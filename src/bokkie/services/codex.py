@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -63,8 +65,10 @@ class CodexCliBackend:
             else:
                 command.extend(["--sandbox", "read-only"])
 
+            env = self._build_subprocess_env()
             process = subprocess.Popen(
                 command,
+                env=env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -97,3 +101,49 @@ class CodexCliBackend:
                     f"Failed to parse structured output: {raw_message}"
                 ) from exc
             return CodexRunResult(final_output=final_output, raw_last_message=raw_message)
+
+    def _build_subprocess_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        runtime_home = self._prepare_runtime_home()
+        if runtime_home is not None:
+            env["HOME"] = str(runtime_home)
+        return env
+
+    def _prepare_runtime_home(self) -> Path | None:
+        if not any(
+            [
+                self.settings.codex_home_seed_dir,
+                self.settings.codex_auth_json_path,
+                self.settings.codex_config_toml_path,
+            ]
+        ):
+            return None
+        runtime_home = self.settings.codex_runtime_home_dir or (
+            self.settings.worker_cache_dir / "codex-runtime-home"
+        )
+        codex_dir = runtime_home / ".codex"
+        codex_dir.mkdir(parents=True, exist_ok=True)
+        if self.settings.codex_home_seed_dir:
+            self._copy_seed_dir(self.settings.codex_home_seed_dir, codex_dir)
+        if self.settings.codex_auth_json_path:
+            self._copy_file(self.settings.codex_auth_json_path, codex_dir / "auth.json")
+        if self.settings.codex_config_toml_path:
+            self._copy_file(self.settings.codex_config_toml_path, codex_dir / "config.toml")
+        return runtime_home
+
+    def _copy_seed_dir(self, source_dir: Path, target_dir: Path) -> None:
+        self._copy_if_present(source_dir / "auth.json", target_dir / "auth.json")
+        self._copy_if_present(source_dir / "config.toml", target_dir / "config.toml")
+        source_skills = source_dir / "skills"
+        target_skills = target_dir / "skills"
+        if source_skills.exists():
+            shutil.copytree(source_skills, target_skills, dirs_exist_ok=True)
+
+    def _copy_if_present(self, source: Path, destination: Path) -> None:
+        if source.exists():
+            self._copy_file(source, destination)
+
+    def _copy_file(self, source: Path, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        destination.chmod(0o600)

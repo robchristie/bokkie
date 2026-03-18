@@ -26,7 +26,18 @@ class Settings(BaseSettings):
     worker_cleanup_worktrees: bool = False
     telegram_bot_token: str | None = None
     telegram_default_chat_id: str | None = None
+    telegram_allowed_chat_ids: str | None = None
     default_codex_model: str | None = None
+    codex_home_seed_dir: Path | None = None
+    codex_auth_json_path: Path | None = None
+    codex_config_toml_path: Path | None = None
+    codex_runtime_home_dir: Path | None = None
+
+    def telegram_allowed_chat_id_set(self) -> set[str]:
+        raw = self.telegram_allowed_chat_ids
+        if not raw:
+            return set()
+        return {part.strip() for part in raw.split(",") if part.strip()}
 
 
 @lru_cache(maxsize=1)

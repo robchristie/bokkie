@@ -15,6 +15,13 @@ class TelegramBotRunner:
         self.token = settings.telegram_bot_token
         self.client = httpx.Client(timeout=60)
         self.offset = 0
+        self.allowed_chat_ids = settings.telegram_allowed_chat_id_set()
+        if (
+            settings.telegram_default_chat_id
+            and self.allowed_chat_ids
+            and settings.telegram_default_chat_id not in self.allowed_chat_ids
+        ):
+            raise RuntimeError("BOKKIE_TELEGRAM_DEFAULT_CHAT_ID must be in BOKKIE_TELEGRAM_ALLOWED_CHAT_IDS")
 
     def run_forever(self) -> None:
         while True:
@@ -28,7 +35,10 @@ class TelegramBotRunner:
                 message = update.get("message", {})
                 text = message.get("text", "")
                 chat_id = message.get("chat", {}).get("id")
+                from_user_id = message.get("from", {}).get("id")
                 if not chat_id or not text.startswith("/"):
+                    continue
+                if not self._is_allowed_chat(chat_id, from_user_id):
                     continue
                 reply = self.handle_command(text)
                 self.client.post(
@@ -36,6 +46,13 @@ class TelegramBotRunner:
                     json={"chat_id": chat_id, "text": reply},
                 ).raise_for_status()
             time.sleep(1)
+
+    def _is_allowed_chat(self, chat_id: int | str | None, from_user_id: int | str | None) -> bool:
+        if not self.allowed_chat_ids:
+            return True
+        chat_text = str(chat_id) if chat_id is not None else None
+        user_text = str(from_user_id) if from_user_id is not None else None
+        return chat_text in self.allowed_chat_ids and user_text in self.allowed_chat_ids
 
     def handle_command(self, text: str) -> str:
         parts = text.strip().split(maxsplit=2)

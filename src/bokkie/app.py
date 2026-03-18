@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import SessionLocal, get_db, init_db
+from .enums import RiskLevel, RunType
 from .models import WorkItem
 from .schemas import (
     OperatorDecision,
@@ -29,6 +30,7 @@ from .schemas import (
     WorkItemLeaseResponse,
 )
 from .services.artifacts import ArtifactStore
+from .services.notifications import TelegramNotifier
 from .services.orchestrator import OrchestrationError, OrchestratorService
 
 settings = get_settings()
@@ -41,6 +43,7 @@ def get_service(db: Session = Depends(get_db)) -> OrchestratorService:
 
 def create_app() -> FastAPI:
     artifact_store = ArtifactStore(settings.artifacts_dir)
+    notifier = TelegramNotifier(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -190,6 +193,8 @@ def create_app() -> FastAPI:
     ) -> dict[str, str]:
         try:
             item = service.complete_work_item(work_item_id, data)
+            run = service.serialize_run(service.get_run(item.run_id))
+            notifier.notify_run_checkpoint(run)
         except OrchestrationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"work_item_id": item.id, "status": item.status}
@@ -242,10 +247,17 @@ def create_app() -> FastAPI:
         service: OrchestratorService = Depends(get_service),
     ) -> HTMLResponse:
         runs = [service.serialize_run(run) for run in service.list_runs()]
+        projects = [ProjectRead.model_validate(project) for project in service.list_projects()]
         return templates.TemplateResponse(
             request,
             "runs.html",
-            {"runs": runs, "title": "Runs"},
+            {
+                "runs": runs,
+                "projects": projects,
+                "title": "Runs",
+                "run_types": [value.value for value in RunType],
+                "risk_levels": [value.value for value in RiskLevel],
+            },
         )
 
     @app.get("/ui/runs/{run_id}", response_class=HTMLResponse)
@@ -258,10 +270,11 @@ def create_app() -> FastAPI:
             run = service.serialize_run(service.get_run(run_id))
         except OrchestrationError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        pending_review = next((review for review in reversed(run.reviews) if review.status == "pending"), None)
         return templates.TemplateResponse(
             request,
             "run_detail.html",
-            {"run": run, "title": f"Run {run.id[:8]}"},
+            {"run": run, "pending_review": pending_review, "title": f"Run {run.id[:8]}"},
         )
 
     @app.get("/ui/reviews", response_class=HTMLResponse)
@@ -312,6 +325,131 @@ def create_app() -> FastAPI:
                 await asyncio.sleep(2)
 
         return StreamingResponse(event_source(), media_type="text/event-stream")
+
+    @app.post("/ui/projects")
+    def create_project_form(
+        slug: str = Form(...),
+        name: str = Form(...),
+        repo_url: str = Form(...),
+        default_branch: str = Form("main"),
+        push_remote: str | None = Form(None),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            service.create_project(
+                ProjectCreate(
+                    slug=slug,
+                    name=name,
+                    repo_url=repo_url,
+                    default_branch=default_branch,
+                    push_remote=push_remote or None,
+                )
+            )
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(url="/ui/runs", status_code=303)
+
+    @app.post("/ui/runs")
+    def create_run_form(
+        project_id: str = Form(...),
+        objective: str = Form(...),
+        success_criteria: str = Form(...),
+        run_type: str = Form("feature"),
+        risk_level: str = Form("medium"),
+        pool: str | None = Form(None),
+        internet: bool = Form(False),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            run = service.create_run(
+                RunCreate(
+                    project_id=project_id,
+                    type=run_type,
+                    objective=objective,
+                    success_criteria=success_criteria,
+                    risk_level=risk_level,
+                    resource_profile={"pool": pool or None, "internet": internet, "secrets": []},
+                )
+            )
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/runs/{run.id}", status_code=303)
+
+    @app.post("/ui/runs/{run_id}/approve")
+    def approve_run_form(
+        run_id: str,
+        actor: str = Form("web-ui"),
+        reason: str | None = Form(None),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            run = service.serialize_run(
+                service.approve_run(run_id, OperatorDecision(actor=actor, reason=reason or None))
+            )
+            notifier.notify_run_checkpoint(run)
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/runs/{run_id}", status_code=303)
+
+    @app.post("/ui/runs/{run_id}/reject")
+    def reject_run_form(
+        run_id: str,
+        actor: str = Form("web-ui"),
+        reason: str = Form(...),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            service.reject_run(run_id, OperatorDecision(actor=actor, reason=reason))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/runs/{run_id}", status_code=303)
+
+    @app.post("/ui/runs/{run_id}/pause")
+    def pause_run_form(
+        run_id: str,
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            service.pause_run(run_id)
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/runs/{run_id}", status_code=303)
+
+    @app.post("/ui/runs/{run_id}/resume")
+    def resume_run_form(
+        run_id: str,
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            service.resume_run(run_id)
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/runs/{run_id}", status_code=303)
+
+    @app.post("/ui/runs/{run_id}/steer")
+    def steer_run_form(
+        run_id: str,
+        note: str = Form(...),
+        created_by: str = Form("web-ui"),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            service.steer_run(run_id, OperatorNoteIn(note=note, created_by=created_by))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/runs/{run_id}", status_code=303)
+
+    @app.post("/ui/runs/{run_id}/promote")
+    def promote_run_form(
+        run_id: str,
+        pool: str = Form(...),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            service.promote_run(run_id, PromoteRunIn(pool=pool))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/runs/{run_id}", status_code=303)
 
     return app
 

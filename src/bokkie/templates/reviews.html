@@ -3,7 +3,7 @@
 <section class="card">
   <h2>Pending Approvals</h2>
   <table>
-    <thead><tr><th>Run</th><th>Gate</th><th>Summary</th><th>Created</th></tr></thead>
+    <thead><tr><th>Run</th><th>Gate</th><th>Summary</th><th>Created</th><th>Actions</th></tr></thead>
     <tbody>
       {% for review in reviews %}
       <tr>
@@ -11,12 +11,24 @@
         <td>{{ review.gate }}</td>
         <td>{{ review.summary or "n/a" }}</td>
         <td class="mono">{{ review.created_at }}</td>
+        <td>
+          <div class="inline-actions">
+            <form method="post" action="/ui/runs/{{ review.run_id }}/approve">
+              <input type="hidden" name="actor" value="web-ui" />
+              <button type="submit">Approve</button>
+            </form>
+            <form method="post" action="/ui/runs/{{ review.run_id }}/reject">
+              <input type="hidden" name="actor" value="web-ui" />
+              <input name="reason" placeholder="Reason" required />
+              <button class="button-secondary" type="submit">Reject</button>
+            </form>
+          </div>
+        </td>
       </tr>
       {% else %}
-      <tr><td colspan="4">No pending approvals.</td></tr>
+      <tr><td colspan="5">No pending approvals.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </section>
 {% endblock %}
-

@@ -119,6 +119,10 @@ class OrchestratorService:
         )
         return list(self.db.scalars(statement))
 
+    def list_projects(self) -> list[Project]:
+        statement = select(Project).order_by(Project.name, Project.slug)
+        return list(self.db.scalars(statement))
+
     def list_workers(self) -> list[Worker]:
         return list(self.db.scalars(select(Worker).order_by(Worker.host, Worker.id)))
 

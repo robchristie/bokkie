@@ -18,6 +18,63 @@
 
 <div class="grid cards">
   <section class="card">
+    <h3>Operator Actions</h3>
+    <div class="split">
+      <form method="post" action="/ui/runs/{{ run.id }}/approve">
+        <input type="hidden" name="actor" value="web-ui" />
+        <label>
+          Approval Note
+          <input name="reason" placeholder="Optional note" />
+        </label>
+        <button type="submit">Approve</button>
+      </form>
+      <form method="post" action="/ui/runs/{{ run.id }}/reject">
+        <input type="hidden" name="actor" value="web-ui" />
+        <label>
+          Rejection Reason
+          <textarea name="reason" required></textarea>
+        </label>
+        <button class="button-secondary" type="submit">Reject</button>
+      </form>
+    </div>
+    <div class="split">
+      <form method="post" action="/ui/runs/{{ run.id }}/pause">
+        <button class="button-secondary" type="submit">Pause</button>
+      </form>
+      <form method="post" action="/ui/runs/{{ run.id }}/resume">
+        <button type="submit">Resume</button>
+      </form>
+    </div>
+    <form method="post" action="/ui/runs/{{ run.id }}/steer">
+      <input type="hidden" name="created_by" value="web-ui" />
+      <label>
+        Steering Note
+        <textarea name="note" placeholder="Add the next-safe-boundary note here." required></textarea>
+      </label>
+      <button type="submit">Store Steering Note</button>
+    </form>
+    <form method="post" action="/ui/runs/{{ run.id }}/promote">
+      <label>
+        Promote Pool
+        <input name="pool" placeholder="gpu-3090" required />
+      </label>
+      <button class="button-secondary" type="submit">Promote</button>
+    </form>
+  </section>
+  <section class="card">
+    <h3>Review Gate</h3>
+    {% if pending_review %}
+    <p><strong>Gate:</strong> {{ pending_review.gate }}</p>
+    <p><strong>Summary:</strong> {{ pending_review.summary or "n/a" }}</p>
+    <p class="muted">Decision status: {{ pending_review.status }}</p>
+    {% else %}
+    <p>No pending review.</p>
+    {% endif %}
+  </section>
+</div>
+
+<div class="grid cards">
+  <section class="card">
     <h3>Work Items</h3>
     <table>
       <thead><tr><th>#</th><th>Kind</th><th>Status</th><th>Worker</th></tr></thead>
@@ -53,4 +110,3 @@
   };
 </script>
 {% endblock %}
-

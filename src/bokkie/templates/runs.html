@@ -1,6 +1,90 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="grid cards">
+  <section class="card">
+    <h2>Create Run</h2>
+    <form method="post" action="/ui/runs">
+      <label>
+        Project
+        <select name="project_id" required>
+          {% for project in projects %}
+          <option value="{{ project.id }}">{{ project.name }} · {{ project.slug }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Objective
+        <input name="objective" required />
+      </label>
+      <label>
+        Success Criteria
+        <textarea name="success_criteria" required></textarea>
+      </label>
+      <div class="split">
+        <label>
+          Run Type
+          <select name="run_type">
+            {% for run_type in run_types %}
+            <option value="{{ run_type }}">{{ run_type }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Risk Level
+          <select name="risk_level">
+            {% for risk_level in risk_levels %}
+            <option value="{{ risk_level }}" {% if risk_level == "medium" %}selected{% endif %}>{{ risk_level }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div class="split">
+        <label>
+          Preferred Pool
+          <input name="pool" placeholder="cpu-large" />
+        </label>
+        <label>
+          Internet
+          <select name="internet">
+            <option value="false" selected>false</option>
+            <option value="true">true</option>
+          </select>
+        </label>
+      </div>
+      <button type="submit">Create Run</button>
+    </form>
+  </section>
+  <section class="card">
+    <h2>Create Project</h2>
+    <form method="post" action="/ui/projects">
+      <label>
+        Name
+        <input name="name" required />
+      </label>
+      <label>
+        Slug
+        <input name="slug" required />
+      </label>
+      <label>
+        Repo URL
+        <input name="repo_url" required />
+      </label>
+      <div class="split">
+        <label>
+          Default Branch
+          <input name="default_branch" value="main" />
+        </label>
+        <label>
+          Push Remote
+          <input name="push_remote" placeholder="origin" />
+        </label>
+      </div>
+      <button class="button-secondary" type="submit">Create Project</button>
+    </form>
+  </section>
+</div>
+
+<div class="grid cards">
   {% for run in runs %}
   <article class="card">
     <div class="pill">{{ run.status }}</div>
@@ -14,4 +98,3 @@
   {% endfor %}
 </div>
 {% endblock %}
-
