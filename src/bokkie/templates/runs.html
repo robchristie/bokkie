@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid cards">
+  {% for run in runs %}
+  <article class="card">
+    <div class="pill">{{ run.status }}</div>
+    <h2><a href="/ui/runs/{{ run.id }}">{{ run.objective }}</a></h2>
+    <p class="muted">{{ run.current_stage }} · {{ run.branch_name }}</p>
+    <p>{{ run.latest_summary or "No summary yet." }}</p>
+    <p class="mono">{{ run.id }}</p>
+  </article>
+  {% else %}
+  <article class="card"><p>No runs yet.</p></article>
+  {% endfor %}
+</div>
+{% endblock %}
+

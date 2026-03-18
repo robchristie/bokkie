@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid cards">
+  <section class="card">
+    <div class="pill" id="run-status">{{ run.status }}</div>
+    <h2>{{ run.objective }}</h2>
+    <p><strong>Stage:</strong> <span id="run-stage">{{ run.current_stage }}</span></p>
+    <p><strong>Worker:</strong> <span id="run-worker">{{ run.current_worker_id or "idle" }}</span></p>
+    <p><strong>Branch:</strong> <span class="mono">{{ run.branch_name }}</span></p>
+    <p><strong>Summary:</strong> <span id="run-summary">{{ run.latest_summary or "n/a" }}</span></p>
+    <p><strong>Next:</strong> <span id="run-next">{{ run.next_action or "n/a" }}</span></p>
+  </section>
+  <section class="card">
+    <h3>Verifier</h3>
+    <pre id="run-verifier">{{ run.latest_verifier_result | tojson(indent=2) if run.latest_verifier_result else "No verifier result yet." }}</pre>
+  </section>
+</div>
+
+<div class="grid cards">
+  <section class="card">
+    <h3>Work Items</h3>
+    <table>
+      <thead><tr><th>#</th><th>Kind</th><th>Status</th><th>Worker</th></tr></thead>
+      <tbody>
+        {% for item in run.work_items %}
+        <tr><td>{{ item.sequence_no }}</td><td>{{ item.kind }}</td><td>{{ item.status }}</td><td>{{ item.worker_id or "-" }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h3>Events</h3>
+    <div id="events">
+      {% for event in run.events %}
+      <p><span class="mono">{{ event.created_at }}</span> {{ event.event_type }} {{ event.summary or "" }}</p>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+
+<script>
+  const eventsEl = document.getElementById("events");
+  const source = new EventSource("/ui/runs/{{ run.id }}/stream");
+  source.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    document.getElementById("run-status").textContent = data.status;
+    document.getElementById("run-stage").textContent = data.current_stage;
+    document.getElementById("run-worker").textContent = data.current_worker_id || "idle";
+    document.getElementById("run-summary").textContent = data.latest_summary || "n/a";
+    document.getElementById("run-next").textContent = data.next_action || "n/a";
+    document.getElementById("run-verifier").textContent = data.latest_verifier_result ? JSON.stringify(data.latest_verifier_result, null, 2) : "No verifier result yet.";
+    eventsEl.innerHTML = data.events.map((item) => `<p><span class="mono">${item.created_at}</span> ${item.event_type} ${item.summary || ""}</p>`).join("");
+  };
+</script>
+{% endblock %}
+

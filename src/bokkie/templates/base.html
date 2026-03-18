@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }} · Bokkie</title>
+    <style>
+      :root {
+        --bg: #f3efe4;
+        --card: #fffdf8;
+        --text: #1f2421;
+        --muted: #5b645e;
+        --accent: #0f766e;
+        --accent-soft: #d6f5ef;
+        --border: #d8d2c3;
+      }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top right, rgba(15, 118, 110, 0.08), transparent 30%),
+          linear-gradient(180deg, #f8f5ec 0%, var(--bg) 100%);
+        color: var(--text);
+      }
+      header, main {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 1.25rem;
+      }
+      nav a {
+        color: var(--text);
+        margin-right: 1rem;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .grid {
+        display: grid;
+        gap: 1rem;
+      }
+      .cards {
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 1rem;
+        box-shadow: 0 12px 30px rgba(31, 36, 33, 0.05);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        text-align: left;
+        padding: 0.75rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .pill {
+        display: inline-block;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 0.9rem;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .mono {
+        font-family: "IBM Plex Mono", monospace;
+      }
+      pre {
+        overflow-x: auto;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Bokkie</h1>
+      <nav>
+        <a href="/ui/runs">Runs</a>
+        <a href="/ui/reviews">Approvals</a>
+        <a href="/ui/workers">Workers</a>
+      </nav>
+    </header>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>
+

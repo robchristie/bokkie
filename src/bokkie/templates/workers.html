@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Workers</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Host</th><th>Pools</th><th>Labels</th><th>State</th><th>Last Seen</th></tr></thead>
+    <tbody>
+      {% for worker in workers %}
+      <tr>
+        <td class="mono">{{ worker.id }}</td>
+        <td>{{ worker.host }}</td>
+        <td>{{ worker.pools | join(", ") }}</td>
+        <td>{{ worker.labels | join(", ") }}</td>
+        <td>{{ worker.state }}</td>
+        <td class="mono">{{ worker.last_seen_at }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6">No workers registered.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Pending Approvals</h2>
+  <table>
+    <thead><tr><th>Run</th><th>Gate</th><th>Summary</th><th>Created</th></tr></thead>
+    <tbody>
+      {% for review in reviews %}
+      <tr>
+        <td><a href="/ui/runs/{{ review.run_id }}">{{ runs[review.run_id].objective }}</a></td>
+        <td>{{ review.gate }}</td>
+        <td>{{ review.summary or "n/a" }}</td>
+        <td class="mono">{{ review.created_at }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4">No pending approvals.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
