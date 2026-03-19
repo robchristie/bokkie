@@ -8,7 +8,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./run/postgres:/var/lib/postgresql/data
+      - ./run/postgres:/var/lib/postgresql/data:Z
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d bokkie"]
       interval: 10s
@@ -24,7 +24,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    user: "${BOKKIE_CONTAINER_UID:-1000}:${BOKKIE_CONTAINER_GID:-1000}"
+    user: "${BOKKIE_CONTAINER_USER:-${BOKKIE_CONTAINER_UID:-1000}:${BOKKIE_CONTAINER_GID:-1000}}"
     restart: unless-stopped
     working_dir: /workspace
     command: >
@@ -42,7 +42,7 @@ services:
     env_file:
       - .env
     volumes:
-      - .:/workspace
+      - .:/workspace:Z
     ports:
       - "${BOKKIE_API_PORT:-8008}:${BOKKIE_API_PORT:-8008}"
     healthcheck:

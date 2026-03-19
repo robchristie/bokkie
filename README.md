@@ -102,15 +102,34 @@ docker compose -f docker-compose.worker.yml up -d --build
 This runs a long-lived polling worker using `uv run bokkie worker-service`, with its identity and
 capabilities driven entirely by `.env.worker`.
 
+### Worker host with rootless Podman
+
+If the worker host uses rootless Podman instead of Docker, use the Podman override file:
+
+```bash
+podman compose -f docker-compose.worker.yml -f docker-compose.worker.podman.yml up -d --build
+```
+
+The worker compose file now uses SELinux-aware bind mounts, and the Podman override runs the
+container as container `root`, which maps back to your invoking host user in a rootless Podman
+user namespace. That avoids the common bind-mount write failure caused by forcing a fixed
+`1000:1000` container user.
+
 ## Container notes
 
-- Both compose files use `BOKKIE_CONTAINER_UID` and `BOKKIE_CONTAINER_GID` to avoid root-owned
-  files on the bind-mounted checkout. If needed:
+- For Docker, both compose files can use `BOKKIE_CONTAINER_UID` and `BOKKIE_CONTAINER_GID` to
+  avoid root-owned files on the bind-mounted checkout. If needed:
 
 ```bash
 export BOKKIE_CONTAINER_UID=$(id -u)
 export BOKKIE_CONTAINER_GID=$(id -g)
 ```
+
+- For rootless Podman, do not set those variables for the worker container. Use
+  [docker-compose.worker.podman.yml](/nvme/development/bokkie/docker-compose.worker.podman.yml)
+  instead.
+- Bind mounts now use `:Z` so they are writable on SELinux-enabled Podman hosts without manually
+  relabeling the checkout.
 
 - The worker container uses `run/codex-home` as a read-only mount target and sets
   `BOKKIE_CODEX_HOME_SEED_DIR=/codex-home` by default through `.env.worker`.

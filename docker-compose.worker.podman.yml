@@ -1,0 +1,5 @@
+services:
+  bokkie-worker:
+    # In rootless Podman, running as container root maps to the invoking host user
+    # and avoids the Docker-style fixed UID/GID mismatch on bind mounts.
+    user: "0:0"
