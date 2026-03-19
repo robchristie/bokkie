@@ -39,6 +39,11 @@ class WorkerRunner:
         self.settings = settings
         self.worker = worker
         self.api_base_url = api_base_url or settings.api_base_url
+        if not self.api_base_url.startswith(("http://", "https://")):
+            raise ValueError(
+                "BOKKIE_API_BASE_URL must be a full http(s) URL, "
+                f"got {self.api_base_url!r}."
+            )
         self.client = httpx.Client(base_url=self.api_base_url, timeout=120)
         self.codex = CodexAppServerBackend(settings)
         self.git = RepoWorkspaceManager(settings.worker_cache_dir, settings.worker_worktree_dir)

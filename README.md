@@ -84,6 +84,9 @@ BOKKIE_WORKER_POOLS=cpu-large,gpu-3090
 BOKKIE_WORKER_LABELS=cpu,highmem,gpu:rtx3090,internet
 ```
 
+The worker reads `BOKKIE_API_BASE_URL` from `.env.worker`. You do not need to export it in your
+shell before running Compose.
+
 3. Mount Codex auth into `./run/codex-home` on that host:
 
 ```text
