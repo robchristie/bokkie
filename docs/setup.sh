@@ -24,8 +24,9 @@
 
 sudo groupadd -g 3333 bokkie
 sudo useradd -m -s /bin/bash -u 3333 -g 3333 bokkie
-sudo mkdir -p /srv/bokkie
-sudo chown -R bokkie:bokkie /srv/bokkie
+sudo passwd bokkie
+sudo mkdir -p /home/bokkie/srv
+sudo chown -R bokkie:bokkie /home/bokkie/srv
 
 # If you want your normal user to inspect files easily:
 
@@ -38,103 +39,119 @@ sudo chmod 2775 /home/bokkie
 
 #  On both machines:
 
-sudo -u bokkie git clone <your-repo-url> /srv/bokkie
-sudo -u bokkie bash -lc 'cd /srv/bokkie && uv sync'
+URL="https://github.com/robchristie/bokkie"
+sudo -u bokkie git clone $URL /home/bokkie/srv
+sudo -u bokkie bash -lc 'cd /home/bokkie/srv && uv sync'
 
-  If the repo already exists under your user, either reclone it cleanly or hand ownership over deliberately. For a service account, I prefer a clean clone.
+#  If the repo already exists under your user, either reclone it cleanly or hand ownership over deliberately. For a service account, I prefer a clean clone.
 
-  3. Set Up Codex Auth For bokkie
+#  3. Set Up Codex Auth For bokkie
+#
+#  On each machine where Codex will run:
 
-  On each machine where Codex will run:
+sudo -u bokkie mkdir -p /home/bokkie/.codex
 
-  sudo -u bokkie mkdir -p /home/bokkie/.codex
+#  Then place:
+#
+#  - auth.json
+#  - optional config.toml
+#  - optional skills/
+#
+#  under /home/bokkie/.codex/.
+#
+#  Make permissions tight:
+sudo cp ~/.codex/auth.json /home/bokkie/.codex
+sudo cp ~/.codex/config.toml /home/bokkie/.codex
 
-  Then place:
+sudo chown -R bokkie:bokkie /home/bokkie/.codex
+sudo chmod 700 /home/bokkie/.codex
+sudo chmod 600 /home/bokkie/.codex/auth.json
 
-  - auth.json
-  - optional config.toml
-  - optional skills/
+#  If you want to keep auth outside the service home, that also works, but putting it under the service user’s home is the simplest setup.
 
-  under /home/bokkie/.codex/.
+#  4. Set Up SSH From App Server To Dev Box
 
-  Make permissions tight:
+#  Generate a dedicated key as bokkie on the app server:
 
-  sudo chown -R bokkie:bokkie /home/bokkie/.codex
-  sudo chmod 700 /home/bokkie/.codex
-  sudo chmod 600 /home/bokkie/.codex/auth.json
+sudo -u bokkie ssh-keygen -t ed25519 -f /home/bokkie/.ssh/id_ed25519 -N ""
 
-  If you want to keep auth outside the service home, that also works, but putting it under the service user’s home is the simplest setup.
+# Fix permissions
+chmod 700 /home/bokkie
+chmod 700 /home/bokkie/.ssh
+chmod 600 /home/bokkie/.ssh/authorized_keys
+chmod 600 /home/bokkie/.ssh/id_ed25519
+chmod 644 /home/bokkie/.ssh/id_ed25519.pub
+chown -R bokkie:bokkie /home/bokkie/.ssh
+chown bokkie:bokkie /home/bokkie
 
-  4. Set Up SSH From App Server To Dev Box
 
-  Generate a dedicated key as bokkie on the app server:
+sudo -u bokkie cat /home/bokkie/.ssh/id_ed25519.pub >> /home/bokkie/.ssh/authorized_keys
+sudo -u bokkie chmod 600 /home/bokkie/.ssh/authorized_keys
 
-  sudo -u bokkie ssh-keygen -t ed25519 -f /home/bokkie/.ssh/id_ed25519 -N ""
 
-  Copy the public key to the dev box’s bokkie account:
+#  Copy the public key to the dev box’s bokkie account:
 
-  sudo -u bokkie ssh-copy-id -i /home/bokkie/.ssh/id_ed25519.pub bokkie@DEVBOX_HOST
+sudo -u bokkie ssh-copy-id -i /home/bokkie/.ssh/id_ed25519.pub bokkie@lv426.yutani.tech
 
-  Test it:
+#  Test it:
 
-  sudo -u bokkie ssh bokkie@DEVBOX_HOST 'hostname && whoami && test -d /srv/bokkie && echo ok'
+sudo -u bokkie ssh bokkie@lv426.yutani.tech 'hostnamectl status && whoami && test -d /home/bokkie/srv && echo ok'
 
-  This should work without prompting.
+#  This should work without prompting.
+#  I would also add a small SSH config on the app server:
 
-  I would also add a small SSH config on the app server:
+Host devbox
+HostName YOUR_DEVBOX_HOSTNAME_OR_IP
+User bokkie
+IdentityFile /home/bokkie/.ssh/id_ed25519
+IdentitiesOnly yes
 
-  Host devbox
-    HostName YOUR_DEVBOX_HOSTNAME_OR_IP
-    User bokkie
-    IdentityFile /home/bokkie/.ssh/id_ed25519
-    IdentitiesOnly yes
+Path: /home/bokkie/.ssh/config
 
-  Path: /home/bokkie/.ssh/config
+Permissions:
 
-  Permissions:
+sudo chown bokkie:bokkie /home/bokkie/.ssh/config
+sudo chmod 600 /home/bokkie/.ssh/config
 
-  sudo chown bokkie:bokkie /home/bokkie/.ssh/config
-  sudo chmod 600 /home/bokkie/.ssh/config
+#  5. Environment File For bokkie
 
-  5. Environment File For bokkie
+#  Create /srv/bokkie/.env on both hosts.
 
-  Create /srv/bokkie/.env on both hosts.
+#  App server version should include at least:
 
-  App server version should include at least:
+BOKKIE_API_HOST=0.0.0.0
+BOKKIE_API_PORT=8008
+BOKKIE_API_BASE_URL=http://APP_SERVER_IP_OR_DNS:8008
 
-  BOKKIE_API_HOST=0.0.0.0
-  BOKKIE_API_PORT=8008
-  BOKKIE_API_BASE_URL=http://APP_SERVER_IP_OR_DNS:8008
+BOKKIE_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/bokkie
 
-  BOKKIE_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/bokkie
+BOKKIE_REPO_ROOT=/srv/bokkie
+BOKKIE_BOKKIE_CONFIG_PATH=/srv/bokkie/bokkie.toml
+BOKKIE_RUNS_ROOT=/srv/bokkie/.bokkie/runs
+BOKKIE_ARTIFACTS_DIR=/srv/bokkie/.bokkie/runs
+BOKKIE_WORKER_CACHE_DIR=/srv/bokkie/.worker-cache
+BOKKIE_WORKER_WORKTREE_DIR=/srv/bokkie/.worker-worktrees
 
-  BOKKIE_REPO_ROOT=/srv/bokkie
-  BOKKIE_BOKKIE_CONFIG_PATH=/srv/bokkie/bokkie.toml
-  BOKKIE_RUNS_ROOT=/srv/bokkie/.bokkie/runs
-  BOKKIE_ARTIFACTS_DIR=/srv/bokkie/.bokkie/runs
-  BOKKIE_WORKER_CACHE_DIR=/srv/bokkie/.worker-cache
-  BOKKIE_WORKER_WORKTREE_DIR=/srv/bokkie/.worker-worktrees
+BOKKIE_DISPATCHER_ENABLED=true
+BOKKIE_DISPATCHER_POLL_SECONDS=10
+BOKKIE_EXECUTOR_LAUNCH_COOLDOWN_SECONDS=30
 
-  BOKKIE_DISPATCHER_ENABLED=true
-  BOKKIE_DISPATCHER_POLL_SECONDS=10
-  BOKKIE_EXECUTOR_LAUNCH_COOLDOWN_SECONDS=30
+#  Dev box version should include at least:
 
-  Dev box version should include at least:
+BOKKIE_API_BASE_URL=http://192.168.50.20:8008
 
-  BOKKIE_API_BASE_URL=http://APP_SERVER_IP_OR_DNS:8008
+BOKKIE_REPO_ROOT=/home/bokkie/srv
+BOKKIE_BOKKIE_CONFIG_PATH=/home/bokkie/srv/bokkie.toml
+BOKKIE_RUNS_ROOT=/home/bokkie/srv/.bokkie/runs
+BOKKIE_ARTIFACTS_DIR=/home/bokkie/srv/.bokkie/runs
+BOKKIE_WORKER_CACHE_DIR=/home/bokkie/srv/.worker-cache
+BOKKIE_WORKER_WORKTREE_DIR=/home/bokkie/srv/.worker-worktrees
 
-  BOKKIE_REPO_ROOT=/srv/bokkie
-  BOKKIE_BOKKIE_CONFIG_PATH=/srv/bokkie/bokkie.toml
-  BOKKIE_RUNS_ROOT=/srv/bokkie/.bokkie/runs
-  BOKKIE_ARTIFACTS_DIR=/srv/bokkie/.bokkie/runs
-  BOKKIE_WORKER_CACHE_DIR=/srv/bokkie/.worker-cache
-  BOKKIE_WORKER_WORKTREE_DIR=/srv/bokkie/.worker-worktrees
+#  Because the worker talks to the API only, it does not need DB access.
 
-  Because the worker talks to the API only, it does not need DB access.
+#  6. bokkie.toml Executor Config
 
-  6. bokkie.toml Executor Config
-
-  I would set the devbox executor in your current bokkie.toml like this:
+#  I would set the devbox executor in your current bokkie.toml like this:
 
   [executors.local]
   driver = "local"
@@ -156,11 +173,9 @@ sudo -u bokkie bash -lc 'cd /srv/bokkie && uv sync'
   --pool cpu-large --pool gpu-3090 --label cpu --label highmem --label gpu:rtx3090 --label
   internet"
 
-  That is the simplest first version. Despite the executor name ssh-docker, the implementation
-  currently runs an SSH command, and worker_command is the right place to decide whether that
-  command is direct uv or docker run.
-
-  If you want Docker later, replace only worker_command.
+#  That is the simplest first version. Despite the executor name ssh-docker, the implementation currently runs an SSH command, and worker_command is the right place to decide whether that command is direct uv or docker run.
+#
+#  If you want Docker later, replace only worker_command.
 
   7. Systemd Units
 

@@ -72,6 +72,10 @@ def create_app() -> FastAPI:
                 launcher.dispatch_once()
             await asyncio.sleep(settings.dispatcher_poll_seconds)
 
+    @app.get("/healthz")
+    def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
     @app.get("/", response_class=HTMLResponse)
     def root() -> RedirectResponse:
         return RedirectResponse(url="/ui/runs")

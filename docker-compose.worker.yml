@@ -1,0 +1,28 @@
+services:
+  bokkie-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CODEX_VERSION: "0.115.0"
+    user: "${BOKKIE_CONTAINER_UID:-1000}:${BOKKIE_CONTAINER_GID:-1000}"
+    restart: unless-stopped
+    working_dir: /workspace
+    command: >
+      sh -lc "mkdir -p /workspace/.bokkie/runs /workspace/.worker-cache /workspace/.worker-worktrees /workspace/run/home &&
+      uv run bokkie worker-service"
+    environment:
+      HOME: /workspace/run/home
+      BOKKIE_API_BASE_URL: ${BOKKIE_API_BASE_URL}
+      BOKKIE_REPO_ROOT: /workspace
+      BOKKIE_BOKKIE_CONFIG_PATH: /workspace/bokkie.toml
+      BOKKIE_RUNS_ROOT: /workspace/.bokkie/runs
+      BOKKIE_ARTIFACTS_DIR: /workspace/.bokkie/runs
+      BOKKIE_WORKER_CACHE_DIR: /workspace/.worker-cache
+      BOKKIE_WORKER_WORKTREE_DIR: /workspace/.worker-worktrees
+    env_file:
+      - path: .env.worker
+        required: false
+    volumes:
+      - .:/workspace
+      - ./run/codex-home:/codex-home:ro

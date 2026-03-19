@@ -1,0 +1,17 @@
+.git
+.venv
+.pytest_cache
+.ruff_cache
+run
+.env
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+build
+dist
+wheels
+*.egg-info
+.worker-cache
+.worker-worktrees
+.bokkie
