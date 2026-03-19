@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
-from .models import Project, Run, WorkItem
+from .config import Settings
+from .enums import PhaseName, PhaseRole
+from .models import PhaseAttempt, Project, Run
 
 
 def _render_notes(operator_notes: list[str]) -> str:
@@ -11,14 +15,41 @@ def _render_notes(operator_notes: list[str]) -> str:
     return "\n".join(f"- {note}" for note in operator_notes)
 
 
-def planner_prompt(
+def load_agent_prompt(settings: Settings, role: str) -> str:
+    path = settings.resolved_repo_root() / "agents" / role / "PROMPT.md"
+    if not path.exists():
+        return ""
+    return path.read_text().strip()
+
+
+def _read_artifacts(worktree: Path, input_artifacts: dict[str, str]) -> str:
+    rendered: list[str] = []
+    for relative_path in sorted(input_artifacts):
+        artifact_path = worktree / relative_path
+        if not artifact_path.exists():
+            continue
+        rendered.append(f"## {relative_path}\n{artifact_path.read_text()}")
+    return "\n\n".join(rendered) if rendered else "No prior artifacts materialized in the worktree."
+
+
+def build_phase_prompt(
+    settings: Settings,
     project: Project,
     run: Run,
-    work_item: WorkItem,
+    phase_attempt: PhaseAttempt,
+    worktree: Path,
     operator_notes: list[str],
+    input_artifacts: dict[str, str],
+    evaluator_commands: list[str],
 ) -> str:
+    role = phase_attempt.role
+    phase_name = phase_attempt.phase_name
+    base_prompt = load_agent_prompt(settings, role)
+    artifacts_text = _read_artifacts(worktree, input_artifacts)
+    evaluator_text = "\n".join(f"- {command}" for command in evaluator_commands) or "- None"
+    payload_text = json.dumps(phase_attempt.payload, indent=2, sort_keys=True)
     return f"""
-You are the planning worker for a bounded software development run.
+{base_prompt}
 
 Project:
 - Name: {project.name}
@@ -27,148 +58,60 @@ Project:
 
 Run:
 - Type: {run.type}
+- Task preset: {run.task_name or "none"}
 - Objective: {run.objective}
 - Success criteria: {run.success_criteria}
 - Risk level: {run.risk_level}
-- Preferred pool: {run.preferred_pool or "unspecified"}
-- Requires internet: {run.requires_internet}
-- Required secrets: {", ".join(run.required_secrets) or "none"}
+- Branch: {run.branch_name}
+- Base ref: {run.base_ref}
+
+Phase:
+- Name: {phase_name}
+- Role: {role}
+- Attempt: {phase_attempt.attempt_no}
+- Payload:
+{payload_text}
 
 Operator notes:
 {_render_notes(operator_notes)}
 
-Budget:
-{run.budget}
+Materialized artifacts:
+{artifacts_text}
+
+Evaluator commands:
+{evaluator_text}
 
 Instructions:
-- Inspect the repository and produce a concrete implementation plan.
-- Break the plan into bounded implementation work items.
-- Keep the work items sequential and execution-safe.
-- Call out blockers and risks clearly.
-- Do not make code changes if read-only constraints apply.
+- Work only on the current phase objective.
+- Treat the materialized artifact bundle as the contract with other phases.
+- Preserve any existing changes already present in the worktree.
 - Return only content that matches the provided JSON schema.
 """.strip()
 
 
-def implement_prompt(
-    project: Project,
-    run: Run,
-    work_item: WorkItem,
-    operator_notes: list[str],
-) -> str:
-    instructions = work_item.payload.get("instructions", "")
-    title = work_item.payload.get("title", work_item.prompt_template)
-    return f"""
-You are the executor for a bounded software development work item.
-
-Project: {project.name}
-Run objective: {run.objective}
-Success criteria: {run.success_criteria}
-Work item title: {title}
-Work item instructions:
-{instructions}
-
-Operator notes:
-{_render_notes(operator_notes)}
-
-Constraints:
-- Work only within this work item.
-- Preserve previous changes already present in the worktree.
-- Make pragmatic progress toward the run objective.
-- If tests or checks are available, run the most relevant ones.
-- Return only content that matches the provided JSON schema.
-""".strip()
-
-
-def verify_prompt(
-    project: Project,
-    run: Run,
-    work_item: WorkItem,
-    operator_notes: list[str],
-) -> str:
-    verify_commands = project.command_profiles.get("verify", [])
-    verify_text = (
-        verify_commands if verify_commands else ["Inspect the diff and run focused verification."]
-    )
-    return f"""
-You are the verifier for a bounded software development run.
-
-Project: {project.name}
-Run objective: {run.objective}
-Success criteria: {run.success_criteria}
-
-Operator notes:
-{_render_notes(operator_notes)}
-
-Verify using these commands or checks when possible:
-{verify_text}
-
-Instructions:
-- Review the current worktree as if you were an exacting reviewer.
-- Focus on correctness, regressions, and missing validation.
-- Summarize whether the run is ready for publish.
-- Return only content that matches the provided JSON schema.
-""".strip()
-
-
-def repair_prompt(
-    project: Project,
-    run: Run,
-    work_item: WorkItem,
-    operator_notes: list[str],
-) -> str:
-    verifier_findings = work_item.payload.get("verifier_findings", [])
-    reason = work_item.payload.get("rejection_reason", "")
-    return f"""
-You are the executor for a rework item created after verification feedback.
-
-Project: {project.name}
-Run objective: {run.objective}
-Success criteria: {run.success_criteria}
-
-Verifier findings:
-{verifier_findings}
-
-Operator rejection reason:
-{reason}
-
-Operator notes:
-{_render_notes(operator_notes)}
-
-Instructions:
-- Address the verifier and operator feedback directly.
-- Keep the scope bounded to the reported issues.
-- Return only content that matches the provided JSON schema.
-""".strip()
-
-
-def build_prompt(
-    project: Project,
-    run: Run,
-    work_item: WorkItem,
-    operator_notes: list[str],
-) -> str:
-    if work_item.kind == "plan":
-        return planner_prompt(project, run, work_item, operator_notes)
-    if work_item.kind == "verify":
-        return verify_prompt(project, run, work_item, operator_notes)
-    if work_item.payload.get("verifier_findings"):
-        return repair_prompt(project, run, work_item, operator_notes)
-    return implement_prompt(project, run, work_item, operator_notes)
+def phase_role_for(phase_name: str) -> str:
+    if phase_name in {PhaseName.PLAN.value, PhaseName.SPEC.value}:
+        return PhaseRole.PLANNER.value
+    if phase_name in {PhaseName.PLAN_REVIEW.value, PhaseName.SPEC_REVIEW.value, PhaseName.FINAL_REVIEW.value}:
+        return PhaseRole.REVIEWER.value
+    if phase_name == PhaseName.VERIFY.value:
+        return PhaseRole.VERIFIER.value
+    return PhaseRole.CODER.value
 
 
 def summarize_event_line(event: dict[str, Any]) -> str | None:
-    event_type = event.get("type")
+    event_type = event.get("method") or event.get("type")
     if not event_type:
         return None
-    if event_type == "thread.started":
-        return "Codex thread started"
-    if event_type == "turn.started":
-        return "Codex turn started"
-    if event_type == "turn.completed":
-        return "Codex turn completed"
-    if event_type == "turn.failed":
-        return "Codex turn failed"
-    if event_type.startswith("item."):
-        return event_type
-    return None
+    summaries = {
+        "thread/started": "Codex thread started",
+        "turn/started": "Codex turn started",
+        "turn/completed": "Codex turn completed",
+        "thread/status/changed": "Thread status changed",
+        "item/started": "Codex item started",
+        "item/completed": "Codex item completed",
+        "item/agentMessage/delta": "Assistant message delta",
+        "item/commandExecution/outputDelta": "Command output delta",
+        "error": "Codex app-server error",
+    }
+    return summaries.get(event_type, event_type)

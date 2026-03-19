@@ -1,0 +1,22 @@
+[run_types.change]
+phases = ["plan", "plan_review", "spec", "spec_review", "execute", "verify", "final_review"]
+
+[run_types.investigation]
+phases = ["triage", "reproduce", "diagnose", "fix", "verify"]
+
+[run_types.experiment]
+phases = ["hypothesis", "run", "analyze", "propose_next"]
+auto_continue = true
+
+[executors.local]
+driver = "local"
+pools = ["cpu-small", "cpu-large"]
+labels = ["cpu", "small", "internet"]
+workdir = "."
+
+[executors.devbox]
+driver = "ssh-docker"
+host = "devbox"
+pools = ["cpu-large", "gpu-3090"]
+labels = ["cpu", "highmem", "gpu:rtx3090", "internet"]
+workdir = "/srv/bokkie"

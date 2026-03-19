@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -13,10 +13,14 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .db import SessionLocal, get_db, init_db
 from .enums import RiskLevel, RunType
-from .models import WorkItem
+from .models import PhaseAttempt
 from .schemas import (
+    EventRead,
     OperatorDecision,
     OperatorNoteIn,
+    PhaseAttemptCompletionIn,
+    PhaseAttemptEventIn,
+    PhaseLeaseResponse,
     ProjectCreate,
     ProjectRead,
     PromoteRunIn,
@@ -25,11 +29,9 @@ from .schemas import (
     WorkerCapabilities,
     WorkerHeartbeatIn,
     WorkerRead,
-    WorkItemCompletionIn,
-    WorkItemEventIn,
-    WorkItemLeaseResponse,
 )
 from .services.artifacts import ArtifactStore
+from .services.executors import ExecutorLauncherService
 from .services.notifications import TelegramNotifier
 from .services.orchestrator import OrchestrationError, OrchestratorService
 
@@ -48,10 +50,28 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        settings.runs_root.mkdir(parents=True, exist_ok=True)
         init_db()
-        yield
+        dispatcher_task = None
+        if settings.dispatcher_enabled:
+            dispatcher_task = asyncio.create_task(_dispatcher_loop())
+        try:
+            yield
+        finally:
+            if dispatcher_task is not None:
+                dispatcher_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await dispatcher_task
 
     app = FastAPI(title="Bokkie", lifespan=lifespan)
+
+    async def _dispatcher_loop() -> None:
+        while True:
+            with SessionLocal() as db:
+                launcher = ExecutorLauncherService(db=db, settings=settings)
+                launcher.dispatch_once()
+            await asyncio.sleep(settings.dispatcher_poll_seconds)
+
     @app.get("/", response_class=HTMLResponse)
     def root() -> RedirectResponse:
         return RedirectResponse(url="/ui/runs")
@@ -91,7 +111,9 @@ def create_app() -> FastAPI:
         service: OrchestratorService = Depends(get_service),
     ) -> RunRead:
         try:
-            return service.serialize_run(service.approve_run(run_id, decision))
+            run = service.serialize_run(service.approve_run(run_id, decision))
+            notifier.notify_run_checkpoint(run)
+            return run
         except OrchestrationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -163,61 +185,79 @@ def create_app() -> FastAPI:
         except OrchestrationError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/api/workers/{worker_id}/lease", response_model=WorkItemLeaseResponse)
-    def lease_work_item(
+    @app.post("/api/workers/{worker_id}/lease", response_model=PhaseLeaseResponse)
+    def lease_phase_attempt(
         worker_id: str,
+        target_phase_attempt_id: str | None = None,
         service: OrchestratorService = Depends(get_service),
-    ) -> WorkItemLeaseResponse:
+    ) -> PhaseLeaseResponse:
         try:
-            return service.claim_work_item(worker_id)
+            return service.claim_phase_attempt(worker_id, target_phase_attempt_id=target_phase_attempt_id)
         except OrchestrationError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/api/work-items/{work_item_id}/events")
+    @app.post("/api/phase-attempts/{phase_attempt_id}/events")
     def add_event(
-        work_item_id: str,
-        data: WorkItemEventIn,
+        phase_attempt_id: str,
+        data: PhaseAttemptEventIn,
         service: OrchestratorService = Depends(get_service),
     ) -> dict[str, int]:
         try:
-            event = service.add_event(work_item_id, data)
+            event = service.add_event(phase_attempt_id, data)
         except OrchestrationError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"event_id": event.id}
 
-    @app.post("/api/work-items/{work_item_id}/complete")
-    def complete_work_item(
-        work_item_id: str,
-        data: WorkItemCompletionIn,
+    @app.post("/api/phase-attempts/{phase_attempt_id}/notes/claim")
+    def claim_phase_notes(
+        phase_attempt_id: str,
+        service: OrchestratorService = Depends(get_service),
+    ) -> dict[str, list[str]]:
+        try:
+            notes = service.claim_phase_notes(phase_attempt_id)
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"notes": notes}
+
+    @app.post("/api/phase-attempts/{phase_attempt_id}/complete")
+    def complete_phase_attempt(
+        phase_attempt_id: str,
+        data: PhaseAttemptCompletionIn,
         service: OrchestratorService = Depends(get_service),
     ) -> dict[str, str]:
         try:
-            item = service.complete_work_item(work_item_id, data)
-            run = service.serialize_run(service.get_run(item.run_id))
+            phase_attempt = service.complete_phase_attempt(phase_attempt_id, data)
+            run = service.serialize_run(service.get_run(phase_attempt.run_id))
             notifier.notify_run_checkpoint(run)
         except OrchestrationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"work_item_id": item.id, "status": item.status}
+        return {"phase_attempt_id": phase_attempt.id, "status": phase_attempt.status}
 
-    @app.post("/api/work-items/{work_item_id}/artifacts")
+    @app.post("/api/phase-attempts/{phase_attempt_id}/artifacts")
     async def upload_artifact(
-        work_item_id: str,
+        phase_attempt_id: str,
         file: UploadFile = File(...),
         kind: str = Form(...),
         metadata: str = Form("{}"),
+        relative_path: str = Form(""),
         service: OrchestratorService = Depends(get_service),
     ) -> dict[str, str]:
-        work_item = service.db.get(WorkItem, work_item_id)
-        if work_item is None:
-            raise HTTPException(status_code=404, detail="Work item not found")
+        phase_attempt = service.db.get(PhaseAttempt, phase_attempt_id)
+        if phase_attempt is None:
+            raise HTTPException(status_code=404, detail="Phase attempt not found")
         raw_bytes = await file.read()
         filename = file.filename or "artifact.bin"
-        stored = artifact_store.put_bytes(work_item.run_id, work_item_id, filename, raw_bytes)
+        if relative_path:
+            stored = artifact_store.put_relative_bytes(Path(phase_attempt.run_id) / relative_path, raw_bytes)
+            artifact_name = relative_path
+        else:
+            stored = artifact_store.put_bytes(phase_attempt.run_id, phase_attempt_id, filename, raw_bytes)
+            artifact_name = filename
         artifact = service.create_artifact(
-            run_id=work_item.run_id,
-            work_item_id=work_item_id,
+            run_id=phase_attempt.run_id,
+            phase_attempt_id=phase_attempt_id,
             kind=kind,
-            name=filename,
+            name=artifact_name,
             storage_path=stored.storage_path,
             content_type=file.content_type or "application/octet-stream",
             sha256=stored.sha256,
@@ -238,7 +278,7 @@ def create_app() -> FastAPI:
         return FileResponse(
             artifact_store.resolve(artifact.storage_path),
             media_type=artifact.content_type,
-            filename=artifact.name,
+            filename=Path(artifact.name).name,
         )
 
     @app.get("/ui/runs", response_class=HTMLResponse)
@@ -305,6 +345,57 @@ def create_app() -> FastAPI:
             {"workers": workers, "title": "Workers"},
         )
 
+    @app.get("/ui/executors", response_class=HTMLResponse)
+    def executors_page(
+        request: Request,
+        db: Session = Depends(get_db),
+    ) -> HTMLResponse:
+        launcher = ExecutorLauncherService(db=db, settings=settings)
+        executors = launcher.list_executors()
+        return templates.TemplateResponse(
+            request,
+            "executors.html",
+            {"executors": executors, "title": "Executors"},
+        )
+
+    @app.post("/ui/executors/dispatch")
+    def dispatch_executors(
+        db: Session = Depends(get_db),
+    ) -> RedirectResponse:
+        launcher = ExecutorLauncherService(db=db, settings=settings)
+        launcher.dispatch_once()
+        return RedirectResponse(url="/ui/executors", status_code=303)
+
+    @app.get("/ui/phases/{phase_attempt_id}", response_class=HTMLResponse)
+    def phase_detail_page(
+        request: Request,
+        phase_attempt_id: str,
+        service: OrchestratorService = Depends(get_service),
+    ) -> HTMLResponse:
+        try:
+            phase_attempt = service.get_phase_attempt(phase_attempt_id)
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        phase_artifacts = [
+            service._artifact_summary(artifact)
+            for artifact in sorted(phase_attempt.artifacts, key=lambda item: item.created_at)
+        ]
+        phase_events = [
+            EventRead.model_validate(event)
+            for event in sorted(phase_attempt.events, key=lambda item: item.id)
+        ]
+        return templates.TemplateResponse(
+            request,
+            "phase_detail.html",
+            {
+                "phase_attempt": phase_attempt,
+                "run": service.serialize_run(phase_attempt.run),
+                "artifacts": phase_artifacts,
+                "events": phase_events,
+                "title": f"Phase {phase_attempt.phase_name}",
+            },
+        )
+
     @app.get("/ui/runs/{run_id}/stream")
     async def run_stream(run_id: str) -> StreamingResponse:
         async def event_source():
@@ -317,7 +408,7 @@ def create_app() -> FastAPI:
                     except OrchestrationError:
                         yield "event: end\ndata: {}\n\n"
                         return
-                    marker = (run.updated_at.isoformat(), len(run.events))
+                    marker = (run.updated_at.isoformat(), len(run.events), len(run.phase_attempts))
                     if marker != last_seen:
                         payload = run.model_dump(mode="json")
                         yield f"data: {json.dumps(payload)}\n\n"
@@ -354,7 +445,8 @@ def create_app() -> FastAPI:
         project_id: str = Form(...),
         objective: str = Form(...),
         success_criteria: str = Form(...),
-        run_type: str = Form("feature"),
+        run_type: str = Form("change"),
+        task_name: str | None = Form(None),
         risk_level: str = Form("medium"),
         pool: str | None = Form(None),
         internet: bool = Form(False),
@@ -365,6 +457,7 @@ def create_app() -> FastAPI:
                 RunCreate(
                     project_id=project_id,
                     type=run_type,
+                    task_name=task_name or None,
                     objective=objective,
                     success_criteria=success_criteria,
                     risk_level=risk_level,

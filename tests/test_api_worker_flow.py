@@ -40,24 +40,53 @@ class FakeCodex:
     def __init__(self) -> None:
         self.calls = 0
 
-    def run(self, worktree, prompt, schema_model, kind, on_event=None):
+    def run(self, worktree, prompt, schema_model, **kwargs):
         self.calls += 1
+        on_event = kwargs.get("on_event")
         if on_event:
-            on_event({"type": "thread.started", "thread_id": f"thr-{self.calls}"})
-            on_event({"type": "turn.completed"})
-        if kind.value == "plan":
+            on_event(
+                {
+                    "method": "thread/started",
+                    "params": {"thread": {"id": f"thr-{self.calls}"}},
+                }
+            )
+            on_event(
+                {
+                    "method": "turn/started",
+                    "params": {"turn": {"id": f"turn-{self.calls}"}},
+                }
+            )
+            on_event({"method": "turn/completed", "params": {"turn": {"id": f"turn-{self.calls}"}}})
+        if schema_model.__name__ == "PlanPhaseResult":
             result = {
                 "summary": "Plan ready",
                 "next_action": "Wait for approval",
+                "proposal_md": "# Proposal",
+                "design_md": "# Design",
+                "tasks_md": "# Tasks",
                 "blockers": [],
                 "risk_flags": [],
-                "work_items": [{"title": "Implement feature", "instructions": "Edit the file"}],
             }
-        elif kind.value == "implement":
+        elif schema_model.__name__ == "ReviewPhaseResult":
+            result = {
+                "verdict": "approve",
+                "summary": "Looks good",
+                "concerns": [],
+                "next_action": "Await approval",
+            }
+        elif schema_model.__name__ == "SpecPhaseResult":
+            result = {
+                "summary": "Spec ready",
+                "next_action": "Review the spec",
+                "program_md": "# PROGRAM",
+                "acceptance_checks": ["pytest -q"],
+            }
+        elif schema_model.__name__ == "ExecutePhaseResult":
             (worktree / "feature.txt").write_text("implemented\n")
             result = {
                 "summary": "Feature implemented",
                 "changed_files": ["feature.txt"],
+                "checkpoints": ["wrote feature.txt"],
                 "next_action": "Run verifier",
             }
         else:
@@ -66,12 +95,38 @@ class FakeCodex:
                 "pass": True,
                 "findings": [],
                 "confidence": "high",
-                "next_action": "Await approval",
+                "next_action": "Run final review",
+                "command_results": [],
             }
-        return CodexRunResult(final_output=result, raw_last_message=json.dumps(result))
+        return CodexRunResult(
+            thread_id=f"thr-{self.calls}",
+            turn_id=f"turn-{self.calls}",
+            final_output=result,
+            raw_last_message=json.dumps(result),
+        )
 
 
-def test_worker_executes_run_via_api(tmp_path, settings: Settings, session) -> None:
+def test_worker_executes_change_run_via_api(tmp_path, session) -> None:
+    repo_root = tmp_path / "repo-root"
+    (repo_root / "tasks").mkdir(parents=True)
+    (repo_root / "bokkie.toml").write_text(
+        """
+[run_types.change]
+phases = ["plan", "plan_review", "spec", "spec_review", "execute", "verify", "final_review"]
+"""
+    )
+    (repo_root / "tasks" / "change.toml").write_text('run_type = "change"\n')
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        api_base_url="http://testserver",
+        repo_root=repo_root,
+        bokkie_config_path=repo_root / "bokkie.toml",
+        runs_root=tmp_path / ".bokkie" / "runs",
+        artifacts_dir=tmp_path / ".bokkie" / "runs",
+        worker_cache_dir=tmp_path / "cache",
+        worker_worktree_dir=tmp_path / "worktrees",
+        worker_cleanup_worktrees=True,
+    )
     app_module.settings = settings
     app = app_module.create_app()
 
@@ -90,7 +145,7 @@ def test_worker_executes_run_via_api(tmp_path, settings: Settings, session) -> N
             "name": "Demo",
             "repo_url": str(repo),
             "default_branch": "main",
-            "command_profiles": {"verify": ["pytest -q"]},
+            "command_profiles": {"verify": []},
         },
     )
     project_resp.raise_for_status()
@@ -100,6 +155,7 @@ def test_worker_executes_run_via_api(tmp_path, settings: Settings, session) -> N
         "/api/runs",
         json={
             "project_id": project_id,
+            "type": "change",
             "objective": "Build the feature",
             "success_criteria": "Feature lands cleanly",
             "resource_profile": {"pool": "cpu-large", "internet": False, "secrets": []},
@@ -114,7 +170,7 @@ def test_worker_executes_run_via_api(tmp_path, settings: Settings, session) -> N
             id="worker-1",
             host="devbox",
             pools=["cpu-large"],
-            labels=[],
+            labels=["internet", "cpu"],
             secrets=[],
             metadata={},
         ),
@@ -124,28 +180,34 @@ def test_worker_executes_run_via_api(tmp_path, settings: Settings, session) -> N
     worker.codex = FakeCodex()
 
     worker.register()
-    lease = worker.lease()
-    assert lease.leased is True
-    worker.execute_assignment(lease)
 
+    for _ in range(2):
+        lease = worker.lease()
+        assert lease.leased is True
+        worker.execute_assignment(lease)
     waiting_review = client.get(f"/api/runs/{run_id}").json()
     assert waiting_review["status"] == "waiting_review"
-
     client.post(f"/api/runs/{run_id}/approve", json={"actor": "tester"}).raise_for_status()
-    lease = worker.lease()
-    assert lease.work_item is not None
-    assert lease.work_item.kind.value == "implement"
-    worker.execute_assignment(lease)
 
-    lease = worker.lease()
-    assert lease.work_item is not None
-    assert lease.work_item.kind.value == "verify"
-    worker.execute_assignment(lease)
+    for _ in range(2):
+        lease = worker.lease()
+        assert lease.phase_attempt is not None
+        worker.execute_assignment(lease)
+    client.post(f"/api/runs/{run_id}/approve", json={"actor": "tester"}).raise_for_status()
 
+    for _ in range(3):
+        lease = worker.lease()
+        assert lease.phase_attempt is not None
+        worker.execute_assignment(lease)
+
+    run_before_final = client.get(f"/api/runs/{run_id}").json()
+    assert run_before_final["status"] == "waiting_review"
     client.post(f"/api/runs/{run_id}/approve", json={"actor": "tester"}).raise_for_status()
     final_run = client.get(f"/api/runs/{run_id}").json()
     assert final_run["status"] == "done"
     patch_artifacts = [
         artifact for artifact in final_run["artifacts"] if artifact["kind"] == "patch"
     ]
+    artifact_names = {artifact["name"] for artifact in final_run["artifacts"]}
     assert patch_artifacts
+    assert "exec/PROGRAM.md" in artifact_names

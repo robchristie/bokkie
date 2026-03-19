@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
-from ..models import Project, Run, WorkItem
+from ..models import PhaseAttempt, Project, Run
 
 
 class GitError(RuntimeError):
@@ -54,21 +55,26 @@ class RepoWorkspaceManager:
         self,
         project: Project,
         run: Run,
-        work_item: WorkItem,
+        phase_attempt: PhaseAttempt,
         patch_paths: list[Path],
     ) -> Path:
         mirror = self.ensure_mirror(project)
-        worktree = self.worktree_dir / run.id / work_item.id
+        worktree = self.worktree_dir / run.id / phase_attempt.id
         if worktree.exists():
-            subprocess.run(["rm", "-rf", str(worktree)], check=False)
+            shutil.rmtree(worktree)
         worktree.parent.mkdir(parents=True, exist_ok=True)
-        base_ref = work_item.base_ref or run.base_ref or project.default_branch
+        base_ref = run.base_ref or project.default_branch
         resolved_ref = self._resolve_ref(mirror, base_ref)
         _run_git("worktree", "add", "--detach", str(worktree), resolved_ref, git_dir=mirror)
         for patch_path in patch_paths:
             if patch_path.exists() and patch_path.stat().st_size:
                 _run_git("apply", "--whitespace=nowarn", str(patch_path), cwd=worktree)
         return worktree
+
+    def materialize_artifact(self, worktree: Path, relative_path: str, content: bytes) -> None:
+        target = worktree / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
 
     def create_patch(self, worktree: Path) -> bytes | None:
         _run_git("add", "-A", cwd=worktree)
@@ -101,7 +107,7 @@ class RepoWorkspaceManager:
 
     def cleanup(self, worktree: Path) -> None:
         if worktree.exists():
-            subprocess.run(["rm", "-rf", str(worktree)], check=False)
+            shutil.rmtree(worktree)
 
     def _resolve_ref(self, mirror: Path, base_ref: str) -> str:
         candidates = [

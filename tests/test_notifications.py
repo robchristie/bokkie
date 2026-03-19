@@ -23,17 +23,19 @@ def build_run(status: str) -> RunRead:
         {
             "id": "run12345",
             "project_id": "project1",
-            "type": "feature",
+            "type": "change",
+            "task_name": "change",
             "objective": "Ship web-first workflow",
             "success_criteria": "UI covers operator flow",
             "risk_level": "medium",
             "budget": {},
             "resource_profile": {},
-            "current_stage": "review_gate_plan",
+            "current_stage": "plan_review",
             "current_session_id": None,
             "status": status,
             "base_ref": "main",
             "branch_name": "bokkie/run-1234",
+            "run_root": "/tmp/.bokkie/runs/run12345",
             "latest_summary": "Summary text",
             "current_worker_id": None,
             "latest_verifier_result": None,
@@ -48,7 +50,7 @@ def build_run(status: str) -> RunRead:
             "updated_at": "2026-03-18T00:00:00Z",
             "started_at": None,
             "completed_at": None,
-            "work_items": [],
+            "phase_attempts": [],
             "reviews": [],
             "artifacts": [],
             "events": [],
@@ -71,4 +73,3 @@ def test_notifier_only_sends_for_key_checkpoints() -> None:
     notifier.notify_run_checkpoint(build_run(RunStatus.FAILED.value))
 
     assert len(notifier.client.messages) == 3
-

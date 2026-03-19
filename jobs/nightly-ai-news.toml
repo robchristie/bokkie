@@ -1,0 +1,5 @@
+task = "nightly-ai-news"
+schedule = "0 21 * * *"
+
+[params]
+topic = "AI/ML news"

@@ -38,6 +38,9 @@ def worker_command(
     pool: list[str] = typer.Option([], "--pool"),
     label: list[str] = typer.Option([], "--label"),
     secret: list[str] = typer.Option([], "--secret"),
+    executor_name: str | None = typer.Option(None, "--executor-name"),
+    target_phase_attempt_id: str | None = typer.Option(None, "--target-phase-attempt-id"),
+    once: bool = typer.Option(False, "--once"),
     cpu_cores: int | None = typer.Option(None, "--cpu-cores"),
     ram_gb: int | None = typer.Option(None, "--ram-gb"),
     gpu_model: str | None = typer.Option(None, "--gpu-model"),
@@ -54,9 +57,13 @@ def worker_command(
         ram_gb=ram_gb,
         gpu_model=gpu_model,
         gpu_vram_gb=gpu_vram_gb,
-        metadata={},
+        metadata={"executor_name": executor_name} if executor_name else {},
     )
-    WorkerRunner(settings=settings, worker=worker).run_forever()
+    runner = WorkerRunner(settings=settings, worker=worker)
+    if once:
+        runner.run_once(target_phase_attempt_id=target_phase_attempt_id)
+        return
+    runner.run_forever()
 
 
 @app.command("telegram")

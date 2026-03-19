@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -8,19 +9,23 @@ from typing import Any
 import httpx
 
 from .config import Settings
-from .enums import ArtifactKind, WorkItemKind
-from .prompts import build_prompt, summarize_event_line
+from .enums import ArtifactKind, PhaseName
+from .models import PhaseAttempt, Project, Run
+from .prompts import build_phase_prompt, summarize_event_line
 from .schemas import (
-    ImplementResult,
-    PlanResult,
+    ExecutePhaseResult,
+    PhaseLeaseResponse,
+    PlanPhaseResult,
     ProjectRead,
+    ReviewPhaseResult,
     RunRead,
-    VerifyResult,
+    SpecPhaseResult,
+    VerifyCommandResult,
+    VerifyPhaseResult,
     WorkerCapabilities,
     WorkerHeartbeatIn,
-    WorkItemLeaseResponse,
 )
-from .services.codex import CodexCliBackend, CodexExecutionError
+from .services.codex import CodexAppServerBackend, CodexExecutionError
 from .services.gitops import RepoWorkspaceManager
 
 
@@ -35,7 +40,7 @@ class WorkerRunner:
         self.worker = worker
         self.api_base_url = api_base_url or settings.api_base_url
         self.client = httpx.Client(base_url=self.api_base_url, timeout=120)
-        self.codex = CodexCliBackend(settings)
+        self.codex = CodexAppServerBackend(settings)
         self.git = RepoWorkspaceManager(settings.worker_cache_dir, settings.worker_worktree_dir)
 
     def run_forever(self) -> None:
@@ -48,6 +53,15 @@ class WorkerRunner:
                 continue
             self.execute_assignment(lease)
 
+    def run_once(self, target_phase_attempt_id: str | None = None) -> bool:
+        self.register()
+        self.heartbeat(0)
+        lease = self.lease(target_phase_attempt_id=target_phase_attempt_id)
+        if not lease.leased:
+            return False
+        self.execute_assignment(lease)
+        return True
+
     def register(self) -> None:
         self.client.post("/api/workers/register", json=self.worker.model_dump()).raise_for_status()
 
@@ -57,16 +71,19 @@ class WorkerRunner:
             f"/api/workers/{self.worker.id}/heartbeat", json=payload
         ).raise_for_status()
 
-    def lease(self) -> WorkItemLeaseResponse:
-        response = self.client.post(f"/api/workers/{self.worker.id}/lease")
+    def lease(self, target_phase_attempt_id: str | None = None) -> PhaseLeaseResponse:
+        params = {}
+        if target_phase_attempt_id:
+            params["target_phase_attempt_id"] = target_phase_attempt_id
+        response = self.client.post(f"/api/workers/{self.worker.id}/lease", params=params)
         response.raise_for_status()
-        return WorkItemLeaseResponse.model_validate(response.json())
+        return PhaseLeaseResponse.model_validate(response.json())
 
-    def execute_assignment(self, lease: WorkItemLeaseResponse) -> None:
-        assert lease.work_item is not None
+    def execute_assignment(self, lease: PhaseLeaseResponse) -> None:
+        assert lease.phase_attempt is not None
         assert lease.project is not None
         assert lease.run is not None
-        work_item = lease.work_item
+        phase_attempt = lease.phase_attempt
         run = lease.run
         project = lease.project
         self.heartbeat(1)
@@ -76,60 +93,81 @@ class WorkerRunner:
             worktree = self.git.prepare_worktree(
                 self._project_model(project),
                 self._run_model(run),
-                self._work_item_model(work_item),
+                self._phase_model(phase_attempt),
                 patch_paths,
             )
-            if work_item.kind == WorkItemKind.PUBLISH:
-                self._publish(worktree, project, run, work_item)
-                return
-            prompt = build_prompt(
+            self._materialize_input_artifacts(worktree, lease.input_artifacts)
+            phase_model = self._phase_model(phase_attempt)
+            if phase_attempt.phase_name == PhaseName.VERIFY:
+                command_results = self._run_evaluator_commands(worktree, lease.evaluator_commands)
+                phase_model.payload["command_results"] = [
+                    result.model_dump() for result in command_results
+                ]
+            prompt = build_phase_prompt(
+                self.settings,
                 self._project_model(project),
                 self._run_model(run),
-                self._work_item_model(work_item),
-                work_item.payload.get("operator_notes", []),
+                phase_model,
+                worktree,
+                lease.operator_notes,
+                lease.input_artifacts,
+                lease.evaluator_commands,
             )
             schema_model = {
-                WorkItemKind.PLAN: PlanResult,
-                WorkItemKind.IMPLEMENT: ImplementResult,
-                WorkItemKind.VERIFY: VerifyResult,
-            }[work_item.kind]
+                PhaseName.PLAN: PlanPhaseResult,
+                PhaseName.PLAN_REVIEW: ReviewPhaseResult,
+                PhaseName.SPEC: SpecPhaseResult,
+                PhaseName.SPEC_REVIEW: ReviewPhaseResult,
+                PhaseName.EXECUTE: ExecutePhaseResult,
+                PhaseName.VERIFY: VerifyPhaseResult,
+                PhaseName.FINAL_REVIEW: ReviewPhaseResult,
+            }[phase_attempt.phase_name]
             result = self.codex.run(
                 worktree,
                 prompt,
                 schema_model=schema_model,
-                kind=work_item.kind,
-                on_event=lambda event: self._post_event(work_item.id, event),
+                writable=phase_attempt.phase_name == PhaseName.EXECUTE,
+                internet=self._phase_internet(phase_attempt.phase_name),
+                on_event=lambda event: self._post_event(phase_attempt.id, event),
+                steering_supplier=lambda: self._claim_notes(phase_attempt.id),
             )
+            final_output = result.final_output
+            if phase_attempt.phase_name == PhaseName.VERIFY:
+                command_results = phase_model.payload.get("command_results", [])
+                final_output["command_results"] = command_results
+            log_relative_path = self._log_relative_path(phase_attempt.phase_name, phase_attempt.id)
             self._upload_artifact(
-                work_item.id,
+                phase_attempt.id,
                 kind=ArtifactKind.FINAL_MESSAGE.value,
-                name="last-message.json",
+                name=Path(log_relative_path).name,
                 content=result.raw_last_message.encode(),
-                metadata={"kind": work_item.kind},
+                metadata={"phase": phase_attempt.phase_name.value},
+                relative_path=log_relative_path,
             )
-            if work_item.kind == WorkItemKind.IMPLEMENT:
+            if phase_attempt.phase_name == PhaseName.EXECUTE:
                 patch = self.git.create_patch(worktree)
                 if patch:
                     self._upload_artifact(
-                        work_item.id,
+                        phase_attempt.id,
                         kind=ArtifactKind.PATCH.value,
-                        name="changes.patch",
+                        name=f"{phase_attempt.id}.patch",
                         content=patch,
                         metadata={"branch_name": run.branch_name},
+                        relative_path=f"exec/patches/{phase_attempt.id}.patch",
                     )
             completion_payload = {
                 "success": True,
                 "worker_id": self.worker.id,
-                "summary": result.final_output.get("summary"),
-                "result": result.final_output,
+                "summary": final_output.get("summary"),
+                "result": final_output,
             }
             self.client.post(
-                f"/api/work-items/{work_item.id}/complete",
+                f"/api/phase-attempts/{phase_attempt.id}/complete",
                 json=completion_payload,
             ).raise_for_status()
         except CodexExecutionError as exc:
             self.client.post(
-                f"/api/work-items/{work_item.id}/complete",
+                f"/api/phase-attempts/{phase_attempt.id}/complete",
                 json={
                     "success": False,
                     "worker_id": self.worker.id,
@@ -142,26 +180,47 @@ class WorkerRunner:
                 self.git.cleanup(worktree)
             self.heartbeat(0)
 
-    def _publish(self, worktree: Path, project: ProjectRead, run: RunRead, work_item: Any) -> None:
-        if not project.push_remote:
-            raise RuntimeError("Project has no push remote configured")
-        self.git.push_branch(worktree, project.push_remote, run.branch_name)
-        self.client.post(
-            f"/api/work-items/{work_item.id}/complete",
-            json={
-                "success": True,
-                "worker_id": self.worker.id,
-                "summary": f"Pushed branch {run.branch_name} to {project.push_remote}",
-                "result": {"summary": f"Pushed branch {run.branch_name}"},
-            },
-        ).raise_for_status()
+    def _run_evaluator_commands(
+        self, worktree: Path, commands: list[str]
+    ) -> list[VerifyCommandResult]:
+        results: list[VerifyCommandResult] = []
+        for command in commands:
+            completed = subprocess.run(
+                ["zsh", "-lc", command],
+                cwd=worktree,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            results.append(
+                VerifyCommandResult(
+                    command=command,
+                    exit_code=completed.returncode,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                )
+            )
+        return results
 
-    def _post_event(self, work_item_id: str, event: dict[str, Any]) -> None:
+    def _phase_internet(self, phase_name: PhaseName) -> bool:
+        return phase_name in {
+            PhaseName.PLAN,
+            PhaseName.PLAN_REVIEW,
+            PhaseName.SPEC_REVIEW,
+            PhaseName.FINAL_REVIEW,
+        }
+
+    def _claim_notes(self, phase_attempt_id: str) -> list[str]:
+        response = self.client.post(f"/api/phase-attempts/{phase_attempt_id}/notes/claim")
+        response.raise_for_status()
+        return response.json().get("notes", [])
+
+    def _post_event(self, phase_attempt_id: str, event: dict[str, Any]) -> None:
         summary = summarize_event_line(event)
         self.client.post(
-            f"/api/work-items/{work_item_id}/events",
+            f"/api/phase-attempts/{phase_attempt_id}/events",
             json={
-                "event_type": event.get("type", "codex.event"),
+                "event_type": event.get("method", event.get("type", "codex.event")),
                 "summary": summary,
                 "payload": event,
                 "worker_id": self.worker.id,
@@ -169,22 +228,29 @@ class WorkerRunner:
         ).raise_for_status()
 
     def _upload_artifact(
-        self, work_item_id: str, kind: str, name: str, content: bytes, metadata: dict[str, Any]
+        self,
+        phase_attempt_id: str,
+        *,
+        kind: str,
+        name: str,
+        content: bytes,
+        metadata: dict[str, Any],
+        relative_path: str | None = None,
     ) -> None:
         files = {"file": (name, content, "application/octet-stream")}
-        data = {"kind": kind, "metadata": json.dumps(metadata)}
+        data = {"kind": kind, "metadata": json.dumps(metadata), "relative_path": relative_path or ""}
         self.client.post(
-            f"/api/work-items/{work_item_id}/artifacts", files=files, data=data
+            f"/api/phase-attempts/{phase_attempt_id}/artifacts", files=files, data=data
         ).raise_for_status()
 
+    def _materialize_input_artifacts(self, worktree: Path, input_artifacts: dict[str, str]) -> None:
+        for relative_path, url in input_artifacts.items():
+            response = self.client.get(self._request_url(url))
+            response.raise_for_status()
+            self.git.materialize_artifact(worktree, relative_path, response.content)
+
     def _download_patch(self, url: str) -> Path:
-        request_url = url
-        client_base_url = getattr(self.client, "base_url", None)
-        if client_base_url is not None:
-            base_url_text = str(client_base_url).rstrip("/")
-            if url.startswith(base_url_text):
-                request_url = url.removeprefix(base_url_text) or "/"
-        response = self.client.get(request_url)
+        response = self.client.get(self._request_url(url))
         response.raise_for_status()
         patch_dir = self.settings.worker_cache_dir / "downloaded-patches"
         patch_dir.mkdir(parents=True, exist_ok=True)
@@ -192,9 +258,16 @@ class WorkerRunner:
         file_path.write_bytes(response.content)
         return file_path
 
-    def _project_model(self, project: ProjectRead) -> Any:
-        from .models import Project
+    def _request_url(self, url: str) -> str:
+        client_base_url = getattr(self.client, "base_url", None)
+        if client_base_url is None:
+            return url
+        base_url_text = str(client_base_url).rstrip("/")
+        if url.startswith(base_url_text):
+            return url.removeprefix(base_url_text) or "/"
+        return url
 
+    def _project_model(self, project: ProjectRead) -> Project:
         return Project(
             id=project.id,
             slug=project.slug,
@@ -208,22 +281,23 @@ class WorkerRunner:
             settings=project.settings,
         )
 
-    def _run_model(self, run: RunRead) -> Any:
-        from .models import Run
-
+    def _run_model(self, run: RunRead) -> Run:
         return Run(
             id=run.id,
             project_id=run.project_id,
             type=run.type.value,
+            task_name=run.task_name,
             objective=run.objective,
             success_criteria=run.success_criteria,
             risk_level=run.risk_level.value,
             budget=run.budget,
             resource_profile=run.resource_profile,
             current_stage=run.current_stage.value,
+            current_session_id=run.current_session_id,
             status=run.status.value,
             base_ref=run.base_ref,
             branch_name=run.branch_name,
+            run_root=run.run_root,
             latest_summary=run.latest_summary,
             current_worker_id=run.current_worker_id,
             latest_verifier_result=run.latest_verifier_result,
@@ -236,23 +310,35 @@ class WorkerRunner:
             publish_strategy=run.publish_strategy.value,
         )
 
-    def _work_item_model(self, work_item: Any) -> Any:
-        from .models import WorkItem
-
-        return WorkItem(
-            id=work_item.id,
+    def _phase_model(self, phase_attempt: Any) -> PhaseAttempt:
+        return PhaseAttempt(
+            id=phase_attempt.id,
             run_id="",
-            sequence_no=work_item.sequence_no,
-            kind=work_item.kind.value,
-            status=work_item.status.value,
-            prompt_template=work_item.prompt_template,
-            requested_pool=work_item.requested_pool,
+            phase_name=phase_attempt.phase_name.value,
+            phase_index=phase_attempt.phase_index,
+            attempt_no=phase_attempt.attempt_no,
+            role=phase_attempt.role.value,
+            status=phase_attempt.status.value,
+            requested_pool=phase_attempt.requested_pool,
+            required_labels=[],
             requires_internet=False,
             required_secrets=[],
             timeout_seconds=1800,
-            retry_limit=1,
-            retry_count=0,
-            base_ref=None,
+            retry_limit=phase_attempt.retry_limit,
+            retry_count=phase_attempt.retry_count,
+            thread_id=phase_attempt.thread_id,
+            last_turn_id=phase_attempt.last_turn_id,
+            worker_id=phase_attempt.worker_id,
             branch_name=None,
-            payload=work_item.payload,
+            input_artifact_refs={},
+            payload=dict(phase_attempt.payload),
         )
+
+    def _log_relative_path(self, phase_name: PhaseName, phase_attempt_id: str) -> str:
+        if phase_name in {PhaseName.PLAN, PhaseName.PLAN_REVIEW}:
+            directory = "plan/logs"
+        elif phase_name in {PhaseName.SPEC, PhaseName.SPEC_REVIEW, PhaseName.EXECUTE}:
+            directory = "exec/logs"
+        else:
+            directory = "verify/logs"
+        return f"{directory}/{phase_attempt_id}-last-message.json"

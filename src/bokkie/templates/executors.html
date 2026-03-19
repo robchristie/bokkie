@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="inline-actions">
+    <h2>Executors</h2>
+    <form method="post" action="/ui/executors/dispatch">
+      <button type="submit">Dispatch Pending Phases</button>
+    </form>
+  </div>
+  <p class="muted">Configured executor backends and the workers they currently own.</p>
+</section>
+
+<div class="grid cards">
+  {% for executor in executors %}
+  <article class="card">
+    <div class="pill">{{ executor.driver }}</div>
+    <h2>{{ executor.name }}</h2>
+    <p><strong>Host:</strong> {{ executor.host or "local" }}</p>
+    <p><strong>Pools:</strong> {{ executor.pools | join(", ") if executor.pools else "any" }}</p>
+    <p><strong>Labels:</strong> {{ executor.labels | join(", ") if executor.labels else "none" }}</p>
+    <p><strong>Pending phases:</strong> {{ executor.pending_phase_count }}</p>
+    <p><strong>Active workers:</strong> {{ executor.active_workers | length }} / {{ executor.max_workers }}</p>
+    {% if executor.active_workers %}
+    <ul>
+      {% for worker in executor.active_workers %}
+      <li class="mono">{{ worker.id }} · {{ worker.host }} · {{ worker.state }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </article>
+  {% else %}
+  <article class="card"><p>No executors configured.</p></article>
+  {% endfor %}
+</div>
+{% endblock %}

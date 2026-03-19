@@ -45,7 +45,7 @@ def test_web_ui_forms_create_project_and_run(session, settings) -> None:
             "project_id": projects[0].id,
             "objective": "Operate from the browser",
             "success_criteria": "Web UI can create and steer runs",
-            "run_type": "feature",
+            "run_type": "change",
             "risk_level": "medium",
             "pool": "cpu-large",
             "internet": "false",
@@ -56,3 +56,16 @@ def test_web_ui_forms_create_project_and_run(session, settings) -> None:
     location = run_response.headers["location"]
     detail = client.get(location)
     assert "Operate from the browser" in detail.text
+    assert "Phase Attempts" in detail.text
+
+    run_id = location.rsplit("/", maxsplit=1)[-1]
+    run_payload = client.get(f"/api/runs/{run_id}").json()
+    phase_id = run_payload["phase_attempts"][0]["id"]
+
+    phase_detail = client.get(f"/ui/phases/{phase_id}")
+    assert phase_detail.status_code == 200
+    assert "plan" in phase_detail.text
+
+    executors = client.get("/ui/executors")
+    assert executors.status_code == 200
+    assert "Executors" in executors.text

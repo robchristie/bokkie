@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid cards">
+  <section class="card">
+    <div class="pill">{{ phase_attempt.status }}</div>
+    <h2>{{ phase_attempt.phase_name }}</h2>
+    <p><strong>Run:</strong> <a href="/ui/runs/{{ run.id }}">{{ run.id[:8] }}</a></p>
+    <p><strong>Attempt:</strong> {{ phase_attempt.attempt_no }}</p>
+    <p><strong>Executor:</strong> {{ phase_attempt.assigned_executor_name or "unassigned" }}</p>
+    <p><strong>Worker:</strong> {{ phase_attempt.worker_id or "idle" }}</p>
+    <p><strong>Thread:</strong> <span class="mono">{{ phase_attempt.thread_id or "-" }}</span></p>
+    <p><strong>Turn:</strong> <span class="mono">{{ phase_attempt.last_turn_id or "-" }}</span></p>
+  </section>
+  <section class="card">
+    <h3>Payload</h3>
+    <pre>{{ phase_attempt.payload | tojson(indent=2) }}</pre>
+  </section>
+</div>
+
+<div class="grid cards">
+  <section class="card">
+    <h3>Result</h3>
+    <pre>{{ phase_attempt.result | tojson(indent=2) if phase_attempt.result else "No result yet." }}</pre>
+  </section>
+  <section class="card">
+    <h3>Artifacts</h3>
+    <table>
+      <thead><tr><th>Name</th><th>Kind</th><th>Download</th></tr></thead>
+      <tbody>
+        {% for artifact in artifacts %}
+        <tr>
+          <td class="mono">{{ artifact.name }}</td>
+          <td>{{ artifact.kind }}</td>
+          <td>{% if artifact.download_url %}<a href="{{ artifact.download_url }}">download</a>{% else %}-{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<section class="card">
+  <h3>Events</h3>
+  {% for event in events %}
+  <p><span class="mono">{{ event.created_at }}</span> {{ event.event_type }} {{ event.summary or "" }}</p>
+  {% else %}
+  <p>No events yet.</p>
+  {% endfor %}
+</section>
+{% endblock %}

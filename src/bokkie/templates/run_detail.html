@@ -7,6 +7,7 @@
     <p><strong>Stage:</strong> <span id="run-stage">{{ run.current_stage }}</span></p>
     <p><strong>Worker:</strong> <span id="run-worker">{{ run.current_worker_id or "idle" }}</span></p>
     <p><strong>Branch:</strong> <span class="mono">{{ run.branch_name }}</span></p>
+    <p><strong>Run Root:</strong> <span class="mono">{{ run.run_root }}</span></p>
     <p><strong>Summary:</strong> <span id="run-summary">{{ run.latest_summary or "n/a" }}</span></p>
     <p><strong>Next:</strong> <span id="run-next">{{ run.next_action or "n/a" }}</span></p>
   </section>
@@ -75,12 +76,34 @@
 
 <div class="grid cards">
   <section class="card">
-    <h3>Work Items</h3>
+    <h3>Phase Attempts</h3>
     <table>
-      <thead><tr><th>#</th><th>Kind</th><th>Status</th><th>Worker</th></tr></thead>
+      <thead><tr><th>Phase</th><th>Attempt</th><th>Executor</th><th>Status</th><th>Worker</th><th>Thread</th></tr></thead>
       <tbody>
-        {% for item in run.work_items %}
-        <tr><td>{{ item.sequence_no }}</td><td>{{ item.kind }}</td><td>{{ item.status }}</td><td>{{ item.worker_id or "-" }}</td></tr>
+        {% for item in run.phase_attempts %}
+        <tr>
+          <td><a href="/ui/phases/{{ item.id }}">{{ item.phase_name }}</a></td>
+          <td>{{ item.attempt_no }}</td>
+          <td>{{ item.assigned_executor_name or "-" }}</td>
+          <td>{{ item.status }}</td>
+          <td>{{ item.worker_id or "-" }}</td>
+          <td class="mono">{{ item.thread_id or "-" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h3>Artifacts</h3>
+    <table>
+      <thead><tr><th>Name</th><th>Kind</th><th>Download</th></tr></thead>
+      <tbody>
+        {% for artifact in run.artifacts %}
+        <tr>
+          <td class="mono">{{ artifact.name }}</td>
+          <td>{{ artifact.kind }}</td>
+          <td>{% if artifact.download_url %}<a href="{{ artifact.download_url }}">download</a>{% else %}-{% endif %}</td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>

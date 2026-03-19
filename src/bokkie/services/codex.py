@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shutil
 import subprocess
-import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +14,6 @@ from typing import Any
 from pydantic import BaseModel
 
 from ..config import Settings
-from ..enums import WorkItemKind
 
 
 class CodexExecutionError(RuntimeError):
@@ -22,92 +22,114 @@ class CodexExecutionError(RuntimeError):
 
 @dataclass
 class CodexRunResult:
+    thread_id: str
+    turn_id: str
     final_output: dict[str, Any]
     raw_last_message: str
 
 
-class CodexCliBackend:
+def _closed_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(schema, dict):
+        return schema
+    cloned: dict[str, Any] = {}
+    for key, value in schema.items():
+        if isinstance(value, dict):
+            cloned[key] = _closed_json_schema(value)
+        elif isinstance(value, list):
+            cloned[key] = [
+                _closed_json_schema(item) if isinstance(item, dict) else item for item in value
+            ]
+        else:
+            cloned[key] = value
+    if cloned.get("type") == "object" and "additionalProperties" not in cloned:
+        cloned["additionalProperties"] = False
+    return cloned
+
+
+class AppServerSession:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.process: subprocess.Popen[str] | None = None
+        self._request_id = 0
+        self._runtime_home: Path | None = None
 
-    def run(
-        self,
-        worktree: Path,
-        prompt: str,
-        schema_model: type[BaseModel],
-        kind: WorkItemKind,
-        on_event: Callable[[dict[str, Any]], None] | None = None,
-    ) -> CodexRunResult:
-        with tempfile.TemporaryDirectory(prefix="bokkie-codex-") as temp_dir_name:
-            temp_dir = Path(temp_dir_name)
-            schema_path = temp_dir / "schema.json"
-            output_path = temp_dir / "last-message.json"
-            schema_path.write_text(json.dumps(schema_model.model_json_schema(), indent=2))
-
-            command = [
-                "codex",
-                "exec",
-                "--json",
-                "--ephemeral",
-                "--skip-git-repo-check",
-                "--cd",
-                str(worktree),
-                "--output-schema",
-                str(schema_path),
-                "--output-last-message",
-                str(output_path),
-            ]
-            if self.settings.default_codex_model:
-                command.extend(["--model", self.settings.default_codex_model])
-
-            if kind == WorkItemKind.IMPLEMENT:
-                command.append("--full-auto")
-            else:
-                command.extend(["--sandbox", "read-only"])
-
-            env = self._build_subprocess_env()
-            process = subprocess.Popen(
-                command,
-                env=env,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            stdout_lines: list[str] = []
-            stderr_text = ""
-            assert process.stdin is not None
-            process.stdin.write(prompt)
-            process.stdin.close()
-            assert process.stdout is not None
-            for line in process.stdout:
-                stdout_lines.append(line)
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if on_event:
-                    on_event(event)
-            if process.stderr is not None:
-                stderr_text = process.stderr.read()
-            return_code = process.wait()
-            if return_code != 0:
-                raise CodexExecutionError(stderr_text.strip() or "".join(stdout_lines).strip())
-            raw_message = output_path.read_text().strip() if output_path.exists() else "{}"
-            try:
-                final_output = json.loads(raw_message)
-            except json.JSONDecodeError as exc:
-                raise CodexExecutionError(
-                    f"Failed to parse structured output: {raw_message}"
-                ) from exc
-            return CodexRunResult(final_output=final_output, raw_last_message=raw_message)
-
-    def _build_subprocess_env(self) -> dict[str, str]:
+    def __enter__(self) -> AppServerSession:
         env = os.environ.copy()
-        runtime_home = self._prepare_runtime_home()
-        if runtime_home is not None:
-            env["HOME"] = str(runtime_home)
-        return env
+        self._runtime_home = self._prepare_runtime_home()
+        if self._runtime_home is not None:
+            env["HOME"] = str(self._runtime_home)
+        self.process = subprocess.Popen(
+            [self.settings.codex_app_server_bin, "app-server"],
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self.request(
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "bokkie",
+                    "version": "0.1.0",
+                },
+                "capabilities": {},
+            },
+        )
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.process is not None and self.process.poll() is None:
+            self.process.kill()
+            self.process.wait(timeout=5)
+
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        on_notification: Callable[[dict[str, Any]], None] | None = None,
+        timeout_seconds: int = 30,
+    ) -> dict[str, Any]:
+        assert self.process is not None
+        assert self.process.stdin is not None
+        self._request_id += 1
+        request_id = self._request_id
+        self.process.stdin.write(
+            json.dumps({"id": request_id, "method": method, "params": params}) + "\n"
+        )
+        self.process.stdin.flush()
+        end = time.time() + timeout_seconds
+        while time.time() < end:
+            message = self._read_message(timeout_seconds=0.5)
+            if message is None:
+                continue
+            if "id" in message:
+                if message["id"] != request_id:
+                    continue
+                if "error" in message:
+                    raise CodexExecutionError(message["error"]["message"])
+                return message["result"]
+            if on_notification:
+                on_notification(message)
+        raise CodexExecutionError(f"Timed out waiting for {method} response")
+
+    def _read_message(self, timeout_seconds: float) -> dict[str, Any] | None:
+        assert self.process is not None
+        assert self.process.stdout is not None
+        streams = [self.process.stdout]
+        if self.process.stderr is not None:
+            streams.append(self.process.stderr)
+        ready, _, _ = select.select(streams, [], [], timeout_seconds)
+        for stream in ready:
+            line = stream.readline()
+            if not line:
+                continue
+            if stream is self.process.stderr:
+                continue
+            return json.loads(line)
+        return None
 
     def _prepare_runtime_home(self) -> Path | None:
         if not any(
@@ -147,3 +169,138 @@ class CodexCliBackend:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         destination.chmod(0o600)
+
+
+class CodexAppServerBackend:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    def run(
+        self,
+        worktree: Path,
+        prompt: str,
+        schema_model: type[BaseModel],
+        *,
+        writable: bool,
+        internet: bool,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+        steering_supplier: Callable[[], list[str]] | None = None,
+    ) -> CodexRunResult:
+        schema = _closed_json_schema(schema_model.model_json_schema())
+        with AppServerSession(self.settings) as session:
+            thread_result = session.request(
+                "thread/start",
+                {
+                    "cwd": str(worktree),
+                    "approvalPolicy": "never",
+                    "ephemeral": False,
+                    **({"model": self.settings.default_codex_model} if self.settings.default_codex_model else {}),
+                },
+                on_notification=on_event,
+            )
+            thread_id = thread_result["thread"]["id"]
+            turn_result = session.request(
+                "turn/start",
+                {
+                    "threadId": thread_id,
+                    "cwd": str(worktree),
+                    "input": [{"type": "text", "text": prompt}],
+                    "outputSchema": schema,
+                    "sandboxPolicy": self._sandbox_policy(
+                        writable=writable,
+                        internet=internet,
+                        worktree=worktree,
+                    ),
+                    **({"model": self.settings.default_codex_model} if self.settings.default_codex_model else {}),
+                },
+                on_notification=on_event,
+            )
+            turn_id = turn_result["turn"]["id"]
+            raw_last_message = self._wait_for_turn_completion(
+                session,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                on_event=on_event,
+                steering_supplier=steering_supplier,
+            )
+            try:
+                final_output = json.loads(raw_last_message)
+            except json.JSONDecodeError as exc:
+                raise CodexExecutionError(
+                    f"Failed to parse structured output: {raw_last_message}"
+                ) from exc
+            return CodexRunResult(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                final_output=final_output,
+                raw_last_message=raw_last_message,
+            )
+
+    def _wait_for_turn_completion(
+        self,
+        session: AppServerSession,
+        *,
+        thread_id: str,
+        turn_id: str,
+        on_event: Callable[[dict[str, Any]], None] | None,
+        steering_supplier: Callable[[], list[str]] | None,
+    ) -> str:
+        last_message = ""
+        last_note_poll = 0.0
+        deadline = time.time() + self.settings.codex_turn_timeout_seconds
+        while time.time() < deadline:
+            message = session._read_message(timeout_seconds=0.5)
+            if message is not None:
+                if "method" in message and on_event:
+                    on_event(message)
+                method = message.get("method")
+                params = message.get("params", {})
+                if method == "item/completed":
+                    item = params.get("item", {})
+                    if item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
+                        last_message = item.get("text", "")
+                if method == "error":
+                    error = params.get("error", {})
+                    raise CodexExecutionError(error.get("message", "codex app-server error"))
+                if method == "turn/completed" and params.get("turn", {}).get("id") == turn_id:
+                    turn = params["turn"]
+                    if turn.get("status") != "completed":
+                        error = turn.get("error") or {}
+                        raise CodexExecutionError(error.get("message", "Codex turn failed"))
+                    if not last_message:
+                        raise CodexExecutionError("Codex completed without a final structured message")
+                    return last_message
+            if (
+                steering_supplier is not None
+                and time.time() - last_note_poll >= 1.0
+            ):
+                notes = [note.strip() for note in steering_supplier() if note.strip()]
+                last_note_poll = time.time()
+                if notes:
+                    session.request(
+                        "turn/steer",
+                        {
+                            "threadId": thread_id,
+                            "expectedTurnId": turn_id,
+                            "input": [
+                                {
+                                    "type": "text",
+                                    "text": "Operator steering note:\n" + "\n".join(f"- {note}" for note in notes),
+                                }
+                            ],
+                        },
+                        on_notification=on_event,
+                    )
+        raise CodexExecutionError("Timed out waiting for Codex turn completion")
+
+    def _sandbox_policy(self, *, writable: bool, internet: bool, worktree: Path) -> dict[str, Any]:
+        if writable:
+            return {
+                "type": "workspaceWrite",
+                "writableRoots": [str(worktree)],
+                "networkAccess": internet,
+            }
+        return {
+            "type": "readOnly",
+            "networkAccess": internet,
+        }

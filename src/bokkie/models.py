@@ -9,6 +9,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 from .enums import (
     ArtifactKind,
+    PhaseAttemptStatus,
+    PhaseName,
+    PhaseRole,
     PublishStrategy,
     ReviewGate,
     ReviewStatus,
@@ -17,8 +20,6 @@ from .enums import (
     RunStatus,
     RunType,
     WorkerState,
-    WorkItemKind,
-    WorkItemStatus,
 )
 
 
@@ -71,6 +72,7 @@ class Worker(Base, TimestampMixin):
 
     runs: Mapped[list[Run]] = relationship(back_populates="current_worker")
     heartbeats: Mapped[list[WorkerHeartbeat]] = relationship(back_populates="worker")
+    phase_attempts: Mapped[list[PhaseAttempt]] = relationship(back_populates="worker")
 
 
 class Run(Base, TimestampMixin):
@@ -78,7 +80,8 @@ class Run(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
-    type: Mapped[str] = mapped_column(String(32), default=RunType.FEATURE.value)
+    type: Mapped[str] = mapped_column(String(32), default=RunType.CHANGE.value)
+    task_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     objective: Mapped[str] = mapped_column(Text)
     success_criteria: Mapped[str] = mapped_column(Text)
     risk_level: Mapped[str] = mapped_column(String(16), default=RiskLevel.MEDIUM.value)
@@ -89,6 +92,7 @@ class Run(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), default=RunStatus.QUEUED.value, index=True)
     base_ref: Mapped[str | None] = mapped_column(String(120), nullable=True)
     branch_name: Mapped[str] = mapped_column(String(160))
+    run_root: Mapped[str] = mapped_column(Text)
     latest_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     current_worker_id: Mapped[str | None] = mapped_column(ForeignKey("workers.id"), nullable=True)
     latest_verifier_result: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
@@ -104,7 +108,7 @@ class Run(Base, TimestampMixin):
 
     project: Mapped[Project] = relationship(back_populates="runs")
     current_worker: Mapped[Worker | None] = relationship(back_populates="runs")
-    work_items: Mapped[list[WorkItem]] = relationship(back_populates="run")
+    phase_attempts: Mapped[list[PhaseAttempt]] = relationship(back_populates="run")
     reviews: Mapped[list[Review]] = relationship(back_populates="run")
     artifacts: Mapped[list[Artifact]] = relationship(back_populates="run")
     events: Mapped[list[Event]] = relationship(back_populates="run")
@@ -112,40 +116,47 @@ class Run(Base, TimestampMixin):
     experiment_results: Mapped[list[ExperimentResult]] = relationship(back_populates="run")
 
 
-class WorkItem(Base, TimestampMixin):
-    __tablename__ = "work_items"
-    __table_args__ = (UniqueConstraint("run_id", "sequence_no", name="uq_run_sequence"),)
+class PhaseAttempt(Base, TimestampMixin):
+    __tablename__ = "phase_attempts"
+    __table_args__ = (UniqueConstraint("run_id", "phase_name", "attempt_no", name="uq_phase_attempt"),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
-    sequence_no: Mapped[int] = mapped_column(Integer)
-    kind: Mapped[str] = mapped_column(String(32), default=WorkItemKind.PLAN.value)
-    status: Mapped[str] = mapped_column(String(32), default=WorkItemStatus.QUEUED.value, index=True)
-    prompt_template: Mapped[str] = mapped_column(String(120))
+    phase_name: Mapped[str] = mapped_column(String(32), default=PhaseName.PLAN.value, index=True)
+    phase_index: Mapped[int] = mapped_column(Integer)
+    attempt_no: Mapped[int] = mapped_column(Integer, default=1)
+    role: Mapped[str] = mapped_column(String(32), default=PhaseRole.PLANNER.value)
+    status: Mapped[str] = mapped_column(
+        String(32), default=PhaseAttemptStatus.QUEUED.value, index=True
+    )
     requested_pool: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    assigned_executor_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    required_labels: Mapped[list[str]] = mapped_column(JSON, default=list)
     requires_internet: Mapped[bool] = mapped_column(default=False)
     required_secrets: Mapped[list[str]] = mapped_column(JSON, default=list)
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=1800)
     retry_limit: Mapped[int] = mapped_column(Integer, default=1)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
-    base_ref: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    dispatch_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_dispatch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    thread_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    last_turn_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(ForeignKey("workers.id"), nullable=True)
     branch_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     worktree_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    worker_id: Mapped[str | None] = mapped_column(ForeignKey("workers.id"), nullable=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    input_artifact_refs: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
     payload: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
     result: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    run: Mapped[Run] = relationship(back_populates="work_items")
-    worker: Mapped[Worker | None] = relationship()
-    leases: Mapped[list[Lease]] = relationship(back_populates="work_item")
-    events: Mapped[list[Event]] = relationship(back_populates="work_item")
-    artifacts: Mapped[list[Artifact]] = relationship(back_populates="work_item")
+    run: Mapped[Run] = relationship(back_populates="phase_attempts")
+    worker: Mapped[Worker | None] = relationship(back_populates="phase_attempts")
+    events: Mapped[list[Event]] = relationship(back_populates="phase_attempt")
+    artifacts: Mapped[list[Artifact]] = relationship(back_populates="phase_attempt")
+    leases: Mapped[list[Lease]] = relationship(back_populates="phase_attempt")
+    reviews: Mapped[list[Review]] = relationship(back_populates="phase_attempt")
 
 
 class Review(Base, TimestampMixin):
@@ -153,6 +164,9 @@ class Review(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    phase_attempt_id: Mapped[str | None] = mapped_column(
+        ForeignKey("phase_attempts.id"), nullable=True
+    )
     gate: Mapped[str] = mapped_column(String(32), default=ReviewGate.PLAN.value)
     status: Mapped[str] = mapped_column(String(32), default=ReviewStatus.PENDING.value, index=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -162,6 +176,7 @@ class Review(Base, TimestampMixin):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     run: Mapped[Run] = relationship(back_populates="reviews")
+    phase_attempt: Mapped[PhaseAttempt | None] = relationship(back_populates="reviews")
 
 
 class Artifact(Base, TimestampMixin):
@@ -169,7 +184,9 @@ class Artifact(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
-    work_item_id: Mapped[str | None] = mapped_column(ForeignKey("work_items.id"), nullable=True)
+    phase_attempt_id: Mapped[str | None] = mapped_column(
+        ForeignKey("phase_attempts.id"), nullable=True
+    )
     kind: Mapped[str] = mapped_column(String(32), default=ArtifactKind.LOG.value)
     name: Mapped[str] = mapped_column(String(200))
     storage_path: Mapped[str] = mapped_column(Text)
@@ -179,7 +196,7 @@ class Artifact(Base, TimestampMixin):
     metadata_json: Mapped[dict[str, object]] = mapped_column("metadata", JSON, default=dict)
 
     run: Mapped[Run] = relationship(back_populates="artifacts")
-    work_item: Mapped[WorkItem | None] = relationship(back_populates="artifacts")
+    phase_attempt: Mapped[PhaseAttempt | None] = relationship(back_populates="artifacts")
 
 
 class Event(Base):
@@ -187,7 +204,9 @@ class Event(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
-    work_item_id: Mapped[str | None] = mapped_column(ForeignKey("work_items.id"), nullable=True)
+    phase_attempt_id: Mapped[str | None] = mapped_column(
+        ForeignKey("phase_attempts.id"), nullable=True
+    )
     worker_id: Mapped[str | None] = mapped_column(ForeignKey("workers.id"), nullable=True)
     event_type: Mapped[str] = mapped_column(String(120), index=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -195,7 +214,7 @@ class Event(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     run: Mapped[Run] = relationship(back_populates="events")
-    work_item: Mapped[WorkItem | None] = relationship(back_populates="events")
+    phase_attempt: Mapped[PhaseAttempt | None] = relationship(back_populates="events")
 
 
 class WorkerHeartbeat(Base):
@@ -214,7 +233,7 @@ class Lease(Base):
     __tablename__ = "leases"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
-    work_item_id: Mapped[str] = mapped_column(ForeignKey("work_items.id"), index=True)
+    phase_attempt_id: Mapped[str] = mapped_column(ForeignKey("phase_attempts.id"), index=True)
     worker_id: Mapped[str] = mapped_column(ForeignKey("workers.id"), index=True)
     acquired_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -223,7 +242,7 @@ class Lease(Base):
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     release_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    work_item: Mapped[WorkItem] = relationship(back_populates="leases")
+    phase_attempt: Mapped[PhaseAttempt] = relationship(back_populates="leases")
 
 
 class OperatorNote(Base):

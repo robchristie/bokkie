@@ -17,7 +17,8 @@ def settings(tmp_path) -> Settings:
     return Settings(
         database_url="sqlite:///:memory:",
         api_base_url="http://testserver",
-        artifacts_dir=tmp_path / "artifacts",
+        runs_root=tmp_path / ".bokkie" / "runs",
+        artifacts_dir=tmp_path / ".bokkie" / "runs",
         worker_cache_dir=tmp_path / "cache",
         worker_worktree_dir=tmp_path / "worktrees",
         worker_cleanup_worktrees=True,
