@@ -15,6 +15,11 @@ from .db import SessionLocal, database_healthcheck, get_db, init_db
 from .enums import RiskLevel, RunType
 from .models import PhaseAttempt
 from .schemas import (
+    CampaignDraftApprove,
+    CampaignDraftCreate,
+    CampaignDraftRead,
+    CampaignRead,
+    CampaignSummary,
     EventRead,
     OperatorDecision,
     OperatorNoteIn,
@@ -51,6 +56,7 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
         settings.runs_root.mkdir(parents=True, exist_ok=True)
+        settings.campaigns_root.mkdir(parents=True, exist_ok=True)
         init_db()
         dispatcher_task = None
         if settings.dispatcher_enabled:
@@ -79,7 +85,7 @@ def create_app() -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def root() -> RedirectResponse:
-        return RedirectResponse(url="/ui/runs")
+        return RedirectResponse(url="/ui/intake")
 
     @app.post("/api/projects", response_model=ProjectRead)
     def create_project(
@@ -90,6 +96,122 @@ def create_app() -> FastAPI:
             return ProjectRead.model_validate(service.create_project(data))
         except OrchestrationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/campaign-drafts", response_model=CampaignDraftRead)
+    def create_campaign_draft(
+        data: CampaignDraftCreate,
+        service: OrchestratorService = Depends(get_service),
+    ) -> CampaignDraftRead:
+        try:
+            return service.serialize_campaign_draft(service.create_campaign_draft(data))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/campaign-drafts", response_model=list[CampaignDraftRead])
+    def list_campaign_drafts(
+        service: OrchestratorService = Depends(get_service),
+    ) -> list[CampaignDraftRead]:
+        return [service.serialize_campaign_draft(draft) for draft in service.list_campaign_drafts()]
+
+    @app.get("/api/campaign-drafts/{draft_id}", response_model=CampaignDraftRead)
+    def get_campaign_draft(
+        draft_id: str,
+        service: OrchestratorService = Depends(get_service),
+    ) -> CampaignDraftRead:
+        try:
+            return service.serialize_campaign_draft(service.get_campaign_draft(draft_id))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/campaign-drafts/{draft_id}/approve", response_model=CampaignRead)
+    def approve_campaign_draft(
+        draft_id: str,
+        overrides: CampaignDraftApprove,
+        service: OrchestratorService = Depends(get_service),
+    ) -> CampaignRead:
+        try:
+            campaign = service.approve_campaign_draft(
+                draft_id,
+                OperatorDecision(actor="operator"),
+                overrides,
+            )
+            return service.serialize_campaign(campaign)
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/campaign-drafts/{draft_id}/reject", response_model=CampaignDraftRead)
+    def reject_campaign_draft(
+        draft_id: str,
+        decision: OperatorDecision,
+        service: OrchestratorService = Depends(get_service),
+    ) -> CampaignDraftRead:
+        try:
+            return service.serialize_campaign_draft(
+                service.reject_campaign_draft(draft_id, decision)
+            )
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/campaigns", response_model=list[CampaignSummary])
+    def list_campaigns(
+        service: OrchestratorService = Depends(get_service),
+    ) -> list[CampaignSummary]:
+        return [service.serialize_campaign(campaign) for campaign in service.list_campaigns()]
+
+    @app.get("/api/campaigns/{campaign_id}", response_model=CampaignRead)
+    def get_campaign(
+        campaign_id: str,
+        service: OrchestratorService = Depends(get_service),
+    ) -> CampaignRead:
+        try:
+            return service.serialize_campaign(service.get_campaign(campaign_id))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/campaigns/{campaign_id}/steer", response_model=CampaignRead)
+    def steer_campaign(
+        campaign_id: str,
+        data: OperatorNoteIn,
+        service: OrchestratorService = Depends(get_service),
+    ) -> CampaignRead:
+        try:
+            return service.serialize_campaign(service.steer_campaign(campaign_id, data))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/campaigns/{campaign_id}/approve", response_model=CampaignRead)
+    def approve_campaign(
+        campaign_id: str,
+        decision: OperatorDecision,
+        service: OrchestratorService = Depends(get_service),
+    ) -> CampaignRead:
+        try:
+            return service.serialize_campaign(service.approve_campaign_gate(campaign_id, decision))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/campaigns/{campaign_id}/reject", response_model=CampaignRead)
+    def reject_campaign(
+        campaign_id: str,
+        decision: OperatorDecision,
+        service: OrchestratorService = Depends(get_service),
+    ) -> CampaignRead:
+        try:
+            return service.serialize_campaign(service.reject_campaign_gate(campaign_id, decision))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/campaigns/{campaign_id}/artifacts/{relative_path:path}")
+    def download_campaign_artifact(
+        campaign_id: str,
+        relative_path: str,
+        service: OrchestratorService = Depends(get_service),
+    ) -> FileResponse:
+        try:
+            file_path = service.campaign_file_path(campaign_id, relative_path)
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(file_path, filename=Path(relative_path).name)
 
     @app.post("/api/runs", response_model=RunRead)
     def create_run(data: RunCreate, service: OrchestratorService = Depends(get_service)) -> RunRead:
@@ -197,7 +319,9 @@ def create_app() -> FastAPI:
         service: OrchestratorService = Depends(get_service),
     ) -> PhaseLeaseResponse:
         try:
-            return service.claim_phase_attempt(worker_id, target_phase_attempt_id=target_phase_attempt_id)
+            return service.claim_phase_attempt(
+                worker_id, target_phase_attempt_id=target_phase_attempt_id
+            )
         except OrchestrationError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -253,10 +377,14 @@ def create_app() -> FastAPI:
         raw_bytes = await file.read()
         filename = file.filename or "artifact.bin"
         if relative_path:
-            stored = artifact_store.put_relative_bytes(Path(phase_attempt.run_id) / relative_path, raw_bytes)
+            stored = artifact_store.put_relative_bytes(
+                Path(phase_attempt.run_id) / relative_path, raw_bytes
+            )
             artifact_name = relative_path
         else:
-            stored = artifact_store.put_bytes(phase_attempt.run_id, phase_attempt_id, filename, raw_bytes)
+            stored = artifact_store.put_bytes(
+                phase_attempt.run_id, phase_attempt_id, filename, raw_bytes
+            )
             artifact_name = filename
         artifact = service.create_artifact(
             run_id=phase_attempt.run_id,
@@ -285,6 +413,184 @@ def create_app() -> FastAPI:
             media_type=artifact.content_type,
             filename=Path(artifact.name).name,
         )
+
+    @app.get("/ui/intake", response_class=HTMLResponse)
+    def intake_page(
+        request: Request,
+        draft_id: str | None = None,
+        service: OrchestratorService = Depends(get_service),
+    ) -> HTMLResponse:
+        draft = None
+        if draft_id:
+            try:
+                draft = service.serialize_campaign_draft(service.get_campaign_draft(draft_id))
+            except OrchestrationError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        projects = [ProjectRead.model_validate(project) for project in service.list_projects()]
+        campaigns = [
+            service.serialize_campaign(campaign) for campaign in service.list_campaigns()[:5]
+        ]
+        return templates.TemplateResponse(
+            request,
+            "intake.html",
+            {
+                "draft": draft,
+                "projects": projects,
+                "campaigns": campaigns,
+                "title": "Intake",
+                "run_types": [value.value for value in RunType],
+                "risk_levels": [value.value for value in RiskLevel],
+            },
+        )
+
+    @app.post("/ui/campaign-drafts")
+    def create_campaign_draft_form(
+        prompt: str = Form(...),
+        project_id: str | None = Form(None),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            draft = service.create_campaign_draft(
+                CampaignDraftCreate(prompt=prompt, project_id=project_id or None)
+            )
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/intake?draft_id={draft.id}", status_code=303)
+
+    @app.post("/ui/campaign-drafts/{draft_id}/approve")
+    def approve_campaign_draft_form(
+        draft_id: str,
+        project_id: str | None = Form(None),
+        title: str | None = Form(None),
+        objective: str | None = Form(None),
+        campaign_type: str | None = Form(None),
+        first_run_type: str | None = Form(None),
+        task_name: str | None = Form(None),
+        preferred_pool: str | None = Form(None),
+        requires_internet: bool = Form(False),
+        max_iterations: int | None = Form(None),
+        max_total_cost: float | None = Form(None),
+        auto_continue: bool = Form(False),
+        first_run_objective: str | None = Form(None),
+        first_run_success_criteria: str | None = Form(None),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            campaign = service.approve_campaign_draft(
+                draft_id,
+                OperatorDecision(actor="web-ui"),
+                CampaignDraftApprove(
+                    project_id=project_id or None,
+                    title=title or None,
+                    objective=objective or None,
+                    campaign_type=campaign_type or None,
+                    first_run_type=first_run_type or None,
+                    task_name=task_name or None,
+                    preferred_pool=preferred_pool or None,
+                    requires_internet=requires_internet,
+                    max_iterations=max_iterations,
+                    max_total_cost=max_total_cost,
+                    auto_continue=auto_continue,
+                    first_run_objective=first_run_objective or None,
+                    first_run_success_criteria=first_run_success_criteria or None,
+                ),
+            )
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/campaigns/{campaign.id}", status_code=303)
+
+    @app.post("/ui/campaign-drafts/{draft_id}/reject")
+    def reject_campaign_draft_form(
+        draft_id: str,
+        reason: str = Form("Rejected from web UI"),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            service.reject_campaign_draft(draft_id, OperatorDecision(actor="web-ui", reason=reason))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(url="/ui/intake", status_code=303)
+
+    @app.get("/ui/campaigns", response_class=HTMLResponse)
+    def campaigns_page(
+        request: Request,
+        service: OrchestratorService = Depends(get_service),
+    ) -> HTMLResponse:
+        campaigns = [service.serialize_campaign(campaign) for campaign in service.list_campaigns()]
+        return templates.TemplateResponse(
+            request,
+            "campaigns.html",
+            {"campaigns": campaigns, "title": "Campaigns"},
+        )
+
+    @app.get("/ui/campaigns/{campaign_id}", response_class=HTMLResponse)
+    def campaign_detail_page(
+        request: Request,
+        campaign_id: str,
+        service: OrchestratorService = Depends(get_service),
+    ) -> HTMLResponse:
+        try:
+            campaign = service.serialize_campaign(service.get_campaign(campaign_id))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        active_run = next(
+            (run for run in reversed(campaign.runs) if run.id == campaign.active_run_id), None
+        )
+        pending_review = None
+        if active_run is not None:
+            pending_review = next(
+                (review for review in reversed(active_run.reviews) if review.status == "pending"),
+                None,
+            )
+        return templates.TemplateResponse(
+            request,
+            "campaign_detail.html",
+            {
+                "campaign": campaign,
+                "active_run": active_run,
+                "pending_review": pending_review,
+                "title": campaign.title,
+            },
+        )
+
+    @app.post("/ui/campaigns/{campaign_id}/steer")
+    def steer_campaign_form(
+        campaign_id: str,
+        note: str = Form(...),
+        created_by: str = Form("web-ui"),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            service.steer_campaign(campaign_id, OperatorNoteIn(note=note, created_by=created_by))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/campaigns/{campaign_id}", status_code=303)
+
+    @app.post("/ui/campaigns/{campaign_id}/approve")
+    def approve_campaign_form(
+        campaign_id: str,
+        actor: str = Form("web-ui"),
+        reason: str | None = Form(None),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            service.approve_campaign_gate(campaign_id, OperatorDecision(actor=actor, reason=reason))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/campaigns/{campaign_id}", status_code=303)
+
+    @app.post("/ui/campaigns/{campaign_id}/reject")
+    def reject_campaign_form(
+        campaign_id: str,
+        actor: str = Form("web-ui"),
+        reason: str = Form(...),
+        service: OrchestratorService = Depends(get_service),
+    ) -> RedirectResponse:
+        try:
+            service.reject_campaign_gate(campaign_id, OperatorDecision(actor=actor, reason=reason))
+        except OrchestrationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/ui/campaigns/{campaign_id}", status_code=303)
 
     @app.get("/ui/runs", response_class=HTMLResponse)
     def runs_page(
@@ -315,7 +621,9 @@ def create_app() -> FastAPI:
             run = service.serialize_run(service.get_run(run_id))
         except OrchestrationError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        pending_review = next((review for review in reversed(run.reviews) if review.status == "pending"), None)
+        pending_review = next(
+            (review for review in reversed(run.reviews) if review.status == "pending"), None
+        )
         return templates.TemplateResponse(
             request,
             "run_detail.html",

@@ -74,12 +74,10 @@ def load_repo_config(settings: Settings) -> BokkieRepoConfig:
             jobs[path.stem] = JobConfig(name=path.stem, **raw)
 
     run_types = {
-        name: RunTypeConfig(**config)
-        for name, config in data.get("run_types", {}).items()
+        name: RunTypeConfig(**config) for name, config in data.get("run_types", {}).items()
     }
     executors = {
-        name: ExecutorConfig(**config)
-        for name, config in data.get("executors", {}).items()
+        name: ExecutorConfig(**config) for name, config in data.get("executors", {}).items()
     }
     return BokkieRepoConfig(
         run_types=run_types,

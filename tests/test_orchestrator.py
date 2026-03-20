@@ -107,7 +107,8 @@ def test_change_run_lifecycle_from_plan_to_done(session, settings) -> None:
         },
     )
     spec_review = next(
-        phase for phase in service.get_run(run.id).phase_attempts
+        phase
+        for phase in service.get_run(run.id).phase_attempts
         if phase.phase_name == PhaseName.SPEC_REVIEW.value
     )
     service.complete_phase_attempt(
@@ -145,7 +146,8 @@ def test_change_run_lifecycle_from_plan_to_done(session, settings) -> None:
         },
     )
     verify_phase = next(
-        phase for phase in service.get_run(run.id).phase_attempts
+        phase
+        for phase in service.get_run(run.id).phase_attempts
         if phase.phase_name == PhaseName.VERIFY.value
     )
     assert verify_phase.status == PhaseAttemptStatus.QUEUED.value
@@ -167,7 +169,8 @@ def test_change_run_lifecycle_from_plan_to_done(session, settings) -> None:
         },
     )
     final_review_phase = next(
-        phase for phase in service.get_run(run.id).phase_attempts
+        phase
+        for phase in service.get_run(run.id).phase_attempts
         if phase.phase_name == PhaseName.FINAL_REVIEW.value
     )
     service.complete_phase_attempt(
@@ -199,7 +202,9 @@ def test_change_run_lifecycle_from_plan_to_done(session, settings) -> None:
     assert "verify/results.json" in artifact_names
 
 
-def test_claim_requires_matching_capabilities_and_requeues_expired_attempts(session, settings) -> None:
+def test_claim_requires_matching_capabilities_and_requeues_expired_attempts(
+    session, settings
+) -> None:
     service = OrchestratorService(session, settings)
     project_id = create_project(service)
     run = service.create_run(

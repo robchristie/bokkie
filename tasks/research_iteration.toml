@@ -6,3 +6,4 @@ evaluator_commands = [
   "uv run pytest -q",
 ]
 timeout_seconds = 3600
+auto_continue = true

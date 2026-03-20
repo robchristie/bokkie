@@ -37,6 +37,10 @@
         display: grid;
         gap: 1rem;
       }
+      .stack {
+        display: grid;
+        gap: 0.75rem;
+      }
       .cards {
         grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       }
@@ -117,12 +121,29 @@
         overflow-x: auto;
         white-space: pre-wrap;
       }
+      .hero {
+        display: grid;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+      }
+      .artifact-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      .artifact-links a {
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 600;
+      }
     </style>
   </head>
   <body>
     <header>
       <h1>Bokkie</h1>
       <nav>
+        <a href="/ui/intake">Intake</a>
+        <a href="/ui/campaigns">Campaigns</a>
         <a href="/ui/runs">Runs</a>
         <a href="/ui/reviews">Approvals</a>
         <a href="/ui/workers">Workers</a>

@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 
 from .enums import (
     ArtifactKind,
+    CampaignDraftStatus,
+    CampaignStatus,
     PhaseAttemptStatus,
     PhaseName,
     PhaseRole,
@@ -24,6 +26,21 @@ class Budget(BaseModel):
     max_turns: int | None = None
     max_wall_clock: int | None = None
     max_cost: float | None = None
+
+
+class CampaignBudget(BaseModel):
+    max_iterations: int | None = None
+    max_total_cost: float | None = None
+    max_active_runs: int = 1
+    recorded_total_cost: float | None = None
+
+
+class ContinuationPolicy(BaseModel):
+    auto_continue: bool = False
+    require_approval_for: list[str] = Field(default_factory=list)
+    pause_on_data_family_change: bool = True
+    pause_on_executor_change: bool = True
+    pause_on_special_resources: bool = True
 
 
 class ResourceProfile(BaseModel):
@@ -52,8 +69,68 @@ class ProjectRead(ProjectCreate):
     model_config = {"from_attributes": True}
 
 
+class CampaignDraftPayload(BaseModel):
+    inferred_project_id: str | None = None
+    inferred_project_slug: str | None = None
+    inferred_project_name: str | None = None
+    title: str
+    objective: str
+    campaign_type: str
+    first_run_type: RunType = RunType.EXPERIMENT
+    task_name: str | None = None
+    preferred_pool: str | None = None
+    preferred_executor_labels: list[str] = Field(default_factory=list)
+    requires_internet: bool = False
+    budget: CampaignBudget = Field(default_factory=CampaignBudget)
+    continuation_policy: ContinuationPolicy = Field(default_factory=ContinuationPolicy)
+    approval_gates: list[str] = Field(default_factory=list)
+    initial_deliverables: list[str] = Field(default_factory=list)
+    rationale: list[str] = Field(default_factory=list)
+    first_run_objective: str
+    first_run_success_criteria: str
+
+
+class CampaignDraftCreate(BaseModel):
+    prompt: str
+    project_id: str | None = None
+
+
+class CampaignDraftApprove(BaseModel):
+    project_id: str | None = None
+    title: str | None = None
+    objective: str | None = None
+    campaign_type: str | None = None
+    first_run_type: RunType | None = None
+    task_name: str | None = None
+    preferred_pool: str | None = None
+    requires_internet: bool | None = None
+    max_iterations: int | None = None
+    max_total_cost: float | None = None
+    auto_continue: bool | None = None
+    first_run_objective: str | None = None
+    first_run_success_criteria: str | None = None
+
+
+class CampaignDraftRead(BaseModel):
+    id: str
+    project_id: str | None = None
+    campaign_id: str | None = None
+    operator_prompt: str
+    status: CampaignDraftStatus
+    draft: CampaignDraftPayload
+    decision_reason: str | None = None
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class RunCreate(BaseModel):
     project_id: str
+    campaign_id: str | None = None
+    iteration_no: int | None = None
     type: RunType = RunType.CHANGE
     task_name: str | None = None
     objective: str
@@ -73,6 +150,7 @@ class PhaseAttemptSummary(BaseModel):
     role: PhaseRole
     status: PhaseAttemptStatus
     requested_pool: str | None = None
+    requires_internet: bool = False
     assigned_executor_name: str | None = None
     worker_id: str | None = None
     retry_count: int
@@ -128,9 +206,23 @@ class EventRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class OperatorNoteRead(BaseModel):
+    id: str
+    run_id: str | None = None
+    campaign_id: str | None = None
+    note: str
+    created_by: str
+    applied_at: datetime | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class RunRead(BaseModel):
     id: str
     project_id: str
+    campaign_id: str | None = None
+    iteration_no: int | None = None
     type: RunType
     task_name: str | None = None
     objective: str
@@ -162,8 +254,47 @@ class RunRead(BaseModel):
     reviews: list[ReviewSummary] = Field(default_factory=list)
     artifacts: list[ArtifactSummary] = Field(default_factory=list)
     events: list[EventRead] = Field(default_factory=list)
+    notes: list[OperatorNoteRead] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
+
+
+class CampaignFileLink(BaseModel):
+    label: str
+    relative_path: str
+    download_url: str
+
+
+class CampaignSummary(BaseModel):
+    id: str
+    project_id: str
+    title: str
+    objective: str
+    status: CampaignStatus
+    campaign_type: str
+    task_name: str | None = None
+    preferred_pool: str | None = None
+    requires_internet: bool
+    budget_json: dict[str, Any]
+    continuation_policy_json: dict[str, Any]
+    approval_gates_json: list[str]
+    latest_summary: str | None = None
+    next_action: str | None = None
+    current_iteration_no: int
+    notebook_path: str
+    artifact_root: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CampaignRead(CampaignSummary):
+    active_run_id: str | None = None
+    runs: list[RunRead] = Field(default_factory=list)
+    drafts: list[CampaignDraftRead] = Field(default_factory=list)
+    notes: list[OperatorNoteRead] = Field(default_factory=list)
+    files: list[CampaignFileLink] = Field(default_factory=list)
 
 
 class WorkerCapabilities(BaseModel):
@@ -311,3 +442,36 @@ class VerifyPhaseResult(BaseModel):
     command_results: list[VerifyCommandResult] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
+
+
+class AnalyzePhaseResult(BaseModel):
+    summary: str
+    key_findings: list[str] = Field(default_factory=list)
+    report_md: str
+    recommended_direction: str
+    data_family: str | None = None
+    research_branch: str | None = None
+
+
+class ProposedIteration(BaseModel):
+    objective: str
+    success_criteria: str
+    run_type: RunType = RunType.EXPERIMENT
+    task_name: str | None = None
+    preferred_pool: str | None = None
+    requires_internet: bool = False
+    data_family: str | None = None
+    research_branch: str | None = None
+    deliverables: list[str] = Field(default_factory=list)
+
+
+class ProposeNextPhaseResult(BaseModel):
+    summary: str
+    should_continue: bool
+    within_policy: bool
+    requires_operator_approval: bool
+    approval_reason: str | None = None
+    recommended_action: str
+    rationale: list[str] = Field(default_factory=list)
+    estimated_additional_cost: float | None = None
+    next_iteration: ProposedIteration | None = None

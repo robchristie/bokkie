@@ -48,6 +48,7 @@ class Project(Base, TimestampMixin):
     command_profiles: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
     settings: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
 
+    campaigns: Mapped[list[Campaign]] = relationship(back_populates="project")
     runs: Mapped[list[Run]] = relationship(back_populates="project")
 
 
@@ -75,11 +76,63 @@ class Worker(Base, TimestampMixin):
     phase_attempts: Mapped[list[PhaseAttempt]] = relationship(back_populates="worker")
 
 
+class Campaign(Base, TimestampMixin):
+    __tablename__ = "campaigns"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    title: Mapped[str] = mapped_column(String(240))
+    objective: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    campaign_type: Mapped[str] = mapped_column(String(64), default="campaign")
+    task_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    preferred_pool: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    requires_internet: Mapped[bool] = mapped_column(default=False)
+    budget_json: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    continuation_policy_json: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    approval_gates_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    latest_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_iteration_no: Mapped[int] = mapped_column(Integer, default=0)
+    notebook_path: Mapped[str] = mapped_column(Text)
+    artifact_root: Mapped[str] = mapped_column(Text)
+
+    project: Mapped[Project] = relationship(back_populates="campaigns")
+    runs: Mapped[list[Run]] = relationship(back_populates="campaign")
+    drafts: Mapped[list[CampaignDraft]] = relationship(back_populates="campaign")
+    notes: Mapped[list[OperatorNote]] = relationship(back_populates="campaign")
+
+
+class CampaignDraft(Base, TimestampMixin):
+    __tablename__ = "campaign_drafts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id"), nullable=True, index=True
+    )
+    campaign_id: Mapped[str | None] = mapped_column(
+        ForeignKey("campaigns.id"), nullable=True, index=True
+    )
+    operator_prompt: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
+    draft_json: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    project: Mapped[Project | None] = relationship()
+    campaign: Mapped[Campaign | None] = relationship(back_populates="drafts")
+
+
 class Run(Base, TimestampMixin):
     __tablename__ = "runs"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    campaign_id: Mapped[str | None] = mapped_column(
+        ForeignKey("campaigns.id"), nullable=True, index=True
+    )
+    iteration_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     type: Mapped[str] = mapped_column(String(32), default=RunType.CHANGE.value)
     task_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     objective: Mapped[str] = mapped_column(Text)
@@ -107,6 +160,7 @@ class Run(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     project: Mapped[Project] = relationship(back_populates="runs")
+    campaign: Mapped[Campaign | None] = relationship(back_populates="runs")
     current_worker: Mapped[Worker | None] = relationship(back_populates="runs")
     phase_attempts: Mapped[list[PhaseAttempt]] = relationship(back_populates="run")
     reviews: Mapped[list[Review]] = relationship(back_populates="run")
@@ -118,7 +172,9 @@ class Run(Base, TimestampMixin):
 
 class PhaseAttempt(Base, TimestampMixin):
     __tablename__ = "phase_attempts"
-    __table_args__ = (UniqueConstraint("run_id", "phase_name", "attempt_no", name="uq_phase_attempt"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", "phase_name", "attempt_no", name="uq_phase_attempt"),
+    )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
@@ -138,7 +194,9 @@ class PhaseAttempt(Base, TimestampMixin):
     retry_limit: Mapped[int] = mapped_column(Integer, default=1)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     dispatch_attempts: Mapped[int] = mapped_column(Integer, default=0)
-    last_dispatch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_dispatch_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     thread_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     last_turn_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     worker_id: Mapped[str | None] = mapped_column(ForeignKey("workers.id"), nullable=True)
@@ -249,13 +307,17 @@ class OperatorNote(Base):
     __tablename__ = "operator_notes"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
-    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"), nullable=True, index=True)
+    campaign_id: Mapped[str | None] = mapped_column(
+        ForeignKey("campaigns.id"), nullable=True, index=True
+    )
     note: Mapped[str] = mapped_column(Text)
     created_by: Mapped[str] = mapped_column(String(120), default="operator")
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    run: Mapped[Run] = relationship(back_populates="notes")
+    run: Mapped[Run | None] = relationship(back_populates="notes")
+    campaign: Mapped[Campaign | None] = relationship(back_populates="notes")
 
 
 class ExperimentResult(Base):

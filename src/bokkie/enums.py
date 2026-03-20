@@ -24,6 +24,8 @@ class RunStage(StrEnum):
     SPEC_REVIEW = "spec_review"
     EXECUTE = "execute"
     VERIFY = "verify"
+    ANALYZE = "analyze"
+    PROPOSE_NEXT = "propose_next"
     FINAL_REVIEW = "final_review"
     PUBLISH = "publish"
     DONE = "done"
@@ -54,6 +56,8 @@ class PhaseName(StrEnum):
     SPEC_REVIEW = "spec_review"
     EXECUTE = "execute"
     VERIFY = "verify"
+    ANALYZE = "analyze"
+    PROPOSE_NEXT = "propose_next"
     FINAL_REVIEW = "final_review"
 
 
@@ -90,6 +94,8 @@ class ArtifactKind(StrEnum):
     CHECKPOINT = "checkpoint"
     LOG = "log"
     VERIFY_RESULTS = "verify_results"
+    ANALYSIS_JSON = "analysis_json"
+    PROPOSE_NEXT_JSON = "propose_next_json"
     VERIFY_REVIEW = "verify_review"
     FINAL_MESSAGE = "final_message"
 
@@ -103,3 +109,18 @@ class WorkerState(StrEnum):
 class PublishStrategy(StrEnum):
     NONE = "none"
     PUSH = "push"
+
+
+class CampaignStatus(StrEnum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    WAITING_APPROVAL = "waiting_approval"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class CampaignDraftStatus(StrEnum):
+    DRAFT = "draft"
+    APPROVED = "approved"
+    REJECTED = "rejected"

@@ -16,7 +16,7 @@ dependencies = [
   "uvicorn>=0.35.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
   "pytest>=8.4.1",
   "pytest-cov>=6.2.1",
@@ -36,6 +36,9 @@ packages = ["src/bokkie"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+
+[tool.uv]
+default-groups = ["dev"]
 
 [tool.ruff]
 line-length = 100

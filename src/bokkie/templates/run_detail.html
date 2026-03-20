@@ -6,6 +6,9 @@
     <h2>{{ run.objective }}</h2>
     <p><strong>Stage:</strong> <span id="run-stage">{{ run.current_stage }}</span></p>
     <p><strong>Worker:</strong> <span id="run-worker">{{ run.current_worker_id or "idle" }}</span></p>
+    {% if run.campaign_id %}
+    <p><strong>Campaign:</strong> <a href="/ui/campaigns/{{ run.campaign_id }}">{{ run.campaign_id }}</a> · iteration {{ run.iteration_no or "n/a" }}</p>
+    {% endif %}
     <p><strong>Branch:</strong> <span class="mono">{{ run.branch_name }}</span></p>
     <p><strong>Run Root:</strong> <span class="mono">{{ run.run_root }}</span></p>
     <p><strong>Summary:</strong> <span id="run-summary">{{ run.latest_summary or "n/a" }}</span></p>

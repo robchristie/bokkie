@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero card">
+  <div class="pill">Campaign-First Intake</div>
+  <h2>Start from intent, not a dense run form</h2>
+  <p class="muted">Describe the campaign in free text. Bokkie will draft the inferred project, run type, task preset, executor/pool, internet use, budget, continuation policy, and approval boundaries before anything is created.</p>
+  <form method="post" action="/ui/campaign-drafts">
+    <label>
+      Operator Prompt
+      <textarea name="prompt" placeholder="In hedgeknight, continue free-data event research. Highest priority is 8-K item-specific studies. Use the existing event-study/reporting style. Keep it autonomous, prefer devbox, cap spend at $15, and pause if the next branch changes data family." required></textarea>
+    </label>
+    <label>
+      Project Override
+      <select name="project_id">
+        <option value="">Infer from prompt</option>
+        {% for project in projects %}
+        <option value="{{ project.id }}">{{ project.name }} · {{ project.slug }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Generate Draft</button>
+  </form>
+</section>
+
+{% if draft %}
+<section class="card">
+  <div class="pill">{{ draft.status }}</div>
+  <h2>Draft Proposal</h2>
+  <p><strong>Prompt:</strong> {{ draft.operator_prompt }}</p>
+  <form method="post" action="/ui/campaign-drafts/{{ draft.id }}/approve" class="stack">
+    <div class="split">
+      <label>
+        Project
+        <select name="project_id">
+          <option value="">Use inferred project</option>
+          {% for project in projects %}
+          <option value="{{ project.id }}" {% if draft.draft.inferred_project_id == project.id %}selected{% endif %}>{{ project.name }} · {{ project.slug }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Campaign Type
+        <input name="campaign_type" value="{{ draft.draft.campaign_type }}" />
+      </label>
+    </div>
+    <div class="split">
+      <label>
+        Title
+        <input name="title" value="{{ draft.draft.title }}" />
+      </label>
+      <label>
+        Preferred Pool
+        <input name="preferred_pool" value="{{ draft.draft.preferred_pool or '' }}" />
+      </label>
+    </div>
+    <label>
+      Objective
+      <textarea name="objective">{{ draft.draft.objective }}</textarea>
+    </label>
+    <div class="split">
+      <label>
+        First Run Type
+        <select name="first_run_type">
+          {% for run_type in run_types %}
+          <option value="{{ run_type }}" {% if draft.draft.first_run_type.value == run_type %}selected{% endif %}>{{ run_type }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Task Preset
+        <input name="task_name" value="{{ draft.draft.task_name or '' }}" />
+      </label>
+    </div>
+    <div class="split">
+      <label>
+        Max Iterations
+        <input name="max_iterations" type="number" value="{{ draft.draft.budget.max_iterations or '' }}" />
+      </label>
+      <label>
+        Max Total Cost
+        <input name="max_total_cost" type="number" step="0.01" value="{{ draft.draft.budget.max_total_cost or '' }}" />
+      </label>
+    </div>
+    <div class="split">
+      <label>
+        First Run Objective
+        <textarea name="first_run_objective">{{ draft.draft.first_run_objective }}</textarea>
+      </label>
+      <label>
+        First Run Success Criteria
+        <textarea name="first_run_success_criteria">{{ draft.draft.first_run_success_criteria }}</textarea>
+      </label>
+    </div>
+    <div class="split">
+      <label>
+        Requires Internet
+        <select name="requires_internet">
+          <option value="false" {% if not draft.draft.requires_internet %}selected{% endif %}>false</option>
+          <option value="true" {% if draft.draft.requires_internet %}selected{% endif %}>true</option>
+        </select>
+      </label>
+      <label>
+        Auto Continue
+        <select name="auto_continue">
+          <option value="false" {% if not draft.draft.continuation_policy.auto_continue %}selected{% endif %}>false</option>
+          <option value="true" {% if draft.draft.continuation_policy.auto_continue %}selected{% endif %}>true</option>
+        </select>
+      </label>
+    </div>
+    <div class="grid cards">
+      <section class="card">
+        <h3>Inferred Settings</h3>
+        <p><strong>Project:</strong> {{ draft.draft.inferred_project_name or "Unresolved" }}</p>
+        <p><strong>Executor Labels:</strong> {{ draft.draft.preferred_executor_labels | join(", ") if draft.draft.preferred_executor_labels else "n/a" }}</p>
+        <p><strong>Approval Gates:</strong> {{ draft.draft.approval_gates | join("; ") }}</p>
+        <p><strong>Initial Deliverables:</strong> {{ draft.draft.initial_deliverables | join("; ") }}</p>
+      </section>
+      <section class="card">
+        <h3>Why</h3>
+        {% for line in draft.draft.rationale %}
+        <p>{{ line }}</p>
+        {% endfor %}
+      </section>
+    </div>
+    <div class="inline-actions">
+      <button type="submit">Approve Draft</button>
+    </div>
+  </form>
+  <form method="post" action="/ui/campaign-drafts/{{ draft.id }}/reject">
+    <label>
+      Reject Reason
+      <input name="reason" placeholder="Optional note" />
+    </label>
+    <button class="button-secondary" type="submit">Reject Draft</button>
+  </form>
+</section>
+{% endif %}
+
+<div class="grid cards">
+  <section class="card">
+    <h2>Recent Campaigns</h2>
+    {% for campaign in campaigns %}
+    <p><a href="/ui/campaigns/{{ campaign.id }}">{{ campaign.title }}</a> · {{ campaign.status }} · iteration {{ campaign.current_iteration_no }}</p>
+    {% else %}
+    <p>No campaigns yet.</p>
+    {% endfor %}
+  </section>
+  <section class="card">
+    <h2>Advanced / Manual</h2>
+    <p class="muted">The old run form still exists for bounded manual work.</p>
+    <form method="post" action="/ui/runs">
+      <label>
+        Project
+        <select name="project_id" required>
+          {% for project in projects %}
+          <option value="{{ project.id }}">{{ project.name }} · {{ project.slug }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Objective
+        <input name="objective" required />
+      </label>
+      <label>
+        Success Criteria
+        <textarea name="success_criteria" required></textarea>
+      </label>
+      <div class="split">
+        <label>
+          Run Type
+          <select name="run_type">
+            {% for run_type in run_types %}
+            <option value="{{ run_type }}">{{ run_type }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Task Preset
+          <input name="task_name" placeholder="change" />
+        </label>
+      </div>
+      <div class="split">
+        <label>
+          Risk Level
+          <select name="risk_level">
+            {% for risk_level in risk_levels %}
+            <option value="{{ risk_level }}" {% if risk_level == "medium" %}selected{% endif %}>{{ risk_level }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Preferred Pool
+          <input name="pool" placeholder="cpu-large" />
+        </label>
+      </div>
+      <label>
+        Internet
+        <select name="internet">
+          <option value="false" selected>false</option>
+          <option value="true">true</option>
+        </select>
+      </label>
+      <button class="button-secondary" type="submit">Create Manual Run</button>
+    </form>
+  </section>
+</div>
+
+<section class="card">
+  <h2>Create Project</h2>
+  <form method="post" action="/ui/projects">
+    <div class="split">
+      <label>
+        Name
+        <input name="name" required />
+      </label>
+      <label>
+        Slug
+        <input name="slug" required />
+      </label>
+    </div>
+    <label>
+      Repo URL
+      <input name="repo_url" required />
+    </label>
+    <div class="split">
+      <label>
+        Default Branch
+        <input name="default_branch" value="main" />
+      </label>
+      <label>
+        Push Remote
+        <input name="push_remote" placeholder="origin" />
+      </label>
+    </div>
+    <button class="button-secondary" type="submit">Create Project</button>
+  </form>
+</section>
+{% endblock %}

@@ -36,7 +36,9 @@ class ExecutorLauncherService:
                 if worker.metadata_json.get("executor_name") == name
                 and worker.last_seen_at >= self._worker_cutoff()
             ]
-            pending_count = sum(1 for phase in queued_phases if self._executor_matches_phase(config, phase))
+            pending_count = sum(
+                1 for phase in queued_phases if self._executor_matches_phase(config, phase)
+            )
             results.append(
                 ExecutorRead(
                     name=name,
@@ -103,7 +105,9 @@ class ExecutorLauncherService:
             return False
         return not any(secret not in config.secrets for secret in phase.required_secrets)
 
-    def _launch_worker(self, executor_name: str, config: ExecutorConfig, phase: PhaseAttempt) -> None:
+    def _launch_worker(
+        self, executor_name: str, config: ExecutorConfig, phase: PhaseAttempt
+    ) -> None:
         worker_id = f"{executor_name}-{phase.id[:8]}-{phase.dispatch_attempts + 1}"
         host = config.host or executor_name
         command = config.worker_command or self._default_worker_command(

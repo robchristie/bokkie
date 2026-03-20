@@ -1,9 +1,21 @@
 # Bokkie
 
-Bokkie is a Python control plane for Codex-backed workers. The main abstraction is a `Run`, not a
-chatty agent roster. Runs move through explicit phases, with durable artifacts under
-`.bokkie/runs/<run-id>/...`, phase-level approvals, and a thin worker that prepares an isolated
-worktree, runs `codex app-server`, streams events back, and exits or sleeps.
+Bokkie is a Python control plane for Codex-backed workers. The primary operator abstraction is now
+a `Campaign`: a long-running research or development effort that owns policy, steering, and a
+compact notebook. A `Run` is still the bounded execution unit underneath the campaign.
+
+Runs still move through explicit phases, with durable artifacts under `.bokkie/runs/<run-id>/...`,
+phase-level approvals, and a thin worker that prepares an isolated worktree, runs
+`codex app-server`, streams events back, and exits or sleeps. Campaign-level memory and setup
+artifacts live under `.bokkie/campaigns/<campaign-id>/...`.
+
+The primary web UX is now draft-first and chat-first:
+
+- operator enters a free-text request at `/ui/intake`
+- Bokkie returns a structured draft with inferred settings and rationale
+- operator approves the draft once
+- Bokkie creates the campaign and its first bounded run
+- later iterations can auto-continue within policy or pause at approval boundaries
 
 The preferred deployment model is now container-first:
 
@@ -16,18 +28,108 @@ For the first slice, workers use a bind-mounted repo checkout on the host.
 
 This initial implementation includes:
 
+- campaign-first intake with draft approval before execution
+- `Campaign` parent objects above bounded `Run` iterations
 - FastAPI control plane with PostgreSQL/SQLite-compatible SQLAlchemy models
 - first-class `change` runs with `plan -> plan_review -> spec -> spec_review -> execute -> verify -> final_review`
+- first-class `experiment`/research iterations with `plan -> execute -> verify -> analyze -> propose_next`
 - phase attempts, reviews, leases, events, and filesystem-backed artifact bundles
 - worker registration, heartbeats, capability-based leasing, retries, and patch-based cross-host reconstruction
 - `codex app-server` backend with one thread per phase and structured-output schemas
-- local artifact storage under `.bokkie/runs`
-- minimal dashboard with run, phase, approval, worker, and executor pages
+- local artifact storage under `.bokkie/runs` plus campaign notebooks/setup under `.bokkie/campaigns`
+- minimal dashboard with intake, campaign, run, phase, approval, worker, and executor pages
 - container deployment files for the app stack and external worker hosts
 - executor definitions plus an optional launcher for `local` and `ssh-docker` backends
 - repo-authored config in `bokkie.toml`, `agents/*`, `tasks/*`, and `jobs/*`
-- Telegram bot command surface that talks to the control-plane API, with the web UI as the primary operator surface
+- Telegram bot support for `/new`, campaign status, campaign steering, and legacy run commands
 - tests for state transitions, leasing, and a mocked end-to-end run flow
+
+## Campaign vs Run
+
+- `Campaign`: the long-lived operator object. It stores the objective, current status, continuation
+  policy, budget guardrails, steering history, notebook, and campaign setup artifacts.
+- `Run`: the bounded execution unit. It still owns explicit phases, worker leases, reviews, events,
+  and phase handoff artifacts.
+
+In other words: campaigns own intent and continuity, runs own execution.
+
+## Source Of Truth
+
+- The database is the orchestration and indexing source of truth. It tracks campaigns, runs, phase
+  attempts, review gates, notes, workers, and artifact metadata.
+- Files remain the canonical handoff surface between phases and campaign steps.
+  - run artifacts live under `.bokkie/runs/<run-id>/...`
+  - campaign setup and notebook artifacts live under `.bokkie/campaigns/<campaign-id>/...`
+
+This keeps multi-host execution reconstructible without assuming shared writable storage.
+
+## Campaign-First Flow
+
+1. Open `/ui/intake`.
+2. Enter a free-text request such as:
+
+```text
+In hedgeknight, continue free-data event research. Highest priority is 8-K item-specific studies.
+Use the existing event-study/reporting style. Keep it autonomous, prefer devbox, cap spend at $15,
+and pause if the next branch changes data family.
+```
+
+3. Review the generated draft. The draft summarizes:
+   - inferred project/repo
+   - campaign type
+   - first run type
+   - task preset
+   - preferred pool / executor hints
+   - internet requirements
+   - budget and continuation policy
+   - approval gates
+   - rationale
+4. Approve the draft once. Bokkie creates the campaign and the first run.
+5. Follow progress from the campaign detail page or Telegram.
+
+The old direct run form still exists at `/ui/runs` and inside the intake page as the
+advanced/manual path.
+
+## Auto-Continuation And Approvals
+
+The first campaign slice supports auto-continuation for experiment/research-style iterations.
+
+- If `propose_next` stays within campaign policy and auto-continue is enabled, Bokkie creates the
+  next bounded run automatically.
+- If the next step crosses a policy boundary, Bokkie pauses at an approval gate instead.
+
+Current lightweight guardrails include:
+
+- max iterations
+- max active child runs, currently intended to remain `1`
+- coarse max total estimated/recorded cost
+- approval on data-family / research-branch changes
+- approval on material pool / executor changes
+- approval on special-resource escalation such as GPU/cloud-style pools
+
+## Steering
+
+- Run-level steering still works and is delivered to the current or next safe phase boundary.
+- Campaign-level steering is now first-class. If a campaign has an active run, the note is
+  delivered there; otherwise it is queued for the next relevant iteration.
+- The campaign notebook at `.bokkie/campaigns/<campaign-id>/NOTEBOOK.md` is updated with compact
+  status, decisions, and next steps.
+
+## Research Iteration Config
+
+The first research vertical slice is expressed as a repo task preset plus the `experiment` run type.
+
+- `bokkie.toml` now maps `experiment` to:
+
+```text
+plan -> execute -> verify -> analyze -> propose_next
+```
+
+- `tasks/research_iteration.toml` is the generic preset for long-running experiment/research loops.
+- `tasks/autoresearch.toml` now points at `run_type = "experiment"` for compatibility.
+
+To adapt this flow for a repo like hedgeknight, keep repo-specific assumptions in task config,
+validation commands, and prompt/task documentation rather than hard-coding them into Bokkie core.
 
 ## Quick start
 
@@ -224,12 +326,24 @@ optional. A stable polling worker container on the dev box is the preferred star
 The repo-authored control surface is intentionally small:
 
 - `bokkie.toml` defines run types and executors
-- `agents/*/PROMPT.md` holds the role instructions for planner, reviewer, verifier, and coder
-- `tasks/*.toml` defines presets such as `change` and `autoresearch`
+- `agents/*/PROMPT.md` holds the role instructions for setup, planner, reviewer, verifier, and coder
+- `tasks/*.toml` defines presets such as `change`, `research_iteration`, and `autoresearch`
 - `jobs/*.toml` holds scheduled jobs such as `nightly-ai-news`
 - `AGENTS.md` carries repo-specific validation and operating rules
 
 ## Artifact Layout
+
+Each campaign gets a durable artifact bundle under `.bokkie/campaigns/<campaign-id>/`:
+
+```text
+brief.md
+setup/draft.json
+setup/draft.md
+NOTEBOOK.md
+policy.json
+iterations/<n>/status.json
+iterations/<n>/summary.md
+```
 
 Each run gets a durable artifact bundle under `.bokkie/runs/<run-id>/`:
 
@@ -265,18 +379,16 @@ currently registered workers associated with each executor.
 
 ## Model
 
-Runs move through:
+`change` runs move through:
 
 ```text
-intake
--> plan
--> plan_review
--> spec
--> spec_review
--> execute
--> verify
--> final_review
--> done
+intake -> plan -> plan_review -> spec -> spec_review -> execute -> verify -> final_review -> done
+```
+
+`experiment` / research-iteration runs move through:
+
+```text
+intake -> plan -> execute -> verify -> analyze -> propose_next -> done
 ```
 
 Workers are capability-tagged and lease eligible phase attempts from the control plane. Worktree

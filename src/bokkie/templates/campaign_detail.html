@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid cards">
+  <section class="card">
+    <div class="pill">{{ campaign.status }}</div>
+    <h2>{{ campaign.title }}</h2>
+    <p><strong>Objective:</strong> {{ campaign.objective }}</p>
+    <p><strong>Type:</strong> {{ campaign.campaign_type }}</p>
+    <p><strong>Current Iteration:</strong> {{ campaign.current_iteration_no }}</p>
+    <p><strong>Latest Summary:</strong> {{ campaign.latest_summary or "n/a" }}</p>
+    <p><strong>Next Action:</strong> {{ campaign.next_action or "n/a" }}</p>
+    <p><strong>Preferred Pool:</strong> {{ campaign.preferred_pool or "n/a" }}</p>
+    <p><strong>Requires Internet:</strong> {{ campaign.requires_internet }}</p>
+  </section>
+  <section class="card">
+    <h3>Policy</h3>
+    <pre>{{ campaign.continuation_policy_json | tojson(indent=2) }}</pre>
+    <h3>Budget</h3>
+    <pre>{{ campaign.budget_json | tojson(indent=2) }}</pre>
+    <p><strong>Approval Gates:</strong> {{ campaign.approval_gates_json | join("; ") }}</p>
+  </section>
+</div>
+
+<div class="grid cards">
+  <section class="card">
+    <h3>Operator Controls</h3>
+    {% if pending_review %}
+    <p><strong>Pending Gate:</strong> {{ pending_review.gate }}</p>
+    <p>{{ pending_review.summary or "n/a" }}</p>
+    <div class="split">
+      <form method="post" action="/ui/campaigns/{{ campaign.id }}/approve">
+        <input type="hidden" name="actor" value="web-ui" />
+        <label>
+          Approval Note
+          <input name="reason" placeholder="Optional note" />
+        </label>
+        <button type="submit">Approve Next Step</button>
+      </form>
+      <form method="post" action="/ui/campaigns/{{ campaign.id }}/reject">
+        <input type="hidden" name="actor" value="web-ui" />
+        <label>
+          Rejection Reason
+          <textarea name="reason" required></textarea>
+        </label>
+        <button class="button-secondary" type="submit">Reject Next Step</button>
+      </form>
+    </div>
+    {% else %}
+    <p>No pending approval gate.</p>
+    {% endif %}
+    <form method="post" action="/ui/campaigns/{{ campaign.id }}/steer">
+      <input type="hidden" name="created_by" value="web-ui" />
+      <label>
+        Campaign Steering Note
+        <textarea name="note" placeholder="Queue a steering note for the active run or next iteration." required></textarea>
+      </label>
+      <button type="submit">Store Campaign Note</button>
+    </form>
+  </section>
+  <section class="card">
+    <h3>Artifacts</h3>
+    <div class="artifact-links">
+      {% for file in campaign.files %}
+      <a href="{{ file.download_url }}">{{ file.label }}</a>
+      {% else %}
+      <span class="muted">No campaign artifacts yet.</span>
+      {% endfor %}
+    </div>
+    <p class="mono">{{ campaign.notebook_path }}</p>
+  </section>
+</div>
+
+<div class="grid cards">
+  <section class="card">
+    <h3>Runs</h3>
+    <table>
+      <thead><tr><th>Iteration</th><th>Status</th><th>Stage</th><th>Objective</th></tr></thead>
+      <tbody>
+        {% for run in campaign.runs %}
+        <tr>
+          <td>{{ run.iteration_no or "-" }}</td>
+          <td>{{ run.status }}</td>
+          <td>{{ run.current_stage }}</td>
+          <td><a href="/ui/runs/{{ run.id }}">{{ run.objective }}</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h3>Steering History</h3>
+    {% for note in campaign.notes %}
+    <p><span class="mono">{{ note.created_at }}</span> {{ note.created_by }} · {{ note.note }}</p>
+    {% else %}
+    <p>No campaign notes yet.</p>
+    {% endfor %}
+  </section>
+  <section class="card">
+    <h3>Current Run</h3>
+    {% if active_run %}
+    <p><strong>Run:</strong> <a href="/ui/runs/{{ active_run.id }}">{{ active_run.id }}</a></p>
+    <p><strong>Status:</strong> {{ active_run.status }}</p>
+    <p><strong>Stage:</strong> {{ active_run.current_stage }}</p>
+    <p><strong>Summary:</strong> {{ active_run.latest_summary or "n/a" }}</p>
+    {% else %}
+    <p>No active run.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

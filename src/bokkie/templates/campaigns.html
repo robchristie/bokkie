@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero card">
+  <div class="pill">Campaigns</div>
+  <h2>Long-running research and development efforts</h2>
+  <p class="muted">Campaigns are the parent objects above bounded runs. They own the notebook, continuation policy, and operator steering history.</p>
+</section>
+
+<div class="grid cards">
+  {% for campaign in campaigns %}
+  <article class="card">
+    <div class="pill">{{ campaign.status }}</div>
+    <h2><a href="/ui/campaigns/{{ campaign.id }}">{{ campaign.title }}</a></h2>
+    <p class="muted">{{ campaign.campaign_type }} · iteration {{ campaign.current_iteration_no }}</p>
+    <p>{{ campaign.latest_summary or "No summary yet." }}</p>
+    <p><strong>Next:</strong> {{ campaign.next_action or "n/a" }}</p>
+    <p class="mono">{{ campaign.id }}</p>
+  </article>
+  {% else %}
+  <article class="card"><p>No campaigns yet.</p></article>
+  {% endfor %}
+</div>
+{% endblock %}

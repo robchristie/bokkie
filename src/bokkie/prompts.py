@@ -58,6 +58,8 @@ Project:
 
 Run:
 - Type: {run.type}
+- Campaign: {run.campaign_id or "none"}
+- Iteration: {run.iteration_no or "n/a"}
 - Task preset: {run.task_name or "none"}
 - Objective: {run.objective}
 - Success criteria: {run.success_criteria}
@@ -90,9 +92,18 @@ Instructions:
 
 
 def phase_role_for(phase_name: str) -> str:
-    if phase_name in {PhaseName.PLAN.value, PhaseName.SPEC.value}:
+    if phase_name in {
+        PhaseName.PLAN.value,
+        PhaseName.SPEC.value,
+        PhaseName.ANALYZE.value,
+        PhaseName.PROPOSE_NEXT.value,
+    }:
         return PhaseRole.PLANNER.value
-    if phase_name in {PhaseName.PLAN_REVIEW.value, PhaseName.SPEC_REVIEW.value, PhaseName.FINAL_REVIEW.value}:
+    if phase_name in {
+        PhaseName.PLAN_REVIEW.value,
+        PhaseName.SPEC_REVIEW.value,
+        PhaseName.FINAL_REVIEW.value,
+    }:
         return PhaseRole.REVIEWER.value
     if phase_name == PhaseName.VERIFY.value:
         return PhaseRole.VERIFIER.value

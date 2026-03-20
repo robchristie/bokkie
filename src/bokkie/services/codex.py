@@ -194,7 +194,11 @@ class CodexAppServerBackend:
                     "cwd": str(worktree),
                     "approvalPolicy": "never",
                     "ephemeral": False,
-                    **({"model": self.settings.default_codex_model} if self.settings.default_codex_model else {}),
+                    **(
+                        {"model": self.settings.default_codex_model}
+                        if self.settings.default_codex_model
+                        else {}
+                    ),
                 },
                 on_notification=on_event,
             )
@@ -211,7 +215,11 @@ class CodexAppServerBackend:
                         internet=internet,
                         worktree=worktree,
                     ),
-                    **({"model": self.settings.default_codex_model} if self.settings.default_codex_model else {}),
+                    **(
+                        {"model": self.settings.default_codex_model}
+                        if self.settings.default_codex_model
+                        else {}
+                    ),
                 },
                 on_notification=on_event,
             )
@@ -268,12 +276,11 @@ class CodexAppServerBackend:
                         error = turn.get("error") or {}
                         raise CodexExecutionError(error.get("message", "Codex turn failed"))
                     if not last_message:
-                        raise CodexExecutionError("Codex completed without a final structured message")
+                        raise CodexExecutionError(
+                            "Codex completed without a final structured message"
+                        )
                     return last_message
-            if (
-                steering_supplier is not None
-                and time.time() - last_note_poll >= 1.0
-            ):
+            if steering_supplier is not None and time.time() - last_note_poll >= 1.0:
                 notes = [note.strip() for note in steering_supplier() if note.strip()]
                 last_note_poll = time.time()
                 if notes:
@@ -285,7 +292,8 @@ class CodexAppServerBackend:
                             "input": [
                                 {
                                     "type": "text",
-                                    "text": "Operator steering note:\n" + "\n".join(f"- {note}" for note in notes),
+                                    "text": "Operator steering note:\n"
+                                    + "\n".join(f"- {note}" for note in notes),
                                 }
                             ],
                         },

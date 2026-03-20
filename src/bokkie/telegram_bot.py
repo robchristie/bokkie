@@ -21,7 +21,9 @@ class TelegramBotRunner:
             and self.allowed_chat_ids
             and settings.telegram_default_chat_id not in self.allowed_chat_ids
         ):
-            raise RuntimeError("BOKKIE_TELEGRAM_DEFAULT_CHAT_ID must be in BOKKIE_TELEGRAM_ALLOWED_CHAT_IDS")
+            raise RuntimeError(
+                "BOKKIE_TELEGRAM_DEFAULT_CHAT_ID must be in BOKKIE_TELEGRAM_ALLOWED_CHAT_IDS"
+            )
 
     def run_forever(self) -> None:
         while True:
@@ -55,9 +57,45 @@ class TelegramBotRunner:
         return chat_text in self.allowed_chat_ids and user_text in self.allowed_chat_ids
 
     def handle_command(self, text: str) -> str:
-        parts = text.strip().split(maxsplit=2)
+        stripped = text.strip()
+        parts = stripped.split(maxsplit=2)
         command = parts[0]
+        remainder = stripped[len(command) :].strip()
         api = httpx.Client(base_url=self.settings.api_base_url, timeout=60)
+        if command == "/new" and remainder:
+            response = api.post("/api/campaign-drafts", json={"prompt": remainder})
+            response.raise_for_status()
+            draft = response.json()
+            return (
+                f"Draft {draft['id']}\n"
+                f"Project: {draft['draft'].get('inferred_project_name') or 'unresolved'}\n"
+                f"Campaign type: {draft['draft']['campaign_type']}\n"
+                f"First run: {draft['draft']['first_run_type']}\n"
+                f"Pool: {draft['draft'].get('preferred_pool') or 'n/a'}\n"
+                f"Auto continue: {draft['draft']['continuation_policy']['auto_continue']}\n"
+                f"Use /approve {draft['id']} to create the campaign or /reject {draft['id']} <reason>."
+            )
+        if command == "/campaigns":
+            response = api.get("/api/campaigns")
+            response.raise_for_status()
+            campaigns = response.json()
+            if not campaigns:
+                return "No campaigns found."
+            return "\n".join(
+                f"{campaign['id'][:8]} {campaign['status']} iter={campaign['current_iteration_no']} {campaign['title']}"
+                for campaign in campaigns[:10]
+            )
+        if command == "/campaign" and len(parts) >= 2:
+            response = api.get(f"/api/campaigns/{parts[1]}")
+            response.raise_for_status()
+            campaign = response.json()
+            return (
+                f"Campaign {campaign['id']}\n"
+                f"Status: {campaign['status']}\n"
+                f"Iteration: {campaign['current_iteration_no']}\n"
+                f"Summary: {campaign.get('latest_summary') or 'n/a'}\n"
+                f"Next: {campaign.get('next_action') or 'n/a'}"
+            )
         if command == "/runs":
             response = api.get("/api/runs")
             response.raise_for_status()
@@ -80,22 +118,56 @@ class TelegramBotRunner:
                 f"Next: {run.get('next_action') or 'n/a'}"
             )
         if command in {"/approve", "/reject", "/pause", "/resume"} and len(parts) >= 2:
-            run_id = parts[1]
             if command == "/approve":
+                target_id = parts[1]
+                response = api.post(f"/api/campaign-drafts/{target_id}/approve", json={})
+                if response.status_code < 400:
+                    campaign = response.json()
+                    return f"Draft approved. Campaign {campaign['id']} created."
                 response = api.post(
-                    f"/api/runs/{run_id}/approve", json={"reason": None, "actor": "telegram"}
+                    f"/api/campaigns/{target_id}/approve",
+                    json={"reason": None, "actor": "telegram"},
+                )
+                if response.status_code < 400:
+                    return f"Campaign approval accepted for {target_id}"
+                response = api.post(
+                    f"/api/runs/{target_id}/approve", json={"reason": None, "actor": "telegram"}
                 )
             elif command == "/reject":
+                target_id = parts[1]
                 reason = parts[2] if len(parts) > 2 else "Rejected from Telegram"
                 response = api.post(
-                    f"/api/runs/{run_id}/reject", json={"reason": reason, "actor": "telegram"}
+                    f"/api/campaign-drafts/{target_id}/reject",
+                    json={"reason": reason, "actor": "telegram"},
+                )
+                if response.status_code < 400:
+                    return f"Draft {target_id} rejected"
+                response = api.post(
+                    f"/api/campaigns/{target_id}/reject",
+                    json={"reason": reason, "actor": "telegram"},
+                )
+                if response.status_code < 400:
+                    return f"Campaign gate rejected for {target_id}"
+                response = api.post(
+                    f"/api/runs/{target_id}/reject", json={"reason": reason, "actor": "telegram"}
                 )
             elif command == "/pause":
+                run_id = parts[1]
                 response = api.post(f"/api/runs/{run_id}/pause")
             else:
+                run_id = parts[1]
                 response = api.post(f"/api/runs/{run_id}/resume")
             response.raise_for_status()
-            return f"{command[1:]} accepted for {run_id}"
+            return f"{command[1:]} accepted for {parts[1]}"
+        if command == "/steer_campaign" and len(parts) >= 3:
+            campaign_id = parts[1]
+            note = parts[2]
+            response = api.post(
+                f"/api/campaigns/{campaign_id}/steer",
+                json={"note": note, "created_by": "telegram"},
+            )
+            response.raise_for_status()
+            return f"Campaign steering note stored for {campaign_id}"
         if command == "/steer" and len(parts) >= 3:
             run_id = parts[1]
             note = parts[2]

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     repo_root: Path = Path(".")
     bokkie_config_path: Path = Path("bokkie.toml")
     runs_root: Path = Path(".bokkie/runs")
+    campaigns_root: Path = Path(".bokkie/campaigns")
     artifacts_dir: Path = Path(".bokkie/runs")
     worker_cache_dir: Path = Path(".worker-cache")
     worker_worktree_dir: Path = Path(".worker-worktrees")

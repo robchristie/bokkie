@@ -14,10 +14,12 @@ from .enums import ArtifactKind, PhaseName
 from .models import PhaseAttempt, Project, Run
 from .prompts import build_phase_prompt, summarize_event_line
 from .schemas import (
+    AnalyzePhaseResult,
     ExecutePhaseResult,
     PhaseLeaseResponse,
     PlanPhaseResult,
     ProjectRead,
+    ProposeNextPhaseResult,
     ReviewPhaseResult,
     RunRead,
     SpecPhaseResult,
@@ -44,8 +46,7 @@ class WorkerRunner:
         self.api_base_url = api_base_url or settings.api_base_url
         if not self.api_base_url.startswith(("http://", "https://")):
             raise ValueError(
-                "BOKKIE_API_BASE_URL must be a full http(s) URL, "
-                f"got {self.api_base_url!r}."
+                f"BOKKIE_API_BASE_URL must be a full http(s) URL, got {self.api_base_url!r}."
             )
         self.client = httpx.Client(base_url=self.api_base_url, timeout=120)
         self.codex = CodexAppServerBackend(settings)
@@ -149,6 +150,8 @@ class WorkerRunner:
                 PhaseName.SPEC_REVIEW: ReviewPhaseResult,
                 PhaseName.EXECUTE: ExecutePhaseResult,
                 PhaseName.VERIFY: VerifyPhaseResult,
+                PhaseName.ANALYZE: AnalyzePhaseResult,
+                PhaseName.PROPOSE_NEXT: ProposeNextPhaseResult,
                 PhaseName.FINAL_REVIEW: ReviewPhaseResult,
             }[phase_attempt.phase_name]
             result = self.codex.run(
@@ -156,7 +159,7 @@ class WorkerRunner:
                 prompt,
                 schema_model=schema_model,
                 writable=phase_attempt.phase_name == PhaseName.EXECUTE,
-                internet=self._phase_internet(phase_attempt.phase_name),
+                internet=phase_attempt.requires_internet,
                 on_event=lambda event: self._post_event(phase_attempt.id, event),
                 steering_supplier=lambda: self._claim_notes(phase_attempt.id),
             )
@@ -231,14 +234,6 @@ class WorkerRunner:
             )
         return results
 
-    def _phase_internet(self, phase_name: PhaseName) -> bool:
-        return phase_name in {
-            PhaseName.PLAN,
-            PhaseName.PLAN_REVIEW,
-            PhaseName.SPEC_REVIEW,
-            PhaseName.FINAL_REVIEW,
-        }
-
     def _claim_notes(self, phase_attempt_id: str) -> list[str]:
         response = self.client.post(f"/api/phase-attempts/{phase_attempt_id}/notes/claim")
         response.raise_for_status()
@@ -267,7 +262,11 @@ class WorkerRunner:
         relative_path: str | None = None,
     ) -> None:
         files = {"file": (name, content, "application/octet-stream")}
-        data = {"kind": kind, "metadata": json.dumps(metadata), "relative_path": relative_path or ""}
+        data = {
+            "kind": kind,
+            "metadata": json.dumps(metadata),
+            "relative_path": relative_path or "",
+        }
         self.client.post(
             f"/api/phase-attempts/{phase_attempt_id}/artifacts", files=files, data=data
         ).raise_for_status()
@@ -314,6 +313,8 @@ class WorkerRunner:
         return Run(
             id=run.id,
             project_id=run.project_id,
+            campaign_id=run.campaign_id,
+            iteration_no=run.iteration_no,
             type=run.type.value,
             task_name=run.task_name,
             objective=run.objective,
@@ -350,7 +351,7 @@ class WorkerRunner:
             status=phase_attempt.status.value,
             requested_pool=phase_attempt.requested_pool,
             required_labels=[],
-            requires_internet=False,
+            requires_internet=phase_attempt.requires_internet,
             required_secrets=[],
             timeout_seconds=1800,
             retry_limit=phase_attempt.retry_limit,
