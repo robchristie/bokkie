@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from .config import get_settings
-from .db import SessionLocal, get_db, init_db
+from .db import SessionLocal, database_healthcheck, get_db, init_db
 from .enums import RiskLevel, RunType
 from .models import PhaseAttempt
 from .schemas import (
@@ -74,6 +74,7 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
+        database_healthcheck()
         return {"status": "ok"}
 
     @app.get("/", response_class=HTMLResponse)

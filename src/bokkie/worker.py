@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import time
 from pathlib import Path
@@ -28,6 +29,8 @@ from .schemas import (
 from .services.codex import CodexAppServerBackend, CodexExecutionError
 from .services.gitops import RepoWorkspaceManager
 
+logger = logging.getLogger(__name__)
+
 
 class WorkerRunner:
     def __init__(
@@ -49,14 +52,35 @@ class WorkerRunner:
         self.git = RepoWorkspaceManager(settings.worker_cache_dir, settings.worker_worktree_dir)
 
     def run_forever(self) -> None:
-        self.register()
         while True:
-            self.heartbeat(0)
-            lease = self.lease()
+            try:
+                self.register()
+                self.heartbeat(0)
+                lease = self.lease()
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "Worker %s could not reach API at %s: %s. Retrying in %ss.",
+                    self.worker.id,
+                    self.api_base_url,
+                    exc,
+                    self.settings.worker_poll_seconds,
+                )
+                time.sleep(self.settings.worker_poll_seconds)
+                continue
             if not lease.leased:
                 time.sleep(self.settings.worker_poll_seconds)
                 continue
-            self.execute_assignment(lease)
+            try:
+                self.execute_assignment(lease)
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "Worker %s lost API connectivity during phase execution against %s: %s. "
+                    "The lease will expire and can be retried.",
+                    self.worker.id,
+                    self.api_base_url,
+                    exc,
+                )
+                time.sleep(self.settings.worker_poll_seconds)
 
     def run_once(self, target_phase_attempt_id: str | None = None) -> bool:
         self.register()

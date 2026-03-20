@@ -7,7 +7,7 @@ import uvicorn
 
 from .app import create_app
 from .config import get_settings
-from .db import init_db
+from .db import init_db, reset_db
 from .schemas import WorkerCapabilities
 from .telegram_bot import TelegramBotRunner
 from .worker import WorkerRunner
@@ -23,6 +23,15 @@ def _csv_env(name: str) -> list[str]:
 @app.command("init-db")
 def init_db_command() -> None:
     init_db()
+
+
+@app.command("reset-db")
+def reset_db_command(
+    yes: bool = typer.Option(False, "--yes", help="Drop and recreate all database tables."),
+) -> None:
+    if not yes:
+        raise typer.BadParameter("Pass --yes to confirm dropping and recreating the database.")
+    reset_db()
 
 
 @app.command("api")

@@ -5,20 +5,20 @@ services:
       dockerfile: Dockerfile
       args:
         CODEX_VERSION: "0.115.0"
-    user: "${BOKKIE_CONTAINER_USER:-${BOKKIE_CONTAINER_UID:-1000}:${BOKKIE_CONTAINER_GID:-1000}}"
+    user: "${BOKKIE_CONTAINER_USER:-0:0}"
     restart: unless-stopped
     working_dir: /workspace
     command: >
-      sh -lc "mkdir -p /workspace/.bokkie/runs /workspace/.worker-cache /workspace/.worker-worktrees /workspace/run/home &&
+      sh -lc "mkdir -p /workspace/run/.bokkie/runs /workspace/run/worker-cache /workspace/run/worker-worktrees /workspace/run/home &&
       uv run bokkie worker-service"
     environment:
       HOME: /workspace/run/home
       BOKKIE_REPO_ROOT: /workspace
       BOKKIE_BOKKIE_CONFIG_PATH: /workspace/bokkie.toml
-      BOKKIE_RUNS_ROOT: /workspace/.bokkie/runs
-      BOKKIE_ARTIFACTS_DIR: /workspace/.bokkie/runs
-      BOKKIE_WORKER_CACHE_DIR: /workspace/.worker-cache
-      BOKKIE_WORKER_WORKTREE_DIR: /workspace/.worker-worktrees
+      BOKKIE_RUNS_ROOT: /workspace/run/.bokkie/runs
+      BOKKIE_ARTIFACTS_DIR: /workspace/run/.bokkie/runs
+      BOKKIE_WORKER_CACHE_DIR: /workspace/run/worker-cache
+      BOKKIE_WORKER_WORKTREE_DIR: /workspace/run/worker-worktrees
     env_file:
       - path: .env.worker
         required: false

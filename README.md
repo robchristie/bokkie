@@ -63,6 +63,23 @@ The PostgreSQL data directory is bind-mounted to `./run/postgres`, which is alre
 The API container bind-mounts the repo to `/workspace`, so the app uses the live checkout plus the
 repo-authored `bokkie.toml`, `agents/*`, `tasks/*`, and `jobs/*`.
 
+Container runtime state is written under `./run/` rather than into top-level hidden directories in
+the checkout:
+
+- `run/.bokkie/runs`
+- `run/worker-cache`
+- `run/worker-worktrees`
+- `run/home`
+
+If you already have older Bokkie Postgres data under `run/postgres`, the current code may reject it
+as a stale schema. This repo does not have migrations yet. In that case either:
+
+```bash
+uv run bokkie reset-db --yes
+```
+
+or stop the stack and remove `run/postgres/` before starting again.
+
 ### Worker host
 
 On each worker host, clone the repo to a stable path such as `/srv/bokkie`, then:
@@ -103,7 +120,7 @@ docker compose -f docker-compose.worker.yml up -d --build
 ```
 
 This runs a long-lived polling worker using `uv run bokkie worker-service`, with its identity and
-capabilities driven entirely by `.env.worker`.
+capabilities driven entirely by `.env.worker`. Worker runtime state also lives under `run/`.
 
 ### Worker host with rootless Podman
 
@@ -120,12 +137,14 @@ user namespace. That avoids the common bind-mount write failure caused by forcin
 
 ## Container notes
 
-- For Docker, both compose files can use `BOKKIE_CONTAINER_UID` and `BOKKIE_CONTAINER_GID` to
-  avoid root-owned files on the bind-mounted checkout. If needed:
+- By default, the containers run as `root` inside the container so bind-mounted checkouts work
+  reliably even when the host UID is not `1000`. Because runtime writes now live under `./run/`,
+  that is usually the simplest setup.
+- For Docker, if you want those runtime files owned by your host user instead, set
+  `BOKKIE_CONTAINER_USER` before starting Compose. For example:
 
 ```bash
-export BOKKIE_CONTAINER_UID=$(id -u)
-export BOKKIE_CONTAINER_GID=$(id -g)
+export BOKKIE_CONTAINER_USER="$(id -u):$(id -g)"
 ```
 
 - For rootless Podman, do not set those variables for the worker container. Use
