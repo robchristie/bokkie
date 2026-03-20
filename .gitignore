@@ -14,7 +14,7 @@ wheels/
 .env.worker
 
 /prompts/
-/run/
+/run
 .bokkie/
 .worker-cache/
 .worker-worktrees/
