@@ -68,7 +68,10 @@ impl GardenerRuntimeConfig {
             ));
         }
         if self.heartbeat_interval.is_zero()
-            || self.heartbeat_interval > Duration::from_secs(lease_seconds as u64 / 3)
+            || self
+                .heartbeat_interval
+                .checked_mul(3)
+                .is_none_or(|interval| interval > Duration::from_secs(lease_seconds as u64))
         {
             return Err(GardenerRunnerError::Configuration(format!(
                 "gardener heartbeat interval must be positive and no more than one third of the {lease_seconds}-second lease"
@@ -419,6 +422,8 @@ impl<'a> GardenerRunner<'a> {
             }
             self.heartbeat(store, claim)?;
             git.verify_head(verification_worktree, &pull_request.head)?;
+            self.heartbeat(store, claim)?;
+            git.observe_pull_request(&branch, &pull_request.head)?;
             store.finish_gardener_verification(
                 claim,
                 &run_id,

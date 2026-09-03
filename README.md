@@ -10,12 +10,16 @@ The initial implementation is intentionally narrow:
 - a Rust daemon and command-line client;
 - SQLite-backed obligations, attempts, approvals, leases, and audit events;
 - cron recurrence with named time zones;
-- a deterministic fake runner for qualification; and
+- a deterministic fake runner for qualification;
+- an explicitly enabled coding gardener restricted to `robchristie/bokkie`;
+- persisted inspection, proposal, implementation, and verification evidence;
+  and
 - a loopback HTTP API suitable for a future Polyorama interface.
 
-Codex integration, real infrastructure actions, notifications, memory, and the
-graphical interface are later slices. The kernel must be reliable before any of
-those are allowed to depend on it.
+General infrastructure actions, automatic merge or deployment, notifications,
+memory, and the graphical interface remain outside this slice. The narrow
+gardener uses Codex only through isolated, network-off worktrees and preserves
+human approval before implementation.
 
 ## Design guarantee
 
@@ -46,9 +50,16 @@ operator decision.
 ## Command and service adapters
 
 The `bokkie` executable provides JSON-producing `create`, `list`, `show`,
-`approve`, `reject`, `retry`, `cancel`, `events`, and `attempts` commands. Its
-`serve` command runs the scheduler and unauthenticated HTTP API together and
-refuses non-loopback binding.
+`approve`, `reject`, `retry`, `cancel`, `events`, and `attempts` commands. The
+nested `gardener` commands register the one supported `robchristie/bokkie`
+checkout, show inspections, immutable proposals, observations, implementation
+runs and run events, and record proposal approval or rejection.
+
+`serve` runs the scheduler and unauthenticated HTTP API together and refuses
+non-loopback binding. It remains fake-only unless the operator supplies
+`--enable-coding-gardener` and an existing absolute
+`--gardener-worktree-root`. Enabling the runtime does not register a checkout,
+approve work, merge a pull request, deploy, or restart Bokkie.
 
 See the [operator guide](docs/operator-guide.md) for command examples, HTTP
 routes, crash and graceful-shutdown behaviour, the trust boundary, and the

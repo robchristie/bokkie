@@ -474,6 +474,18 @@ impl Store {
         gardener_inspection(&self.connection, id)
     }
 
+    pub fn gardener_inspections(&self) -> Result<Vec<GardenerInspection>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, repository, obligation_id, occurrence, lease_generation,
+                    source_commit, worktree_path, prompt_digest, codex_thread_id,
+                    codex_turn_id, result_json, started_at, completed_at
+             FROM gardener_inspections ORDER BY started_at, id",
+        )?;
+        let rows = statement.query_map([], gardener_inspection_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
     pub fn record_inspection_codex_thread(
         &mut self,
         claim: &Claim,
@@ -669,6 +681,25 @@ impl Store {
 
     pub fn gardener_proposal(&self, fingerprint: &str) -> Result<Option<Proposal>, StoreError> {
         proposal(&self.connection, fingerprint)
+    }
+
+    pub fn gardener_proposals(&self) -> Result<Vec<Proposal>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT p.fingerprint, p.repository, p.prompt, p.implementation_obligation_id,
+                    o.state,
+                    (SELECT decision FROM approvals a
+                     WHERE a.obligation_id = o.id AND a.occurrence = o.occurrence
+                     ORDER BY a.id DESC LIMIT 1),
+                    (SELECT COUNT(*) FROM gardener_proposal_observations po
+                     WHERE po.proposal_fingerprint = p.fingerprint),
+                    p.created_at
+             FROM gardener_proposals p
+             JOIN obligations o ON o.id = p.implementation_obligation_id
+             ORDER BY p.created_at, p.fingerprint",
+        )?;
+        let rows = statement.query_map([], proposal_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     pub fn gardener_obligation_kind(
@@ -1700,26 +1731,28 @@ fn gardener_inspection(
                     codex_turn_id, result_json, started_at, completed_at
              FROM gardener_inspections WHERE id = ?1",
             [id],
-            |row| {
-                Ok(GardenerInspection {
-                    id: row.get(0)?,
-                    repository: row.get(1)?,
-                    obligation_id: row.get(2)?,
-                    occurrence: row.get(3)?,
-                    lease_generation: row.get(4)?,
-                    source_commit: row.get(5)?,
-                    worktree_path: row.get(6)?,
-                    prompt_digest: row.get(7)?,
-                    codex_thread_id: row.get(8)?,
-                    codex_turn_id: row.get(9)?,
-                    result_json: row.get(10)?,
-                    started_at: row.get(11)?,
-                    completed_at: row.get(12)?,
-                })
-            },
+            gardener_inspection_from_row,
         )
         .optional()
         .map_err(StoreError::from)
+}
+
+fn gardener_inspection_from_row(row: &Row<'_>) -> rusqlite::Result<GardenerInspection> {
+    Ok(GardenerInspection {
+        id: row.get(0)?,
+        repository: row.get(1)?,
+        obligation_id: row.get(2)?,
+        occurrence: row.get(3)?,
+        lease_generation: row.get(4)?,
+        source_commit: row.get(5)?,
+        worktree_path: row.get(6)?,
+        prompt_digest: row.get(7)?,
+        codex_thread_id: row.get(8)?,
+        codex_turn_id: row.get(9)?,
+        result_json: row.get(10)?,
+        started_at: row.get(11)?,
+        completed_at: row.get(12)?,
+    })
 }
 
 fn require_current_inspection(
@@ -1949,22 +1982,24 @@ fn proposal(connection: &Connection, fingerprint: &str) -> Result<Option<Proposa
              JOIN obligations o ON o.id = p.implementation_obligation_id
              WHERE p.fingerprint = ?1",
             [fingerprint],
-            |row| {
-                let decision: Option<String> = row.get(5)?;
-                Ok(Proposal {
-                    fingerprint: row.get(0)?,
-                    repository: row.get(1)?,
-                    prompt: row.get(2)?,
-                    implementation_obligation_id: row.get(3)?,
-                    obligation_state: parse_index(row, 4)?,
-                    approval_decision: decision.map(|value| parse_value(value, 5)).transpose()?,
-                    observation_count: row.get(6)?,
-                    created_at: row.get(7)?,
-                })
-            },
+            proposal_from_row,
         )
         .optional()
         .map_err(StoreError::from)
+}
+
+fn proposal_from_row(row: &Row<'_>) -> rusqlite::Result<Proposal> {
+    let decision: Option<String> = row.get(5)?;
+    Ok(Proposal {
+        fingerprint: row.get(0)?,
+        repository: row.get(1)?,
+        prompt: row.get(2)?,
+        implementation_obligation_id: row.get(3)?,
+        obligation_state: parse_index(row, 4)?,
+        approval_decision: decision.map(|value| parse_value(value, 5)).transpose()?,
+        observation_count: row.get(6)?,
+        created_at: row.get(7)?,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -30,7 +30,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(verdict: &str, mismatched_head: bool) -> Self {
+    fn new(verdict: &str, mismatched_head: bool, changed_pr_head: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let origin = root.path().join("origin.git");
         let checkout = root.path().join("checkout");
@@ -129,6 +129,7 @@ for raw in sys.stdin:
         write_executable(&codex, &codex_script);
 
         let gh_log = root.path().join("gh.log");
+        let gh_count = root.path().join("gh.count");
         let gh = root.path().join("fake-gh.py");
         let gh_script = format!(
             r#"#!/usr/bin/env python3
@@ -138,14 +139,22 @@ import subprocess
 import sys
 
 args = sys.argv[1:]
-with pathlib.Path({log}).open("a") as output:
+log = pathlib.Path({log})
+count_path = pathlib.Path({count})
+with log.open("a") as output:
     output.write(json.dumps(args) + "\n")
 if args[:2] == ["pr", "view"]:
+    count = int(count_path.read_text()) + 1 if count_path.exists() else 1
+    count_path.write_text(str(count))
     branch = args[2]
     head = subprocess.check_output(["git", "rev-parse", branch], text=True).strip()
+    if {changed_pr_head} and count >= 2:
+        head = "b" * 40
     print(json.dumps({{"number": 42, "url": "https://github.com/robchristie/bokkie/pull/42", "headRefOid": head, "state": "OPEN", "isDraft": False}}))
 "#,
             log = serde_json::to_string(gh_log.to_str().unwrap()).unwrap(),
+            count = serde_json::to_string(gh_count.to_str().unwrap()).unwrap(),
+            changed_pr_head = if changed_pr_head { "True" } else { "False" },
         );
         write_executable(&gh, &gh_script);
 
@@ -226,7 +235,7 @@ if args[:2] == ["pr", "view"]:
 
 #[test]
 fn complete_process_flow_persists_exact_identities_and_passes_verification() {
-    let fixture = Fixture::new("pass", false);
+    let fixture = Fixture::new("pass", false, false);
     let mut store = fixture.store();
     let implementation_claim = fixture.inspect_and_approve(&mut store);
 
@@ -295,7 +304,7 @@ fn complete_process_flow_persists_exact_identities_and_passes_verification() {
 
 #[test]
 fn blocking_verdict_preserves_ready_pr_and_enters_attention() {
-    let fixture = Fixture::new("blocking", false);
+    let fixture = Fixture::new("blocking", false, false);
     let mut store = fixture.store();
     let claim = fixture.inspect_and_approve(&mut store);
     let config = fixture.config();
@@ -326,7 +335,7 @@ fn blocking_verdict_preserves_ready_pr_and_enters_attention() {
 
 #[test]
 fn mismatched_reported_head_is_non_retryable_and_never_records_a_verdict() {
-    let fixture = Fixture::new("pass", true);
+    let fixture = Fixture::new("pass", true, false);
     let mut store = fixture.store();
     let claim = fixture.inspect_and_approve(&mut store);
     let config = fixture.config();
@@ -358,8 +367,50 @@ fn mismatched_reported_head_is_non_retryable_and_never_records_a_verdict() {
 }
 
 #[test]
+fn changed_pr_head_on_final_observation_enters_attention_without_a_verdict() {
+    let fixture = Fixture::new("pass", false, true);
+    let mut store = fixture.store();
+    let claim = fixture.inspect_and_approve(&mut store);
+    let config = fixture.config();
+    let runner = GardenerRunner::new(&config, 30, &fixture.clock).unwrap();
+    let result = runner.execute(&mut store, &claim);
+    assert!(matches!(
+        result.completion,
+        Completion::Failed {
+            retryable: false,
+            ..
+        }
+    ));
+    store
+        .complete(&claim, result.completion, fixture.clock.now())
+        .unwrap();
+
+    let run = store.gardener_implementation_runs().unwrap().remove(0);
+    assert_eq!(run.verification_verdict, None);
+    assert_eq!(run.pull_request_head, run.verification_head);
+    let obligation = store.get(&claim.obligation_id).unwrap().unwrap();
+    assert_eq!(obligation.state, ObligationState::Attention);
+    assert!(
+        obligation
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("observed bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    );
+    let views = fs::read_to_string(&fixture.gh_log)
+        .unwrap()
+        .lines()
+        .filter(|line| {
+            let arguments: Vec<String> = serde_json::from_str(line).unwrap();
+            arguments.get(1).is_some_and(|command| command == "view")
+        })
+        .count();
+    assert_eq!(views, 2);
+}
+
+#[test]
 fn unconfigured_ordinary_claims_cannot_take_gardener_work() {
-    let fixture = Fixture::new("pass", false);
+    let fixture = Fixture::new("pass", false, false);
     let mut store = fixture.store();
     store
         .create(

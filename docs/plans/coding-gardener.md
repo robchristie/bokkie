@@ -53,27 +53,27 @@ exact pull-request head.
 
 ## Acceptance criteria
 
-- [ ] Registration and inspection recurrence survive reopening SQLite and
+- [x] Registration and inspection recurrence survive reopening SQLite and
   duplicate registration is idempotent only for the same immutable identity.
-- [ ] Every inspection records the resolved commit before app-server starts and
+- [x] Every inspection records the resolved commit before app-server starts and
   uses a detached worktree plus read-only sandbox at that commit.
-- [ ] Repeated equivalent prompts produce one pending proposal while preserving
+- [x] Repeated equivalent prompts produce one pending proposal while preserving
   every inspection observation and source commit.
-- [ ] A proposal cannot dispatch before an immutable approval for its exact
+- [x] A proposal cannot dispatch before an immutable approval for its exact
   content; rejection and ambiguous external state remain visible attention.
-- [ ] App-server initialisation, thread/turn creation and completion are tested
+- [x] App-server initialisation, thread/turn creation and completion are tested
   against the installed stable JSONL contract, including explicit denial of
   unplanned command, file-change or permission escalation requests.
-- [ ] Local run, Codex thread/turn, Git branch/head and GitHub PR number/URL/head
+- [x] Local run, Codex thread/turn, Git branch/head and GitHub PR number/URL/head
   identities are persisted as they become known and retained across reopen.
-- [ ] Verification uses a fresh Codex thread with read-only access to a detached
+- [x] Verification uses a fresh Codex thread with read-only access to a detached
   worktree at the independently observed PR head; only a passing verdict for
   that same head completes the goal obligation.
-- [ ] A changed PR head invalidates an older verdict, a blocking verdict enters
+- [x] A changed PR head invalidates an older verdict, a blocking verdict enters
   attention, and stale leases cannot publish or overwrite newer evidence.
-- [ ] Worktrees are isolated and cleaned when safe; retained paths and reasons
+- [x] Worktrees are isolated and cleaned when safe; retained paths and reasons
   are visible when cleanup cannot be proved safe.
-- [ ] Existing fake obligations remain compatible and the canonical repository
+- [x] Existing fake obligations remain compatible and the canonical repository
   check passes.
 
 ## Design and lifecycle
@@ -119,8 +119,8 @@ passes. That candidate then receives the canonical and landing gates.
 | Increment | Acceptance proof | Status |
 |---|---|---|
 | Durable registration and proposal lifecycle | Migration/store tests for reopen, recurrence, deduplication, exact-content approval and events | complete at `dda602c` |
-| App-server and isolated Git execution | Protocol tests plus fake-process proof of read-only exact-commit inspection and persisted identities | active; protocol/state/Git foundations complete at `80a1372` |
-| Exact-head verification and adapters | End-to-end fake Git/GitHub/app-server process test, recovery cases, CLI/HTTP/operator docs | pending |
+| App-server and isolated Git execution | Protocol tests plus fake-process proof of read-only exact-commit inspection and persisted identities | complete at `91727f4` |
+| Exact-head verification and adapters | End-to-end fake Git/GitHub/app-server process test, recovery cases, CLI/HTTP/operator docs | complete in the current candidate |
 | Terminal qualification and landing | Canonical check, exact-head independent review, ready PR, CI, squash merge and post-merge reconciliation | pending |
 
 ## Authority and human-review boundaries
@@ -133,8 +133,7 @@ destructive repository operation. Those remain explicit human boundaries.
 
 ## Current phase
 
-Integrate the completed execution state, app-server client and isolated
-Git/GitHub adapter with gardener-only scheduler claims. Require an independently
-observed remote branch head after push and fake-process end-to-end evidence.
-Keep one terminal pull request for the coherent slice; internal increments are
-verified checkpoints rather than independently landed products.
+Run terminal qualification, exact-head independent review and the ordinary
+landing gates for the coherent slice. The implementation, adapters and
+operator documentation are complete; no deployment or service restart is part
+of qualification.
