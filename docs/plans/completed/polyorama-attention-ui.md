@@ -113,8 +113,8 @@ primary action. The decision and its necessary evidence remain visible at
 | Transport exploration | Bokkie application/HTTP adapter | Fixed pane, fixture read/action, native+Wasm build and browser same-origin probe | Baselines above | Complete at `3910f2bd4076f82042c9017da2fe12e674bf736e` |
 | Read projections and capabilities | Bokkie domain/store/HTTP | Authoritative inbox, liveness, timeline and legal-action projection with deterministic store/API tests | Selected seam | Complete at `ad0afe37c24ec4876f18244e5dbdc6dc9cf6e7bb` |
 | Operational workspace | Bokkie application | Three connected panes, typed intents, virtualisation, refresh/stale/conflict handling and responsive semantics | Projection contract | Complete at `340fc3a3324fdfde20951627bb4ae34380f25e78` |
-| Qualification and documentation | Bokkie application/tooling | Temporary-service native/browser physical journeys, semantic/text/visual/idle evidence and operator docs | Complete workspace | Complete: application/harness `8b368e9197ecac4c9dd38a478f6e5485325af60b`; evidence `8672da7d1de2783083ed72f4ef3ed5a7d948bf47` |
-| Terminal review and landing | Bokkie campaign | Canonical check, exact-head independent review, CI, squash merge and cleanup | All acceptance proof | Ready pull request [#4](https://github.com/robchristie/bokkie/pull/4); canonical check complete; exact-head review and landing pending |
+| Qualification and documentation | Bokkie application/tooling | Temporary-service native/browser physical journeys, semantic/text/visual/idle evidence and operator docs | Complete workspace | Complete: repaired application/harness `12ba204901386169fad63664cb8a87af51dbcfaa`; evidence `d60f6e4ea16980222ba6468febb32b1a09312f41` |
+| Terminal review and landing | Bokkie campaign | Canonical check, exact-head independent review, CI, squash merge and cleanup | All acceptance proof | Pull request [#4](https://github.com/robchristie/bokkie/pull/4); head `736554d76df1a4d7bf1898ba55c0bde92b367897` rejected for a stale-action race; conditional-operator repair and requalification complete; exact-head re-review and landing pending |
 
 Add a Polyorama owner node before its consumer only if a demonstrated reusable
 gap makes one necessary.
@@ -164,14 +164,17 @@ gap makes one necessary.
 ## Current phase
 
 Qualification and documentation are complete at application/harness revision
-`8b368e9197ecac4c9dd38a478f6e5485325af60b`; retained evidence is revision
-`8672da7d1de2783083ed72f4ef3ed5a7d948bf47` in the [UI qualification evidence index](../../ui-qualification-evidence/README.md).
+`12ba204901386169fad63664cb8a87af51dbcfaa`; retained evidence is revision
+`d60f6e4ea16980222ba6468febb32b1a09312f41` in the [UI qualification evidence index](../../ui-qualification-evidence/README.md).
 Fixture-only native and browser journeys exercised the real HTTP/store
 cancellation path, gardener confirmation inspection, stale/conflict safety,
 responsiveness, semantics, text layout, captures and idle behaviour. No
-reusable Polyorama gap was found. At `c22d4886537d1ddf5feeebec17a7230359ae228f`,
-the canonical check, strict Clippy, formatting, native/Wasm builds and evidence
-hashes passed; a separate Lantern flow found no layout, console, network or
-HTTP failure at 1440×900. The local-scale gardener-history scan remains the
-known performance risk. Next: create a ready pull request, obtain exact-head
-independent review, pass CI, squash merge and reconcile the landed revision.
+reusable Polyorama gap was found. Independent review rejected `736554d...`
+because confirmations lacked an atomic backend state precondition. The repair
+uses a dedicated, compatibility-preserving conditional `/operator` route and
+binds every UI action to the reviewed obligation, occurrence and append-only
+audit sequence inside the Store transaction; later-occurrence and same-cycle
+races now return 409. A separate earlier Lantern flow found no layout, console,
+network or HTTP failure at 1440×900. The local-scale gardener-history scan
+remains the known performance risk. Next: run final canonical verification,
+obtain exact-head re-review, pass CI, squash merge and reconcile landing.
