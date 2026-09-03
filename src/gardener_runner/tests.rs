@@ -1,8 +1,10 @@
 use std::{
     fs,
+    io::Write,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
+    sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
 
@@ -497,10 +499,25 @@ fn inspection_rejects_a_noncanonical_effective_origin_before_remote_or_codex_wor
 }
 
 fn write_executable(path: &Path, contents: &str) {
-    fs::write(path, contents).unwrap();
-    let mut permissions = fs::metadata(path).unwrap().permissions();
+    static NEXT_TEMPORARY_FILE: AtomicUsize = AtomicUsize::new(0);
+
+    let temporary_path = path.with_file_name(format!(
+        ".{}.{}.tmp",
+        path.file_name().unwrap().to_string_lossy(),
+        NEXT_TEMPORARY_FILE.fetch_add(1, Ordering::Relaxed),
+    ));
+    let mut temporary = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary_path)
+        .unwrap();
+    temporary.write_all(contents.as_bytes()).unwrap();
+    let mut permissions = temporary.metadata().unwrap().permissions();
     permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions).unwrap();
+    temporary.set_permissions(permissions).unwrap();
+    temporary.sync_all().unwrap();
+    drop(temporary);
+    fs::rename(temporary_path, path).unwrap();
 }
 
 fn local_git_transport(root: &Path, origin: &Path, log: &Path) -> PathBuf {
