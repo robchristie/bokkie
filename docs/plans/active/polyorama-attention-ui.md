@@ -1,6 +1,6 @@
 # Polyorama attention UI
 
-- Status: implementation
+- Status: qualification complete; landing pending
 - Owner: `bokkie`
 - Bokkie baseline: `78558bf915eb9ed0ffb3a676676bf18dc0a5c908`
 - Polyorama baseline: `0e725f5a97a6d99a6bc4c961dfc05b4e9252ba1d`
@@ -112,7 +112,7 @@ primary action. The decision and its necessary evidence remain visible at
 | Transport exploration | Bokkie application/HTTP adapter | Fixed pane, fixture read/action, native+Wasm build and browser same-origin probe | Baselines above | Complete at `3910f2bd4076f82042c9017da2fe12e674bf736e` |
 | Read projections and capabilities | Bokkie domain/store/HTTP | Authoritative inbox, liveness, timeline and legal-action projection with deterministic store/API tests | Selected seam | Complete at `ad0afe37c24ec4876f18244e5dbdc6dc9cf6e7bb` |
 | Operational workspace | Bokkie application | Three connected panes, typed intents, virtualisation, refresh/stale/conflict handling and responsive semantics | Projection contract | Complete at `340fc3a3324fdfde20951627bb4ae34380f25e78` |
-| Qualification and documentation | Bokkie application/tooling | Temporary-service native/browser physical journeys, semantic/text/visual/idle evidence and operator docs | Complete workspace | Pending |
+| Qualification and documentation | Bokkie application/tooling | Temporary-service native/browser physical journeys, semantic/text/visual/idle evidence and operator docs | Complete workspace | Complete: application/harness `8b368e9197ecac4c9dd38a478f6e5485325af60b`; evidence `8672da7d1de2783083ed72f4ef3ed5a7d948bf47` |
 | Terminal review and landing | Bokkie campaign | Canonical check, exact-head independent review, CI, squash merge and cleanup | All acceptance proof | Pending |
 
 Add a Polyorama owner node before its consumer only if a demonstrated reusable
@@ -120,32 +120,32 @@ gap makes one necessary.
 
 ## Acceptance
 
-- [ ] One Rust application model runs natively and as Wasm/WebGPU.
-- [ ] Browser transport reaches only a loopback temporary Bokkie service through
+- [x] One Rust application model runs natively and as Wasm/WebGPU.
+- [x] Browser transport reaches only a loopback temporary Bokkie service through
   same-origin routing, without permissive CORS or non-loopback exposure.
-- [ ] A seeded genuine exception shows the correct reason, consequence,
+- [x] A seeded genuine exception shows the correct reason, consequence,
   freshness and available action.
-- [ ] Selecting an exception selects its obligation and opens the complete
+- [x] Selecting an exception selects its obligation and opens the complete
   relevant evidence timeline.
-- [ ] Approve, reject, retry or cancel uses the real HTTP/domain path and the
+- [x] Approve, reject, retry or cancel uses the real HTTP/domain path and the
   resulting durable event appears after refresh.
-- [ ] Gardener approval requires deliberate confirmation of the exact immutable
+- [x] Gardener approval requires deliberate confirmation of the exact immutable
   prompt, fingerprint, occurrence and consequence, with an optional note.
-- [ ] Every represented non-terminal obligation exposes its wake-up, active
+- [x] Every represented non-terminal obligation exposes its wake-up, active
   lease or visible human-attention reason.
-- [ ] Large fixtures materialise a bounded visible row range.
-- [ ] Loading, empty inbox/database, disconnected, stale, conflict, disabled,
+- [x] Large fixtures materialise a bounded visible row range.
+- [x] Loading, empty inbox/database, disconnected, stale, conflict, disabled,
   long-content and post-action states are visible and semantically exercised.
-- [ ] Selection and scrolling survive refresh and responsive changes.
-- [ ] Idle repainting remains event- or deadline-driven.
-- [ ] Primary workflows pass at 1280×720, 1440×900 and one narrow layout.
-- [ ] Native and browser physical interaction tests pass against temporary data.
-- [ ] Visual captures, semantic snapshots and text-layout evidence are inspected.
+- [x] Selection and scrolling survive refresh and responsive changes.
+- [x] Idle repainting remains event- or deadline-driven.
+- [x] Primary workflows pass at 1280×720, 1440×900 and one narrow layout.
+- [x] Native and browser physical interaction tests pass against temporary data.
+- [x] Visual captures, semantic snapshots and text-layout evidence are inspected.
 - [ ] Bokkie's canonical test, strict Clippy and format checks pass.
-- [ ] Any Polyorama change passes `cargo xtask verify` at its delivered revision.
+- [x] No Polyorama change was required.
 - [ ] Final exact heads receive independent review; blocking findings are
   repaired and re-reviewed; owner dependencies land before consumers.
-- [ ] README, operator guide and completed plan document running, the trust
+- [x] README, operator guide and active plan document running, the trust
   boundary, refresh behaviour, evidence, limitations and exact landed revisions.
 
 ## Safety and exceptional review boundaries
@@ -160,15 +160,13 @@ gap makes one necessary.
 
 ## Current phase
 
-The operational workspace is complete at
-`340fc3a3324fdfde20951627bb4ae34380f25e78`. It consumes the authoritative
-projection through three stable panes, keeps one canonical workspace across
-wide and narrow presentation, confirms every action, retains drafts across
-conflicts, disables stale decisions, rejects out-of-order topic responses and
-schedules bounded refresh deadlines. A 50,000-row fixture produces at most 14
-materialised rows in the representative range. Nineteen UI tests, 89 workspace
-tests, strict Clippy, formatting and native/Wasm builds passed. No reusable
-Polyorama gap was found. The existing local-scale gardener-history scan remains
-the only known performance risk. Next, add deterministic service fixtures and
-native/browser physical, semantic, text-layout, visual, responsive, stale,
-conflict, post-action and idle qualification, then update operator docs.
+Qualification and documentation are complete at application/harness revision
+`8b368e9197ecac4c9dd38a478f6e5485325af60b`; retained evidence is revision
+`8672da7d1de2783083ed72f4ef3ed5a7d948bf47` in the [UI qualification evidence index](../../ui-qualification-evidence/README.md).
+Fixture-only native and browser journeys exercised the real HTTP/store
+cancellation path, gardener confirmation inspection, stale/conflict safety,
+responsiveness, semantics, text layout, captures and idle behaviour. No
+reusable Polyorama gap was found. The local-scale gardener-history scan remains
+the known performance risk. Next: run the canonical check at the exact head,
+obtain independent review, create a ready pull request, pass CI, squash merge
+and reconcile the landed revision.

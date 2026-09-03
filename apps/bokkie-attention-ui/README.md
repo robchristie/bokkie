@@ -37,6 +37,34 @@ Then open `http://127.0.0.1:7744/ui/`. The generated `web/pkg` directory is
 ignored. This arrangement adds no CORS policy, authentication change, proxy,
 non-loopback listener or second database path.
 
+## Operate the workspace
+
+The workspace reads Bokkie's projected HTTP state; it never reads SQLite. On
+start, manual refresh and a bounded wake-up it requests a current snapshot.
+While refreshing it retains the last snapshot and a surviving selection and
+scroll position. A failed snapshot or selected-topic request marks retained
+data **Stale** and disables lifecycle decisions until a current snapshot is
+received. A `409` transition conflict similarly preserves the confirmation
+draft, refreshes current state, and requires the operator to review it before
+trying again. Responses for an older selected topic are discarded.
+
+Buttons reflect backend capabilities rather than UI-invented transitions. Each
+approve, reject, retry or cancel action opens a separate confirmation with its
+target occurrence and consequence. Decisions require a non-empty operator
+actor and accept an optional note. For gardener approval or rejection, the
+confirmation shows the exact immutable repository, fingerprint and prompt;
+occurrence and consequence; submission is blocked if that proposal identity or
+occurrence no longer matches the current snapshot. The actor is persisted audit
+evidence but is not authentication: this remains an unauthenticated loopback
+service.
+
+The browser module deliberately has no configurable API origin. Serve it only
+from Bokkie's loopback `/ui/` route, using the same origin as its relative API
+requests. The native executable accepts only `http` with a literal IPv4 or IPv6
+loopback base (and rejects credentials, queries and fragments). Do not use
+either form with an operator database until you have separately assessed the
+requested lifecycle action.
+
 Run the focused application checks with:
 
 ```sh
@@ -59,4 +87,10 @@ script builds native and Wasm assets, creates only fixture-owned temporary
 SQLite databases, runs real browser and Xvfb native interaction smokes, and
 removes its explicit runtime root. It never accepts an operator database path
 or enables the coding-gardener runtime. Retained results and their limitations
-are indexed in `docs/ui-qualification-evidence/README.md`.
+are indexed in [the qualification evidence](../../docs/ui-qualification-evidence/README.md).
+
+The retained result qualifies functional native and browser journeys, not a
+deployment, screen-reader certification or physical-GPU performance. In
+particular, native AccessKit adapters are outside this slice and the browser
+disconnected-state surface is an explicitly labelled approximation; see the
+evidence index before relying on either claim.

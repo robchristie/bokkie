@@ -50,6 +50,43 @@ systemd's `TimeoutStopSec` with enough margin for SQLite reconciliation. An
 abrupt kill leaves the claim running only until its lease expires; a restarted
 scheduler records the expired attempt and applies the persisted retry policy.
 
+## Attention UI
+
+The optional attention workspace is a local view over Bokkie's HTTP
+projections, not a database client. Its native executable accepts only a
+literal loopback `http` base; its browser build uses relative API paths and
+must be served from the same loopback Bokkie origin. Build/run commands for
+both forms are in [the application README](../apps/bokkie-attention-ui/README.md).
+For browser use, build the Wasm assets, then start the existing service with
+`--ui-dir apps/bokkie-attention-ui/web` and open `/ui/` on that listener. Do
+not add a proxy, port forwarding, CORS policy or a non-loopback bind.
+
+Use **Refresh** before acting if the state is not current. The workspace keeps
+the prior snapshot, selected obligation and context visible during refresh; a
+transport failure, stale selected evidence or `409` transition conflict marks
+that retained view stale and disables decisions. A conflict keeps the actor and
+note draft, refreshes Bokkie's state, and requires a new review. A successful
+action is not proof of completion: it triggers refresh so the durable event and
+new server-authorised capabilities are observed.
+
+Every lifecycle action has a separate confirmation. The UI cannot invent an
+approve, reject, retry or cancel transition absent from Bokkie's capabilities.
+For gardener approval or rejection, compare the displayed repository,
+immutable prompt, fingerprint, occurrence and consequence before submitting.
+The confirmation will not submit if the current proposal identity or occurrence
+changed. Decision actions require an operator actor; it is immutable audit
+evidence of the supplied identity once recorded, **not** authentication or
+proof of a human's real-world identity. The optional note is retained with the
+decision.
+
+Run `tools/qualify-ui.sh` from the repository root to regenerate the
+deterministic native/browser qualification against fixture-only temporary
+databases. It does not accept an operator database or start the coding gardener.
+Inspect the retained artefacts, hashes, direct/approximate classifications and
+limitations in [the UI qualification evidence index](ui-qualification-evidence/README.md).
+The result does not claim deployment readiness, screen-reader certification or
+physical-GPU performance.
+
 ## Coding gardener
 
 Register the canonical checkout. The checkout path must be absolute. The first
