@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::oneshot;
 
+use crate::gardener_runner::{GardenerRunner, GardenerRunnerError, GardenerRuntimeConfig};
 use crate::{Claim, Completion, RunResult, Runner, Store, StoreError, SystemClock, UnixClock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +43,8 @@ pub enum SchedulerError {
     Panicked,
     #[error("could not start scheduler thread: {0}")]
     Thread(#[source] io::Error),
+    #[error(transparent)]
+    Gardener(#[from] GardenerRunnerError),
 }
 
 pub struct Scheduler {
@@ -52,8 +55,20 @@ pub struct Scheduler {
 
 impl Scheduler {
     pub fn start(config: SchedulerConfig) -> Result<Self, SchedulerError> {
+        Self::start_configured(config, None)
+    }
+
+    /// Starts the scheduler with an optional coding-gardener execution runtime.
+    /// Gardener-bound obligations are not claimable when this is `None`.
+    pub fn start_configured(
+        config: SchedulerConfig,
+        gardener: Option<GardenerRuntimeConfig>,
+    ) -> Result<Self, SchedulerError> {
         // Fail before advertising readiness if the database cannot be opened or migrated.
         Store::open(&config.database)?;
+        if let Some(runtime) = &gardener {
+            runtime.validate(config.lease_seconds)?;
+        }
 
         let stop = Arc::new(AtomicBool::new(false));
         let scheduler_stop = Arc::clone(&stop);
@@ -61,7 +76,7 @@ impl Scheduler {
         let thread = thread::Builder::new()
             .name("bokkie-scheduler".to_owned())
             .spawn(move || {
-                let result = scheduler_loop(config, &scheduler_stop);
+                let result = scheduler_loop(config, gardener, &scheduler_stop);
                 let _ = exit_sender.send(());
                 result
             })
@@ -84,7 +99,7 @@ impl Scheduler {
             .expect("scheduler exit signal can only be taken once")
     }
 
-    /// Stop claiming new work, then wait for already-claimed fake work to reconcile.
+    /// Stop claiming new work, then wait for already-claimed work to reconcile.
     pub fn shutdown(mut self) -> Result<(), SchedulerError> {
         self.stop.store(true, Ordering::SeqCst);
         self.thread
@@ -96,11 +111,24 @@ impl Scheduler {
     }
 }
 
-fn scheduler_loop(config: SchedulerConfig, stop: &AtomicBool) -> Result<(), SchedulerError> {
+fn scheduler_loop(
+    config: SchedulerConfig,
+    gardener: Option<GardenerRuntimeConfig>,
+    stop: &AtomicBool,
+) -> Result<(), SchedulerError> {
     let mut store = Store::open(&config.database)?;
     let clock = SystemClock;
 
     while !stop.load(Ordering::SeqCst) {
+        if let Some(runtime) = &gardener {
+            let mut claims = store.claim_due_gardener(clock.now(), config.lease_seconds, 1)?;
+            if let Some(claim) = claims.pop() {
+                let runner = GardenerRunner::new(runtime, config.lease_seconds, &clock)?;
+                let result = runner.execute(&mut store, &claim);
+                reconcile_completion(&mut store, &claim, result, &clock)?;
+                continue;
+            }
+        }
         let mut claims = store.claim_due(clock.now(), config.lease_seconds, 1)?;
         if let Some(claim) = claims.pop() {
             delay_with_lease_renewal(
@@ -114,15 +142,24 @@ fn scheduler_loop(config: SchedulerConfig, stop: &AtomicBool) -> Result<(), Sche
                 outcome: config.fake_outcome,
             };
             let result = runner.execute(&claim);
-            match store.complete(&claim, result.completion, clock.now()) {
-                Ok(()) | Err(StoreError::Fenced) => {}
-                Err(error) => return Err(error.into()),
-            }
+            reconcile_completion(&mut store, &claim, result, &clock)?;
             continue;
         }
         sleep_until_poll_or_stop(config.poll_interval, stop);
     }
     Ok(())
+}
+
+fn reconcile_completion(
+    store: &mut Store,
+    claim: &Claim,
+    result: RunResult,
+    clock: &impl UnixClock,
+) -> Result<(), StoreError> {
+    match store.complete(claim, result.completion, clock.now()) {
+        Ok(()) | Err(StoreError::Fenced) => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn sleep_until_poll_or_stop(interval: Duration, stop: &AtomicBool) {

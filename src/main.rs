@@ -10,8 +10,9 @@ use std::{
 };
 
 use bokkie::{
-    ApprovalDecision, NewObligation, Recurrence, RetryPolicy, Store, StoreError, SystemClock,
-    UnixClock,
+    ApprovalDecision, CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerRunnerError,
+    GardenerRuntimeConfig, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
+    Store, StoreError, SystemClock, UnixClock,
     http::{error_json, router, validate_loopback},
     service::{Scheduler, SchedulerConfig, SchedulerError, ServiceFakeOutcome},
 };
@@ -94,6 +95,11 @@ enum Command {
     Events { id: String },
     /// List execution attempts for an obligation.
     Attempts { id: String },
+    /// Register, inspect, and decide coding-gardener state.
+    Gardener {
+        #[command(subcommand)]
+        command: GardenerCommand,
+    },
     /// Run the loopback API and background scheduler.
     Serve {
         #[arg(long, default_value = "127.0.0.1:7744")]
@@ -106,7 +112,96 @@ enum Command {
         fake_delay_ms: u64,
         #[arg(long, value_enum, default_value_t = FakeOutcomeArg::Succeed)]
         fake_outcome: FakeOutcomeArg,
+        /// Explicitly allow the scheduler to claim coding-gardener work.
+        #[arg(long, requires = "gardener_worktree_root")]
+        enable_coding_gardener: bool,
+        /// Existing absolute parent directory for isolated gardener worktrees.
+        #[arg(long, requires = "enable_coding_gardener")]
+        gardener_worktree_root: Option<PathBuf>,
+        #[arg(long, default_value = "codex")]
+        gardener_codex_executable: PathBuf,
+        #[arg(long, default_value = "git")]
+        gardener_git_executable: PathBuf,
+        #[arg(long, default_value = "gh")]
+        gardener_gh_executable: PathBuf,
+        #[arg(long, default_value_t = 10_000)]
+        gardener_heartbeat_ms: u64,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum GardenerCommand {
+    /// Register the canonical Bokkie checkout and inspection schedule.
+    Register {
+        #[arg(long, default_value = CANONICAL_REPOSITORY)]
+        repository: String,
+        #[arg(long, default_value = CANONICAL_DEFAULT_BRANCH)]
+        default_branch: String,
+        #[arg(long)]
+        checkout_path: PathBuf,
+        /// Unix timestamp; defaults to now.
+        #[arg(long)]
+        first_inspection_at: Option<i64>,
+        #[arg(long, default_value = "0 0 * * *")]
+        recurrence_cron: String,
+        #[arg(long, default_value = "UTC")]
+        recurrence_timezone: String,
+    },
+    /// Show the canonical repository registration.
+    Repository,
+    /// List or show persisted inspections.
+    Inspections {
+        #[command(subcommand)]
+        command: GardenerInspectionCommand,
+    },
+    /// List, show, or decide immutable proposals.
+    Proposals {
+        #[command(subcommand)]
+        command: GardenerProposalCommand,
+    },
+    /// List or show implementation runs and their events.
+    Runs {
+        #[command(subcommand)]
+        command: GardenerRunCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum GardenerInspectionCommand {
+    List,
+    Show { id: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum GardenerProposalCommand {
+    List,
+    Show {
+        fingerprint: String,
+    },
+    Observations {
+        fingerprint: String,
+    },
+    Approve {
+        fingerprint: String,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    Reject {
+        fingerprint: String,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum GardenerRunCommand {
+    List,
+    Show { id: String },
+    Events { id: String },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -114,6 +209,20 @@ enum FakeOutcomeArg {
     Succeed,
     FailRetryable,
     FailTerminal,
+}
+
+struct ServeOptions {
+    bind: SocketAddr,
+    poll_ms: u64,
+    lease_seconds: i64,
+    fake_delay_ms: u64,
+    fake_outcome: ServiceFakeOutcome,
+    enable_coding_gardener: bool,
+    gardener_worktree_root: Option<PathBuf>,
+    gardener_codex_executable: PathBuf,
+    gardener_git_executable: PathBuf,
+    gardener_gh_executable: PathBuf,
+    gardener_heartbeat_ms: u64,
 }
 
 impl From<FakeOutcomeArg> for ServiceFakeOutcome {
@@ -143,6 +252,7 @@ impl AppError {
         match self {
             Self::Store(StoreError::NotFound(_)) => "not_found",
             Self::Store(StoreError::Invalid(_) | StoreError::Recurrence(_))
+            | Self::Scheduler(SchedulerError::Gardener(GardenerRunnerError::Configuration(_)))
             | Self::Configuration(_) => "invalid_request",
             Self::Store(StoreError::Conflict(_) | StoreError::Fenced) => "transition_conflict",
             Self::Store(StoreError::Sql(_)) => "storage_error",
@@ -156,6 +266,7 @@ impl AppError {
             Self::Store(StoreError::NotFound(_)) => 3,
             Self::Store(StoreError::Conflict(_) | StoreError::Fenced) => 4,
             Self::Store(StoreError::Invalid(_) | StoreError::Recurrence(_))
+            | Self::Scheduler(SchedulerError::Gardener(GardenerRunnerError::Configuration(_)))
             | Self::Configuration(_) => 2,
             _ => 1,
         }
@@ -199,14 +310,28 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             lease_seconds,
             fake_delay_ms,
             fake_outcome,
+            enable_coding_gardener,
+            gardener_worktree_root,
+            gardener_codex_executable,
+            gardener_git_executable,
+            gardener_gh_executable,
+            gardener_heartbeat_ms,
         } => {
             serve(
                 cli.database,
-                bind,
-                poll_ms,
-                lease_seconds,
-                fake_delay_ms,
-                fake_outcome.into(),
+                ServeOptions {
+                    bind,
+                    poll_ms,
+                    lease_seconds,
+                    fake_delay_ms,
+                    fake_outcome: fake_outcome.into(),
+                    enable_coding_gardener,
+                    gardener_worktree_root,
+                    gardener_codex_executable,
+                    gardener_git_executable,
+                    gardener_gh_executable,
+                    gardener_heartbeat_ms,
+                },
             )
             .await
         }
@@ -290,9 +415,119 @@ fn run_store_command(database: PathBuf, command: Command) -> Result<(), AppError
             require_obligation(&store, &id)?;
             print_json(&store.attempts(&id)?);
         }
+        Command::Gardener { command } => run_gardener_command(&mut store, command, now)?,
         Command::Serve { .. } => unreachable!("serve was handled asynchronously"),
     }
     Ok(())
+}
+
+fn run_gardener_command(
+    store: &mut Store,
+    command: GardenerCommand,
+    now: i64,
+) -> Result<(), StoreError> {
+    match command {
+        GardenerCommand::Register {
+            repository,
+            default_branch,
+            checkout_path,
+            first_inspection_at,
+            recurrence_cron,
+            recurrence_timezone,
+        } => print_json(&store.register_gardener_repository(
+            NewRepositoryRegistration {
+                repository,
+                default_branch,
+                checkout_path: checkout_path.to_string_lossy().into_owned(),
+                inspection_recurrence: Recurrence::new(recurrence_cron, recurrence_timezone)?,
+                first_inspection_at: first_inspection_at.unwrap_or(now),
+            },
+            now,
+        )?),
+        GardenerCommand::Repository => print_json(&require_gardener_repository(store)?),
+        GardenerCommand::Inspections { command } => match command {
+            GardenerInspectionCommand::List => print_json(&store.gardener_inspections()?),
+            GardenerInspectionCommand::Show { id } => {
+                print_json(&require_gardener_inspection(store, &id)?)
+            }
+        },
+        GardenerCommand::Proposals { command } => match command {
+            GardenerProposalCommand::List => print_json(&store.gardener_proposals()?),
+            GardenerProposalCommand::Show { fingerprint } => {
+                print_json(&require_gardener_proposal(store, &fingerprint)?)
+            }
+            GardenerProposalCommand::Observations { fingerprint } => {
+                require_gardener_proposal(store, &fingerprint)?;
+                print_json(&store.proposal_observations(&fingerprint)?);
+            }
+            GardenerProposalCommand::Approve {
+                fingerprint,
+                actor,
+                note,
+            } => print_json(&store.decide_gardener_proposal(
+                &fingerprint,
+                ApprovalDecision::Approved,
+                &actor,
+                note.as_deref(),
+                now,
+            )?),
+            GardenerProposalCommand::Reject {
+                fingerprint,
+                actor,
+                note,
+            } => print_json(&store.decide_gardener_proposal(
+                &fingerprint,
+                ApprovalDecision::Rejected,
+                &actor,
+                note.as_deref(),
+                now,
+            )?),
+        },
+        GardenerCommand::Runs { command } => match command {
+            GardenerRunCommand::List => print_json(&store.gardener_implementation_runs()?),
+            GardenerRunCommand::Show { id } => print_json(&require_gardener_run(store, &id)?),
+            GardenerRunCommand::Events { id } => {
+                require_gardener_run(store, &id)?;
+                print_json(&store.gardener_run_events(&id)?);
+            }
+        },
+    }
+    Ok(())
+}
+
+fn require_gardener_repository(
+    store: &Store,
+) -> Result<bokkie::RepositoryRegistration, StoreError> {
+    store
+        .gardener_repository()?
+        .ok_or_else(|| StoreError::NotFound(CANONICAL_REPOSITORY.to_owned()))
+}
+
+fn require_gardener_inspection(
+    store: &Store,
+    id: &str,
+) -> Result<bokkie::GardenerInspection, StoreError> {
+    store
+        .gardener_inspection(id)?
+        .ok_or_else(|| StoreError::NotFound(id.to_owned()))
+}
+
+fn require_gardener_proposal(
+    store: &Store,
+    fingerprint: &str,
+) -> Result<bokkie::Proposal, StoreError> {
+    store
+        .gardener_proposal(fingerprint)?
+        .ok_or_else(|| StoreError::NotFound(fingerprint.to_owned()))
+}
+
+fn require_gardener_run(
+    store: &Store,
+    id: &str,
+) -> Result<bokkie::GardenerImplementationRun, StoreError> {
+    store
+        .gardener_implementation_run(id)?
+        .ok_or_else(|| StoreError::NotFound(id.to_owned()))
 }
 
 fn decide_and_print(
@@ -314,21 +549,14 @@ fn require_obligation(store: &Store, id: &str) -> Result<bokkie::Obligation, Sto
         .ok_or_else(|| StoreError::NotFound(id.to_owned()))
 }
 
-async fn serve(
-    database: PathBuf,
-    bind: SocketAddr,
-    poll_ms: u64,
-    lease_seconds: i64,
-    fake_delay_ms: u64,
-    fake_outcome: ServiceFakeOutcome,
-) -> Result<(), AppError> {
-    validate_loopback(bind).map_err(AppError::Configuration)?;
-    if poll_ms == 0 {
+async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError> {
+    validate_loopback(options.bind).map_err(AppError::Configuration)?;
+    if options.poll_ms == 0 {
         return Err(AppError::Configuration(
             "poll-ms must be positive".to_owned(),
         ));
     }
-    if lease_seconds < 2 {
+    if options.lease_seconds < 2 {
         return Err(AppError::Configuration(
             "lease-seconds must be at least 2 for second-resolution lease renewal".to_owned(),
         ));
@@ -336,15 +564,32 @@ async fn serve(
 
     // Bind before starting the scheduler so a port conflict cannot execute work in a
     // process that immediately fails service start-up.
-    let listener = tokio::net::TcpListener::bind(bind).await?;
+    let listener = tokio::net::TcpListener::bind(options.bind).await?;
     let local_address = listener.local_addr()?;
-    let mut scheduler = Scheduler::start(SchedulerConfig {
+    let scheduler_config = SchedulerConfig {
         database: database.clone(),
-        poll_interval: Duration::from_millis(poll_ms),
-        lease_seconds,
-        fake_delay: Duration::from_millis(fake_delay_ms),
-        fake_outcome,
-    })?;
+        poll_interval: Duration::from_millis(options.poll_ms),
+        lease_seconds: options.lease_seconds,
+        fake_delay: Duration::from_millis(options.fake_delay_ms),
+        fake_outcome: options.fake_outcome,
+    };
+    let mut scheduler = if options.enable_coding_gardener {
+        let worktree_root = options.gardener_worktree_root.ok_or_else(|| {
+            AppError::Configuration(
+                "gardener-worktree-root is required when coding gardener is enabled".to_owned(),
+            )
+        })?;
+        let gardener = GardenerRuntimeConfig::new(
+            worktree_root,
+            options.gardener_codex_executable,
+            options.gardener_git_executable,
+            options.gardener_gh_executable,
+        )
+        .with_heartbeat_interval(Duration::from_millis(options.gardener_heartbeat_ms));
+        Scheduler::start_configured(scheduler_config, Some(gardener))?
+    } else {
+        Scheduler::start(scheduler_config)?
+    };
     let stop = scheduler.stop_flag();
     let scheduler_exit = scheduler.take_exit_signal();
     eprintln!(

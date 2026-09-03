@@ -11,6 +11,11 @@ use std::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+use bokkie::{
+    Completion, InspectionResult, NewGardenerImplementationRun, NewGardenerInspection,
+    NewRepositoryRegistration, Recurrence, Store, proposal_fingerprint,
+};
+
 const POLL: Duration = Duration::from_millis(25);
 
 #[test]
@@ -66,6 +71,393 @@ fn cli_lifecycle_operations_return_structured_json_and_exit_statuses() {
     assert_eq!(missing.status.code(), Some(3));
     let error: Value = serde_json::from_slice(&missing.stderr).unwrap();
     assert_eq!(error["error"]["code"], "not_found");
+}
+
+#[test]
+fn gardener_cli_registers_and_exposes_persisted_state_and_decisions() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("gardener-cli.sqlite");
+    let checkout = temporary.path().join("checkout");
+    std::fs::create_dir(&checkout).unwrap();
+    let checkout = checkout.to_str().unwrap();
+    let registration_arguments = [
+        "gardener",
+        "register",
+        "--checkout-path",
+        checkout,
+        "--first-inspection-at",
+        "2000000000",
+        "--recurrence-cron",
+        "30 9 * * *",
+        "--recurrence-timezone",
+        "Australia/Adelaide",
+    ];
+    let registered = cli_json(&database, &registration_arguments);
+    assert_eq!(registered["repository"], "robchristie/bokkie");
+    assert_eq!(registered["default_branch"], "main");
+    assert_eq!(registered["checkout_path"], checkout);
+    assert_eq!(
+        cli_json(&database, &registration_arguments),
+        registered,
+        "identical registration must be idempotent"
+    );
+    assert_eq!(cli_json(&database, &["gardener", "repository"]), registered);
+
+    let conflict = run_cli(
+        &database,
+        &[
+            "gardener",
+            "register",
+            "--checkout-path",
+            checkout,
+            "--first-inspection-at",
+            "2000000001",
+        ],
+    );
+    assert_eq!(conflict.status.code(), Some(4));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&conflict.stderr).unwrap()["error"]["code"],
+        "transition_conflict"
+    );
+    let noncanonical = run_cli(
+        &temporary.path().join("noncanonical.sqlite"),
+        &[
+            "gardener",
+            "register",
+            "--repository",
+            "someone/else",
+            "--checkout-path",
+            checkout,
+        ],
+    );
+    assert_eq!(noncanonical.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&noncanonical.stderr).unwrap()["error"]["code"],
+        "invalid_request"
+    );
+
+    let database = temporary.path().join("gardener-state-cli.sqlite");
+    let seeded = seed_gardener_state(&database, checkout);
+    let inspections = cli_json(&database, &["gardener", "inspections", "list"]);
+    assert_eq!(inspections.as_array().unwrap().len(), 2);
+    assert_eq!(
+        cli_json(
+            &database,
+            &["gardener", "inspections", "show", "inspection-one"]
+        )["source_commit"],
+        "a".repeat(40)
+    );
+    let proposals = cli_json(&database, &["gardener", "proposals", "list"]);
+    assert_eq!(proposals.as_array().unwrap().len(), 3);
+    assert_eq!(
+        cli_json(
+            &database,
+            &[
+                "gardener",
+                "proposals",
+                "show",
+                &seeded.approved_fingerprint
+            ]
+        )["observation_count"],
+        2
+    );
+    assert_eq!(
+        cli_json(
+            &database,
+            &[
+                "gardener",
+                "proposals",
+                "observations",
+                &seeded.approved_fingerprint
+            ]
+        )
+        .as_array()
+        .unwrap()
+        .len(),
+        2
+    );
+
+    let before_approval = Store::open(&database)
+        .unwrap()
+        .claim_due_gardener(3_000, 60, 10)
+        .unwrap();
+    assert!(before_approval.iter().all(|claim| {
+        claim.obligation_id != format!("gardener:implement:{}", seeded.approved_fingerprint)
+    }));
+    let approved = cli_json(
+        &database,
+        &[
+            "gardener",
+            "proposals",
+            "approve",
+            &seeded.approved_fingerprint,
+            "--actor",
+            "operator",
+            "--note",
+            "bounded and useful",
+        ],
+    );
+    assert_eq!(approved["approval_decision"], "approved");
+    assert_eq!(approved["obligation_state"], "pending");
+    let rejected = cli_json(
+        &database,
+        &[
+            "gardener",
+            "proposals",
+            "reject",
+            &seeded.rejected_fingerprint,
+            "--actor",
+            "operator",
+        ],
+    );
+    assert_eq!(rejected["approval_decision"], "rejected");
+    assert_eq!(rejected["obligation_state"], "attention");
+
+    create_seeded_run(&database, &seeded.approved_fingerprint);
+    assert_eq!(
+        cli_json(&database, &["gardener", "runs", "list"])[0]["id"],
+        "run-one"
+    );
+    assert_eq!(
+        cli_json(&database, &["gardener", "runs", "show", "run-one"])["phase"],
+        "created"
+    );
+    let run_events = cli_json(&database, &["gardener", "runs", "events", "run-one"]);
+    assert_eq!(run_events[0]["event_type"], "implementation_run_created");
+    let run_evidence: Value =
+        serde_json::from_str(run_events[0]["details_json"].as_str().unwrap()).unwrap();
+    assert_eq!(run_evidence["source_commit"], "b".repeat(40));
+    assert_eq!(run_evidence["branch"], "codex/gardener-run-one");
+
+    let missing = run_cli(
+        &database,
+        &["gardener", "proposals", "observations", "missing"],
+    );
+    assert_eq!(missing.status.code(), Some(3));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&missing.stderr).unwrap()["error"]["code"],
+        "not_found"
+    );
+}
+
+#[test]
+fn gardener_http_exposes_registration_evidence_and_decisions() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("gardener-api.sqlite");
+    let checkout = temporary.path().join("checkout");
+    std::fs::create_dir(&checkout).unwrap();
+    let checkout = checkout.to_str().unwrap();
+    let address = unused_loopback_address();
+    let mut daemon = spawn_daemon(&database, address, &[]);
+    wait_until(Duration::from_secs(5), || {
+        http_json(address, "GET", "/health", None)
+            .is_some_and(|(status, body)| status == 200 && body["status"] == "ok")
+    });
+
+    let (canonical_status, canonical_error) = http_json(
+        address,
+        "POST",
+        "/gardener/repository",
+        Some(json!({
+            "repository": "someone/else",
+            "checkout_path": checkout
+        })),
+    )
+    .unwrap();
+    assert_eq!(canonical_status, 400);
+    assert_eq!(canonical_error["error"]["code"], "invalid_request");
+    let registration_body = json!({
+        "checkout_path": checkout,
+        "first_inspection_at": 2_000_000_000_i64,
+        "recurrence_cron": "30 9 * * *",
+        "recurrence_timezone": "Australia/Adelaide"
+    });
+    let (status, registered) = http_json(
+        address,
+        "POST",
+        "/gardener/repository",
+        Some(registration_body.clone()),
+    )
+    .unwrap();
+    assert_eq!(status, 201);
+    let (_, duplicate) = http_json(
+        address,
+        "POST",
+        "/gardener/repository",
+        Some(registration_body),
+    )
+    .unwrap();
+    assert_eq!(duplicate, registered);
+    assert_eq!(
+        http_json(address, "GET", "/gardener/repository", None)
+            .unwrap()
+            .1,
+        registered
+    );
+    let (conflict_status, conflict) = http_json(
+        address,
+        "POST",
+        "/gardener/repository",
+        Some(json!({
+            "checkout_path": checkout,
+            "first_inspection_at": 2_000_000_001_i64
+        })),
+    )
+    .unwrap();
+    assert_eq!(conflict_status, 409);
+    assert_eq!(conflict["error"]["code"], "transition_conflict");
+    stop_child(&mut daemon);
+
+    let database = temporary.path().join("gardener-state-api.sqlite");
+    let seeded = seed_gardener_state(&database, checkout);
+    let address = unused_loopback_address();
+    let mut daemon = spawn_daemon(&database, address, &[]);
+    wait_until(Duration::from_secs(5), || {
+        http_json(address, "GET", "/health", None).is_some()
+    });
+    assert_eq!(
+        http_json(address, "GET", "/gardener/inspections", None)
+            .unwrap()
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        http_json(address, "GET", "/gardener/inspections/inspection-two", None)
+            .unwrap()
+            .1["source_commit"],
+        "b".repeat(40)
+    );
+    assert_eq!(
+        http_json(address, "GET", "/gardener/proposals", None)
+            .unwrap()
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    let observations_path = format!(
+        "/gardener/proposals/{}/observations",
+        seeded.approved_fingerprint
+    );
+    assert_eq!(
+        http_json(address, "GET", &observations_path, None)
+            .unwrap()
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let approve_path = format!(
+        "/gardener/proposals/{}/approve",
+        seeded.approved_fingerprint
+    );
+    let (_, approved) = http_json(
+        address,
+        "POST",
+        &approve_path,
+        Some(json!({"actor": "http-operator", "note": "approved exactly"})),
+    )
+    .unwrap();
+    assert_eq!(approved["obligation_state"], "pending");
+    assert_eq!(approved["approval_decision"], "approved");
+    let reject_path = format!("/gardener/proposals/{}/reject", seeded.rejected_fingerprint);
+    let (_, rejected) = http_json(
+        address,
+        "POST",
+        &reject_path,
+        Some(json!({"actor": "http-operator", "note": "not suitable"})),
+    )
+    .unwrap();
+    assert_eq!(rejected["obligation_state"], "attention");
+    stop_child(&mut daemon);
+
+    create_seeded_run(&database, &seeded.approved_fingerprint);
+    let address = unused_loopback_address();
+    let mut daemon = spawn_daemon(&database, address, &[]);
+    wait_until(Duration::from_secs(5), || {
+        http_json(address, "GET", "/health", None).is_some()
+    });
+    assert_eq!(
+        http_json(address, "GET", "/gardener/runs", None).unwrap().1[0]["id"],
+        "run-one"
+    );
+    assert_eq!(
+        http_json(address, "GET", "/gardener/runs/run-one", None)
+            .unwrap()
+            .1["proposal_fingerprint"],
+        seeded.approved_fingerprint
+    );
+    assert_eq!(
+        http_json(address, "GET", "/gardener/runs/run-one/events", None)
+            .unwrap()
+            .1[0]["event_type"],
+        "implementation_run_created"
+    );
+    let (missing_status, missing) =
+        http_json(address, "GET", "/gardener/runs/missing/events", None).unwrap();
+    assert_eq!(missing_status, 404);
+    assert_eq!(missing["error"]["code"], "not_found");
+
+    stop_child(&mut daemon);
+}
+
+#[test]
+fn gardener_service_requires_explicit_valid_runtime_configuration() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("service-config.sqlite");
+    let missing_root = run_cli(&database, &["serve", "--enable-coding-gardener"]);
+    assert_eq!(missing_root.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&missing_root.stderr).unwrap()["error"]["code"],
+        "invalid_arguments"
+    );
+
+    let relative_root = run_cli(
+        &database,
+        &[
+            "serve",
+            "--bind",
+            &unused_loopback_address().to_string(),
+            "--enable-coding-gardener",
+            "--gardener-worktree-root",
+            "relative",
+        ],
+    );
+    assert_eq!(relative_root.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&relative_root.stderr).unwrap()["error"]["code"],
+        "invalid_request"
+    );
+
+    let excessive_heartbeat = run_cli(
+        &database,
+        &[
+            "serve",
+            "--bind",
+            &unused_loopback_address().to_string(),
+            "--enable-coding-gardener",
+            "--gardener-worktree-root",
+            temporary.path().to_str().unwrap(),
+            "--lease-seconds",
+            "30",
+            "--gardener-heartbeat-ms",
+            "10001",
+        ],
+    );
+    assert_eq!(excessive_heartbeat.status.code(), Some(2));
+    let error: Value = serde_json::from_slice(&excessive_heartbeat.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "invalid_request");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("one third")
+    );
 }
 
 #[test]
@@ -412,6 +804,134 @@ fn scheduler_failure_stops_http_and_exits_non_zero() {
             .unwrap()
             .contains("attempts")
     );
+}
+
+struct SeededGardener {
+    approved_fingerprint: String,
+    rejected_fingerprint: String,
+}
+
+fn seed_gardener_state(database: &Path, checkout: &str) -> SeededGardener {
+    const APPROVED_PROMPT: &str = "Implement the bounded adapter improvement.";
+    const REJECTED_PROMPT: &str = "Replace the entire repository without review.";
+    const HTTP_PROMPT: &str = "Document one additional operator invariant.";
+    let mut store = Store::open(database).unwrap();
+    store
+        .register_gardener_repository(
+            NewRepositoryRegistration {
+                repository: "robchristie/bokkie".to_owned(),
+                default_branch: "main".to_owned(),
+                checkout_path: checkout.to_owned(),
+                inspection_recurrence: Recurrence::new("* * * * *", "UTC").unwrap(),
+                first_inspection_at: 1_000,
+            },
+            900,
+        )
+        .unwrap();
+
+    let first_claim = store.claim_due_gardener(1_000, 500, 1).unwrap().remove(0);
+    store
+        .start_gardener_inspection(
+            &first_claim,
+            NewGardenerInspection {
+                id: "inspection-one".to_owned(),
+                source_commit: "a".repeat(40),
+                worktree_path: "/tmp/bokkie-inspection-one".to_owned(),
+                prompt_digest: "1".repeat(64),
+            },
+            1_001,
+        )
+        .unwrap();
+    store
+        .finish_gardener_inspection(
+            &first_claim,
+            "inspection-one",
+            &InspectionResult {
+                summary: "Three bounded candidates were observed".to_owned(),
+                proposed_goal_prompts: vec![
+                    APPROVED_PROMPT.to_owned(),
+                    REJECTED_PROMPT.to_owned(),
+                    HTTP_PROMPT.to_owned(),
+                ],
+            },
+            1_002,
+        )
+        .unwrap();
+    store
+        .complete(
+            &first_claim,
+            Completion::Succeeded {
+                evidence: Some("seeded inspection one".to_owned()),
+            },
+            1_003,
+        )
+        .unwrap();
+
+    let second_claim = store
+        .claim_due_gardener(2_000, 500, 10)
+        .unwrap()
+        .into_iter()
+        .find(|claim| claim.obligation_id == "gardener:inspect:robchristie/bokkie")
+        .unwrap();
+    store
+        .start_gardener_inspection(
+            &second_claim,
+            NewGardenerInspection {
+                id: "inspection-two".to_owned(),
+                source_commit: "b".repeat(40),
+                worktree_path: "/tmp/bokkie-inspection-two".to_owned(),
+                prompt_digest: "2".repeat(64),
+            },
+            2_001,
+        )
+        .unwrap();
+    store
+        .finish_gardener_inspection(
+            &second_claim,
+            "inspection-two",
+            &InspectionResult {
+                summary: "The same bounded candidate remains relevant".to_owned(),
+                proposed_goal_prompts: vec![format!("\n{APPROVED_PROMPT}   \n")],
+            },
+            2_002,
+        )
+        .unwrap();
+    store
+        .complete(
+            &second_claim,
+            Completion::Succeeded {
+                evidence: Some("seeded inspection two".to_owned()),
+            },
+            2_003,
+        )
+        .unwrap();
+
+    SeededGardener {
+        approved_fingerprint: proposal_fingerprint("robchristie/bokkie", APPROVED_PROMPT),
+        rejected_fingerprint: proposal_fingerprint("robchristie/bokkie", REJECTED_PROMPT),
+    }
+}
+
+fn create_seeded_run(database: &Path, approved_fingerprint: &str) {
+    let mut store = Store::open(database).unwrap();
+    let obligation_id = format!("gardener:implement:{approved_fingerprint}");
+    let claim = store
+        .claim_due_gardener(3_000, 600, 10)
+        .unwrap()
+        .into_iter()
+        .find(|claim| claim.obligation_id == obligation_id)
+        .expect("approved implementation must become claimable");
+    store
+        .create_gardener_implementation_run(
+            &claim,
+            NewGardenerImplementationRun {
+                id: "run-one".to_owned(),
+                implementation_worktree_path: "/tmp/bokkie-run-one".to_owned(),
+                branch: "codex/gardener-run-one".to_owned(),
+            },
+            3_001,
+        )
+        .unwrap();
 }
 
 fn cli_json(database: &Path, arguments: &[&str]) -> Value {
