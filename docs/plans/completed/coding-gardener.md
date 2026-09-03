@@ -1,6 +1,6 @@
 # Coding gardener
 
-- Status: active
+- Status: complete
 - Owner: `bokkie`
 - Source revision: `093194ae69bef837dada4e7dcfb9443438f77699`
 - Target repository: `robchristie/bokkie`
@@ -121,8 +121,8 @@ passes. That candidate then receives the canonical and landing gates.
 |---|---|---|
 | Durable registration and proposal lifecycle | Migration/store tests for reopen, recurrence, deduplication, exact-content approval and events | complete at `dda602c` |
 | App-server and isolated Git execution | Protocol tests plus fake-process proof of read-only exact-commit inspection and persisted identities | complete at `91727f4` |
-| Exact-head verification and adapters | End-to-end fake Git/GitHub/app-server process test, recovery cases, CLI/HTTP/operator docs | complete in the current candidate |
-| Terminal qualification and landing | Canonical check, exact-head independent review, ready PR, CI, squash merge and post-merge reconciliation | pending |
+| Exact-head verification and adapters | End-to-end fake Git/GitHub/app-server process test, recovery cases, CLI/HTTP/operator docs | complete at `3c599d406000971ea6c615ff3e2d61fb0a46af22` |
+| Terminal qualification and landing | Canonical check, exact-head independent review, ready PR, CI, squash merge and post-merge reconciliation | qualified at `3c599d406000971ea6c615ff3e2d61fb0a46af22`; final landing evidence is recorded on [PR #2](https://github.com/robchristie/bokkie/pull/2) |
 
 ## Authority and human-review boundaries
 
@@ -132,9 +132,12 @@ restart Bokkie, merge a gardener-created pull request, publish a release, change
 credentials or access controls, expose a non-loopback service, or perform a
 destructive repository operation. Those remain explicit human boundaries.
 
-## Current phase
+## Completion
 
-Run terminal qualification, exact-head independent review and the ordinary
-landing gates for the coherent slice. The implementation, adapters and
-operator documentation are complete; no deployment or service restart is part
-of qualification.
+The coherent slice passed the canonical repository check and independent
+exact-head review on [pull request #2](https://github.com/robchristie/bokkie/pull/2). The first reviewed candidate was rejected
+because effective Git origins were not proven canonical and app-server
+escalations were not explicitly denied; both findings were repaired and the
+new exact head passed re-review. Final merge, tree-identity and cleanup evidence
+belongs to the pull request landing comment. No deployment or service restart
+is part of this outcome.
