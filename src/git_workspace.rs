@@ -196,6 +196,8 @@ pub enum GitWorkspaceError {
     InvalidPullRequestJson(#[from] serde_json::Error),
     #[error("invalid pull-request observation: {0}")]
     InvalidPullRequest(String),
+    #[error("invalid remote branch observation: {0}")]
+    InvalidRemoteBranch(String),
 }
 
 impl std::error::Error for ProcessFailure {}
@@ -375,6 +377,53 @@ impl GitWorkspace {
         let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
         self.git_success(&worktree.path, ["push", "origin", refspec.as_str()])?;
         Ok(())
+    }
+
+    /// Independently observes the exact remote branch ref with `git ls-remote`.
+    ///
+    /// This deliberately does not inspect a local remote-tracking ref or infer
+    /// identity from the preceding push process status.
+    pub fn observe_remote_branch(
+        &self,
+        branch: &str,
+        expected_head: &CommitId,
+    ) -> Result<CommitId, GitWorkspaceError> {
+        validate_branch(branch)?;
+        let reference = format!("refs/heads/{branch}");
+        let output = self.git_success(
+            &self.checkout,
+            ["ls-remote", "--refs", "origin", reference.as_str()],
+        )?;
+        let mut lines = output.lines();
+        let line = lines.next().ok_or_else(|| {
+            GitWorkspaceError::InvalidRemoteBranch(format!(
+                "remote branch {reference:?} was not found"
+            ))
+        })?;
+        if lines.next().is_some() {
+            return Err(GitWorkspaceError::InvalidRemoteBranch(format!(
+                "remote branch {reference:?} produced more than one result"
+            )));
+        }
+        let mut fields = line.split_whitespace();
+        let head = fields.next().ok_or_else(|| {
+            GitWorkspaceError::InvalidRemoteBranch("missing commit identity".to_owned())
+        })?;
+        let observed_reference = fields.next().ok_or_else(|| {
+            GitWorkspaceError::InvalidRemoteBranch("missing branch ref".to_owned())
+        })?;
+        if fields.next().is_some() || observed_reference != reference {
+            return Err(GitWorkspaceError::InvalidRemoteBranch(format!(
+                "expected exactly {reference:?}, observed {line:?}"
+            )));
+        }
+        let observed = CommitId::parse(head.to_owned())?;
+        if &observed != expected_head {
+            return Err(GitWorkspaceError::InvalidRemoteBranch(format!(
+                "expected head {expected_head}, observed {observed}"
+            )));
+        }
+        Ok(observed)
     }
 
     /// Creates a ready PR, then independently observes its structured identity.
@@ -917,6 +966,10 @@ mod tests {
 
         adapter.push_branch(&worktree, &commit).unwrap();
         assert_eq!(
+            adapter.observe_remote_branch(branch_name, &commit).unwrap(),
+            commit
+        );
+        assert_eq!(
             git_stdout(
                 fixture.root.path(),
                 [
@@ -939,6 +992,30 @@ mod tests {
             ]
         ));
         adapter.remove_clean_worktree(&worktree).unwrap();
+    }
+
+    #[test]
+    fn remote_branch_observation_rejects_a_missing_or_mismatched_ref() {
+        let fixture = RepositoryFixture::new();
+        let adapter = fixture.adapter("unused-gh");
+        let branch = "codex/gardener-observed";
+        assert!(matches!(
+            adapter.observe_remote_branch(branch, &fixture.source),
+            Err(GitWorkspaceError::InvalidRemoteBranch(message))
+                if message.contains("was not found")
+        ));
+
+        git(
+            &fixture.checkout,
+            ["branch", branch, fixture.source.as_str()],
+        );
+        git(&fixture.checkout, ["push", "origin", branch]);
+        let other = CommitId::parse("a".repeat(40)).unwrap();
+        assert!(matches!(
+            adapter.observe_remote_branch(branch, &other),
+            Err(GitWorkspaceError::InvalidRemoteBranch(message))
+                if message.contains("expected head")
+        ));
     }
 
     #[test]

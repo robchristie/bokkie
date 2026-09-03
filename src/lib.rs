@@ -8,6 +8,7 @@
 pub mod app_server;
 pub mod domain;
 pub mod gardener;
+pub mod gardener_runner;
 pub mod git_workspace;
 pub mod http;
 pub mod recurrence;
@@ -22,10 +23,11 @@ pub use domain::{
 pub use gardener::{
     CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerEvent, GardenerImplementationRun,
     GardenerInspection, GardenerObligationKind, GardenerRunEvent, GardenerRunPhase,
-    GardenerVerificationVerdict, InspectionResult, NewGardenerImplementationRun,
-    NewGardenerInspection, NewRepositoryRegistration, Proposal, ProposalObservation,
-    RepositoryRegistration, normalise_goal_prompt, proposal_fingerprint,
+    GardenerVerificationResult, GardenerVerificationVerdict, InspectionResult,
+    NewGardenerImplementationRun, NewGardenerInspection, NewRepositoryRegistration, Proposal,
+    ProposalObservation, RepositoryRegistration, normalise_goal_prompt, proposal_fingerprint,
 };
+pub use gardener_runner::{GardenerRunner, GardenerRunnerError, GardenerRuntimeConfig};
 pub use recurrence::Recurrence;
 pub use runner::{FakeOutcome, FakeRunner, RunResult, Runner, run_one};
 pub use store::{ManualClock, Store, StoreError, SystemClock, UnixClock};

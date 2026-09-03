@@ -119,7 +119,7 @@ passes. That candidate then receives the canonical and landing gates.
 | Increment | Acceptance proof | Status |
 |---|---|---|
 | Durable registration and proposal lifecycle | Migration/store tests for reopen, recurrence, deduplication, exact-content approval and events | complete at `dda602c` |
-| App-server and isolated Git execution | Protocol tests plus fake-process proof of read-only exact-commit inspection and persisted identities | active; app-server protocol client complete at `dda602c` |
+| App-server and isolated Git execution | Protocol tests plus fake-process proof of read-only exact-commit inspection and persisted identities | active; protocol/state/Git foundations complete at `80a1372` |
 | Exact-head verification and adapters | End-to-end fake Git/GitHub/app-server process test, recovery cases, CLI/HTTP/operator docs | pending |
 | Terminal qualification and landing | Canonical check, exact-head independent review, ready PR, CI, squash merge and post-merge reconciliation | pending |
 
@@ -133,7 +133,8 @@ destructive repository operation. Those remain explicit human boundaries.
 
 ## Current phase
 
-Implement the execution identity state machine and isolated Git/GitHub adapter,
-then integrate them with the scheduler and the completed app-server client.
+Integrate the completed execution state, app-server client and isolated
+Git/GitHub adapter with gardener-only scheduler claims. Require an independently
+observed remote branch head after push and fake-process end-to-end evidence.
 Keep one terminal pull request for the coherent slice; internal increments are
 verified checkpoints rather than independently landed products.

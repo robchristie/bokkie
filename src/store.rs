@@ -1681,6 +1681,11 @@ fn validate_inspection_result(result: &InspectionResult) -> Result<(), StoreErro
             "inspection result summary must not be empty".to_owned(),
         ));
     }
+    if result.proposed_goal_prompts.len() > 3 {
+        return Err(StoreError::Invalid(
+            "inspection result may contain at most three proposed goal prompts".to_owned(),
+        ));
+    }
     Ok(())
 }
 

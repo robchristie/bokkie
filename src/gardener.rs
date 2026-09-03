@@ -62,6 +62,7 @@ pub struct GardenerInspection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InspectionResult {
     pub summary: String,
     pub proposed_goal_prompts: Vec<String>,
@@ -167,6 +168,14 @@ pub enum GardenerVerificationVerdict {
     Pass,
     Blocking,
     Inconclusive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GardenerVerificationResult {
+    pub verdict: GardenerVerificationVerdict,
+    pub head: String,
+    pub summary: String,
 }
 
 impl fmt::Display for GardenerVerificationVerdict {
