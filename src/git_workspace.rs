@@ -1476,7 +1476,7 @@ mod tests {
             workspace.gh_success(std::iter::empty::<OsString>()),
             Err(GitWorkspaceError::Command(_))
         ));
-        assert_eq!(fs::read_to_string(log).unwrap().lines().count(), 1);
+        assert_eq!(fs::read_to_string(log).unwrap(), "invoked");
     }
 
     fn fake_gh(root: &Path, log: &Path, json: &str) -> PathBuf {
