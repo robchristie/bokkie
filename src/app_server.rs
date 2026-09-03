@@ -455,7 +455,7 @@ fn wait_for_response(
                 }
                 Message::Notification { .. } => {}
                 Message::ServerRequest { id, method } => {
-                    return Err(unexpected_server_request(id, &method));
+                    return deny_server_request(transport, id, &method);
                 }
             },
             Receive::Timeout => unreachable!("heartbeat consumes transport timeouts"),
@@ -479,7 +479,7 @@ fn wait_for_completion(
             }
             Receive::Line(line) => match parse_message(&line)? {
                 Message::ServerRequest { id, method } => {
-                    return Err(unexpected_server_request(id, &method));
+                    return deny_server_request(transport, id, &method);
                 }
                 Message::Response { id, .. } => {
                     return Err(AppServerError::Protocol(format!(
@@ -626,6 +626,24 @@ fn unexpected_server_request(id: Value, method: &str) -> AppServerError {
     AppServerError::Protocol(format!(
         "unexpected server request {method} with ID {id}; interactive approvals are forbidden"
     ))
+}
+
+fn deny_server_request<T>(
+    transport: &mut dyn LineTransport,
+    id: Value,
+    method: &str,
+) -> Result<T, AppServerError> {
+    let result = match method {
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+            json!({"decision": "cancel"})
+        }
+        "item/permissions/requestApproval" => {
+            json!({"permissions": {}, "scope": "turn"})
+        }
+        _ => return Err(unexpected_server_request(id, method)),
+    };
+    transport.send(&json!({"id": id, "result": result}))?;
+    Err(unexpected_server_request(id, method))
 }
 
 enum Message {
@@ -925,15 +943,27 @@ mod tests {
     }
 
     #[test]
-    fn unexpected_approval_request_aborts() {
-        for method in [
-            "item/commandExecution/requestApproval",
-            "item/fileChange/requestApproval",
-            "item/permissions/requestApproval",
+    fn unexpected_approval_request_is_denied_before_abort() {
+        for (id, method, expected_result) in [
+            (
+                json!("command-approval"),
+                "item/commandExecution/requestApproval",
+                json!({"decision": "cancel"}),
+            ),
+            (
+                json!(42),
+                "item/fileChange/requestApproval",
+                json!({"decision": "cancel"}),
+            ),
+            (
+                json!("permission-approval"),
+                "item/permissions/requestApproval",
+                json!({"permissions": {}, "scope": "turn"}),
+            ),
         ] {
             let mut messages = successful_exchange([]);
             messages[3] = line(json!({
-                "id": "approval-1",
+                "id": id,
                 "method": method,
                 "params": {"threadId": "thread-1", "turnId": "turn-1"},
             }));
@@ -948,7 +978,35 @@ mod tests {
                     .contains("interactive approvals are forbidden")
             );
             assert!(error.to_string().contains(method));
+            assert_eq!(transport.sent.len(), 5);
+            assert_eq!(
+                transport.sent.last(),
+                Some(&json!({"id": id, "result": expected_result}))
+            );
+            assert_eq!(
+                transport.received.len(),
+                1,
+                "the protocol must stop after emitting the denial"
+            );
         }
+    }
+
+    #[test]
+    fn unknown_server_request_aborts_without_inventing_a_response() {
+        let mut messages = successful_exchange([]);
+        messages[3] = line(json!({
+            "id": "unknown-request",
+            "method": "future/requestApproval",
+            "params": {},
+        }));
+        let mut transport = FakeTransport::new(messages);
+
+        let error =
+            run_fake(&mut transport, TurnKind::Implementation, &mut NoopObserver).unwrap_err();
+
+        assert!(error.to_string().contains("future/requestApproval"));
+        assert_eq!(transport.sent.len(), 4);
+        assert_eq!(transport.received.len(), 1);
     }
 
     #[test]

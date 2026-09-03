@@ -17,6 +17,7 @@ use thiserror::Error;
 pub const CANONICAL_REPOSITORY: &str = "robchristie/bokkie";
 pub const CANONICAL_DEFAULT_BRANCH: &str = "main";
 pub const GARDENER_BRANCH_PREFIX: &str = "codex/gardener-";
+const CANONICAL_HTTPS_URL: &str = "https://github.com/robchristie/bokkie.git";
 
 /// An exact SHA-1 Git commit identity.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -198,6 +199,11 @@ pub enum GitWorkspaceError {
     InvalidPullRequest(String),
     #[error("invalid remote branch observation: {0}")]
     InvalidRemoteBranch(String),
+    #[error("refusing {operation} through noncanonical effective origin URL(s): {urls:?}")]
+    NonCanonicalOrigin {
+        operation: &'static str,
+        urls: Vec<String>,
+    },
 }
 
 impl std::error::Error for ProcessFailure {}
@@ -238,6 +244,7 @@ impl GitWorkspace {
 
     /// Updates and resolves exactly `origin/main` after a read-only remote fetch.
     pub fn resolve_origin_main(&self) -> Result<CommitId, GitWorkspaceError> {
+        self.ensure_canonical_origin(&self.checkout, RemoteOperation::Fetch)?;
         self.git_success(
             &self.checkout,
             ["fetch", "--quiet", "origin", CANONICAL_DEFAULT_BRANCH],
@@ -255,6 +262,7 @@ impl GitWorkspace {
         source_commit: &CommitId,
     ) -> Result<RegisteredWorktree, GitWorkspaceError> {
         let path = normalise_new_worktree_path(path.as_ref())?;
+        self.ensure_canonical_origin(&self.checkout, RemoteOperation::WorktreeCreation)?;
         self.git_success(
             &self.checkout,
             [
@@ -287,6 +295,7 @@ impl GitWorkspace {
         if self.local_branch_exists(branch)? {
             return Err(GitWorkspaceError::BranchExists(branch.to_owned()));
         }
+        self.ensure_canonical_origin(&self.checkout, RemoteOperation::WorktreeCreation)?;
         self.git_success(
             &self.checkout,
             [
@@ -375,6 +384,7 @@ impl GitWorkspace {
         self.verify_branch_path(&worktree.path, branch)?;
         self.verify_head_path(&worktree.path, expected_head)?;
         let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
+        self.ensure_canonical_origin(&worktree.path, RemoteOperation::Push)?;
         self.git_success(&worktree.path, ["push", "origin", refspec.as_str()])?;
         Ok(())
     }
@@ -390,6 +400,7 @@ impl GitWorkspace {
     ) -> Result<CommitId, GitWorkspaceError> {
         validate_branch(branch)?;
         let reference = format!("refs/heads/{branch}");
+        self.ensure_canonical_origin(&self.checkout, RemoteOperation::Fetch)?;
         let output = self.git_success(
             &self.checkout,
             ["ls-remote", "--refs", "origin", reference.as_str()],
@@ -522,6 +533,36 @@ impl GitWorkspace {
                 path: worktree.path.clone(),
                 expected: self.checkout.clone(),
                 actual: worktree.owner_checkout.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_canonical_origin(
+        &self,
+        cwd: &Path,
+        operation: RemoteOperation,
+    ) -> Result<(), GitWorkspaceError> {
+        let outputs = match operation {
+            RemoteOperation::Fetch => {
+                vec![self.git_success(cwd, ["remote", "get-url", "--all", "origin"])?]
+            }
+            RemoteOperation::WorktreeCreation => vec![
+                self.git_success(cwd, ["remote", "get-url", "--all", "origin"])?,
+                self.git_success(cwd, ["remote", "get-url", "--push", "--all", "origin"])?,
+            ],
+            RemoteOperation::Push => {
+                vec![self.git_success(cwd, ["remote", "get-url", "--push", "--all", "origin"])?]
+            }
+        };
+        let urls = outputs
+            .iter()
+            .flat_map(|output| output.lines().map(str::to_owned))
+            .collect::<Vec<_>>();
+        if urls.is_empty() || !urls.iter().all(|url| is_canonical_repository_url(url)) {
+            return Err(GitWorkspaceError::NonCanonicalOrigin {
+                operation: operation.description(),
+                urls,
             });
         }
         Ok(())
@@ -696,6 +737,35 @@ impl GitWorkspace {
     }
 }
 
+#[derive(Clone, Copy)]
+enum RemoteOperation {
+    Fetch,
+    WorktreeCreation,
+    Push,
+}
+
+impl RemoteOperation {
+    fn description(self) -> &'static str {
+        match self {
+            Self::Fetch => "fetch or remote observation",
+            Self::WorktreeCreation => "worktree creation",
+            Self::Push => "push",
+        }
+    }
+}
+
+fn is_canonical_repository_url(url: &str) -> bool {
+    matches!(
+        url,
+        "https://github.com/robchristie/bokkie"
+            | CANONICAL_HTTPS_URL
+            | "git@github.com:robchristie/bokkie"
+            | "git@github.com:robchristie/bokkie.git"
+            | "ssh://git@github.com/robchristie/bokkie"
+            | "ssh://git@github.com/robchristie/bokkie.git"
+    )
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PullRequestObservation {
@@ -851,6 +921,8 @@ mod tests {
         root: TempDir,
         checkout: PathBuf,
         origin: PathBuf,
+        git_executable: PathBuf,
+        git_log: PathBuf,
         source: CommitId,
     }
 
@@ -886,16 +958,24 @@ mod tests {
             );
             git(&checkout, ["push", "-u", "origin", "main"]);
             let source = CommitId::parse(git_stdout(&checkout, ["rev-parse", "HEAD"])).unwrap();
+            git(
+                &checkout,
+                ["remote", "set-url", "origin", CANONICAL_HTTPS_URL],
+            );
+            let git_log = root.path().join("git.log");
+            let git_executable = local_git_transport(root.path(), &origin, &git_log);
             Self {
                 root,
                 checkout,
                 origin,
+                git_executable,
+                git_log,
                 source,
             }
         }
 
         fn adapter(&self, gh: impl Into<PathBuf>) -> GitWorkspace {
-            GitWorkspace::new(&self.checkout, "git", gh).unwrap()
+            GitWorkspace::new(&self.checkout, &self.git_executable, gh).unwrap()
         }
 
         fn path(&self, name: &str) -> PathBuf {
@@ -1009,13 +1089,135 @@ mod tests {
             &fixture.checkout,
             ["branch", branch, fixture.source.as_str()],
         );
-        git(&fixture.checkout, ["push", "origin", branch]);
+        git(
+            &fixture.checkout,
+            ["push", fixture.origin.to_str().unwrap(), branch],
+        );
         let other = CommitId::parse("a".repeat(40)).unwrap();
         assert!(matches!(
             adapter.observe_remote_branch(branch, &other),
             Err(GitWorkspaceError::InvalidRemoteBranch(message))
                 if message.contains("expected head")
         ));
+    }
+
+    #[test]
+    fn rejects_a_noncanonical_effective_fetch_url_before_fetching_or_creating_a_worktree() {
+        let fixture = RepositoryFixture::new();
+        let noncanonical = fixture.path("noncanonical-fetch.git");
+        git(
+            fixture.root.path(),
+            [
+                "init",
+                "--bare",
+                "--initial-branch=main",
+                noncanonical.to_str().unwrap(),
+            ],
+        );
+        git(
+            &fixture.checkout,
+            ["remote", "set-url", "origin", "test-fetch:"],
+        );
+        git(
+            &fixture.checkout,
+            [
+                "config",
+                &format!("url.file://{}.insteadOf", noncanonical.display()),
+                "test-fetch:",
+            ],
+        );
+        fs::write(&fixture.git_log, "").unwrap();
+
+        let error = fixture
+            .adapter("unused-gh")
+            .resolve_origin_main()
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            GitWorkspaceError::NonCanonicalOrigin {
+                operation: "fetch or remote observation",
+                ref urls,
+            } if urls == &[format!("file://{}", noncanonical.display())]
+        ));
+        let log = fs::read_to_string(&fixture.git_log).unwrap();
+        assert!(log.contains("remote get-url --all origin"));
+        assert!(!log.lines().any(|line| line.starts_with("fetch ")));
+        assert_eq!(
+            git_stdout(&fixture.checkout, ["rev-parse", "refs/remotes/origin/main"]),
+            fixture.source.as_str()
+        );
+
+        let worktree_path = fixture.path("rejected-worktree");
+        assert!(matches!(
+            fixture
+                .adapter("unused-gh")
+                .create_detached_worktree(&worktree_path, &fixture.source),
+            Err(GitWorkspaceError::NonCanonicalOrigin {
+                operation: "worktree creation",
+                ..
+            })
+        ));
+        assert!(!worktree_path.exists());
+        let log = fs::read_to_string(&fixture.git_log).unwrap();
+        assert!(!log.contains("worktree add"));
+    }
+
+    #[test]
+    fn rechecks_and_rejects_a_noncanonical_effective_push_url_before_pushing() {
+        let fixture = RepositoryFixture::new();
+        let adapter = fixture.adapter("unused-gh");
+        let branch_name = "codex/gardener-rejected-push";
+        let worktree = adapter
+            .create_branch_worktree(fixture.path("implementation"), branch_name, &fixture.source)
+            .unwrap();
+        fs::write(worktree.path().join("README.md"), "changed\n").unwrap();
+        let commit = adapter.commit_all(&worktree, "Test rejected push").unwrap();
+
+        let noncanonical = fixture.path("noncanonical-push.git");
+        git(
+            fixture.root.path(),
+            [
+                "init",
+                "--bare",
+                "--initial-branch=main",
+                noncanonical.to_str().unwrap(),
+            ],
+        );
+        git(
+            &fixture.checkout,
+            [
+                "config",
+                &format!("url.file://{}.pushInsteadOf", noncanonical.display()),
+                CANONICAL_HTTPS_URL,
+            ],
+        );
+        fs::write(&fixture.git_log, "").unwrap();
+
+        let error = adapter.push_branch(&worktree, &commit).unwrap_err();
+
+        assert!(matches!(
+            error,
+            GitWorkspaceError::NonCanonicalOrigin {
+                operation: "push",
+                ref urls,
+            } if urls == &[format!("file://{}", noncanonical.display())]
+        ));
+        let log = fs::read_to_string(&fixture.git_log).unwrap();
+        assert!(log.contains("remote get-url --push --all origin"));
+        assert!(!log.lines().any(|line| line.starts_with("push ")));
+        for remote in [&fixture.origin, &noncanonical] {
+            assert!(git_fails(
+                fixture.root.path(),
+                [
+                    "--git-dir",
+                    remote.to_str().unwrap(),
+                    "show-ref",
+                    "--verify",
+                    &format!("refs/heads/{branch_name}")
+                ]
+            ));
+        }
     }
 
     #[test]
@@ -1185,6 +1387,24 @@ mod tests {
             "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\nif [ \"$1\" = pr ] && [ \"$2\" = view ]; then\n  printf '%s\\n' '{}'\nfi\n",
             shell_single_quote(log),
             shell_single_quote(Path::new(json)),
+        );
+        fs::write(&script, contents).unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+        script
+    }
+
+    fn local_git_transport(root: &Path, origin: &Path, log: &Path) -> PathBuf {
+        let script = root.join("git-with-local-canonical-transport");
+        let rewrite = format!(
+            "url.file://{}.insteadOf={CANONICAL_HTTPS_URL}",
+            origin.display()
+        );
+        let contents = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\n  fetch|push|ls-remote) exec git -c '{}' \"$@\" ;;\n  *) exec git \"$@\" ;;\nesac\n",
+            shell_single_quote(log),
+            shell_single_quote(Path::new(&rewrite)),
         );
         fs::write(&script, contents).unwrap();
         let mut permissions = fs::metadata(&script).unwrap().permissions();

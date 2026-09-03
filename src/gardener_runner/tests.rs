@@ -15,6 +15,7 @@ use crate::{
 };
 
 const GOAL: &str = "Add a durable gardener marker file and test it.";
+const CANONICAL_HTTPS_URL: &str = "https://github.com/robchristie/bokkie.git";
 
 struct Fixture {
     root: TempDir,
@@ -24,6 +25,8 @@ struct Fixture {
     database: PathBuf,
     codex: PathBuf,
     codex_log: PathBuf,
+    git_executable: PathBuf,
+    git_log: PathBuf,
     gh: PathBuf,
     gh_log: PathBuf,
     clock: ManualClock,
@@ -65,6 +68,12 @@ impl Fixture {
             ["remote", "add", "origin", origin.to_str().unwrap()],
         );
         git(&checkout, ["push", "-u", "origin", "main"]);
+        git(
+            &checkout,
+            ["remote", "set-url", "origin", CANONICAL_HTTPS_URL],
+        );
+        let git_log = root.path().join("git.log");
+        let git_executable = local_git_transport(root.path(), &origin, &git_log);
 
         let codex_log = root.path().join("codex.jsonl");
         let codex_count = root.path().join("codex.count");
@@ -166,6 +175,8 @@ if args[:2] == ["pr", "view"]:
             worktrees,
             codex,
             codex_log,
+            git_executable,
+            git_log,
             gh,
             gh_log,
             clock: ManualClock::new(1_000),
@@ -190,7 +201,7 @@ if args[:2] == ["pr", "view"]:
     }
 
     fn config(&self) -> GardenerRuntimeConfig {
-        GardenerRuntimeConfig::new(&self.worktrees, &self.codex, "git", &self.gh)
+        GardenerRuntimeConfig::new(&self.worktrees, &self.codex, &self.git_executable, &self.gh)
             .with_heartbeat_interval(Duration::from_millis(5))
     }
 
@@ -435,11 +446,80 @@ fn unconfigured_ordinary_claims_cannot_take_gardener_work() {
     assert!(gardener[0].obligation_id.starts_with("gardener:inspect:"));
 }
 
+#[test]
+fn inspection_rejects_a_noncanonical_effective_origin_before_remote_or_codex_work() {
+    let fixture = Fixture::new("pass", false, false);
+    let noncanonical = fixture.root.path().join("noncanonical.git");
+    git(
+        fixture.root.path(),
+        [
+            "init",
+            "--bare",
+            "--initial-branch=main",
+            noncanonical.to_str().unwrap(),
+        ],
+    );
+    git(
+        &fixture.checkout,
+        ["remote", "set-url", "origin", "hidden-destination:"],
+    );
+    git(
+        &fixture.checkout,
+        [
+            "config",
+            &format!("url.file://{}.insteadOf", noncanonical.display()),
+            "hidden-destination:",
+        ],
+    );
+    fs::write(&fixture.git_log, "").unwrap();
+    let mut store = fixture.store();
+    let claim = store
+        .claim_due_gardener(fixture.clock.now(), 30, 1)
+        .unwrap()
+        .remove(0);
+    let config = fixture.config();
+    let runner = GardenerRunner::new(&config, 30, &fixture.clock).unwrap();
+
+    let result = runner.execute(&mut store, &claim);
+
+    assert!(matches!(
+        result.completion,
+        Completion::Failed {
+            retryable: true,
+            ref error,
+            ..
+        } if error.contains("noncanonical effective origin")
+    ));
+    let git_log = fs::read_to_string(&fixture.git_log).unwrap();
+    assert!(git_log.contains("remote get-url --all origin"));
+    assert!(!git_log.lines().any(|line| line.starts_with("fetch ")));
+    assert!(!fixture.codex_log.exists());
+}
+
 fn write_executable(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
     let mut permissions = fs::metadata(path).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).unwrap();
+}
+
+fn local_git_transport(root: &Path, origin: &Path, log: &Path) -> PathBuf {
+    let script = root.join("git-with-local-canonical-transport");
+    let rewrite = format!(
+        "url.file://{}.insteadOf={CANONICAL_HTTPS_URL}",
+        origin.display()
+    );
+    let contents = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\n  fetch|push|ls-remote) exec git -c '{}' \"$@\" ;;\n  *) exec git \"$@\" ;;\nesac\n",
+        shell_single_quote(log),
+        shell_single_quote(Path::new(&rewrite)),
+    );
+    write_executable(&script, &contents);
+    script
+}
+
+fn shell_single_quote(path: &Path) -> String {
+    path.to_string_lossy().replace('\'', "'\\''")
 }
 
 fn git<I, S>(cwd: &Path, arguments: I)

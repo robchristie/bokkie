@@ -98,7 +98,10 @@ identities first.
 The runtime requires `codex`, `git`, and an authenticated `gh` installation.
 Executable locations are configurable. Its worktree root must already exist
 and be absolute; configuration validation does not create directories or alter
-a repository.
+a repository. Before fetching or creating a worktree, the runtime requires
+Git's effective fetch and push URLs for `origin` to resolve to the canonical
+`robchristie/bokkie` GitHub repository. It rechecks the effective push URL
+immediately before pushing, including any Git URL rewrite rules.
 
 ```sh
 bokkie --database ./bokkie.sqlite serve \
@@ -118,8 +121,10 @@ disposable detached worktree with read-only, network-off Codex access. An
 approved implementation uses a separate isolated branch worktree with
 workspace-write, network-off access. Verification uses a fresh read-only Codex
 thread in a detached worktree at the independently observed pull-request head.
-Unexpected permission escalation requests are refused, and the configured
-sandboxes prevent unplanned writes or network access.
+Unexpected command and file-change approvals receive an explicit cancellation;
+permission escalation receives an empty turn-scoped permission grant. The
+configured sandboxes prevent unplanned writes or network access, and the
+session then terminates as failed for operator reconciliation.
 
 SQLite retains inspection source commits and Codex thread/turn identities;
 proposal fingerprints, prompts, observations and source commits; and each
