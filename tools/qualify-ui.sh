@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export BOKKIE_UI_EVIDENCE_DIR="${BOKKIE_UI_EVIDENCE_DIR:-$ROOT/docs/ui-qualification-evidence}"
-if [[ -n "$(git status --short --untracked-files=no)" ]]; then
+if [[ -n "$(git status --short --untracked-files=no -- . ':(exclude)docs/ui-qualification-evidence')" ]]; then
   export BOKKIE_SOURCE_REVISION="$(git rev-parse HEAD)+working-tree"
 else
   export BOKKIE_SOURCE_REVISION="$(git rev-parse HEAD)"
