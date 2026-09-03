@@ -305,7 +305,19 @@ try {
   await clickAction(page, 'cancel_obligation', 3);
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().ui_snapshot.nodes
     .some(candidate => candidate.enabled && candidate.actions.includes('confirm_lifecycle_action')));
-  await page.evaluate(() => fetch('/obligations/attention-nonretryable/cancel', { method: 'POST' }));
+  await page.evaluate(async () => {
+    const snapshot = await (await fetch('/operator/snapshot')).json();
+    const obligation = snapshot.obligations.find(item => item.id === 'attention-nonretryable');
+    await fetch('/operator/obligations/attention-nonretryable/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        precondition: obligation.capabilities.cancel.precondition,
+        actor: '',
+        note: null,
+      }),
+    });
+  });
   await clickAction(page, 'confirm_lifecycle_action');
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
     .interaction.confirmation_conflict != null, null, { timeout: 15_000 });

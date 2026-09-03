@@ -90,11 +90,25 @@ pub enum ActionConsequence {
     RejectExactGardenerProposal,
 }
 
+/// Immutable backend-issued condition for applying one projected lifecycle action.
+///
+/// `state_revision` is the latest append-only audit-event sequence for the
+/// obligation. Exact gardener decisions also bind the immutable proposal
+/// fingerprint; ordinary lifecycle actions leave it unset.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ActionPrecondition {
+    pub obligation_id: String,
+    pub occurrence: u32,
+    pub state_revision: i64,
+    pub gardener_fingerprint: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ActionCapability {
     pub available: bool,
     pub disabled_reason: Option<DisabledReason>,
     pub consequence: ActionConsequence,
+    pub precondition: Option<ActionPrecondition>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

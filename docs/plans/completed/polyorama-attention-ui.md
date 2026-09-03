@@ -131,7 +131,9 @@ gap makes one necessary.
 - [x] Approve, reject, retry or cancel uses the real HTTP/domain path and the
   resulting durable event appears after refresh.
 - [x] Gardener approval requires deliberate confirmation of the exact immutable
-  prompt, fingerprint, occurrence and consequence, with an optional note.
+  prompt, fingerprint, occurrence and consequence, with an optional note; every
+  confirmed action carries a backend-issued obligation, occurrence and
+  append-only state-revision precondition that Store checks atomically.
 - [x] Every represented non-terminal obligation exposes its wake-up, active
   lease or visible human-attention reason.
 - [x] Large fixtures materialise a bounded visible row range.

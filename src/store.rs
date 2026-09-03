@@ -5,6 +5,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use bokkie_operator_api::ActionPrecondition;
 use rusqlite::{
     Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params, types::Type,
 };
@@ -206,12 +207,55 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// Read each obligation together with the immutable audit sequence that
+    /// represents its current state. The correlated value and obligation row
+    /// come from one SQLite statement snapshot, so capabilities cannot combine
+    /// an old state with a newer revision (or the reverse).
+    pub(crate) fn list_with_state_revisions(&self) -> Result<Vec<(Obligation, i64)>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT o.*,
+                    (SELECT sequence FROM audit_events a
+                     WHERE a.obligation_id = o.id
+                     ORDER BY sequence DESC LIMIT 1) AS state_revision
+             FROM obligations o ORDER BY o.created_at, o.id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((obligation_from_row(row)?, row.get("state_revision")?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
     pub fn decide_approval(
         &mut self,
         id: &str,
         decision: ApprovalDecision,
         actor: &str,
         note: Option<&str>,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        self.decide_approval_inner(id, decision, actor, note, None, now)
+    }
+
+    pub fn decide_approval_if_current(
+        &mut self,
+        id: &str,
+        decision: ApprovalDecision,
+        actor: &str,
+        note: Option<&str>,
+        precondition: &ActionPrecondition,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        self.decide_approval_inner(id, decision, actor, note, Some(precondition), now)
+    }
+
+    fn decide_approval_inner(
+        &mut self,
+        id: &str,
+        decision: ApprovalDecision,
+        actor: &str,
+        note: Option<&str>,
+        precondition: Option<&ActionPrecondition>,
         now: i64,
     ) -> Result<(), StoreError> {
         if actor.trim().is_empty() {
@@ -222,6 +266,9 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(precondition) = precondition {
+            validate_action_precondition(&transaction, id, precondition, None)?;
+        }
         let is_gardener_proposal = transaction.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM gardener_proposals
@@ -770,6 +817,37 @@ impl Store {
         note: Option<&str>,
         now: i64,
     ) -> Result<Proposal, StoreError> {
+        self.decide_gardener_proposal_inner(fingerprint, decision, actor, note, None, now)
+    }
+
+    pub fn decide_gardener_proposal_if_current(
+        &mut self,
+        fingerprint: &str,
+        decision: ApprovalDecision,
+        actor: &str,
+        note: Option<&str>,
+        precondition: &ActionPrecondition,
+        now: i64,
+    ) -> Result<Proposal, StoreError> {
+        self.decide_gardener_proposal_inner(
+            fingerprint,
+            decision,
+            actor,
+            note,
+            Some(precondition),
+            now,
+        )
+    }
+
+    fn decide_gardener_proposal_inner(
+        &mut self,
+        fingerprint: &str,
+        decision: ApprovalDecision,
+        actor: &str,
+        note: Option<&str>,
+        precondition: Option<&ActionPrecondition>,
+        now: i64,
+    ) -> Result<Proposal, StoreError> {
         if actor.trim().is_empty() {
             return Err(StoreError::Invalid(
                 "approval actor must not be empty".to_owned(),
@@ -780,6 +858,14 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = proposal(&transaction, fingerprint)?
             .ok_or_else(|| StoreError::NotFound(fingerprint.to_owned()))?;
+        if let Some(precondition) = precondition {
+            validate_action_precondition(
+                &transaction,
+                &current.implementation_obligation_id,
+                precondition,
+                Some(fingerprint),
+            )?;
+        }
         apply_transition(
             &transaction,
             Transition::Approval {
@@ -1526,18 +1612,60 @@ impl Store {
     }
 
     pub fn retry_attention(&mut self, id: &str, now: i64) -> Result<(), StoreError> {
+        self.retry_attention_inner(id, None, now)
+    }
+
+    pub fn retry_attention_if_current(
+        &mut self,
+        id: &str,
+        precondition: &ActionPrecondition,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        self.retry_attention_inner(id, Some(precondition), now)
+    }
+
+    fn retry_attention_inner(
+        &mut self,
+        id: &str,
+        precondition: Option<&ActionPrecondition>,
+        now: i64,
+    ) -> Result<(), StoreError> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(precondition) = precondition {
+            validate_action_precondition(&transaction, id, precondition, None)?;
+        }
         apply_transition(&transaction, Transition::RetryAttention { id, now })?;
         transaction.commit()?;
         Ok(())
     }
 
     pub fn cancel(&mut self, id: &str, now: i64) -> Result<(), StoreError> {
+        self.cancel_inner(id, None, now)
+    }
+
+    pub fn cancel_if_current(
+        &mut self,
+        id: &str,
+        precondition: &ActionPrecondition,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        self.cancel_inner(id, Some(precondition), now)
+    }
+
+    fn cancel_inner(
+        &mut self,
+        id: &str,
+        precondition: Option<&ActionPrecondition>,
+        now: i64,
+    ) -> Result<(), StoreError> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(precondition) = precondition {
+            validate_action_precondition(&transaction, id, precondition, None)?;
+        }
         apply_transition(&transaction, Transition::Cancel { id, now })?;
         transaction.commit()?;
         Ok(())
@@ -2720,6 +2848,48 @@ fn verify_claim(obligation: &Obligation, claim: &Claim, now: i64) -> Result<(), 
             .is_none_or(|expiry| expiry <= now)
     {
         return Err(StoreError::Fenced);
+    }
+    Ok(())
+}
+
+/// Validate the exact operator state inside the same IMMEDIATE transaction as
+/// the requested mutation. Every obligation mutation in this store appends an
+/// audit event atomically, making the latest append-only sequence a durable,
+/// monotonic state revision even when timestamps, state and occurrence repeat.
+fn validate_action_precondition(
+    transaction: &Transaction<'_>,
+    obligation_id: &str,
+    precondition: &ActionPrecondition,
+    gardener_fingerprint: Option<&str>,
+) -> Result<(), StoreError> {
+    if precondition.obligation_id != obligation_id {
+        return Err(StoreError::Conflict(format!(
+            "action targets obligation {obligation_id:?}, but the reviewed precondition targets {:?}",
+            precondition.obligation_id
+        )));
+    }
+    if precondition.gardener_fingerprint.as_deref() != gardener_fingerprint {
+        return Err(StoreError::Conflict(
+            "action does not match the reviewed gardener proposal fingerprint".to_owned(),
+        ));
+    }
+    let obligation = require_obligation(transaction, obligation_id)?;
+    let state_revision: i64 = transaction.query_row(
+        "SELECT sequence FROM audit_events
+         WHERE obligation_id = ?1 ORDER BY sequence DESC LIMIT 1",
+        [obligation_id],
+        |row| row.get(0),
+    )?;
+    if obligation.occurrence != precondition.occurrence
+        || state_revision != precondition.state_revision
+    {
+        return Err(StoreError::Conflict(format!(
+            "reviewed obligation state is stale (expected occurrence {} at revision {}, found occurrence {} at revision {})",
+            precondition.occurrence,
+            precondition.state_revision,
+            obligation.occurrence,
+            state_revision
+        )));
     }
     Ok(())
 }

@@ -441,8 +441,7 @@ impl AttentionApp {
             self.model.status = "The selected obligation is no longer present".to_owned();
             return;
         };
-        if current.id != confirmation.obligation_id
-            || current.occurrence != confirmation.occurrence
+        if !self.model.confirmation_matches_current_state(&confirmation)
             || self
                 .model
                 .action_availability(confirmation.action, current)
@@ -468,6 +467,7 @@ impl AttentionApp {
                 action: confirmation.action,
                 obligation_id: confirmation.obligation_id,
                 fingerprint: confirmation.gardener.map(|gardener| gardener.fingerprint),
+                precondition: confirmation.precondition,
                 actor: confirmation.actor,
                 note: confirmation.note,
             }),
@@ -485,10 +485,9 @@ impl AttentionApp {
         let Some(current) = self.model.selected() else {
             return Some("The selected obligation is no longer present".to_owned());
         };
-        if current.id != confirmation.obligation_id || current.occurrence != confirmation.occurrence
-        {
+        if !self.model.confirmation_matches_current_state(confirmation) {
             return Some(
-                "The confirmation no longer matches the selected current occurrence".to_owned(),
+                "The confirmation no longer matches the selected current state".to_owned(),
             );
         }
         if let Err(reason) = self.model.action_availability(confirmation.action, current) {
@@ -2040,8 +2039,8 @@ fn poll_delay(snapshot: &bokkie_operator_api::OperatorSnapshot) -> Duration {
 #[cfg(test)]
 mod tests {
     use bokkie_operator_api::{
-        ActionCapability, ActionConsequence, DisabledReason, OperatorCapabilities,
-        OperatorObligationState, OperatorSnapshot,
+        ActionCapability, ActionConsequence, ActionPrecondition, DisabledReason,
+        OperatorCapabilities, OperatorObligationState, OperatorSnapshot,
     };
 
     use super::*;
@@ -2051,6 +2050,12 @@ mod tests {
             available,
             disabled_reason: (!available).then_some(DisabledReason::StateDoesNotPermit),
             consequence,
+            precondition: available.then(|| ActionPrecondition {
+                obligation_id: "fixture".to_owned(),
+                occurrence: 2,
+                state_revision: 1,
+                gardener_fingerprint: None,
+            }),
         }
     }
 

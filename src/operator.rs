@@ -3,9 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bokkie_operator_api::{
-    ActionCapability, ActionConsequence, ApprovalSubject, AttentionCause, DisabledReason,
-    DurableLiveness, ExceptionReason, ObligationTopic, OperatorCapabilities, OperatorObligation,
-    OperatorObligationState, OperatorSnapshot, TopicItem, TopicSource,
+    ActionCapability, ActionConsequence, ActionPrecondition, ApprovalSubject, AttentionCause,
+    DisabledReason, DurableLiveness, ExceptionReason, ObligationTopic, OperatorCapabilities,
+    OperatorObligation, OperatorObligationState, OperatorSnapshot, TopicItem, TopicSource,
 };
 use rusqlite::params;
 use serde::Serialize;
@@ -39,10 +39,14 @@ impl Store {
             .map(|proposal| (proposal.implementation_obligation_id.clone(), proposal))
             .collect::<BTreeMap<_, _>>();
         let mut obligations = self
-            .list()?
+            .list_with_state_revisions()?
             .into_iter()
-            .map(|obligation| {
-                self.project_operator_obligation(&obligation, proposals.get(&obligation.id))
+            .map(|(obligation, state_revision)| {
+                self.project_operator_obligation(
+                    &obligation,
+                    proposals.get(&obligation.id),
+                    state_revision,
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
         obligations.sort_by_key(operator_sort_key);
@@ -249,6 +253,7 @@ impl Store {
         &self,
         obligation: &Obligation,
         proposal: Option<&Proposal>,
+        state_revision: i64,
     ) -> Result<OperatorObligation, StoreError> {
         let exception = self.exception_reason(obligation, proposal)?;
         let liveness = match obligation.state {
@@ -310,7 +315,7 @@ impl Store {
             updated_at: obligation.updated_at,
             exception,
             liveness,
-            capabilities: capabilities(obligation, proposal.is_some()),
+            capabilities: capabilities(obligation, proposal, state_revision),
         })
     }
 
@@ -435,7 +440,12 @@ fn failure_cause(
     }
 }
 
-fn capabilities(obligation: &Obligation, is_proposal: bool) -> OperatorCapabilities {
+fn capabilities(
+    obligation: &Obligation,
+    proposal: Option<&Proposal>,
+    state_revision: i64,
+) -> OperatorCapabilities {
+    let is_proposal = proposal.is_some();
     let approval_legal = approval_transition_is_legal(obligation);
     let generic_approval_legal = generic_approval_transition_is_legal(obligation, is_proposal);
     let proposal_approval_legal = gardener_proposal_transition_is_legal(obligation, is_proposal);
@@ -457,27 +467,60 @@ fn capabilities(obligation: &Obligation, is_proposal: bool) -> OperatorCapabilit
         (!retry_transition_is_legal(obligation)).then(|| state_disabled_reason(obligation));
     let cancel_reason =
         (!cancel_transition_is_legal(obligation)).then(|| state_disabled_reason(obligation));
+    let ordinary_precondition = ActionPrecondition {
+        obligation_id: obligation.id.clone(),
+        occurrence: obligation.occurrence,
+        state_revision,
+        gardener_fingerprint: None,
+    };
+    let gardener_precondition = proposal.map(|proposal| ActionPrecondition {
+        gardener_fingerprint: Some(proposal.fingerprint.clone()),
+        ..ordinary_precondition.clone()
+    });
     OperatorCapabilities {
-        approve: capability(approve_reason, ActionConsequence::ScheduleCurrentOccurrence),
-        reject: capability(approve_reason, ActionConsequence::MoveToAttention),
-        retry: capability(retry_reason, ActionConsequence::ReopenForRetry),
-        cancel: capability(cancel_reason, ActionConsequence::CancelObligation),
+        approve: capability(
+            approve_reason,
+            ActionConsequence::ScheduleCurrentOccurrence,
+            Some(ordinary_precondition.clone()),
+        ),
+        reject: capability(
+            approve_reason,
+            ActionConsequence::MoveToAttention,
+            Some(ordinary_precondition.clone()),
+        ),
+        retry: capability(
+            retry_reason,
+            ActionConsequence::ReopenForRetry,
+            Some(ordinary_precondition.clone()),
+        ),
+        cancel: capability(
+            cancel_reason,
+            ActionConsequence::CancelObligation,
+            Some(ordinary_precondition),
+        ),
         approve_gardener_proposal: capability(
             proposal_reason,
             ActionConsequence::ScheduleExactGardenerProposal,
+            gardener_precondition.clone(),
         ),
         reject_gardener_proposal: capability(
             proposal_reason,
             ActionConsequence::RejectExactGardenerProposal,
+            gardener_precondition,
         ),
     }
 }
 
-fn capability(reason: Option<DisabledReason>, consequence: ActionConsequence) -> ActionCapability {
+fn capability(
+    reason: Option<DisabledReason>,
+    consequence: ActionConsequence,
+    precondition: Option<ActionPrecondition>,
+) -> ActionCapability {
     ActionCapability {
         available: reason.is_none(),
         disabled_reason: reason,
         consequence,
+        precondition: reason.is_none().then_some(precondition).flatten(),
     }
 }
 
@@ -741,6 +784,16 @@ mod tests {
             Some(DurableLiveness::HumanAttention { .. })
         ));
         assert!(by_id["approval"].capabilities.approve.available);
+        let approval_precondition = by_id["approval"]
+            .capabilities
+            .approve
+            .precondition
+            .as_ref()
+            .unwrap();
+        assert_eq!(approval_precondition.obligation_id, "approval");
+        assert_eq!(approval_precondition.occurrence, 1);
+        assert!(approval_precondition.state_revision > 0);
+        assert!(approval_precondition.gardener_fingerprint.is_none());
         assert!(
             !by_id["approval"]
                 .capabilities
@@ -862,6 +915,17 @@ mod tests {
             Some(DisabledReason::GardenerProposalRequiresExactDecision)
         );
         assert!(projected.capabilities.approve_gardener_proposal.available);
+        let exact_precondition = projected
+            .capabilities
+            .approve_gardener_proposal
+            .precondition
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            exact_precondition.gardener_fingerprint.as_deref(),
+            Some(proposal.fingerprint.as_str())
+        );
         assert!(matches!(
             projected.exception,
             Some(ExceptionReason::AwaitingApproval {
@@ -873,6 +937,20 @@ mod tests {
                 }
             }) if fingerprint == &proposal.fingerprint && prompt == "Implement the exact safe change"
         ));
+
+        let mut wrong_fingerprint = exact_precondition;
+        wrong_fingerprint.gardener_fingerprint = Some("different".to_owned());
+        let error = store
+            .decide_gardener_proposal_if_current(
+                &proposal.fingerprint,
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                &wrong_fingerprint,
+                101,
+            )
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Conflict(message) if message.contains("fingerprint")));
 
         let topic = store
             .operator_topic(&proposal.implementation_obligation_id, 101)
@@ -1094,5 +1172,104 @@ mod tests {
             store.operator_topic("missing", 100),
             Err(StoreError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn later_occurrence_rejects_action_confirmed_for_an_earlier_occurrence() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut recurring = new("recurring-approval", true);
+        recurring.recurrence = Some(Recurrence::new("* * * * *", "UTC").unwrap());
+        store.create(recurring, 90).unwrap();
+        let stale = store
+            .operator_snapshot(90)
+            .unwrap()
+            .obligations
+            .pop()
+            .unwrap()
+            .capabilities
+            .approve
+            .precondition
+            .unwrap();
+
+        store
+            .decide_approval_if_current(
+                "recurring-approval",
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                &stale,
+                100,
+            )
+            .unwrap();
+        let claim = store.claim_due(100, 60, 1).unwrap().pop().unwrap();
+        store
+            .complete(&claim, Completion::Succeeded { evidence: None }, 101)
+            .unwrap();
+        assert_eq!(
+            store.get("recurring-approval").unwrap().unwrap().occurrence,
+            2
+        );
+
+        let error = store
+            .decide_approval_if_current(
+                "recurring-approval",
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                &stale,
+                102,
+            )
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Conflict(message) if message.contains("stale")));
+        assert_eq!(
+            store.get("recurring-approval").unwrap().unwrap().state,
+            ObligationState::AwaitingApproval
+        );
+    }
+
+    #[test]
+    fn same_occurrence_state_cycle_rejects_the_original_confirmation() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.create(new("cycled-approval", true), 90).unwrap();
+        let stale = store
+            .operator_snapshot(90)
+            .unwrap()
+            .obligations
+            .pop()
+            .unwrap()
+            .capabilities
+            .approve
+            .precondition
+            .unwrap();
+
+        store
+            .decide_approval(
+                "cycled-approval",
+                ApprovalDecision::Rejected,
+                "operator",
+                None,
+                100,
+            )
+            .unwrap();
+        store.retry_attention("cycled-approval", 101).unwrap();
+        let current = store.get("cycled-approval").unwrap().unwrap();
+        assert_eq!(current.occurrence, stale.occurrence);
+        assert_eq!(current.state, ObligationState::AwaitingApproval);
+
+        let error = store
+            .decide_approval_if_current(
+                "cycled-approval",
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                &stale,
+                102,
+            )
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Conflict(message) if message.contains("revision")));
+        assert_eq!(
+            store.get("cycled-approval").unwrap().unwrap().state,
+            ObligationState::AwaitingApproval
+        );
     }
 }

@@ -1,6 +1,6 @@
 use std::{sync::mpsc::Sender, time::Duration};
 
-use bokkie_operator_api::{ObligationTopic, OperatorSnapshot};
+use bokkie_operator_api::{ActionPrecondition, ObligationTopic, OperatorSnapshot};
 use eframe::egui;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -11,6 +11,7 @@ pub struct ActionRequest {
     pub action: LifecycleAction,
     pub obligation_id: String,
     pub fingerprint: Option<String>,
+    pub precondition: ActionPrecondition,
     pub actor: String,
     pub note: String,
 }
@@ -91,19 +92,9 @@ impl Transport {
         let mut http = match &request {
             ApiRequest::Snapshot | ApiRequest::Topic { .. } => ehttp::Request::get(endpoint),
             ApiRequest::Act(action) => {
-                let body = if action.action.requires_decision_body() {
-                    serde_json::to_vec(&DecisionBody {
-                        actor: &action.actor,
-                        note: (!action.note.trim().is_empty()).then_some(action.note.trim()),
-                    })
-                    .expect("decision body is serialisable")
-                } else {
-                    Vec::new()
-                };
+                let body = action_body(action);
                 let mut request = ehttp::Request::post(endpoint, body);
-                if action.action.requires_decision_body() {
-                    request.headers.insert("Content-Type", "application/json");
-                }
+                request.headers.insert("Content-Type", "application/json");
                 request
             }
         };
@@ -134,6 +125,15 @@ impl Transport {
     }
 }
 
+fn action_body(action: &ActionRequest) -> Vec<u8> {
+    serde_json::to_vec(&ActionBody {
+        precondition: &action.precondition,
+        actor: &action.actor,
+        note: (!action.note.trim().is_empty()).then_some(action.note.trim()),
+    })
+    .expect("action body is serialisable")
+}
+
 #[cfg(target_arch = "wasm32")]
 impl Default for Transport {
     fn default() -> Self {
@@ -144,27 +144,27 @@ impl Default for Transport {
 fn action_endpoint(request: &ActionRequest) -> String {
     match request.action {
         LifecycleAction::Approve => format!(
-            "/obligations/{}/approve",
+            "/operator/obligations/{}/approve",
             encode_path_segment(&request.obligation_id)
         ),
         LifecycleAction::Reject => format!(
-            "/obligations/{}/reject",
+            "/operator/obligations/{}/reject",
             encode_path_segment(&request.obligation_id)
         ),
         LifecycleAction::Retry => format!(
-            "/obligations/{}/retry",
+            "/operator/obligations/{}/retry",
             encode_path_segment(&request.obligation_id)
         ),
         LifecycleAction::Cancel => format!(
-            "/obligations/{}/cancel",
+            "/operator/obligations/{}/cancel",
             encode_path_segment(&request.obligation_id)
         ),
         LifecycleAction::ApproveGardenerProposal => format!(
-            "/gardener/proposals/{}/approve",
+            "/operator/gardener/proposals/{}/approve",
             encode_path_segment(request.fingerprint.as_deref().unwrap_or_default())
         ),
         LifecycleAction::RejectGardenerProposal => format!(
-            "/gardener/proposals/{}/reject",
+            "/operator/gardener/proposals/{}/reject",
             encode_path_segment(request.fingerprint.as_deref().unwrap_or_default())
         ),
     }
@@ -204,7 +204,8 @@ fn encode_path_segment(value: &str) -> String {
 }
 
 #[derive(Serialize)]
-struct DecisionBody<'a> {
+struct ActionBody<'a> {
+    precondition: &'a ActionPrecondition,
     actor: &'a str,
     note: Option<&'a str>,
 }
@@ -228,6 +229,12 @@ mod tests {
             action,
             obligation_id: "obligation/1".to_owned(),
             fingerprint: Some("abc def".to_owned()),
+            precondition: ActionPrecondition {
+                obligation_id: "obligation/1".to_owned(),
+                occurrence: 1,
+                state_revision: 7,
+                gardener_fingerprint: action.is_gardener().then(|| "abc def".to_owned()),
+            },
             actor: "operator".to_owned(),
             note: String::new(),
         })
@@ -258,22 +265,28 @@ mod tests {
             }),
             "http://127.0.0.1:7744/operator/obligations/obligation%2F1/topic"
         );
-        assert!(
-            transport
-                .endpoint(&action(LifecycleAction::ApproveGardenerProposal))
-                .ends_with("/gardener/proposals/abc%20def/approve")
-        );
-        assert!(
-            transport
-                .endpoint(&action(LifecycleAction::Cancel))
-                .ends_with("/obligations/obligation%2F1/cancel")
-        );
+        let expected_paths = [
+            "/operator/obligations/obligation%2F1/approve",
+            "/operator/obligations/obligation%2F1/reject",
+            "/operator/obligations/obligation%2F1/retry",
+            "/operator/obligations/obligation%2F1/cancel",
+            "/operator/gardener/proposals/abc%20def/approve",
+            "/operator/gardener/proposals/abc%20def/reject",
+        ];
+        for (lifecycle_action, expected_path) in
+            LifecycleAction::ALL.into_iter().zip(expected_paths)
+        {
+            assert_eq!(
+                transport.endpoint(&action(lifecycle_action)),
+                format!("http://127.0.0.1:7744{expected_path}")
+            );
+        }
     }
 
     #[test]
     fn transition_conflict_is_classified_separately_from_transport_failure() {
         let response = ehttp::Response {
-            url: "http://127.0.0.1:7744/obligations/id/approve".to_owned(),
+            url: "http://127.0.0.1:7744/operator/obligations/id/approve".to_owned(),
             ok: false,
             status: 409,
             status_text: "Conflict".to_owned(),
@@ -285,5 +298,23 @@ mod tests {
             decode(&action(LifecycleAction::Approve), response),
             Err(ApiFailure::Conflict(message)) if message == "occurrence changed"
         ));
+    }
+
+    #[test]
+    fn every_lifecycle_action_body_carries_the_reviewed_precondition() {
+        for lifecycle_action in LifecycleAction::ALL {
+            let request = match action(lifecycle_action) {
+                ApiRequest::Act(request) => request,
+                _ => unreachable!(),
+            };
+            let body: serde_json::Value = serde_json::from_slice(&action_body(&request)).unwrap();
+            assert_eq!(body["precondition"]["obligation_id"], "obligation/1");
+            assert_eq!(body["precondition"]["occurrence"], 1);
+            assert_eq!(body["precondition"]["state_revision"], 7);
+            assert_eq!(
+                body["precondition"]["gardener_fingerprint"].is_string(),
+                lifecycle_action.is_gardener()
+            );
+        }
     }
 }

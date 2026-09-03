@@ -374,6 +374,25 @@ fn gardener_http_exposes_registration_evidence_and_decisions() {
     )
     .unwrap();
     assert_eq!(rejected["obligation_state"], "attention");
+    let conditional_path = format!(
+        "/operator/gardener/proposals/{}/approve",
+        seeded.conditional_fingerprint
+    );
+    let (_, conditionally_approved) = http_json(
+        address,
+        "POST",
+        &conditional_path,
+        Some(operator_action_body(
+            address,
+            &format!("gardener:implement:{}", seeded.conditional_fingerprint),
+            "approve_gardener_proposal",
+            Some("http-operator"),
+            Some("reviewed with a state precondition"),
+        )),
+    )
+    .unwrap();
+    assert_eq!(conditionally_approved["obligation_state"], "pending");
+    assert_eq!(conditionally_approved["approval_decision"], "approved");
     stop_child(&mut daemon);
 
     create_seeded_run(&database, &seeded.approved_fingerprint);
@@ -532,13 +551,7 @@ fn loopback_api_exposes_lifecycle_and_history() {
     )
     .unwrap();
     assert_eq!(approved["state"], "pending");
-    let (_, cancelled) = http_json(
-        address,
-        "POST",
-        "/obligations/api-one/cancel",
-        Some(json!({})),
-    )
-    .unwrap();
+    let (_, cancelled) = http_json(address, "POST", "/obligations/api-one/cancel", None).unwrap();
     assert_eq!(cancelled["state"], "cancelled");
 
     let (_, events) = http_json(address, "GET", "/obligations/api-one/events", None).unwrap();
@@ -593,8 +606,14 @@ fn attention_ui_probe_reads_cancels_refreshes_and_serves_same_origin_assets() {
     let (cancel_status, cancelled) = http_json(
         address,
         "POST",
-        "/obligations/attention-ui-future-fixture/cancel",
-        None,
+        "/operator/obligations/attention-ui-future-fixture/cancel",
+        Some(operator_action_body(
+            address,
+            "attention-ui-future-fixture",
+            "cancel",
+            None,
+            None,
+        )),
     )
     .unwrap();
     assert_eq!(cancel_status, 200);
@@ -881,6 +900,7 @@ fn scheduler_failure_stops_http_and_exits_non_zero() {
 struct SeededGardener {
     approved_fingerprint: String,
     rejected_fingerprint: String,
+    conditional_fingerprint: String,
 }
 
 fn seed_gardener_state(database: &Path, checkout: &str) -> SeededGardener {
@@ -981,6 +1001,7 @@ fn seed_gardener_state(database: &Path, checkout: &str) -> SeededGardener {
     SeededGardener {
         approved_fingerprint: proposal_fingerprint("robchristie/bokkie", APPROVED_PROMPT),
         rejected_fingerprint: proposal_fingerprint("robchristie/bokkie", REJECTED_PROMPT),
+        conditional_fingerprint: proposal_fingerprint("robchristie/bokkie", HTTP_PROMPT),
     }
 }
 
@@ -1141,6 +1162,32 @@ fn http_json(
     let status = headers.split_whitespace().nth(1)?.parse().ok()?;
     let body = serde_json::from_str(body).ok()?;
     Some((status, body))
+}
+
+fn operator_action_body(
+    address: SocketAddr,
+    obligation_id: &str,
+    capability: &str,
+    actor: Option<&str>,
+    note: Option<&str>,
+) -> Value {
+    let (_, snapshot) = http_json(address, "GET", "/operator/snapshot", None).unwrap();
+    let obligation = snapshot["obligations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == obligation_id)
+        .unwrap_or_else(|| panic!("operator snapshot lacks obligation {obligation_id:?}"));
+    let precondition = obligation["capabilities"][capability]["precondition"].clone();
+    assert!(
+        !precondition.is_null(),
+        "capability {capability:?} is unavailable"
+    );
+    json!({
+        "precondition": precondition,
+        "actor": actor.unwrap_or_default(),
+        "note": note,
+    })
 }
 
 fn http_raw(address: SocketAddr, method: &str, path: &str) -> Option<String> {

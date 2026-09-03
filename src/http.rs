@@ -20,6 +20,7 @@ use crate::{
     GardenerInspection, NewObligation, NewRepositoryRegistration, Obligation, Proposal, Recurrence,
     RepositoryRegistration, RetryPolicy, Store, StoreError, SystemClock, UnixClock,
 };
+use bokkie_operator_api::ActionPrecondition;
 
 #[derive(Debug, Clone)]
 pub struct ApiState {
@@ -42,6 +43,14 @@ pub struct CreateRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DecisionRequest {
+    pub actor: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OperatorActionRequest {
+    pub precondition: ActionPrecondition,
+    #[serde(default)]
     pub actor: String,
     pub note: Option<String>,
 }
@@ -129,6 +138,18 @@ pub fn router(database: PathBuf) -> Router {
         .route("/health", get(health))
         .route("/operator/snapshot", get(operator_snapshot))
         .route("/operator/obligations/{id}/topic", get(operator_topic))
+        .route("/operator/obligations/{id}/approve", post(operator_approve))
+        .route("/operator/obligations/{id}/reject", post(operator_reject))
+        .route("/operator/obligations/{id}/retry", post(operator_retry))
+        .route("/operator/obligations/{id}/cancel", post(operator_cancel))
+        .route(
+            "/operator/gardener/proposals/{fingerprint}/approve",
+            post(operator_approve_gardener_proposal),
+        )
+        .route(
+            "/operator/gardener/proposals/{fingerprint}/reject",
+            post(operator_reject_gardener_proposal),
+        )
         .route("/obligations", post(create).get(list))
         .route("/obligations/{id}", get(show))
         .route("/obligations/{id}/approve", post(approve))
@@ -289,6 +310,70 @@ async fn cancel(
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
+async fn operator_approve(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    request: Result<Json<OperatorActionRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    operator_decide(state, id, request, ApprovalDecision::Approved).await
+}
+
+async fn operator_reject(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    request: Result<Json<OperatorActionRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    operator_decide(state, id, request, ApprovalDecision::Rejected).await
+}
+
+async fn operator_decide(
+    state: ApiState,
+    id: String,
+    request: OperatorActionRequest,
+    decision: ApprovalDecision,
+) -> Result<Response, ApiError> {
+    with_store(&state, |store, now| {
+        store.decide_approval_if_current(
+            &id,
+            decision,
+            &request.actor,
+            request.note.as_deref(),
+            &request.precondition,
+            now,
+        )?;
+        require_obligation(store, &id)
+    })
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn operator_retry(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    request: Result<Json<OperatorActionRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    with_store(&state, |store, now| {
+        store.retry_attention_if_current(&id, &request.precondition, now)?;
+        require_obligation(store, &id)
+    })
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn operator_cancel(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    request: Result<Json<OperatorActionRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    with_store(&state, |store, now| {
+        store.cancel_if_current(&id, &request.precondition, now)?;
+        require_obligation(store, &id)
+    })
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
 async fn events(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
@@ -406,6 +491,43 @@ async fn decide_gardener_proposal(
             decision,
             &request.actor,
             request.note.as_deref(),
+            now,
+        )
+    })
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn operator_approve_gardener_proposal(
+    State(state): State<ApiState>,
+    AxumPath(fingerprint): AxumPath<String>,
+    request: Result<Json<OperatorActionRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    operator_decide_gardener_proposal(state, fingerprint, request, ApprovalDecision::Approved).await
+}
+
+async fn operator_reject_gardener_proposal(
+    State(state): State<ApiState>,
+    AxumPath(fingerprint): AxumPath<String>,
+    request: Result<Json<OperatorActionRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    operator_decide_gardener_proposal(state, fingerprint, request, ApprovalDecision::Rejected).await
+}
+
+async fn operator_decide_gardener_proposal(
+    state: ApiState,
+    fingerprint: String,
+    request: OperatorActionRequest,
+    decision: ApprovalDecision,
+) -> Result<Response, ApiError> {
+    with_store(&state, |store, now| {
+        store.decide_gardener_proposal_if_current(
+            &fingerprint,
+            decision,
+            &request.actor,
+            request.note.as_deref(),
+            &request.precondition,
             now,
         )
     })
@@ -619,6 +741,19 @@ mod tests {
             bokkie_operator_api::TopicSource::AuditEvent
         );
 
+        let response = router(database.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/operator/obligations/approval/approve")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"actor":"operator"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
         let response = router(database)
             .oneshot(
                 Request::builder()
@@ -629,5 +764,140 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn stale_confirmation_returns_transition_conflict_after_same_occurrence_cycle() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("stale-action-http.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        store
+            .create(
+                NewObligation {
+                    id: "cycled".to_owned(),
+                    description: "Cycle back to approval".to_owned(),
+                    scheduled_at: 2_000_000_000,
+                    recurrence: None,
+                    approval_required: true,
+                    retry: RetryPolicy::default(),
+                },
+                100,
+            )
+            .unwrap();
+        let stale = store
+            .operator_snapshot(100)
+            .unwrap()
+            .obligations
+            .pop()
+            .unwrap()
+            .capabilities
+            .approve
+            .precondition
+            .unwrap();
+        store
+            .decide_approval(
+                "cycled",
+                ApprovalDecision::Rejected,
+                "other operator",
+                None,
+                101,
+            )
+            .unwrap();
+        store.retry_attention("cycled", 102).unwrap();
+        drop(store);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/operator/obligations/cycled/approve")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&OperatorActionRequest {
+                    precondition: stale,
+                    actor: "operator".to_owned(),
+                    note: Some("confirmed old state".to_owned()),
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+        let response = router(database).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let error: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error["error"]["code"], "transition_conflict");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("revision")
+        );
+    }
+
+    #[tokio::test]
+    async fn conditional_operator_route_rejects_a_later_occurrence() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("later-occurrence-http.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        store
+            .create(
+                NewObligation {
+                    id: "recurring".to_owned(),
+                    description: "Review every occurrence".to_owned(),
+                    scheduled_at: 100,
+                    recurrence: Some(Recurrence::new("* * * * *", "UTC").unwrap()),
+                    approval_required: true,
+                    retry: RetryPolicy::default(),
+                },
+                90,
+            )
+            .unwrap();
+        let stale = store
+            .operator_snapshot(90)
+            .unwrap()
+            .obligations
+            .pop()
+            .unwrap()
+            .capabilities
+            .approve
+            .precondition
+            .unwrap();
+        store
+            .decide_approval(
+                "recurring",
+                ApprovalDecision::Approved,
+                "other operator",
+                None,
+                100,
+            )
+            .unwrap();
+        let claim = store.claim_due(100, 60, 1).unwrap().pop().unwrap();
+        store
+            .complete(&claim, crate::Completion::Succeeded { evidence: None }, 101)
+            .unwrap();
+        drop(store);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/operator/obligations/recurring/approve")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&OperatorActionRequest {
+                    precondition: stale,
+                    actor: "operator".to_owned(),
+                    note: None,
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+        let response = router(database).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let error: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error["error"]["code"], "transition_conflict");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("occurrence")
+        );
     }
 }

@@ -50,11 +50,16 @@ trying again. Responses for an older selected topic are discarded.
 
 Buttons reflect backend capabilities rather than UI-invented transitions. Each
 approve, reject, retry or cancel action opens a separate confirmation with its
-target occurrence and consequence. Decisions require a non-empty operator
-actor and accept an optional note. For gardener approval or rejection, the
+target occurrence and consequence. The confirmation also carries the
+backend-issued obligation identity, occurrence and append-only state revision
+as an immutable precondition that is submitted for every action and
+checked atomically with the store transition through the conditional
+`/operator` routes. Decisions require a non-empty operator actor and accept an
+optional note. For gardener approval or rejection, the
 confirmation shows the exact immutable repository, fingerprint and prompt;
-occurrence and consequence; submission is blocked if that proposal identity or
-occurrence no longer matches the current snapshot. The actor is persisted audit
+the fingerprint is also part of the backend precondition. Submission is blocked
+if the reviewed state no longer matches the current snapshot, and the backend
+returns HTTP 409 if it changes before mutation. The actor is persisted audit
 evidence but is not authentication: this remains an unauthenticated loopback
 service.
 

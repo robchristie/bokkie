@@ -78,7 +78,11 @@ no CORS exception, proxy, authentication layer or remote-access mode.
 Every lifecycle action requires a separate confirmation. Gardener decisions
 also display and submit the exact immutable proposal fingerprint, prompt,
 repository and occurrence, with an operator actor and optional note. The actor
-is audit evidence, not authentication. Refresh keeps a surviving selection and
+is audit evidence, not authentication. Every action also submits the
+backend-issued obligation identity, occurrence and append-only state revision
+that the operator reviewed; Store validates it atomically before mutation.
+The UI uses dedicated conditional `/operator` mutation routes, leaving existing
+lifecycle route contracts unchanged. Refresh keeps a surviving selection and
 retained snapshot visible; failed reads and transition conflicts mark it stale
 and disable decisions until Bokkie provides current state again.
 

@@ -189,6 +189,10 @@ conflicts (409), and internal storage errors (500).
 | `POST` | `/obligations/{id}/cancel` | Cancel eligible work |
 | `GET` | `/obligations/{id}/events` | Read append-only audit events |
 | `GET` | `/obligations/{id}/attempts` | Read immutable attempts |
+| `POST` | `/operator/obligations/{id}/approve` | Conditionally approve reviewed operator state |
+| `POST` | `/operator/obligations/{id}/reject` | Conditionally reject reviewed operator state |
+| `POST` | `/operator/obligations/{id}/retry` | Conditionally retry reviewed operator state |
+| `POST` | `/operator/obligations/{id}/cancel` | Conditionally cancel reviewed operator state |
 | `POST` | `/gardener/repository` | Register the canonical checkout and recurrence |
 | `GET` | `/gardener/repository` | Show the canonical registration |
 | `GET` | `/gardener/inspections` | List inspections |
@@ -198,15 +202,29 @@ conflicts (409), and internal storage errors (500).
 | `GET` | `/gardener/proposals/{fingerprint}/observations` | List deduplicated observations |
 | `POST` | `/gardener/proposals/{fingerprint}/approve` | Approve the exact proposal content |
 | `POST` | `/gardener/proposals/{fingerprint}/reject` | Reject it into visible attention |
+| `POST` | `/operator/gardener/proposals/{fingerprint}/approve` | Conditionally approve the reviewed exact proposal |
+| `POST` | `/operator/gardener/proposals/{fingerprint}/reject` | Conditionally reject the reviewed exact proposal |
 | `GET` | `/gardener/runs` | List implementation runs |
 | `GET` | `/gardener/runs/{id}` | Show one run and persisted identities |
 | `GET` | `/gardener/runs/{id}/events` | Read append-only run events |
 
 Create fields correspond to the CLI flags, using snake case: `description` is
 required; `id` and `scheduled_at` are optional; recurrence fields must appear
-together. Approval and rejection bodies require an `actor` and accept an
-optional `note`. Retry and cancellation requests may have an empty JSON body.
-Gardener proposal decisions use the same decision body. Gardener registration
+together. The established lifecycle routes retain their original contracts:
+approval and rejection bodies require an `actor` and accept an optional `note`,
+while retry and cancellation may use an empty body. Gardener proposal decisions
+use the same legacy decision body.
+
+The conditional `/operator` mutation routes require every body to copy the
+`precondition` from that action's available capability in the latest
+`GET /operator/snapshot` response. It binds the obligation identity, occurrence
+and append-only state revision; exact gardener decisions additionally bind the
+proposal fingerprint. Store validates it in the same transaction as the
+transition and returns HTTP 409 if the reviewed state has changed. Conditional
+approval and rejection also require an `actor` and accept an optional `note`;
+conditional retry and cancellation may omit those decision fields.
+
+Gardener registration
 requires `checkout_path`; `repository`, `default_branch`, `first_inspection_at`,
 `recurrence_cron`, and `recurrence_timezone` default respectively to
 `robchristie/bokkie`, `main`, now, `0 0 * * *`, and `UTC`.

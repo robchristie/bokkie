@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use bokkie_operator_api::{
-    ActionCapability, ApprovalSubject, ObligationTopic, OperatorObligation,
+    ActionCapability, ActionPrecondition, ApprovalSubject, ObligationTopic, OperatorObligation,
     OperatorObligationState, OperatorSnapshot,
 };
 use polyorama_core::{DockNode, DockNodeId, LAYOUT_SCHEMA_VERSION, PaneId, SplitAxis, Workspace};
@@ -114,6 +114,7 @@ pub struct Confirmation {
     pub action: LifecycleAction,
     pub obligation_id: String,
     pub occurrence: u32,
+    pub precondition: ActionPrecondition,
     pub consequence: String,
     pub gardener: Option<GardenerConfirmation>,
     pub actor: String,
@@ -272,6 +273,10 @@ impl AppModel {
         if !capability.available {
             return Err(disabled_reason(capability).to_owned());
         }
+        let precondition = capability
+            .precondition
+            .clone()
+            .ok_or_else(|| "Backend action precondition is unavailable".to_owned())?;
         let gardener = if action.is_gardener() {
             match obligation.exception.as_ref() {
                 Some(bokkie_operator_api::ExceptionReason::AwaitingApproval {
@@ -299,6 +304,7 @@ impl AppModel {
             action,
             obligation_id: obligation.id.clone(),
             occurrence: obligation.occurrence,
+            precondition,
             consequence: consequence_label(capability).to_owned(),
             gardener,
             actor: "operator".to_owned(),
@@ -330,6 +336,19 @@ impl AppModel {
             .available
             .then_some(())
             .ok_or_else(|| disabled_reason(capability).to_owned())
+    }
+
+    pub fn confirmation_matches_current_state(&self, confirmation: &Confirmation) -> bool {
+        self.selected().is_some_and(|current| {
+            current.id == confirmation.obligation_id
+                && current.occurrence == confirmation.occurrence
+                && confirmation
+                    .action
+                    .capability(current)
+                    .precondition
+                    .as_ref()
+                    == Some(&confirmation.precondition)
+        })
     }
 }
 
@@ -421,7 +440,8 @@ impl OperatorStateLabel for OperatorObligationState {
 #[cfg(test)]
 mod tests {
     use bokkie_operator_api::{
-        ActionConsequence, DisabledReason, DurableLiveness, ExceptionReason, OperatorCapabilities,
+        ActionConsequence, ActionPrecondition, DisabledReason, DurableLiveness, ExceptionReason,
+        OperatorCapabilities,
     };
 
     use super::*;
@@ -431,6 +451,12 @@ mod tests {
             available,
             disabled_reason: (!available).then_some(DisabledReason::StateDoesNotPermit),
             consequence,
+            precondition: available.then(|| ActionPrecondition {
+                obligation_id: "fixture".to_owned(),
+                occurrence: 3,
+                state_revision: 1,
+                gardener_fingerprint: None,
+            }),
         }
     }
 
@@ -535,6 +561,14 @@ mod tests {
         });
         proposal.capabilities.approve_gardener_proposal =
             capability(true, ActionConsequence::ScheduleExactGardenerProposal);
+        let exact_precondition = proposal
+            .capabilities
+            .approve_gardener_proposal
+            .precondition
+            .as_mut()
+            .unwrap();
+        exact_precondition.obligation_id = "implementation".to_owned();
+        exact_precondition.gardener_fingerprint = Some("f".repeat(64));
         let mut model = AppModel::default();
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
@@ -553,6 +587,10 @@ mod tests {
             "Implement exactly this long prompt without inference"
         );
         assert_eq!(confirmation.occurrence, 3);
+        assert_eq!(
+            confirmation.precondition.gardener_fingerprint.as_deref(),
+            Some("f".repeat(64).as_str())
+        );
     }
 
     #[test]
@@ -623,6 +661,28 @@ mod tests {
         assert_eq!(model.obligations()[0].id, "approval");
         assert!(matches!(model.connection, ConnectionState::Stale { .. }));
         assert!(!model.action_busy);
+
+        let mut refreshed = model.obligations()[0].clone();
+        refreshed
+            .capabilities
+            .approve
+            .precondition
+            .as_mut()
+            .unwrap()
+            .state_revision += 1;
+        model.apply_snapshot(OperatorSnapshot {
+            captured_at: 121,
+            obligations: vec![refreshed],
+        });
+        let confirmation = model.confirmation.as_ref().unwrap();
+        assert_eq!(confirmation.note, "keep this draft");
+        assert!(!model.confirmation_matches_current_state(confirmation));
+        assert!(
+            model
+                .action_availability(LifecycleAction::Approve, model.selected().unwrap())
+                .is_ok(),
+            "the refreshed state is eligible, but the older confirmation must remain disabled"
+        );
     }
 
     #[test]
@@ -647,6 +707,7 @@ mod tests {
                 available: false,
                 disabled_reason: Some(reason),
                 consequence: ActionConsequence::CancelObligation,
+                precondition: None,
             };
             assert!(!disabled_reason(&capability).is_empty());
         }
