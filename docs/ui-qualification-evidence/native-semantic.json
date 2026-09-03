@@ -1,7 +1,7 @@
 {
-  "frame_number": 58,
+  "frame_number": 43,
   "ui_snapshot": {
-    "frame": 58,
+    "frame": 43,
     "pixels_per_point": 1.0,
     "root": "application",
     "nodes": [
@@ -40,7 +40,7 @@
           "max_y": 34.5
         },
         "enabled": true,
-        "focused": true,
+        "focused": false,
         "selected": false,
         "checked": null,
         "expanded": null,
@@ -96,10 +96,10 @@
         "disabled_reason": null
       },
       {
-        "id": "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+        "id": "bokkie.inbox-row.approval-safe-cancel",
         "parent": "pane.1",
         "role": "result_row",
-        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nAwaiting an exact gardener proposal decision · d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · occurrence 1 · 14h ago\nPermanently cancel this obligation or Schedule implementation of this exact immutable proposal or Reject this exact immutable proposal into attention · current",
+        "name": "Safe temporary approval-bound lifecycle action\nAwaiting a generic operator decision\napproval-safe-cancel · occurrence 1 · 15h ago\nSchedule the current occurrence or Move the current occurrence to attention or Permanently cancel this obligation · current",
         "description": null,
         "rect": {
           "min_x": 0.0,
@@ -109,7 +109,7 @@
         },
         "enabled": true,
         "focused": false,
-        "selected": false,
+        "selected": true,
         "checked": null,
         "expanded": null,
         "pane": 1,
@@ -118,10 +118,10 @@
         "disabled_reason": null
       },
       {
-        "id": "bokkie.inbox-row.attention-exhausted",
+        "id": "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
         "parent": "pane.1",
         "role": "result_row",
-        "name": "Representative attention-exhausted state\nRetry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-exhausted · occurrence 1 · 14h ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nAwaiting an exact gardener proposal decision · d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · occurrence 1 · 15h ago\nPermanently cancel this obligation or Schedule implementation of this exact immutable proposal or Reject this exact immutable proposal into attention · current",
         "description": null,
         "rect": {
           "min_x": 0.0,
@@ -140,10 +140,10 @@
         "disabled_reason": null
       },
       {
-        "id": "bokkie.inbox-row.attention-nonretryable",
+        "id": "bokkie.inbox-row.attention-exhausted",
         "parent": "pane.1",
         "role": "result_row",
-        "name": "Representative attention-nonretryable state\nNon-retryable failure · Deterministic attention-nonretryable failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-nonretryable · occurrence 1 · 14h ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "name": "Representative attention-exhausted state\nRetry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-exhausted · occurrence 1 · 15h ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
         "description": null,
         "rect": {
           "min_x": 0.0,
@@ -184,10 +184,10 @@
         "disabled_reason": null
       },
       {
-        "id": "bokkie.obligation-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+        "id": "bokkie.obligation-row.approval-safe-cancel",
         "parent": "pane.2",
         "role": "result_row",
-        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · Awaiting approval · occurrence 1 · attempts 0/1\nHuman attention: Awaiting an exact gardener proposal decision · d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nOne-off\nError: No last error · Evidence: No last evidence · updated 14h ago",
+        "name": "Safe temporary approval-bound lifecycle action\napproval-safe-cancel · Awaiting approval · occurrence 1 · attempts 0/3\nHuman attention: Awaiting a generic operator decision\nOne-off\nError: No last error · Evidence: No last evidence · updated 15h ago",
         "description": null,
         "rect": {
           "min_x": 343.0,
@@ -197,7 +197,7 @@
         },
         "enabled": true,
         "focused": false,
-        "selected": false,
+        "selected": true,
         "checked": null,
         "expanded": null,
         "pane": 2,
@@ -206,10 +206,10 @@
         "disabled_reason": null
       },
       {
-        "id": "bokkie.obligation-row.attention-exhausted",
+        "id": "bokkie.obligation-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
         "parent": "pane.2",
         "role": "result_row",
-        "name": "Representative attention-exhausted state\nattention-exhausted · Attention · occurrence 1 · attempts 1/1\nHuman attention: Retry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nOne-off\nError: Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee · Evidence: evidence:attention-exhausted:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff · updated 14h ago",
+        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · Awaiting approval · occurrence 1 · attempts 0/1\nHuman attention: Awaiting an exact gardener proposal decision · d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nOne-off\nError: No last error · Evidence: No last evidence · updated 15h ago",
         "description": null,
         "rect": {
           "min_x": 343.0,
@@ -228,10 +228,10 @@
         "disabled_reason": null
       },
       {
-        "id": "bokkie.obligation-row.attention-nonretryable",
+        "id": "bokkie.obligation-row.attention-exhausted",
         "parent": "pane.2",
         "role": "result_row",
-        "name": "Representative attention-nonretryable state\nattention-nonretryable · Attention · occurrence 1 · attempts 1/3\nHuman attention: Non-retryable failure · Deterministic attention-nonretryable failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nOne-off\nError: Deterministic attention-nonretryable failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee · Evidence: evidence:attention-nonretryable:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff · updated 14h ago",
+        "name": "Representative attention-exhausted state\nattention-exhausted · Attention · occurrence 1 · attempts 1/1\nHuman attention: Retry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nOne-off\nError: Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee · Evidence: evidence:attention-exhausted:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff · updated 15h ago",
         "description": null,
         "rect": {
           "min_x": 343.0,
@@ -283,7 +283,7 @@
           "max_x": 861.375,
           "max_y": 268.9375
         },
-        "enabled": false,
+        "enabled": true,
         "focused": false,
         "selected": false,
         "checked": null,
@@ -296,7 +296,7 @@
         "actions": [
           "approve_obligation"
         ],
-        "disabled_reason": "The obligation is already terminal"
+        "disabled_reason": null
       },
       {
         "id": "action.reject_obligation.pane.3",
@@ -310,7 +310,7 @@
           "max_x": 921.34375,
           "max_y": 268.9375
         },
-        "enabled": false,
+        "enabled": true,
         "focused": false,
         "selected": false,
         "checked": null,
@@ -323,7 +323,7 @@
         "actions": [
           "reject_obligation"
         ],
-        "disabled_reason": "The obligation is already terminal"
+        "disabled_reason": null
       },
       {
         "id": "action.retry_obligation.pane.3",
@@ -350,7 +350,7 @@
         "actions": [
           "retry_obligation"
         ],
-        "disabled_reason": "The obligation is already terminal"
+        "disabled_reason": "Current state does not permit this action"
       },
       {
         "id": "action.cancel_obligation.pane.3",
@@ -364,7 +364,7 @@
           "max_x": 1038.5,
           "max_y": 268.9375
         },
-        "enabled": false,
+        "enabled": true,
         "focused": false,
         "selected": false,
         "checked": null,
@@ -377,7 +377,7 @@
         "actions": [
           "cancel_obligation"
         ],
-        "disabled_reason": "The obligation is already terminal"
+        "disabled_reason": null
       },
       {
         "id": "action.approve_exact_gardener_proposal.pane.3",
@@ -432,6 +432,76 @@
           "reject_exact_gardener_proposal"
         ],
         "disabled_reason": "This is not a gardener proposal"
+      },
+      {
+        "id": "action.confirm_lifecycle_action",
+        "parent": "bokkie.lifecycle-confirmation",
+        "role": "button",
+        "name": "Confirm action",
+        "description": "Submit this deliberately reviewed lifecycle action to Bokkie",
+        "rect": {
+          "min_x": 367.0,
+          "min_y": 396.0,
+          "max_x": 467.28125,
+          "max_y": 428.0
+        },
+        "enabled": true,
+        "focused": true,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [
+          "confirm_lifecycle_action"
+        ],
+        "disabled_reason": null
+      },
+      {
+        "id": "action.dismiss_lifecycle_confirmation",
+        "parent": "bokkie.lifecycle-confirmation",
+        "role": "button",
+        "name": "Keep state unchanged",
+        "description": "Close this confirmation without submitting a lifecycle action",
+        "rect": {
+          "min_x": 474.28125,
+          "min_y": 396.0,
+          "max_x": 616.4375,
+          "max_y": 428.0
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [
+          "dismiss_lifecycle_confirmation"
+        ],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.lifecycle-confirmation",
+        "parent": "application",
+        "role": "section",
+        "name": "Confirm lifecycle action",
+        "description": null,
+        "rect": {
+          "min_x": 360.0,
+          "min_y": 286.0,
+          "max_x": 920.0,
+          "max_y": 435.0
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
       }
     ],
     "text": [
@@ -577,7 +647,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 571078913282098315
+          "instance": 1687121305791974662
         },
         "parent_id": null,
         "role": "body",
@@ -591,15 +661,151 @@
         },
         "painted_rect": {
           "min_x": 7.0,
-          "min_y": 147.42188,
-          "max_x": 328.9375,
-          "max_y": 183.42188
+          "min_y": 156.42188,
+          "max_x": 279.84375,
+          "max_y": 174.42188
         },
         "clip_rect": {
           "min_x": 7.0,
           "min_y": 147.875,
           "max_x": 331.0,
           "max_y": 182.96875
+        },
+        "baseline": null,
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1687120206280346451
+        },
+        "parent_id": null,
+        "role": "error",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 7.0,
+          "min_y": 187.96875,
+          "max_x": 331.0,
+          "max_y": 223.0625
+        },
+        "painted_rect": {
+          "min_x": 7.0,
+          "min_y": 196.51562,
+          "max_x": 218.03125,
+          "max_y": 214.51562
+        },
+        "clip_rect": {
+          "min_x": 7.0,
+          "min_y": 187.96875,
+          "max_x": 331.0,
+          "max_y": 223.0625
+        },
+        "baseline": null,
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1687119106768718240
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 7.0,
+          "min_y": 228.0625,
+          "max_x": 331.0,
+          "max_y": 245.625
+        },
+        "painted_rect": {
+          "min_x": 7.0,
+          "min_y": 229.34375,
+          "max_x": 316.5625,
+          "max_y": 244.34375
+        },
+        "clip_rect": {
+          "min_x": 7.0,
+          "min_y": 228.0625,
+          "max_x": 331.0,
+          "max_y": 245.625
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1687126803350115717
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 7.0,
+          "min_y": 250.625,
+          "max_x": 331.0,
+          "max_y": 285.71875
+        },
+        "painted_rect": {
+          "min_x": 7.0,
+          "min_y": 250.17188,
+          "max_x": 315.96875,
+          "max_y": 286.17188
+        },
+        "clip_rect": {
+          "min_x": 7.0,
+          "min_y": 250.625,
+          "max_x": 331.0,
+          "max_y": 285.71875
+        },
+        "baseline": null,
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 2,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 571078913282098315
+        },
+        "parent_id": null,
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 7.0,
+          "min_y": 308.71875,
+          "max_x": 331.0,
+          "max_y": 343.8125
+        },
+        "painted_rect": {
+          "min_x": 7.0,
+          "min_y": 308.26562,
+          "max_x": 328.9375,
+          "max_y": 344.26562
+        },
+        "clip_rect": {
+          "min_x": 7.0,
+          "min_y": 308.71875,
+          "max_x": 331.0,
+          "max_y": 343.8125
         },
         "baseline": null,
         "overflow": "wrap",
@@ -619,21 +825,21 @@
         "vertical_alignment": "centre",
         "allocated_rect": {
           "min_x": 7.0,
-          "min_y": 187.96875,
+          "min_y": 348.8125,
           "max_x": 331.0,
-          "max_y": 223.0625
+          "max_y": 383.90625
         },
         "painted_rect": {
           "min_x": 7.0,
-          "min_y": 187.51562,
+          "min_y": 348.35938,
           "max_x": 328.9375,
-          "max_y": 223.51562
+          "max_y": 384.35938
         },
         "clip_rect": {
           "min_x": 7.0,
-          "min_y": 187.96875,
+          "min_y": 348.8125,
           "max_x": 331.0,
-          "max_y": 223.0625
+          "max_y": 383.90625
         },
         "baseline": null,
         "overflow": "wrap",
@@ -653,21 +859,21 @@
         "vertical_alignment": "centre",
         "allocated_rect": {
           "min_x": 7.0,
-          "min_y": 228.0625,
+          "min_y": 388.90625,
           "max_x": 331.0,
-          "max_y": 245.625
+          "max_y": 406.46875
         },
         "painted_rect": {
           "min_x": 7.0,
-          "min_y": 229.34375,
+          "min_y": 390.1875,
           "max_x": 326.9375,
-          "max_y": 244.34375
+          "max_y": 405.1875
         },
         "clip_rect": {
           "min_x": 7.0,
-          "min_y": 228.0625,
+          "min_y": 388.90625,
           "max_x": 331.0,
-          "max_y": 245.625
+          "max_y": 406.46875
         },
         "baseline": null,
         "overflow": "ellipsis",
@@ -687,21 +893,21 @@
         "vertical_alignment": "centre",
         "allocated_rect": {
           "min_x": 7.0,
-          "min_y": 250.625,
+          "min_y": 411.46875,
           "max_x": 331.0,
-          "max_y": 285.71875
+          "max_y": 446.5625
         },
         "painted_rect": {
           "min_x": 7.0,
-          "min_y": 250.17188,
+          "min_y": 411.01562,
           "max_x": 323.9375,
-          "max_y": 286.17188
+          "max_y": 447.01562
         },
         "clip_rect": {
           "min_x": 7.0,
-          "min_y": 250.625,
+          "min_y": 411.46875,
           "max_x": 331.0,
-          "max_y": 285.71875
+          "max_y": 446.5625
         },
         "baseline": null,
         "overflow": "wrap",
@@ -721,21 +927,21 @@
         "vertical_alignment": "centre",
         "allocated_rect": {
           "min_x": 7.0,
-          "min_y": 308.71875,
+          "min_y": 469.5625,
           "max_x": 331.0,
-          "max_y": 343.8125
+          "max_y": 504.65625
         },
         "painted_rect": {
           "min_x": 7.0,
-          "min_y": 317.26562,
+          "min_y": 478.10938,
           "max_x": 248.5,
-          "max_y": 335.26562
+          "max_y": 496.10938
         },
         "clip_rect": {
           "min_x": 7.0,
-          "min_y": 308.71875,
+          "min_y": 469.5625,
           "max_x": 331.0,
-          "max_y": 343.8125
+          "max_y": 504.65625
         },
         "baseline": null,
         "overflow": "wrap",
@@ -755,21 +961,21 @@
         "vertical_alignment": "centre",
         "allocated_rect": {
           "min_x": 7.0,
-          "min_y": 348.8125,
+          "min_y": 509.65625,
           "max_x": 331.0,
-          "max_y": 383.90625
+          "max_y": 544.75
         },
         "painted_rect": {
           "min_x": 7.0,
-          "min_y": 348.35938,
+          "min_y": 509.20312,
           "max_x": 300.9375,
-          "max_y": 384.35938
+          "max_y": 545.2031
         },
         "clip_rect": {
           "min_x": 7.0,
-          "min_y": 348.8125,
+          "min_y": 509.65625,
           "max_x": 331.0,
-          "max_y": 383.90625
+          "max_y": 544.75
         },
         "baseline": null,
         "overflow": "wrap",
@@ -789,142 +995,6 @@
         "vertical_alignment": "centre",
         "allocated_rect": {
           "min_x": 7.0,
-          "min_y": 388.90625,
-          "max_x": 331.0,
-          "max_y": 406.46875
-        },
-        "painted_rect": {
-          "min_x": 7.0,
-          "min_y": 390.1875,
-          "max_x": 316.53125,
-          "max_y": 405.1875
-        },
-        "clip_rect": {
-          "min_x": 7.0,
-          "min_y": 388.90625,
-          "max_x": 331.0,
-          "max_y": 406.46875
-        },
-        "baseline": null,
-        "overflow": "ellipsis",
-        "interaction": "inert",
-        "declared_max_lines": 1,
-        "line_count": 1,
-        "truncated": false
-      },
-      {
-        "component_id": {
-          "kind": "content_label",
-          "instance": 3022260489824737655
-        },
-        "parent_id": null,
-        "role": "secondary",
-        "horizontal_alignment": "start",
-        "vertical_alignment": "centre",
-        "allocated_rect": {
-          "min_x": 7.0,
-          "min_y": 411.46875,
-          "max_x": 331.0,
-          "max_y": 446.5625
-        },
-        "painted_rect": {
-          "min_x": 7.0,
-          "min_y": 411.01562,
-          "max_x": 322.96875,
-          "max_y": 447.01562
-        },
-        "clip_rect": {
-          "min_x": 7.0,
-          "min_y": 411.46875,
-          "max_x": 331.0,
-          "max_y": 446.5625
-        },
-        "baseline": null,
-        "overflow": "wrap",
-        "interaction": "inert",
-        "declared_max_lines": 2,
-        "line_count": 2,
-        "truncated": false
-      },
-      {
-        "component_id": {
-          "kind": "content_label",
-          "instance": 1284952527056911892
-        },
-        "parent_id": null,
-        "role": "body",
-        "horizontal_alignment": "start",
-        "vertical_alignment": "centre",
-        "allocated_rect": {
-          "min_x": 7.0,
-          "min_y": 469.5625,
-          "max_x": 331.0,
-          "max_y": 504.65625
-        },
-        "painted_rect": {
-          "min_x": 7.0,
-          "min_y": 478.10938,
-          "max_x": 263.46875,
-          "max_y": 496.10938
-        },
-        "clip_rect": {
-          "min_x": 7.0,
-          "min_y": 469.5625,
-          "max_x": 331.0,
-          "max_y": 504.65625
-        },
-        "baseline": null,
-        "overflow": "wrap",
-        "interaction": "inert",
-        "declared_max_lines": 2,
-        "line_count": 1,
-        "truncated": false
-      },
-      {
-        "component_id": {
-          "kind": "content_label",
-          "instance": 1284955825591796525
-        },
-        "parent_id": null,
-        "role": "error",
-        "horizontal_alignment": "start",
-        "vertical_alignment": "centre",
-        "allocated_rect": {
-          "min_x": 7.0,
-          "min_y": 509.65625,
-          "max_x": 331.0,
-          "max_y": 544.75
-        },
-        "painted_rect": {
-          "min_x": 7.0,
-          "min_y": 509.20312,
-          "max_x": 316.9375,
-          "max_y": 545.2031
-        },
-        "clip_rect": {
-          "min_x": 7.0,
-          "min_y": 509.65625,
-          "max_x": 331.0,
-          "max_y": 544.75
-        },
-        "baseline": null,
-        "overflow": "wrap",
-        "interaction": "inert",
-        "declared_max_lines": 2,
-        "line_count": 2,
-        "truncated": true
-      },
-      {
-        "component_id": {
-          "kind": "content_label",
-          "instance": 1284954726080168314
-        },
-        "parent_id": null,
-        "role": "secondary",
-        "horizontal_alignment": "start",
-        "vertical_alignment": "centre",
-        "allocated_rect": {
-          "min_x": 7.0,
           "min_y": 549.75,
           "max_x": 331.0,
           "max_y": 567.3125
@@ -932,7 +1002,7 @@
         "painted_rect": {
           "min_x": 7.0,
           "min_y": 551.03125,
-          "max_x": 331.0,
+          "max_x": 316.53125,
           "max_y": 566.03125
         },
         "clip_rect": {
@@ -951,7 +1021,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 1284949228522027259
+          "instance": 3022260489824737655
         },
         "parent_id": null,
         "role": "secondary",
@@ -985,7 +1055,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 3004179870339876760
+          "instance": 1284952527056911892
         },
         "parent_id": null,
         "role": "body",
@@ -999,9 +1069,9 @@
         },
         "painted_rect": {
           "min_x": 7.0,
-          "min_y": 629.9531,
-          "max_x": 309.96875,
-          "max_y": 665.9531
+          "min_y": 638.9531,
+          "max_x": 263.46875,
+          "max_y": 656.9531
         },
         "clip_rect": {
           "min_x": 7.0,
@@ -1013,13 +1083,13 @@
         "overflow": "wrap",
         "interaction": "inert",
         "declared_max_lines": 2,
-        "line_count": 2,
+        "line_count": 1,
         "truncated": false
       },
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 3004183168874761393
+          "instance": 1284955825591796525
         },
         "parent_id": null,
         "role": "error",
@@ -1034,7 +1104,7 @@
         "painted_rect": {
           "min_x": 7.0,
           "min_y": 670.0469,
-          "max_x": 282.96875,
+          "max_x": 316.9375,
           "max_y": 706.0469
         },
         "clip_rect": {
@@ -1048,7 +1118,7 @@
         "interaction": "inert",
         "declared_max_lines": 2,
         "line_count": 2,
-        "truncated": false
+        "truncated": true
       },
       {
         "component_id": {
@@ -1124,7 +1194,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 598710916701742093
+          "instance": 2832237384872745568
         },
         "parent_id": null,
         "role": "body",
@@ -1138,9 +1208,9 @@
         },
         "painted_rect": {
           "min_x": 350.0,
-          "min_y": 180.54688,
-          "max_x": 776.9375,
-          "max_y": 216.54688
+          "min_y": 189.54688,
+          "max_x": 622.84375,
+          "max_y": 207.54688
         },
         "clip_rect": {
           "min_x": 350.0,
@@ -1152,13 +1222,13 @@
         "overflow": "wrap",
         "interaction": "inert",
         "declared_max_lines": 2,
-        "line_count": 2,
-        "truncated": true
+        "line_count": 1,
+        "truncated": false
       },
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 598707618166857460
+          "instance": 2832240683407630201
         },
         "parent_id": null,
         "role": "secondary",
@@ -1173,7 +1243,7 @@
         "painted_rect": {
           "min_x": 350.0,
           "min_y": 222.375,
-          "max_x": 779.9375,
+          "max_x": 750.0625,
           "max_y": 237.375
         },
         "clip_rect": {
@@ -1187,12 +1257,12 @@
         "interaction": "inert",
         "declared_max_lines": 1,
         "line_count": 1,
-        "truncated": true
+        "truncated": false
       },
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 598708717678485671
+          "instance": 2832239583896001990
         },
         "parent_id": null,
         "role": "secondary",
@@ -1207,7 +1277,7 @@
         "painted_rect": {
           "min_x": 350.0,
           "min_y": 244.9375,
-          "max_x": 780.9375,
+          "max_x": 666.0625,
           "max_y": 259.9375
         },
         "clip_rect": {
@@ -1221,12 +1291,12 @@
         "interaction": "inert",
         "declared_max_lines": 1,
         "line_count": 1,
-        "truncated": true
+        "truncated": false
       },
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 598705419143601038
+          "instance": 2832242882430886623
         },
         "parent_id": null,
         "role": "secondary",
@@ -1260,7 +1330,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 598706518655229249
+          "instance": 2832241782919258412
         },
         "parent_id": null,
         "role": "secondary",
@@ -1294,7 +1364,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 3006041890996465662
+          "instance": 598710916701742093
         },
         "parent_id": null,
         "role": "body",
@@ -1308,9 +1378,9 @@
         },
         "painted_rect": {
           "min_x": 350.0,
-          "min_y": 365.54688,
-          "max_x": 591.5,
-          "max_y": 383.54688
+          "min_y": 356.54688,
+          "max_x": 776.9375,
+          "max_y": 392.54688
         },
         "clip_rect": {
           "min_x": 350.0,
@@ -1322,13 +1392,13 @@
         "overflow": "wrap",
         "interaction": "inert",
         "declared_max_lines": 2,
-        "line_count": 1,
-        "truncated": false
+        "line_count": 2,
+        "truncated": true
       },
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 3006040791484837451
+          "instance": 598707618166857460
         },
         "parent_id": null,
         "role": "secondary",
@@ -1343,7 +1413,7 @@
         "painted_rect": {
           "min_x": 350.0,
           "min_y": 398.375,
-          "max_x": 701.6875,
+          "max_x": 779.9375,
           "max_y": 413.375
         },
         "clip_rect": {
@@ -1357,12 +1427,12 @@
         "interaction": "inert",
         "declared_max_lines": 1,
         "line_count": 1,
-        "truncated": false
+        "truncated": true
       },
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 3006039691973209240
+          "instance": 598708717678485671
         },
         "parent_id": null,
         "role": "secondary",
@@ -1377,7 +1447,7 @@
         "painted_rect": {
           "min_x": 350.0,
           "min_y": 420.9375,
-          "max_x": 778.9375,
+          "max_x": 780.9375,
           "max_y": 435.9375
         },
         "clip_rect": {
@@ -1396,7 +1466,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 3006047388554606717
+          "instance": 598705419143601038
         },
         "parent_id": null,
         "role": "secondary",
@@ -1430,7 +1500,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 3006046289042978506
+          "instance": 598706518655229249
         },
         "parent_id": null,
         "role": "secondary",
@@ -1444,9 +1514,9 @@
         },
         "painted_rect": {
           "min_x": 350.0,
-          "min_y": 464.32812,
-          "max_x": 782.9375,
-          "max_y": 500.32812
+          "min_y": 473.32812,
+          "max_x": 727.4375,
+          "max_y": 491.32812
         },
         "clip_rect": {
           "min_x": 350.0,
@@ -1458,13 +1528,13 @@
         "overflow": "wrap",
         "interaction": "inert",
         "declared_max_lines": 2,
-        "line_count": 2,
-        "truncated": true
+        "line_count": 1,
+        "truncated": false
       },
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 818895935009664930
+          "instance": 3006041890996465662
         },
         "parent_id": null,
         "role": "body",
@@ -1479,7 +1549,7 @@
         "painted_rect": {
           "min_x": 350.0,
           "min_y": 541.5469,
-          "max_x": 606.46875,
+          "max_x": 591.5,
           "max_y": 559.5469
         },
         "clip_rect": {
@@ -1498,7 +1568,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 818894835498036719
+          "instance": 3006040791484837451
         },
         "parent_id": null,
         "role": "secondary",
@@ -1513,7 +1583,7 @@
         "painted_rect": {
           "min_x": 350.0,
           "min_y": 574.375,
-          "max_x": 716.6875,
+          "max_x": 701.6875,
           "max_y": 589.375
         },
         "clip_rect": {
@@ -1532,7 +1602,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 818893735986408508
+          "instance": 3006039691973209240
         },
         "parent_id": null,
         "role": "secondary",
@@ -1547,7 +1617,7 @@
         "painted_rect": {
           "min_x": 350.0,
           "min_y": 596.9375,
-          "max_x": 780.9375,
+          "max_x": 778.9375,
           "max_y": 611.9375
         },
         "clip_rect": {
@@ -1566,7 +1636,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 818892636474780297
+          "instance": 3006047388554606717
         },
         "parent_id": null,
         "role": "secondary",
@@ -1600,7 +1670,7 @@
       {
         "component_id": {
           "kind": "content_label",
-          "instance": 818891536963152086
+          "instance": 3006046289042978506
         },
         "parent_id": null,
         "role": "secondary",
@@ -1720,7 +1790,7 @@
         "painted_rect": {
           "min_x": 803.0,
           "min_y": 101.875,
-          "max_x": 994.84375,
+          "max_x": 1042.7812,
           "max_y": 119.875
         },
         "clip_rect": {
@@ -1868,7 +1938,7 @@
         "painted_rect": {
           "min_x": 967.56,
           "min_y": 180.01562,
-          "max_x": 1199.935,
+          "max_x": 1277.4976,
           "max_y": 195.01562
         },
         "clip_rect": {
@@ -1882,7 +1952,7 @@
         "interaction": "selectable",
         "declared_max_lines": 1,
         "line_count": 1,
-        "truncated": false
+        "truncated": true
       },
       {
         "component_id": {
@@ -2636,30 +2706,64 @@
       },
       {
         "component_id": {
-          "kind": "section_heading",
-          "instance": 1126172709361197959
+          "kind": "action_button",
+          "instance": 4017127806084545
         },
         "parent_id": null,
-        "role": "section_heading",
-        "horizontal_alignment": "start",
+        "role": "button_label",
+        "horizontal_alignment": "centre",
         "vertical_alignment": "centre",
         "allocated_rect": {
-          "min_x": 796.0,
-          "min_y": 671.25,
-          "max_x": 1280.0,
-          "max_y": 693.125
+          "min_x": 376.0,
+          "min_y": 398.0,
+          "max_x": 458.28125,
+          "max_y": 426.0
         },
         "painted_rect": {
-          "min_x": 796.0,
-          "min_y": 675.1875,
-          "max_x": 949.21875,
-          "max_y": 689.1875
+          "min_x": 376.14062,
+          "min_y": 405.0,
+          "max_x": 458.14062,
+          "max_y": 419.0
         },
         "clip_rect": {
-          "min_x": 796.1,
-          "min_y": 671.25,
-          "max_x": 1280.0,
-          "max_y": 693.125
+          "min_x": 376.0,
+          "min_y": 398.0,
+          "max_x": 458.28125,
+          "max_y": 426.0
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "action_button",
+          "instance": 1812945188460580
+        },
+        "parent_id": null,
+        "role": "button_label",
+        "horizontal_alignment": "centre",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 483.28125,
+          "min_y": 398.0,
+          "max_x": 607.4375,
+          "max_y": 426.0
+        },
+        "painted_rect": {
+          "min_x": 483.35938,
+          "min_y": 405.0,
+          "max_x": 607.3594,
+          "max_y": 419.0
+        },
+        "clip_rect": {
+          "min_x": 483.28125,
+          "min_y": 398.0,
+          "max_x": 607.4375,
+          "max_y": 426.0
         },
         "baseline": null,
         "overflow": "ellipsis",
@@ -2671,7 +2775,7 @@
     ],
     "text_audit": [],
     "text_audit_coverage": {
-      "measured_components": 64,
+      "measured_components": 65,
       "native_text_controls": 2,
       "observed_native_controls": 0,
       "excluded_categories": [
@@ -2697,10 +2801,14 @@
     "selected_obligation": "approval-safe-cancel",
     "active_pane": 3,
     "connection": "current",
-    "confirmation_action": null,
-    "confirmation_obligation": null,
-    "confirmation_occurrence": null,
-    "confirmation_consequence": null,
+    "status": "Current operator state",
+    "snapshot_busy": false,
+    "topic_busy": false,
+    "action_busy": false,
+    "confirmation_action": "cancel_obligation",
+    "confirmation_obligation": "approval-safe-cancel",
+    "confirmation_occurrence": 1,
+    "confirmation_consequence": "Permanently cancel this obligation",
     "confirmation_fingerprint": null,
     "confirmation_prompt": null,
     "confirmation_conflict": null

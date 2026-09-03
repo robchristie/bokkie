@@ -1,5 +1,5 @@
 {
-  "classification": "direct native X11 pointer and keyboard input under Xvfb; Mesa llvmpipe, not physical-GPU performance",
+  "classification": "direct native X11 pointer selection and confirmation inspection plus keyboard focus under Xvfb; the durable action is a direct conditional harness POST, while browser evidence proves UI submission; Mesa llvmpipe, not physical-GPU performance",
   "environment": {
     "display": "Xvfb 1440x900x24",
     "renderer_request": "wgpu GL software"
@@ -8,10 +8,14 @@
     "selected_obligation": "approval-safe-cancel",
     "active_pane": 3,
     "connection": "current",
-    "confirmation_action": null,
-    "confirmation_obligation": null,
-    "confirmation_occurrence": null,
-    "confirmation_consequence": null,
+    "status": "Current operator state",
+    "snapshot_busy": false,
+    "topic_busy": false,
+    "action_busy": false,
+    "confirmation_action": "cancel_obligation",
+    "confirmation_obligation": "approval-safe-cancel",
+    "confirmation_occurrence": 1,
+    "confirmation_consequence": "Permanently cancel this obligation",
     "confirmation_fingerprint": null,
     "confirmation_prompt": null,
     "confirmation_conflict": null
@@ -30,7 +34,7 @@
   "semantic_audit": [],
   "text_audit": [],
   "text_audit_coverage": {
-    "measured_components": 64,
+    "measured_components": 65,
     "native_text_controls": 2,
     "observed_native_controls": 0,
     "excluded_categories": [
@@ -40,6 +44,6 @@
     ]
   },
   "focused_nodes": [
-    "action.refresh_operator_state"
+    "action.confirm_lifecycle_action"
   ]
 }

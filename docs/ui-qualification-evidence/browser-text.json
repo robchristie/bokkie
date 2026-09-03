@@ -1374,40 +1374,472 @@
     },
     {
       "component_id": {
-        "kind": "content_label",
-        "instance": "2104530715744881843"
+        "kind": "section_heading",
+        "instance": "2008313830707881038"
+      },
+      "role": "section_heading",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 895,
+        "min_y": 322.8125,
+        "max_x": 1440,
+        "max_y": 344.6875
+      },
+      "painted_rect": {
+        "min_x": 895,
+        "min_y": 326.75,
+        "max_x": 1038.5,
+        "max_y": 340.75
+      },
+      "clip_rect": {
+        "min_x": 895.2999877929688,
+        "min_y": 322.8125,
+        "max_x": 1440,
+        "max_y": 344.6875
+      },
+      "overflow": "ellipsis",
+      "interaction": "inert",
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "4016629860439018498"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "2008314930219509249"
       },
       "role": "secondary",
       "horizontal_alignment": "start",
       "vertical_alignment": "centre",
       "allocated_rect": {
         "min_x": 895,
-        "min_y": 311.8125,
-        "max_x": 1440,
-        "max_y": 364.46875
+        "min_y": 349.6875,
+        "max_x": 1080.300048828125,
+        "max_y": 384.78125
       },
       "painted_rect": {
         "min_x": 895,
-        "min_y": 329.140625,
-        "max_x": 1056.21875,
-        "max_y": 347.140625
+        "min_y": 359.734375,
+        "max_x": 928.90625,
+        "max_y": 374.734375
       },
       "clip_rect": {
         "min_x": 895.2999877929688,
-        "min_y": 311.8125,
-        "max_x": 1440,
-        "max_y": 364.46875
+        "min_y": 349.6875,
+        "max_x": 1080.300048828125,
+        "max_y": 384.78125
       },
-      "overflow": "wrap",
+      "overflow": "ellipsis",
+      "interaction": "inert",
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "4016629860439018499"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "2008314930219509249"
+      },
+      "role": "body",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 349.6875,
+        "max_x": 1440,
+        "max_y": 384.78125
+      },
+      "painted_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 359.734375,
+        "max_x": 1245.175048828125,
+        "max_y": 374.734375
+      },
+      "clip_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 349.6875,
+        "max_x": 1440,
+        "max_y": 384.78125
+      },
+      "overflow": "ellipsis",
       "interaction": "selectable",
-      "declared_max_lines": 3,
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "4016623263369249232"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "2008311631684624616"
+      },
+      "role": "secondary",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 895,
+        "min_y": 389.78125,
+        "max_x": 1080.300048828125,
+        "max_y": 424.875
+      },
+      "painted_rect": {
+        "min_x": 895,
+        "min_y": 399.828125,
+        "max_x": 946.6875,
+        "max_y": 414.828125
+      },
+      "clip_rect": {
+        "min_x": 895.2999877929688,
+        "min_y": 389.78125,
+        "max_x": 1080.300048828125,
+        "max_y": 424.875
+      },
+      "overflow": "ellipsis",
+      "interaction": "inert",
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "4016623263369249233"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "2008311631684624616"
+      },
+      "role": "body",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 389.78125,
+        "max_x": 1440,
+        "max_y": 424.875
+      },
+      "painted_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 399.828125,
+        "max_x": 1127.550048828125,
+        "max_y": 414.828125
+      },
+      "clip_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 389.78125,
+        "max_x": 1440,
+        "max_y": 424.875
+      },
+      "overflow": "ellipsis",
+      "interaction": "selectable",
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "4016625462392505654"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "2008312731196252827"
+      },
+      "role": "secondary",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 895,
+        "min_y": 429.875,
+        "max_x": 1080.300048828125,
+        "max_y": 464.96875
+      },
+      "painted_rect": {
+        "min_x": 895,
+        "min_y": 439.921875,
+        "max_x": 992.90625,
+        "max_y": 454.921875
+      },
+      "clip_rect": {
+        "min_x": 895.2999877929688,
+        "min_y": 429.875,
+        "max_x": 1080.300048828125,
+        "max_y": 464.96875
+      },
+      "overflow": "ellipsis",
+      "interaction": "inert",
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "4016625462392505655"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "2008312731196252827"
+      },
+      "role": "body",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 429.875,
+        "max_x": 1440,
+        "max_y": 464.96875
+      },
+      "painted_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 439.921875,
+        "max_x": 1094.643798828125,
+        "max_y": 454.921875
+      },
+      "clip_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 429.875,
+        "max_x": 1440,
+        "max_y": 464.96875
+      },
+      "overflow": "ellipsis",
+      "interaction": "selectable",
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "4016636457508787764"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "2008318228754393882"
+      },
+      "role": "secondary",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 895,
+        "min_y": 469.96875,
+        "max_x": 1080.300048828125,
+        "max_y": 505.0625
+      },
+      "painted_rect": {
+        "min_x": 895,
+        "min_y": 480.015625,
+        "max_x": 961.78125,
+        "max_y": 495.015625
+      },
+      "clip_rect": {
+        "min_x": 895.2999877929688,
+        "min_y": 469.96875,
+        "max_x": 1080.300048828125,
+        "max_y": 505.0625
+      },
+      "overflow": "ellipsis",
+      "interaction": "inert",
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "4016636457508787765"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "2008318228754393882"
+      },
+      "role": "body",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 469.96875,
+        "max_x": 1440,
+        "max_y": 505.0625
+      },
+      "painted_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 480.015625,
+        "max_x": 1094.643798828125,
+        "max_y": 495.015625
+      },
+      "clip_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 469.96875,
+        "max_x": 1440,
+        "max_y": 505.0625
+      },
+      "overflow": "ellipsis",
+      "interaction": "selectable",
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "7605025080667425414"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "3802512540333712707"
+      },
+      "role": "secondary",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 895,
+        "min_y": 510.0625,
+        "max_x": 1080.300048828125,
+        "max_y": 545.15625
+      },
+      "painted_rect": {
+        "min_x": 895,
+        "min_y": 520.109375,
+        "max_x": 971.5,
+        "max_y": 535.109375
+      },
+      "clip_rect": {
+        "min_x": 895.2999877929688,
+        "min_y": 510.0625,
+        "max_x": 1080.300048828125,
+        "max_y": 545.15625
+      },
+      "overflow": "ellipsis",
+      "interaction": "inert",
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "7605025080667425415"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "3802512540333712707"
+      },
+      "role": "body",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 510.0625,
+        "max_x": 1440,
+        "max_y": 545.15625
+      },
+      "painted_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 520.109375,
+        "max_x": 1156.987548828125,
+        "max_y": 535.109375
+      },
+      "clip_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 510.0625,
+        "max_x": 1440,
+        "max_y": 545.15625
+      },
+      "overflow": "ellipsis",
+      "interaction": "selectable",
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "7605022881644168992"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "3802511440822084496"
+      },
+      "role": "secondary",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 895,
+        "min_y": 550.15625,
+        "max_x": 1080.300048828125,
+        "max_y": 585.25
+      },
+      "painted_rect": {
+        "min_x": 895,
+        "min_y": 560.203125,
+        "max_x": 941.4375,
+        "max_y": 575.203125
+      },
+      "clip_rect": {
+        "min_x": 895.2999877929688,
+        "min_y": 550.15625,
+        "max_x": 1080.300048828125,
+        "max_y": 585.25
+      },
+      "overflow": "ellipsis",
+      "interaction": "inert",
+      "declared_max_lines": 1,
+      "line_count": 1,
+      "truncated": false
+    },
+    {
+      "component_id": {
+        "kind": "property_row",
+        "instance": "7605022881644168993"
+      },
+      "parent_id": {
+        "kind": "property_row",
+        "instance": "3802511440822084496"
+      },
+      "role": "body",
+      "horizontal_alignment": "start",
+      "vertical_alignment": "centre",
+      "allocated_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 550.15625,
+        "max_x": 1440,
+        "max_y": 585.25
+      },
+      "painted_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 560.203125,
+        "max_x": 1134.893798828125,
+        "max_y": 575.203125
+      },
+      "clip_rect": {
+        "min_x": 1087.300048828125,
+        "min_y": 550.15625,
+        "max_x": 1440,
+        "max_y": 585.25
+      },
+      "overflow": "ellipsis",
+      "interaction": "selectable",
+      "declared_max_lines": 1,
       "line_count": 1,
       "truncated": false
     }
   ],
   "audit": [],
   "coverage": {
-    "measured_components": "43",
+    "measured_components": "55",
     "native_text_controls": "2",
     "observed_native_controls": "0",
     "excluded_categories": [

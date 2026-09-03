@@ -2,7 +2,7 @@
   "browser": {
     "version": "151.0.7922.34",
     "backend": "browser WebGPU requested through eframe/wgpu",
-    "source_revision": "8b368e9197ecac4c9dd38a478f6e5485325af60b",
+    "source_revision": "12ba204901386169fad63664cb8a87af51dbcfaa",
     "webgpu": {
       "navigator_gpu": true,
       "adapter_available": true,
@@ -44,7 +44,7 @@
     {
       "name": "stale confirmation conflict",
       "classification": "direct physical confirmation against externally advanced temporary store state",
-      "conflict": "The state changed before this action could be applied: transition conflict: cannot cancel terminal state cancelled. Bokkie has refreshed the obligation; your actor and note are retained. Review the current state before trying again.",
+      "conflict": "The state changed before this action could be applied: transition conflict: reviewed obligation state is stale (expected occurrence 1 at revision 10, found occurrence 1 at revision 214). Bokkie has refreshed the obligation; your actor and note are retained. Review the current state before trying again.",
       "connection": "stale retained data",
       "submit_enabled": false
     },
@@ -66,10 +66,10 @@
   "states": {
     "full": {
       "fixture": {
-        "address": "127.0.0.1:36835",
+        "address": "127.0.0.1:33805",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-96dffc4d-74a9-44a5-a255-6630cf33bdce",
+        "root": "/tmp/bokkie-ui-qualification-da1ea16c-e678-4f4b-a496-683712232843",
         "variant": "full"
       },
       "ready": {
@@ -97,10 +97,10 @@
     },
     "empty": {
       "fixture": {
-        "address": "127.0.0.1:44005",
+        "address": "127.0.0.1:44907",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-394d6236-ce19-4c7e-8850-b56cf7b0df24",
+        "root": "/tmp/bokkie-ui-qualification-954888e8-8dbc-45f1-98a7-b45c56f1d9bc",
         "variant": "empty"
       },
       "result": {
@@ -114,10 +114,10 @@
     },
     "empty-inbox": {
       "fixture": {
-        "address": "127.0.0.1:38259",
+        "address": "127.0.0.1:39961",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-84eed24d-a020-43ad-ba76-2dd03ad70376",
+        "root": "/tmp/bokkie-ui-qualification-9381f976-3b3e-4b5a-82f0-afc3a212bb8f",
         "variant": "empty-inbox"
       }
     },
@@ -128,10 +128,10 @@
     },
     "large": {
       "fixture": {
-        "address": "127.0.0.1:35123",
+        "address": "127.0.0.1:43627",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-f68045c8-6872-49c8-8785-3ed798bda795",
+        "root": "/tmp/bokkie-ui-qualification-c9f3fff0-168d-4b6a-afa4-bc357f8af016",
         "variant": "large"
       },
       "result": {
@@ -148,7 +148,7 @@
         "classification": "direct current-frame Rust virtualisation observation"
       }
     },
-    "disconnected_request": "network: GET http://127.0.0.1:35123/operator/snapshot net::ERR_CONNECTION_REFUSED",
+    "disconnected_request": "network: GET http://127.0.0.1:43627/operator/snapshot net::ERR_CONNECTION_REFUSED",
     "disconnected_console": "console: Failed to load resource: net::ERR_CONNECTION_REFUSED",
     "disconnected": {
       "network_disconnected": true,
@@ -217,7 +217,7 @@
   ],
   "errors": [],
   "last_operator_response": {
-    "url": "http://127.0.0.1:35123/operator/obligations/large%2D00000/topic",
+    "url": "http://127.0.0.1:43627/operator/obligations/large%2D00000/topic",
     "status": 200
   }
 }

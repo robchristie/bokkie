@@ -1,7 +1,7 @@
 # Bokkie attention UI qualification evidence
 
 This retained set qualifies the exact Bokkie application and harness revision
-`8b368e9197ecac4c9dd38a478f6e5485325af60b`, consuming Polyorama
+`12ba204901386169fad63664cb8a87af51dbcfaa`, consuming Polyorama
 `0e725f5a97a6d99a6bc4c961dfc05b4e9252ba1d`.
 The fixture input is created by `bokkie-ui-fixture` with its fixed Unix time
 `1788381000`; every run creates a new database beneath an owned
@@ -26,7 +26,7 @@ The fixture input is created by `bokkie-ui-fixture` with its fixed Unix time
 | `browser-interactions.json` | Direct except its labelled disconnected app-surface approximation | Exact gardener confirmation was inspected but not submitted; safe cancellation reached the real HTTP/store path and retained a `cancelled` audit event; a real 409 produced stale state with disabled submit; keyboard focus, refresh-preserved selection/scroll, loading, empty DB/inbox, 5,000 rows and warmed idle passed. |
 | `browser-gardener-confirmation-semantic.json` | Direct current-frame Rust observation | Exact prompt, fingerprint, occurrence, consequence, bounds, enabled states and selectable measured text accompany the physical confirmation capture. |
 | `browser-semantic.json`, `browser-text.json` | Direct for recorded Rust semantics and measured Polyorama text | Semantic and text audits are empty. Native egui controls and ordinary labels are exclusions, not silently certified. |
-| `native-interaction.json`, `native-semantic.json`, `native-durable-result.json` | Direct native functional evidence | X11 pointer cancellation, keyboard focus, refreshed durable event, semantic audit and measured-text audit passed. |
+| `native-interaction.json`, `native-semantic.json`, `native-durable-result.json` | Direct native functional evidence | X11 pointer selection and confirmation inspection plus keyboard focus passed; a direct conditional harness POST retained the durable event, while the browser journey separately proves UI submission. Semantic and measured-text audits passed. |
 | PNG files | Direct raster capture | 1440×900, 1280×720, 480×720 narrow, exact confirmation and native 1440×900 were inspected for hierarchy, focus/action visibility, clipping and local scrolling. |
 
 The UI is **AccessKit-semantic and keyboard-tested**. It is not claimed as

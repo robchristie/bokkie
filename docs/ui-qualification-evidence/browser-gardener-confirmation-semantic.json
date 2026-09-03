@@ -76,7 +76,7 @@
         "id": "bokkie.inbox-row.approval-safe-cancel",
         "parent": "pane.1",
         "role": "result_row",
-        "name": "Safe temporary approval-bound lifecycle action\nAwaiting a generic operator decision\napproval-safe-cancel · occurrence 1 · 14h ago\nSchedule the current occurrence or Move the current occurrence to attention or Permanently cancel this obligation · current",
+        "name": "Safe temporary approval-bound lifecycle action\nAwaiting a generic operator decision\napproval-safe-cancel · occurrence 1 · 15h ago\nSchedule the current occurrence or Move the current occurrence to attention or Permanently cancel this obligation · current",
         "rect": {
           "min_x": 0,
           "min_y": 140.875,
@@ -93,7 +93,7 @@
         "id": "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
         "parent": "pane.1",
         "role": "result_row",
-        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nAwaiting an exact gardener proposal decision · d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · occurrence 1 · 14h ago\nPermanently cancel this obligation or Schedule implementation of this exact immutable proposal or Reject this exact immutable proposal into attention · current",
+        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nAwaiting an exact gardener proposal decision · d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · occurrence 1 · 15h ago\nPermanently cancel this obligation or Schedule implementation of this exact immutable proposal or Reject this exact immutable proposal into attention · current",
         "rect": {
           "min_x": 0,
           "min_y": 301.71875,
@@ -110,7 +110,7 @@
         "id": "bokkie.inbox-row.attention-exhausted",
         "parent": "pane.1",
         "role": "result_row",
-        "name": "Representative attention-exhausted state\nRetry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-exhausted · occurrence 1 · 14h ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "name": "Representative attention-exhausted state\nRetry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-exhausted · occurrence 1 · 15h ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
         "rect": {
           "min_x": 0,
           "min_y": 462.5625,
@@ -127,7 +127,7 @@
         "id": "bokkie.inbox-row.attention-nonretryable",
         "parent": "pane.1",
         "role": "result_row",
-        "name": "Representative attention-nonretryable state\nNon-retryable failure · Deterministic attention-nonretryable failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-nonretryable · occurrence 1 · 14h ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "name": "Representative attention-nonretryable state\nNon-retryable failure · Deterministic attention-nonretryable failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-nonretryable · occurrence 1 · 15h ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
         "rect": {
           "min_x": 0,
           "min_y": 623.40625,
@@ -161,7 +161,7 @@
         "id": "bokkie.obligation-row.approval-safe-cancel",
         "parent": "pane.2",
         "role": "result_row",
-        "name": "Safe temporary approval-bound lifecycle action\napproval-safe-cancel · Awaiting approval · occurrence 1 · attempts 0/3\nHuman attention: Awaiting a generic operator decision\nOne-off\nError: No last error · Evidence: No last evidence · updated 14h ago",
+        "name": "Safe temporary approval-bound lifecycle action\napproval-safe-cancel · Awaiting approval · occurrence 1 · attempts 0/3\nHuman attention: Awaiting a generic operator decision\nOne-off\nError: No last error · Evidence: No last evidence · updated 15h ago",
         "rect": {
           "min_x": 385,
           "min_y": 174,
@@ -178,7 +178,7 @@
         "id": "bokkie.obligation-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
         "parent": "pane.2",
         "role": "result_row",
-        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · Awaiting approval · occurrence 1 · attempts 0/1\nHuman attention: Awaiting an exact gardener proposal decision · d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nOne-off\nError: No last error · Evidence: No last evidence · updated 14h ago",
+        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · Awaiting approval · occurrence 1 · attempts 0/1\nHuman attention: Awaiting an exact gardener proposal decision · d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nOne-off\nError: No last error · Evidence: No last evidence · updated 15h ago",
         "rect": {
           "min_x": 385,
           "min_y": 350,
@@ -195,7 +195,7 @@
         "id": "bokkie.obligation-row.attention-exhausted",
         "parent": "pane.2",
         "role": "result_row",
-        "name": "Representative attention-exhausted state\nattention-exhausted · Attention · occurrence 1 · attempts 1/1\nHuman attention: Retry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nOne-off\nError: Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee · Evidence: evidence:attention-exhausted:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff · updated 14h ago",
+        "name": "Representative attention-exhausted state\nattention-exhausted · Attention · occurrence 1 · attempts 1/1\nHuman attention: Retry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nOne-off\nError: Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee · Evidence: evidence:attention-exhausted:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff · updated 15h ago",
         "rect": {
           "min_x": 385,
           "min_y": 526,
@@ -212,7 +212,7 @@
         "id": "bokkie.obligation-row.attention-nonretryable",
         "parent": "pane.2",
         "role": "result_row",
-        "name": "Representative attention-nonretryable state\nattention-nonretryable · Attention · occurrence 1 · attempts 1/3\nHuman attention: Non-retryable failure · Deterministic attention-nonretryable failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nOne-off\nError: Deterministic attention-nonretryable failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee · Evidence: evidence:attention-nonretryable:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff · updated 14h ago",
+        "name": "Representative attention-nonretryable state\nattention-nonretryable · Attention · occurrence 1 · attempts 1/3\nHuman attention: Non-retryable failure · Deterministic attention-nonretryable failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nOne-off\nError: Deterministic attention-nonretryable failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee · Evidence: evidence:attention-nonretryable:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff · updated 15h ago",
         "rect": {
           "min_x": 385,
           "min_y": 702,
@@ -3414,6 +3414,10 @@
     "selected_obligation": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
     "active_pane": 3,
     "connection": "current",
+    "status": "Current operator state",
+    "snapshot_busy": false,
+    "topic_busy": false,
+    "action_busy": false,
     "confirmation_action": "approve_exact_gardener_proposal",
     "confirmation_obligation": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
     "confirmation_occurrence": 1,
