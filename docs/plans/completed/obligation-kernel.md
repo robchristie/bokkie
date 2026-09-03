@@ -1,9 +1,9 @@
 # Obligation kernel
 
-- Status: active
+- Status: complete
 - Owner: `bokkie`
-- Related issue or pull request: pending
-- Terminal coordination pull request: pending
+- Related issue or pull request: [#1](https://github.com/robchristie/bokkie/pull/1)
+- Terminal coordination pull request: #1
 - Last updated: 2026-09-03
 
 ## Outcome
@@ -33,29 +33,29 @@ never silently loses overdue, failed, approval-bound, or interrupted work.
 
 ## Acceptance criteria
 
-- [ ] A fresh database is migrated automatically and an existing current
+- [x] A fresh database is migrated automatically and an existing current
   database reopens without destructive changes.
-- [ ] All supported transitions are enforced by one semantic owner and record
+- [x] All supported transitions are enforced by one semantic owner and record
   an audit event atomically with the state change.
-- [ ] Recurring obligations calculate and persist their next occurrence using
+- [x] Recurring obligations calculate and persist their next occurrence using
   a cron expression and named IANA time zone.
-- [ ] Due work is claimed atomically with a renewable, expiring lease so two
+- [x] Due work is claimed atomically with a renewable, expiring lease so two
   schedulers cannot execute the same attempt.
-- [ ] Retryable failures and expired leases consume the persisted attempt
+- [x] Retryable failures and expired leases consume the persisted attempt
   budget, use bounded exponential backoff, and become visible attention rather
   than disappearing when exhausted.
-- [ ] Approval-required work cannot be claimed until a durable approval for its
+- [x] Approval-required work cannot be claimed until a durable approval for its
   current occurrence exists; approval and rejection decisions are audited.
-- [ ] The fake runner can deterministically succeed or fail and stores attempt
+- [x] The fake runner can deterministically succeed or fail and stores attempt
   results/evidence.
-- [ ] CLI and loopback HTTP API operations can create, inspect, list, approve,
+- [x] CLI and loopback HTTP API operations can create, inspect, list, approve,
   retry, cancel, and inspect events for obligations.
-- [ ] The daemon runs the scheduler and API together, shuts down cleanly, and
+- [x] The daemon runs the scheduler and API together, shuts down cleanly, and
   has a documented systemd unit with restart and state-directory behaviour.
-- [ ] Automated crash-recovery tests kill a real daemon after a durable claim,
+- [x] Automated crash-recovery tests kill a real daemon after a durable claim,
   restart it against the same database, and prove eventual completion or
   visible attention without duplicate successful execution.
-- [ ] The canonical repository check passes and operator documentation explains
+- [x] The canonical repository check passes and operator documentation explains
   the trust boundary and current limitations.
 
 ## Repository and authority map
@@ -67,12 +67,12 @@ never silently loses overdue, failed, approval-bound, or interrupted work.
 
 ## Current phase
 
-The lifecycle kernel is implemented and its focused tests pass. It owns ordered
-migrations, explicit transitions, cron/time-zone recurrence, approval-bound
-occurrences, fenced renewable leases, retry recovery, immutable attempts, and
-append-only audit events. The next increment is integrating the CLI, loopback
-HTTP API, daemon scheduler, systemd example, and real process crash test against
-that public interface.
+The complete candidate is implemented on pull request #1. Kernel and adapter
+tests prove the lifecycle, fake execution, loopback service, graceful shutdown,
+scheduler-failure propagation, and abrupt process recovery behaviours. The
+remaining delivery work is exact-head independent review, applicable GitHub
+checks, merge, and post-merge reconciliation; those are landing evidence rather
+than product acceptance criteria.
 
 ## Decisions made
 
@@ -93,6 +93,7 @@ that public interface.
 |---|---|---|---|---|---|
 | Historical prototype scan | local reference | n/a | `bokkie.old`: 9 tests passed; required reliability features absent | complete | Agent report; source paths recorded in task history |
 | Lifecycle kernel | `f2d6d2c` | same | 10 tests passed; Clippy and rustfmt passed | complete | `src/store.rs`, embedded migrations, and focused unit tests |
+| Service and recovery | `9c5886b` | same | 17 tests passed; CLI/API, graceful shutdown, scheduler failure, and daemon crash recovery passed | complete | `tests/adapters.rs` and pull request #1 |
 
 ## Deferred or out of scope
 
@@ -103,11 +104,10 @@ that public interface.
 
 ## Open questions or blockers
 
-None. Implementation evidence may refine internal module boundaries without
-changing the acceptance contract.
+None.
 
 ## Pull-request graph and merge order
 
-One terminal pull request will contain the coherent obligation-kernel slice.
-Internal implementation clusters are milestones, not separately landed
-products.
+Pull request #1 is the one terminal pull request for the coherent
+obligation-kernel slice. Internal implementation clusters were milestones, not
+separately landed products.

@@ -25,8 +25,8 @@ human-attention condition. Runner execution is at least once; leases and stable
 execution identities prevent stale workers from overwriting newer outcomes and
 allow side-effecting adapters to reconcile retries safely.
 
-See the [active obligation-kernel plan](docs/plans/active/obligation-kernel.md)
-for the complete first-slice acceptance criteria.
+See the [obligation-kernel delivery plan](docs/plans/completed/obligation-kernel.md)
+for the complete first-slice acceptance criteria and evidence.
 
 ## Development
 
