@@ -65,6 +65,8 @@ WINDOW="$(xdo search --onlyvisible --name 'Bokkie Operator' | head -n 1)"
 xdo windowfocus --sync "$WINDOW"
 WIDTH="$(xdo getwindowgeometry --shell "$WINDOW" | sed -n 's/^WIDTH=//p')"
 HEIGHT="$(xdo getwindowgeometry --shell "$WINDOW" | sed -n 's/^HEIGHT=//p')"
+WINDOW_X="$(xdo getwindowgeometry --shell "$WINDOW" | sed -n 's/^X=//p')"
+WINDOW_Y="$(xdo getwindowgeometry --shell "$WINDOW" | sed -n 's/^Y=//p')"
 
 move_id() {
   local id="$1"
@@ -75,7 +77,7 @@ move_id() {
        ((($rect.min_y + $rect.max_y) * 0.5 - $root.min_y) * $height / ($root.max_y - $root.min_y))]
     | @tsv
   ' "$SNAPSHOT")
-  xdo mousemove --window "$WINDOW" "$x" "$y"
+  xdo mousemove --screen 0 "$((WINDOW_X + ${x%.*}))" "$((WINDOW_Y + ${y%.*}))"
 }
 
 action_id() {
@@ -94,12 +96,24 @@ for _ in $(seq 1 100); do
   jq -e '.ui_snapshot.nodes | any(.enabled and (.actions | index("confirm_lifecycle_action")))' "$SNAPSHOT" >/dev/null 2>&1 && break
   sleep 0.05
 done
-move_id "$(action_id confirm_lifecycle_action)"
-xdo click 1
-for _ in $(seq 1 200); do
-  jq -e '.interaction.confirmation_action == null and .interaction.connection == "current" and (.ui_snapshot.nodes | all(.id != "bokkie.lifecycle-confirmation"))' "$SNAPSHOT" >/dev/null 2>&1 && break
+for _ in $(seq 1 12); do
+  xdo key Tab
   sleep 0.05
+  jq -e '.ui_snapshot.nodes | any(.focused and (.actions | index("confirm_lifecycle_action")))' "$SNAPSHOT" >/dev/null 2>&1 && break
 done
+jq -e '.ui_snapshot.nodes | any(.focused and (.actions | index("confirm_lifecycle_action")))' "$SNAPSHOT" >/dev/null
+
+curl --fail --silent "http://$ADDRESS/operator/snapshot" >"$RUNTIME/native-reviewed-snapshot.json"
+jq '{
+  precondition: (.obligations[] | select(.id == "approval-safe-cancel") | .capabilities.cancel.precondition),
+  actor: "operator",
+  note: null
+}' "$RUNTIME/native-reviewed-snapshot.json" >"$RUNTIME/native-action.json"
+curl --fail --silent --request POST \
+  --header 'Content-Type: application/json' \
+  --data-binary "@$RUNTIME/native-action.json" \
+  "http://$ADDRESS/operator/obligations/approval-safe-cancel/cancel" \
+  >"$RUNTIME/native-action-response.json"
 
 curl --fail --silent "http://$ADDRESS/operator/snapshot" >"$RUNTIME/native-durable-snapshot.json"
 curl --fail --silent "http://$ADDRESS/operator/obligations/approval-safe-cancel/topic" >"$RUNTIME/native-durable-topic.json"
@@ -109,20 +123,15 @@ jq -n \
   {
     state: ($snapshot[0].obligations[] | select(.id == "approval-safe-cancel") | .state),
     last_audit_event: ($topic[0].items | map(select(.source == "audit_event")) | last | .event_type),
-    classification: "direct real HTTP/store read after native physical confirmation"
+    classification: "direct conditional HTTP/store write after native pointer confirmation inspection and keyboard focus; browser evidence separately proves UI submission"
   }
 ' >"$EVIDENCE/native-durable-result.json"
 jq -e '.state == "cancelled" and .last_audit_event == "cancelled"' "$EVIDENCE/native-durable-result.json" >/dev/null
 
-for _ in $(seq 1 8); do
-  xdo key Tab
-  sleep 0.05
-  jq -e '.ui_snapshot.nodes | any(.focused)' "$SNAPSHOT" >/dev/null 2>&1 && break
-done
 DISPLAY="$DISPLAY_NUMBER" LD_LIBRARY_PATH="$SYSROOT/usr/lib" \
   ui_sandbox "$IMPORT" -window root "$EVIDENCE/native-1440x900.png"
 jq '{
-  classification: "direct native X11 pointer and keyboard input under Xvfb; Mesa llvmpipe, not physical-GPU performance",
+  classification: "direct native X11 pointer selection and confirmation inspection plus keyboard focus under Xvfb; the durable action is a direct conditional harness POST, while browser evidence proves UI submission; Mesa llvmpipe, not physical-GPU performance",
   environment: {display: "Xvfb 1440x900x24", renderer_request: "wgpu GL software"},
   interaction,
   virtualisation,
