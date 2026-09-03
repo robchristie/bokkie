@@ -242,6 +242,82 @@ fn killed_daemon_recovers_expired_claim_and_succeeds_once() {
     stop_child(&mut second);
 }
 
+#[test]
+fn exhausted_finite_recurrence_completes_without_stopping_unrelated_work() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("finite-recurrence.sqlite");
+    let finite = run_cli(
+        &database,
+        &[
+            "create",
+            "--id",
+            "a-finite",
+            "--description",
+            "final finite occurrence",
+            "--scheduled-at",
+            "1",
+            "--recurrence-cron",
+            "0 0 0 1 1 * 1970",
+            "--recurrence-timezone",
+            "UTC",
+        ],
+    );
+    assert_success(&finite);
+    let unrelated = run_cli(
+        &database,
+        &[
+            "create",
+            "--id",
+            "z-unrelated",
+            "--description",
+            "must run after finite recurrence",
+            "--scheduled-at",
+            "2",
+        ],
+    );
+    assert_success(&unrelated);
+
+    let address = unused_loopback_address();
+    let mut daemon = spawn_daemon(&database, address, &["--fake-delay-ms", "0"]);
+    wait_until(Duration::from_secs(5), || {
+        try_cli_json(&database, &["show", "a-finite"])
+            .is_some_and(|obligation| obligation["state"] == "completed")
+            && try_cli_json(&database, &["show", "z-unrelated"])
+                .is_some_and(|obligation| obligation["state"] == "completed")
+    });
+
+    assert!(
+        daemon.try_wait().unwrap().is_none(),
+        "scheduler must remain available after a finite recurrence is exhausted"
+    );
+    assert_eq!(
+        cli_json(&database, &["attempts", "a-finite"])[0]["outcome"],
+        "succeeded"
+    );
+    assert_eq!(
+        cli_json(&database, &["attempts", "z-unrelated"])[0]["outcome"],
+        "succeeded"
+    );
+    let finite_events = cli_json(&database, &["events", "a-finite"]);
+    let completed = finite_events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["event_type"] == "completed")
+        .unwrap();
+    let completed_details: Value =
+        serde_json::from_str(completed["details_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        completed_details,
+        json!({
+            "evidence": "deterministic fake success for attempt 1",
+            "reason": "recurrence_exhausted"
+        })
+    );
+
+    stop_child(&mut daemon);
+}
+
 #[cfg(unix)]
 #[test]
 fn graceful_shutdown_finishes_an_observed_in_flight_claim() {

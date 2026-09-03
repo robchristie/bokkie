@@ -663,59 +663,74 @@ fn apply_transition(
                         obligation.recurrence_cron.as_deref(),
                         obligation.recurrence_timezone.as_deref(),
                     ) {
-                        let recurrence = Recurrence::new(expression, timezone)?;
-                        let next = recurrence.next_after(now.max(obligation.scheduled_at))?;
-                        let next_state = if obligation.approval_required {
-                            ObligationState::AwaitingApproval
-                        } else {
-                            ObligationState::Pending
-                        };
-                        let next_wake = (!obligation.approval_required).then_some(next);
-                        transaction.execute(
-                            "UPDATE obligations SET state = ?2, occurrence = occurrence + 1,
-                                scheduled_at = ?3, next_wake_at = ?4, attempts_made = 0,
-                                lease_token = NULL, lease_expires_at = NULL,
-                                last_error = NULL, last_evidence = ?5, updated_at = ?6
-                             WHERE id = ?1",
-                            params![
-                                claim.obligation_id,
-                                next_state.to_string(),
-                                next,
-                                next_wake,
-                                evidence,
-                                now
-                            ],
-                        )?;
-                        append_event(
-                            transaction,
-                            &claim.obligation_id,
-                            obligation.occurrence + 1,
-                            "occurrence_scheduled",
-                            now,
-                            Some(ObligationState::Running),
-                            next_state,
-                            json!({
-                                "completed_occurrence": obligation.occurrence,
-                                "scheduled_at": next,
-                                "evidence": evidence
-                            }),
-                        )?;
+                        let next_occurrence =
+                            Recurrence::new(expression, timezone).and_then(|recurrence| {
+                                recurrence.next_after(now.max(obligation.scheduled_at))
+                            });
+                        match next_occurrence {
+                            Ok(next) => {
+                                let next_state = if obligation.approval_required {
+                                    ObligationState::AwaitingApproval
+                                } else {
+                                    ObligationState::Pending
+                                };
+                                let next_wake = (!obligation.approval_required).then_some(next);
+                                transaction.execute(
+                                    "UPDATE obligations SET state = ?2, occurrence = occurrence + 1,
+                                        scheduled_at = ?3, next_wake_at = ?4, attempts_made = 0,
+                                        lease_token = NULL, lease_expires_at = NULL,
+                                        last_error = NULL, last_evidence = ?5, updated_at = ?6
+                                     WHERE id = ?1",
+                                    params![
+                                        claim.obligation_id,
+                                        next_state.to_string(),
+                                        next,
+                                        next_wake,
+                                        evidence,
+                                        now
+                                    ],
+                                )?;
+                                append_event(
+                                    transaction,
+                                    &claim.obligation_id,
+                                    obligation.occurrence + 1,
+                                    "occurrence_scheduled",
+                                    now,
+                                    Some(ObligationState::Running),
+                                    next_state,
+                                    json!({
+                                        "completed_occurrence": obligation.occurrence,
+                                        "scheduled_at": next,
+                                        "evidence": evidence
+                                    }),
+                                )?;
+                            }
+                            Err(RecurrenceError::Exhausted) => {
+                                complete_terminal_success(
+                                    transaction,
+                                    &obligation,
+                                    now,
+                                    evidence.as_deref(),
+                                    Some("recurrence_exhausted"),
+                                )?;
+                            }
+                            Err(error) => {
+                                preserve_success_as_attention(
+                                    transaction,
+                                    &obligation,
+                                    now,
+                                    evidence.as_deref(),
+                                    &error,
+                                )?;
+                            }
+                        }
                     } else {
-                        transaction.execute(
-                            "UPDATE obligations SET state = 'completed', lease_token = NULL,
-                                lease_expires_at = NULL, last_error = NULL,
-                                last_evidence = ?2, updated_at = ?3 WHERE id = ?1",
-                            params![claim.obligation_id, evidence, now],
-                        )?;
-                        append_event(
+                        complete_terminal_success(
                             transaction,
-                            &claim.obligation_id,
-                            obligation.occurrence,
-                            "completed",
+                            &obligation,
                             now,
-                            Some(ObligationState::Running),
-                            ObligationState::Completed,
-                            json!({"evidence": evidence}),
+                            evidence.as_deref(),
+                            None,
                         )?;
                     }
                 }
@@ -834,6 +849,63 @@ fn apply_transition(
         }
     }
     Ok(TransitionResult::default())
+}
+
+fn complete_terminal_success(
+    transaction: &Transaction<'_>,
+    obligation: &Obligation,
+    now: i64,
+    evidence: Option<&str>,
+    reason: Option<&str>,
+) -> Result<(), StoreError> {
+    let details = match reason {
+        Some(reason) => json!({"evidence": evidence, "reason": reason}),
+        None => json!({"evidence": evidence}),
+    };
+    transaction.execute(
+        "UPDATE obligations SET state = 'completed', lease_token = NULL,
+            lease_expires_at = NULL, last_error = NULL,
+            last_evidence = ?2, updated_at = ?3 WHERE id = ?1",
+        params![obligation.id, evidence, now],
+    )?;
+    append_event(
+        transaction,
+        &obligation.id,
+        obligation.occurrence,
+        "completed",
+        now,
+        Some(ObligationState::Running),
+        ObligationState::Completed,
+        details,
+    )?;
+    Ok(())
+}
+
+fn preserve_success_as_attention(
+    transaction: &Transaction<'_>,
+    obligation: &Obligation,
+    now: i64,
+    evidence: Option<&str>,
+    error: &RecurrenceError,
+) -> Result<(), StoreError> {
+    let error = format!("could not calculate next recurrence after successful attempt: {error}");
+    transaction.execute(
+        "UPDATE obligations SET state = 'attention', next_wake_at = NULL,
+            lease_token = NULL, lease_expires_at = NULL, last_error = ?2,
+            last_evidence = ?3, updated_at = ?4 WHERE id = ?1",
+        params![obligation.id, error, evidence, now],
+    )?;
+    append_event(
+        transaction,
+        &obligation.id,
+        obligation.occurrence,
+        "recurrence_evaluation_attention",
+        now,
+        Some(ObligationState::Running),
+        ObligationState::Attention,
+        json!({"error": error, "evidence": evidence}),
+    )?;
+    Ok(())
 }
 
 fn recover_expired_in_transaction(
@@ -1218,6 +1290,85 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["created", "claimed", "completed"]
         );
+    }
+
+    #[test]
+    fn successful_final_finite_recurrence_completes_atomically() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut obligation = one_off("finite", 100);
+        obligation.recurrence = Some(Recurrence::new("0 0 0 1 1 * 1970", "UTC").unwrap());
+        store.create(obligation, 100).unwrap();
+        let claim = store.claim_due(100, 30, 1).unwrap().remove(0);
+
+        store
+            .complete(
+                &claim,
+                Completion::Succeeded {
+                    evidence: Some("final finite occurrence ran".to_owned()),
+                },
+                101,
+            )
+            .unwrap();
+
+        let completed = store.get("finite").unwrap().unwrap();
+        assert_eq!(completed.state, ObligationState::Completed);
+        assert_eq!(completed.next_wake_at, None);
+        assert_eq!(
+            completed.last_evidence.as_deref(),
+            Some("final finite occurrence ran")
+        );
+        assert_eq!(
+            store.attempts("finite").unwrap()[0].outcome,
+            AttemptOutcome::Succeeded
+        );
+        let completed_event = store.events("finite").unwrap().pop().unwrap();
+        assert_eq!(completed_event.event_type, "completed");
+        assert_eq!(completed_event.to_state, ObligationState::Completed);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&completed_event.details_json).unwrap()["reason"],
+            "recurrence_exhausted"
+        );
+    }
+
+    #[test]
+    fn successful_attempt_survives_unexpected_recurrence_evaluation_error() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut obligation = one_off("invalid-next", 100);
+        obligation.recurrence = Some(Recurrence::new("* * * * *", "UTC").unwrap());
+        store.create(obligation, 100).unwrap();
+        let claim = store.claim_due(100, i64::MAX, 1).unwrap().remove(0);
+
+        store
+            .complete(
+                &claim,
+                Completion::Succeeded {
+                    evidence: Some("work already succeeded".to_owned()),
+                },
+                i64::MAX - 1,
+            )
+            .unwrap();
+
+        let attention = store.get("invalid-next").unwrap().unwrap();
+        assert_eq!(attention.state, ObligationState::Attention);
+        assert_eq!(attention.next_wake_at, None);
+        assert!(
+            attention
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("timestamp is outside the supported range")
+        );
+        assert_eq!(
+            attention.last_evidence.as_deref(),
+            Some("work already succeeded")
+        );
+        assert_eq!(
+            store.attempts("invalid-next").unwrap()[0].outcome,
+            AttemptOutcome::Succeeded
+        );
+        let event = store.events("invalid-next").unwrap().pop().unwrap();
+        assert_eq!(event.event_type, "recurrence_evaluation_attention");
+        assert_eq!(event.to_state, ObligationState::Attention);
     }
 
     #[test]
