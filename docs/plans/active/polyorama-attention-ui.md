@@ -111,7 +111,7 @@ primary action. The decision and its necessary evidence remain visible at
 | --- | --- | --- | --- | --- |
 | Transport exploration | Bokkie application/HTTP adapter | Fixed pane, fixture read/action, native+Wasm build and browser same-origin probe | Baselines above | Complete at `3910f2bd4076f82042c9017da2fe12e674bf736e` |
 | Read projections and capabilities | Bokkie domain/store/HTTP | Authoritative inbox, liveness, timeline and legal-action projection with deterministic store/API tests | Selected seam | Complete at `ad0afe37c24ec4876f18244e5dbdc6dc9cf6e7bb` |
-| Operational workspace | Bokkie application | Three connected panes, typed intents, virtualisation, refresh/stale/conflict handling and responsive semantics | Projection contract | Pending |
+| Operational workspace | Bokkie application | Three connected panes, typed intents, virtualisation, refresh/stale/conflict handling and responsive semantics | Projection contract | Complete at `340fc3a3324fdfde20951627bb4ae34380f25e78` |
 | Qualification and documentation | Bokkie application/tooling | Temporary-service native/browser physical journeys, semantic/text/visual/idle evidence and operator docs | Complete workspace | Pending |
 | Terminal review and landing | Bokkie campaign | Canonical check, exact-head independent review, CI, squash merge and cleanup | All acceptance proof | Pending |
 
@@ -160,15 +160,15 @@ gap makes one necessary.
 
 ## Current phase
 
-The authoritative projection is complete at
-`ad0afe37c24ec4876f18244e5dbdc6dc9cf6e7bb`. A Wasm-safe shared contract now
-exposes genuine exceptions, liveness, exact generic-versus-gardener actions and
-deterministically ordered durable topic evidence. Store/API tests include all
-obligation states, exact proposal content, rejection, blocking and inconclusive
-verification, equal timestamps and missing topics; 73 workspace tests, strict
-Clippy, formatting and the Wasm UI build passed. Topic construction currently
-scans existing local gardener history before filtering; retain this local-scale
-implementation until representative evidence demonstrates a pagination need.
-Next, replace the one-pane probe with the operational three-pane workspace,
-action confirmation, refresh/stale/conflict behaviour and deterministic UI
-fixtures against this backend-owned contract.
+The operational workspace is complete at
+`340fc3a3324fdfde20951627bb4ae34380f25e78`. It consumes the authoritative
+projection through three stable panes, keeps one canonical workspace across
+wide and narrow presentation, confirms every action, retains drafts across
+conflicts, disables stale decisions, rejects out-of-order topic responses and
+schedules bounded refresh deadlines. A 50,000-row fixture produces at most 14
+materialised rows in the representative range. Nineteen UI tests, 89 workspace
+tests, strict Clippy, formatting and native/Wasm builds passed. No reusable
+Polyorama gap was found. The existing local-scale gardener-history scan remains
+the only known performance risk. Next, add deterministic service fixtures and
+native/browser physical, semantic, text-layout, visual, responsive, stale,
+conflict, post-action and idle qualification, then update operator docs.
