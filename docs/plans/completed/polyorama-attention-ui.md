@@ -1,7 +1,8 @@
 # Polyorama attention UI
 
-- Status: qualification complete; landing pending
+- Status: delivery candidate complete; pull request review and landing pending
 - Owner: `bokkie`
+- Pull request: [Bokkie #4](https://github.com/robchristie/bokkie/pull/4)
 - Bokkie baseline: `78558bf915eb9ed0ffb3a676676bf18dc0a5c908`
 - Polyorama baseline: `0e725f5a97a6d99a6bc4c961dfc05b4e9252ba1d`
 - Branch: `codex/polyorama-attention-ui`
@@ -113,7 +114,7 @@ primary action. The decision and its necessary evidence remain visible at
 | Read projections and capabilities | Bokkie domain/store/HTTP | Authoritative inbox, liveness, timeline and legal-action projection with deterministic store/API tests | Selected seam | Complete at `ad0afe37c24ec4876f18244e5dbdc6dc9cf6e7bb` |
 | Operational workspace | Bokkie application | Three connected panes, typed intents, virtualisation, refresh/stale/conflict handling and responsive semantics | Projection contract | Complete at `340fc3a3324fdfde20951627bb4ae34380f25e78` |
 | Qualification and documentation | Bokkie application/tooling | Temporary-service native/browser physical journeys, semantic/text/visual/idle evidence and operator docs | Complete workspace | Complete: application/harness `8b368e9197ecac4c9dd38a478f6e5485325af60b`; evidence `8672da7d1de2783083ed72f4ef3ed5a7d948bf47` |
-| Terminal review and landing | Bokkie campaign | Canonical check, exact-head independent review, CI, squash merge and cleanup | All acceptance proof | Canonical check complete at `c22d4886537d1ddf5feeebec17a7230359ae228f`; review and landing pending |
+| Terminal review and landing | Bokkie campaign | Canonical check, exact-head independent review, CI, squash merge and cleanup | All acceptance proof | Ready pull request [#4](https://github.com/robchristie/bokkie/pull/4); canonical check complete; exact-head review and landing pending |
 
 Add a Polyorama owner node before its consumer only if a demonstrated reusable
 gap makes one necessary.
@@ -145,7 +146,7 @@ gap makes one necessary.
 - [x] No Polyorama change was required.
 - [ ] Final exact heads receive independent review; blocking findings are
   repaired and re-reviewed; owner dependencies land before consumers.
-- [x] README, operator guide and active plan document running, the trust
+- [x] README, operator guide and completed plan document running, the trust
   boundary, refresh behaviour, evidence, limitations and exact landed revisions.
 
 ## Safety and exceptional review boundaries
