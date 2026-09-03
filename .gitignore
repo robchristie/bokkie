@@ -1,4 +1,7 @@
 /target/
+/apps/bokkie-attention-ui/web/pkg/
+/.ui-qualification-runtime/
+/node_modules/
 *.db
 *.db-shm
 *.db-wal

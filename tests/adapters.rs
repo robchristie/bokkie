@@ -374,6 +374,25 @@ fn gardener_http_exposes_registration_evidence_and_decisions() {
     )
     .unwrap();
     assert_eq!(rejected["obligation_state"], "attention");
+    let conditional_path = format!(
+        "/operator/gardener/proposals/{}/approve",
+        seeded.conditional_fingerprint
+    );
+    let (_, conditionally_approved) = http_json(
+        address,
+        "POST",
+        &conditional_path,
+        Some(operator_action_body(
+            address,
+            &format!("gardener:implement:{}", seeded.conditional_fingerprint),
+            "approve_gardener_proposal",
+            Some("http-operator"),
+            Some("reviewed with a state precondition"),
+        )),
+    )
+    .unwrap();
+    assert_eq!(conditionally_approved["obligation_state"], "pending");
+    assert_eq!(conditionally_approved["approval_decision"], "approved");
     stop_child(&mut daemon);
 
     create_seeded_run(&database, &seeded.approved_fingerprint);
@@ -532,13 +551,7 @@ fn loopback_api_exposes_lifecycle_and_history() {
     )
     .unwrap();
     assert_eq!(approved["state"], "pending");
-    let (_, cancelled) = http_json(
-        address,
-        "POST",
-        "/obligations/api-one/cancel",
-        Some(json!({})),
-    )
-    .unwrap();
+    let (_, cancelled) = http_json(address, "POST", "/obligations/api-one/cancel", None).unwrap();
     assert_eq!(cancelled["state"], "cancelled");
 
     let (_, events) = http_json(address, "GET", "/obligations/api-one/events", None).unwrap();
@@ -550,6 +563,84 @@ fn loopback_api_exposes_lifecycle_and_history() {
         http_json(address, "GET", "/obligations/missing", None).unwrap();
     assert_eq!(missing_status, 404);
     assert_eq!(missing["error"]["code"], "not_found");
+
+    stop_child(&mut daemon);
+}
+
+#[test]
+fn attention_ui_probe_reads_cancels_refreshes_and_serves_same_origin_assets() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("attention-ui.sqlite");
+    let ui_dir = temporary.path().join("ui");
+    std::fs::create_dir(&ui_dir).unwrap();
+    std::fs::write(
+        ui_dir.join("index.html"),
+        "<!doctype html><title>Bokkie attention probe</title>",
+    )
+    .unwrap();
+    let address = unused_loopback_address();
+    let mut daemon = spawn_daemon(&database, address, &["--ui-dir", ui_dir.to_str().unwrap()]);
+
+    wait_until(Duration::from_secs(5), || {
+        http_json(address, "GET", "/health", None).is_some()
+    });
+    let (created_status, created) = http_json(
+        address,
+        "POST",
+        "/obligations",
+        Some(json!({
+            "id": "attention-ui-future-fixture",
+            "description": "Harmless future approval-bound UI probe",
+            "scheduled_at": 4_102_444_800_i64,
+            "approval_required": true
+        })),
+    )
+    .unwrap();
+    assert_eq!(created_status, 201);
+    assert_eq!(created["state"], "awaiting_approval");
+
+    let (_, before) = http_json(address, "GET", "/obligations", None).unwrap();
+    assert_eq!(before[0]["id"], "attention-ui-future-fixture");
+    assert_eq!(before[0]["state"], "awaiting_approval");
+
+    let (cancel_status, cancelled) = http_json(
+        address,
+        "POST",
+        "/operator/obligations/attention-ui-future-fixture/cancel",
+        Some(operator_action_body(
+            address,
+            "attention-ui-future-fixture",
+            "cancel",
+            None,
+            None,
+        )),
+    )
+    .unwrap();
+    assert_eq!(cancel_status, 200);
+    assert_eq!(cancelled["state"], "cancelled");
+
+    let (_, refreshed) = http_json(address, "GET", "/obligations", None).unwrap();
+    assert_eq!(refreshed[0]["state"], "cancelled");
+    let (_, events) = http_json(
+        address,
+        "GET",
+        "/obligations/attention-ui-future-fixture/events",
+        None,
+    )
+    .unwrap();
+    let last = events.as_array().unwrap().last().unwrap();
+    assert_eq!(last["event_type"], "cancelled");
+    assert_eq!(last["from_state"], "awaiting_approval");
+    assert_eq!(last["to_state"], "cancelled");
+
+    let ui_response = http_raw(address, "GET", "/ui/").unwrap();
+    assert!(ui_response.starts_with("HTTP/1.1 200"));
+    assert!(ui_response.contains("Bokkie attention probe"));
+    assert!(
+        !ui_response
+            .to_ascii_lowercase()
+            .contains("access-control-allow-origin")
+    );
 
     stop_child(&mut daemon);
 }
@@ -809,6 +900,7 @@ fn scheduler_failure_stops_http_and_exits_non_zero() {
 struct SeededGardener {
     approved_fingerprint: String,
     rejected_fingerprint: String,
+    conditional_fingerprint: String,
 }
 
 fn seed_gardener_state(database: &Path, checkout: &str) -> SeededGardener {
@@ -909,6 +1001,7 @@ fn seed_gardener_state(database: &Path, checkout: &str) -> SeededGardener {
     SeededGardener {
         approved_fingerprint: proposal_fingerprint("robchristie/bokkie", APPROVED_PROMPT),
         rejected_fingerprint: proposal_fingerprint("robchristie/bokkie", REJECTED_PROMPT),
+        conditional_fingerprint: proposal_fingerprint("robchristie/bokkie", HTTP_PROMPT),
     }
 }
 
@@ -1069,6 +1162,43 @@ fn http_json(
     let status = headers.split_whitespace().nth(1)?.parse().ok()?;
     let body = serde_json::from_str(body).ok()?;
     Some((status, body))
+}
+
+fn operator_action_body(
+    address: SocketAddr,
+    obligation_id: &str,
+    capability: &str,
+    actor: Option<&str>,
+    note: Option<&str>,
+) -> Value {
+    let (_, snapshot) = http_json(address, "GET", "/operator/snapshot", None).unwrap();
+    let obligation = snapshot["obligations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == obligation_id)
+        .unwrap_or_else(|| panic!("operator snapshot lacks obligation {obligation_id:?}"));
+    let precondition = obligation["capabilities"][capability]["precondition"].clone();
+    assert!(
+        !precondition.is_null(),
+        "capability {capability:?} is unavailable"
+    );
+    json!({
+        "precondition": precondition,
+        "actor": actor.unwrap_or_default(),
+        "note": note,
+    })
+}
+
+fn http_raw(address: SocketAddr, method: &str, path: &str) -> Option<String> {
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(100)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    let request =
+        format!("{method} {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok()?;
+    Some(response)
 }
 
 fn unix_now() -> i64 {

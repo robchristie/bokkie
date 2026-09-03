@@ -64,3 +64,30 @@ approve work, merge a pull request, deploy, or restart Bokkie.
 See the [operator guide](docs/operator-guide.md) for command examples, HTTP
 routes, crash and graceful-shutdown behaviour, the trust boundary, and the
 hardened example systemd service.
+
+## Attention UI
+
+The first operator workspace is a separate Rust application that reads Bokkie's
+HTTP projections; it never opens SQLite directly and cannot create a second
+state path. It shows the exception inbox, obligation ledger and selected
+evidence timeline, while offering only actions that the backend declares legal.
+Native builds use a literal loopback HTTP base. Browser builds use relative API
+paths and must be served by this same loopback Bokkie origin at `/ui/`; there is
+no CORS exception, proxy, authentication layer or remote-access mode.
+
+Every lifecycle action requires a separate confirmation. Gardener decisions
+also display and submit the exact immutable proposal fingerprint, prompt,
+repository and occurrence, with an operator actor and optional note. The actor
+is audit evidence, not authentication. Every action also submits the
+backend-issued obligation identity, occurrence and append-only state revision
+that the operator reviewed; Store validates it atomically before mutation.
+The UI uses dedicated conditional `/operator` mutation routes, leaving existing
+lifecycle route contracts unchanged. Refresh keeps a surviving selection and
+retained snapshot visible; failed reads and transition conflicts mark it stale
+and disable decisions until Bokkie provides current state again.
+
+Build, run and qualification instructions, including the retained evidence and
+known accessibility/rendering limits, are in the [attention UI README](apps/bokkie-attention-ui/README.md).
+The UI remains a local single-user operator tool: it does not add authentication,
+notifications, remote access, automatic gardener execution, merge, deployment
+or release authority.

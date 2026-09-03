@@ -1,0 +1,11 @@
+{
+  "name": "bokkie-ui-qualification",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "playwright": "1.62.1"
+  },
+  "scripts": {
+    "ui-browser-smoke": "node tools/ui-browser-smoke.mjs"
+  }
+}
