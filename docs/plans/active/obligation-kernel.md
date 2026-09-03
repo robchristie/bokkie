@@ -67,11 +67,12 @@ never silently loses overdue, failed, approval-bound, or interrupted work.
 
 ## Current phase
 
-The repository is empty apart from Git metadata. Historical prototypes confirm
-that their simple persistence and fake app-server patterns are useful only as
-references; they lack migrations, leases, retry recovery, durable approvals,
-and audit guarantees. Establish the Rust kernel and executable lifecycle tests
-before adding service adapters.
+The lifecycle kernel is implemented and its focused tests pass. It owns ordered
+migrations, explicit transitions, cron/time-zone recurrence, approval-bound
+occurrences, fenced renewable leases, retry recovery, immutable attempts, and
+append-only audit events. The next increment is integrating the CLI, loopback
+HTTP API, daemon scheduler, systemd example, and real process crash test against
+that public interface.
 
 ## Decisions made
 
@@ -91,6 +92,7 @@ before adding service adapters.
 | Cluster | Owner revision | Consumer revision | Aggregate result | Status | Durable evidence |
 |---|---|---|---|---|---|
 | Historical prototype scan | local reference | n/a | `bokkie.old`: 9 tests passed; required reliability features absent | complete | Agent report; source paths recorded in task history |
+| Lifecycle kernel | `f2d6d2c` | same | 10 tests passed; Clippy and rustfmt passed | complete | `src/store.rs`, embedded migrations, and focused unit tests |
 
 ## Deferred or out of scope
 
