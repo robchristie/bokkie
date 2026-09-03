@@ -12,6 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
+use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 use crate::{
@@ -163,6 +164,18 @@ pub fn router(database: PathBuf) -> Router {
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found_route)
         .with_state(ApiState { database })
+}
+
+/// Add an explicit static UI directory to the same loopback service as the API.
+///
+/// Loopback validation remains the listener owner's responsibility. Serving the
+/// browser application from this router keeps its requests same-origin and does
+/// not add CORS or another network listener.
+pub fn router_with_ui(database: PathBuf, ui_dir: PathBuf) -> Router {
+    router(database).nest_service(
+        "/ui",
+        ServeDir::new(ui_dir).append_index_html_on_directories(true),
+    )
 }
 
 pub fn validate_loopback(address: SocketAddr) -> Result<(), String> {

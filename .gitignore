@@ -1,4 +1,5 @@
 /target/
+/apps/bokkie-attention-ui/web/pkg/
 *.db
 *.db-shm
 *.db-wal

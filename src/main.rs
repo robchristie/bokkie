@@ -13,7 +13,7 @@ use bokkie::{
     ApprovalDecision, CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerRunnerError,
     GardenerRuntimeConfig, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
     Store, StoreError, SystemClock, UnixClock,
-    http::{error_json, router, validate_loopback},
+    http::{error_json, router, router_with_ui, validate_loopback},
     service::{Scheduler, SchedulerConfig, SchedulerError, ServiceFakeOutcome},
 };
 #[cfg(test)]
@@ -126,6 +126,9 @@ enum Command {
         gardener_gh_executable: PathBuf,
         #[arg(long, default_value_t = 10_000)]
         gardener_heartbeat_ms: u64,
+        /// Explicit static UI asset directory served at /ui on this loopback origin.
+        #[arg(long)]
+        ui_dir: Option<PathBuf>,
     },
 }
 
@@ -223,6 +226,7 @@ struct ServeOptions {
     gardener_git_executable: PathBuf,
     gardener_gh_executable: PathBuf,
     gardener_heartbeat_ms: u64,
+    ui_dir: Option<PathBuf>,
 }
 
 impl From<FakeOutcomeArg> for ServiceFakeOutcome {
@@ -316,6 +320,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             gardener_git_executable,
             gardener_gh_executable,
             gardener_heartbeat_ms,
+            ui_dir,
         } => {
             serve(
                 cli.database,
@@ -331,6 +336,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                     gardener_git_executable,
                     gardener_gh_executable,
                     gardener_heartbeat_ms,
+                    ui_dir,
                 },
             )
             .await
@@ -561,6 +567,14 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
             "lease-seconds must be at least 2 for second-resolution lease renewal".to_owned(),
         ));
     }
+    if let Some(ui_dir) = &options.ui_dir
+        && !ui_dir.is_dir()
+    {
+        return Err(AppError::Configuration(format!(
+            "ui-dir must be an existing directory: {}",
+            ui_dir.display()
+        )));
+    }
 
     // Bind before starting the scheduler so a port conflict cannot execute work in a
     // process that immediately fails service start-up.
@@ -597,7 +611,11 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         json!({"event": "listening", "address": local_address.to_string()})
     );
 
-    let server_result = axum::serve(listener, router(database))
+    let application = match options.ui_dir {
+        Some(ui_dir) => router_with_ui(database, ui_dir),
+        None => router(database),
+    };
+    let server_result = axum::serve(listener, application)
         .with_graceful_shutdown(shutdown_signal(stop, scheduler_exit))
         .await;
     let scheduler_result = scheduler.shutdown();
