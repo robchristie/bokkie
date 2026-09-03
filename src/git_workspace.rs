@@ -9,7 +9,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, ExitStatus, Output};
+use std::process::{Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -146,6 +146,14 @@ pub enum GitWorkspaceError {
     BranchExists(String),
     #[error("cannot start {program} {arguments:?} in {cwd}: {source}")]
     Spawn {
+        program: PathBuf,
+        arguments: Vec<String>,
+        cwd: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("unable to collect output from started {program} {arguments:?} in {cwd}: {source}")]
+    Wait {
         program: PathBuf,
         arguments: Vec<String>,
         cwd: PathBuf,
@@ -708,11 +716,14 @@ impl GitWorkspace {
     {
         let arguments = arguments.into_iter().map(Into::into).collect::<Vec<_>>();
         let displayed_arguments = display_arguments(&arguments);
-        let output = retry_executable_file_busy(|| {
+        let child = retry_executable_file_busy(|| {
             Command::new(program)
                 .args(&arguments)
                 .current_dir(cwd)
-                .output()
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
         })
         .map_err(|source| GitWorkspaceError::Spawn {
             program: program.to_owned(),
@@ -720,6 +731,14 @@ impl GitWorkspace {
             cwd: cwd.to_owned(),
             source,
         })?;
+        let output = child
+            .wait_with_output()
+            .map_err(|source| GitWorkspaceError::Wait {
+                program: program.to_owned(),
+                arguments: displayed_arguments.clone(),
+                cwd: cwd.to_owned(),
+                source,
+            })?;
         Ok(ExecutedOutput {
             output,
             arguments: displayed_arguments,
@@ -1411,14 +1430,23 @@ mod tests {
         let result = retry_executable_file_busy(|| {
             let attempt = busy_attempts.get();
             busy_attempts.set(attempt + 1);
-            if attempt < 2 {
+            if attempt < 3 {
                 Err(io::Error::from(io::ErrorKind::ExecutableFileBusy))
             } else {
                 Ok(())
             }
         });
         assert!(result.is_ok());
-        assert_eq!(busy_attempts.get(), 3);
+        assert_eq!(busy_attempts.get(), 4);
+
+        let persistent_busy_attempts = Cell::new(0);
+        let error = retry_executable_file_busy(|| {
+            persistent_busy_attempts.set(persistent_busy_attempts.get() + 1);
+            Err::<(), _>(io::Error::from(io::ErrorKind::ExecutableFileBusy))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ExecutableFileBusy);
+        assert_eq!(persistent_busy_attempts.get(), 4);
 
         let other_attempts = Cell::new(0);
         let error = retry_executable_file_busy(|| {
@@ -1428,6 +1456,27 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(other_attempts.get(), 1);
+    }
+
+    #[test]
+    fn started_non_zero_process_is_not_retried() {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("invocations.log");
+        let executable = root.path().join("failing-process");
+        write_executable(
+            &executable,
+            &format!(
+                "#!/bin/sh\nprintf invoked >> '{}'\nexit 23\n",
+                shell_single_quote(&log)
+            ),
+        );
+        let workspace = GitWorkspace::new(root.path(), &executable, &executable).unwrap();
+
+        assert!(matches!(
+            workspace.gh_success(std::iter::empty::<OsString>()),
+            Err(GitWorkspaceError::Command(_))
+        ));
+        assert_eq!(fs::read_to_string(log).unwrap().lines().count(), 1);
     }
 
     fn fake_gh(root: &Path, log: &Path, json: &str) -> PathBuf {
