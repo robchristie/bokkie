@@ -3,33 +3,14 @@ use std::collections::BTreeSet;
 use polyorama_core::{DockNode, DockNodeId, LAYOUT_SCHEMA_VERSION, PaneId, Workspace};
 use serde::{Deserialize, Serialize};
 
+pub use bokkie_operator_api::{OperatorObligation as ObligationReadModel, OperatorObligationState};
+
 pub const ATTENTION_PANE_ID: PaneId = PaneId(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AttentionIntent {
     Refresh,
     Cancel { obligation_id: String },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ObligationReadModel {
-    pub id: String,
-    pub description: String,
-    pub state: ObligationState,
-    pub occurrence: u32,
-    pub scheduled_at: i64,
-    pub next_wake_at: Option<i64>,
-    pub approval_required: bool,
-    pub updated_at: i64,
-}
-
-impl ObligationReadModel {
-    pub fn can_cancel(&self) -> bool {
-        !matches!(
-            self.state,
-            ObligationState::Running | ObligationState::Completed | ObligationState::Cancelled
-        )
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -46,6 +27,24 @@ pub enum ObligationState {
 
 impl ObligationState {
     pub const fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "Pending",
+            Self::AwaitingApproval => "Awaiting approval",
+            Self::Running => "Running",
+            Self::RetryScheduled => "Retry scheduled",
+            Self::Attention => "Attention",
+            Self::Completed => "Completed",
+            Self::Cancelled => "Cancelled",
+        }
+    }
+}
+
+pub trait OperatorStateLabel {
+    fn label(self) -> &'static str;
+}
+
+impl OperatorStateLabel for OperatorObligationState {
+    fn label(self) -> &'static str {
         match self {
             Self::Pending => "Pending",
             Self::AwaitingApproval => "Awaiting approval",

@@ -293,6 +293,7 @@ name = "bokkie"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bokkie-operator-api",
  "chrono",
  "chrono-tz",
  "clap",
@@ -304,6 +305,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tower",
  "tower-http",
  "uuid",
 ]
@@ -312,6 +314,7 @@ dependencies = [
 name = "bokkie-attention-ui"
 version = "0.1.0"
 dependencies = [
+ "bokkie-operator-api",
  "console_error_panic_hook",
  "eframe",
  "ehttp",
@@ -324,6 +327,14 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "bokkie-operator-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

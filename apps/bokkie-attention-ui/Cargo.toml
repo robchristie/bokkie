@@ -12,6 +12,7 @@ name = "bokkie-attention-ui"
 path = "src/main.rs"
 
 [dependencies]
+bokkie-operator-api = { path = "../../crates/bokkie-operator-api" }
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "wgpu"] }
 ehttp = { version = "0.7.1", features = ["json"] }
 polyorama-core = { git = "https://github.com/robchristie/polyorama", rev = "0e725f5a97a6d99a6bc4c961dfc05b4e9252ba1d" }

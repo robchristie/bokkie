@@ -14,7 +14,7 @@ use crate::{
     APPLICATION_NAME,
     model::{
         ATTENTION_PANE_ID, AttentionIntent, AuditEventReadModel, ObligationReadModel,
-        fixed_workspace,
+        OperatorStateLabel, fixed_workspace,
     },
     transport::{ApiMessage, ApiPayload, ApiRequest, Transport},
 };
@@ -138,9 +138,8 @@ impl AttentionApp {
                         self.status = format!("Observed durable {} event", last.event_type);
                     }
                 }
-                Ok(ApiPayload::Cancelled(obligation)) => {
-                    self.status = format!("Cancellation accepted for {}", obligation.id);
-                    self.obligation = Some(obligation);
+                Ok(ApiPayload::Cancelled { obligation_id }) => {
+                    self.status = format!("Cancellation accepted for {obligation_id}");
                     self.dispatch(ApiRequest::List, context);
                 }
                 Err(error) => {
@@ -349,7 +348,8 @@ impl PanePresenter for AttentionPane<'_> {
                         {
                             self.intents.push(AttentionIntent::Refresh);
                         }
-                        let can_cancel = obligation.can_cancel() && !self.read.busy;
+                        let can_cancel =
+                            obligation.capabilities.cancel.available && !self.read.busy;
                         if pane_action(
                             ui,
                             AttentionAction::Cancel,

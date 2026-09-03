@@ -3,6 +3,8 @@ use std::{sync::mpsc::Sender, time::Duration};
 use eframe::egui;
 use serde::de::DeserializeOwned;
 
+use bokkie_operator_api::OperatorSnapshot;
+
 use crate::model::{AuditEventReadModel, ObligationReadModel};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,7 +18,7 @@ pub enum ApiRequest {
 pub enum ApiPayload {
     Obligations(Vec<ObligationReadModel>),
     Events(Vec<AuditEventReadModel>),
-    Cancelled(ObligationReadModel),
+    Cancelled { obligation_id: String },
 }
 
 #[derive(Debug)]
@@ -78,7 +80,7 @@ impl Transport {
 
     fn endpoint(&self, request: &ApiRequest) -> String {
         let path = match request {
-            ApiRequest::List => "/obligations".to_owned(),
+            ApiRequest::List => "/operator/snapshot".to_owned(),
             ApiRequest::Events { obligation_id } => {
                 format!("/obligations/{}/events", encode_path_segment(obligation_id))
             }
@@ -108,9 +110,12 @@ fn decode(request: &ApiRequest, response: ehttp::Response) -> Result<ApiPayload,
         ));
     }
     match request {
-        ApiRequest::List => decode_json(&response).map(ApiPayload::Obligations),
+        ApiRequest::List => decode_json::<OperatorSnapshot>(&response)
+            .map(|snapshot| ApiPayload::Obligations(snapshot.obligations)),
         ApiRequest::Events { .. } => decode_json(&response).map(ApiPayload::Events),
-        ApiRequest::Cancel { .. } => decode_json(&response).map(ApiPayload::Cancelled),
+        ApiRequest::Cancel { obligation_id } => Ok(ApiPayload::Cancelled {
+            obligation_id: obligation_id.clone(),
+        }),
     }
 }
 
@@ -144,7 +149,7 @@ mod tests {
         let transport = Transport::new("http://127.0.0.1:7744/").unwrap();
         assert_eq!(
             transport.endpoint(&ApiRequest::List),
-            "http://127.0.0.1:7744/obligations"
+            "http://127.0.0.1:7744/operator/snapshot"
         );
     }
 }

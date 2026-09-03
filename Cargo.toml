@@ -5,11 +5,12 @@ edition = "2024"
 publish = false
 
 [workspace]
-members = ["apps/bokkie-attention-ui"]
+members = ["apps/bokkie-attention-ui", "crates/bokkie-operator-api"]
 resolver = "2"
 
 [dependencies]
 axum = "0.8.4"
+bokkie-operator-api = { path = "crates/bokkie-operator-api" }
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 chrono-tz = "0.10.4"
 clap = { version = "4.5.47", features = ["derive", "env"] }
@@ -25,3 +26,4 @@ uuid = { version = "1.18.1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3.21.0"
+tower = "0.5.2"

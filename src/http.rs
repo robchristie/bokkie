@@ -127,6 +127,8 @@ impl From<StoreError> for ApiError {
 pub fn router(database: PathBuf) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/operator/snapshot", get(operator_snapshot))
+        .route("/operator/obligations/{id}/topic", get(operator_topic))
         .route("/obligations", post(create).get(list))
         .route("/obligations/{id}", get(show))
         .route("/obligations/{id}/approve", post(approve))
@@ -210,6 +212,19 @@ async fn create(
 
 async fn list(State(state): State<ApiState>) -> Result<Response, ApiError> {
     with_store(&state, |store, _| store.list())
+        .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn operator_snapshot(State(state): State<ApiState>) -> Result<Response, ApiError> {
+    with_store(&state, |store, now| store.operator_snapshot(now))
+        .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn operator_topic(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Response, ApiError> {
+    with_store(&state, |store, now| store.operator_topic(&id, now))
         .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -535,6 +550,12 @@ pub fn error_json(code: &'static str, message: impl Into<String>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tempfile::TempDir;
+    use tower::ServiceExt;
 
     #[test]
     fn remote_bind_is_rejected() {
@@ -542,5 +563,71 @@ mod tests {
         assert!(error.contains("authentication"));
         assert!(validate_loopback("127.0.0.1:7744".parse().unwrap()).is_ok());
         assert!(validate_loopback("[::1]:7744".parse().unwrap()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn operator_endpoints_return_shared_projection_and_missing_topic_is_not_found() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("operator-http.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        store
+            .create(
+                NewObligation {
+                    id: "approval".to_owned(),
+                    description: "Approve carefully".to_owned(),
+                    scheduled_at: 2_000_000_000,
+                    recurrence: None,
+                    approval_required: true,
+                    retry: RetryPolicy::default(),
+                },
+                100,
+            )
+            .unwrap();
+        drop(store);
+
+        let response = router(database.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/operator/snapshot")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let snapshot: bokkie_operator_api::OperatorSnapshot =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(snapshot.obligations[0].id, "approval");
+        assert!(snapshot.obligations[0].capabilities.approve.available);
+
+        let response = router(database.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/operator/obligations/approval/topic")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let topic: bokkie_operator_api::ObligationTopic = serde_json::from_slice(&body).unwrap();
+        assert_eq!(topic.obligation_id, "approval");
+        assert_eq!(
+            topic.items[0].source,
+            bokkie_operator_api::TopicSource::AuditEvent
+        );
+
+        let response = router(database)
+            .oneshot(
+                Request::builder()
+                    .uri("/operator/obligations/missing/topic")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

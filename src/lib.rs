@@ -11,11 +11,13 @@ pub mod gardener;
 pub mod gardener_runner;
 pub mod git_workspace;
 pub mod http;
+pub mod operator;
 pub mod recurrence;
 pub mod runner;
 pub mod service;
 pub mod store;
 
+pub use bokkie_operator_api::*;
 pub use domain::{
     ApprovalDecision, Attempt, AttemptOutcome, AuditEvent, Claim, Completion, NewObligation,
     Obligation, ObligationState, RetryPolicy,

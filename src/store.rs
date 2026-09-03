@@ -108,7 +108,7 @@ impl UnixClock for ManualClock {
 }
 
 pub struct Store {
-    connection: Connection,
+    pub(crate) connection: Connection,
 }
 
 impl Store {
@@ -222,6 +222,19 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let is_gardener_proposal = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM gardener_proposals
+                WHERE implementation_obligation_id = ?1
+             )",
+            [id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if is_gardener_proposal {
+            return Err(StoreError::Conflict(
+                "gardener proposals require the exact proposal decision path".to_owned(),
+            ));
+        }
         apply_transition(
             &transaction,
             Transition::Approval {
@@ -2084,6 +2097,32 @@ enum Transition<'a> {
     },
 }
 
+pub(crate) fn approval_transition_is_legal(obligation: &Obligation) -> bool {
+    obligation.state == ObligationState::AwaitingApproval
+}
+
+pub(crate) fn generic_approval_transition_is_legal(
+    obligation: &Obligation,
+    is_gardener_proposal: bool,
+) -> bool {
+    approval_transition_is_legal(obligation) && !is_gardener_proposal
+}
+
+pub(crate) fn gardener_proposal_transition_is_legal(
+    obligation: &Obligation,
+    is_gardener_proposal: bool,
+) -> bool {
+    approval_transition_is_legal(obligation) && is_gardener_proposal
+}
+
+pub(crate) fn retry_transition_is_legal(obligation: &Obligation) -> bool {
+    obligation.state == ObligationState::Attention
+}
+
+pub(crate) fn cancel_transition_is_legal(obligation: &Obligation) -> bool {
+    !obligation.state.is_terminal() && obligation.state != ObligationState::Running
+}
+
 #[derive(Default)]
 struct TransitionResult {
     claim: Option<Claim>,
@@ -2149,7 +2188,7 @@ fn apply_transition(
             now,
         } => {
             let obligation = require_obligation(transaction, id)?;
-            if obligation.state != ObligationState::AwaitingApproval {
+            if !approval_transition_is_legal(&obligation) {
                 return Err(StoreError::Conflict(format!(
                     "approval requires awaiting_approval, found {}",
                     obligation.state
@@ -2445,7 +2484,7 @@ fn apply_transition(
         }
         Transition::RetryAttention { id, now } => {
             let obligation = require_obligation(transaction, id)?;
-            if obligation.state != ObligationState::Attention {
+            if !retry_transition_is_legal(&obligation) {
                 return Err(StoreError::Conflict(format!(
                     "retry requires attention, found {}",
                     obligation.state
@@ -2481,7 +2520,7 @@ fn apply_transition(
                     obligation.state
                 )));
             }
-            if obligation.state == ObligationState::Running {
+            if !cancel_transition_is_legal(&obligation) {
                 return Err(StoreError::Conflict(
                     "cannot cancel while a runner owns an active claim".to_owned(),
                 ));
