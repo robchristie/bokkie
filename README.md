@@ -42,3 +42,14 @@ cargo fmt --all -- --check
 The supplied systemd unit is an example artefact only. Installing or enabling
 it is deliberately outside repository verification and requires an explicit
 operator decision.
+
+## Command and service adapters
+
+The `bokkie` executable provides JSON-producing `create`, `list`, `show`,
+`approve`, `reject`, `retry`, `cancel`, `events`, and `attempts` commands. Its
+`serve` command runs the scheduler and unauthenticated HTTP API together and
+refuses non-loopback binding.
+
+See the [operator guide](docs/operator-guide.md) for command examples, HTTP
+routes, crash and graceful-shutdown behaviour, the trust boundary, and the
+hardened example systemd service.

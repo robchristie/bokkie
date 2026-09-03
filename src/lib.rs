@@ -6,8 +6,10 @@
 //! deliberately invoked outside those transactions.
 
 pub mod domain;
+pub mod http;
 pub mod recurrence;
 pub mod runner;
+pub mod service;
 pub mod store;
 
 pub use domain::{
