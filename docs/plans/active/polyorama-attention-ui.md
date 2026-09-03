@@ -110,7 +110,7 @@ primary action. The decision and its necessary evidence remain visible at
 | Increment | Semantic owner | Outcome and proof | Dependency | Status |
 | --- | --- | --- | --- | --- |
 | Transport exploration | Bokkie application/HTTP adapter | Fixed pane, fixture read/action, native+Wasm build and browser same-origin probe | Baselines above | Complete at `3910f2bd4076f82042c9017da2fe12e674bf736e` |
-| Read projections and capabilities | Bokkie domain/store/HTTP | Authoritative inbox, liveness, timeline and legal-action projection with deterministic store/API tests | Selected seam | Pending |
+| Read projections and capabilities | Bokkie domain/store/HTTP | Authoritative inbox, liveness, timeline and legal-action projection with deterministic store/API tests | Selected seam | Complete at `ad0afe37c24ec4876f18244e5dbdc6dc9cf6e7bb` |
 | Operational workspace | Bokkie application | Three connected panes, typed intents, virtualisation, refresh/stale/conflict handling and responsive semantics | Projection contract | Pending |
 | Qualification and documentation | Bokkie application/tooling | Temporary-service native/browser physical journeys, semantic/text/visual/idle evidence and operator docs | Complete workspace | Pending |
 | Terminal review and landing | Bokkie campaign | Canonical check, exact-head independent review, CI, squash merge and cleanup | All acceptance proof | Pending |
@@ -160,11 +160,15 @@ gap makes one necessary.
 
 ## Current phase
 
-The transport exploration is complete and retained at the exact revision above.
-The boundary is a Bokkie-owned native/Wasm application plus optional static
-assets on Bokkie's existing loopback listener. The current UI is deliberately
-only a probe and its presentation-side cancellation mapping is not a final
-capability contract. Next, add the smallest authoritative read projection for
-exception classification, durable liveness, complete topic provenance and
-legal action availability, with store and HTTP tests before expanding the
-three-pane workspace.
+The authoritative projection is complete at
+`ad0afe37c24ec4876f18244e5dbdc6dc9cf6e7bb`. A Wasm-safe shared contract now
+exposes genuine exceptions, liveness, exact generic-versus-gardener actions and
+deterministically ordered durable topic evidence. Store/API tests include all
+obligation states, exact proposal content, rejection, blocking and inconclusive
+verification, equal timestamps and missing topics; 73 workspace tests, strict
+Clippy, formatting and the Wasm UI build passed. Topic construction currently
+scans existing local gardener history before filtering; retain this local-scale
+implementation until representative evidence demonstrates a pagination need.
+Next, replace the one-pane probe with the operational three-pane workspace,
+action confirmation, refresh/stale/conflict behaviour and deterministic UI
+fixtures against this backend-owned contract.
