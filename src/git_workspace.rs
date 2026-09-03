@@ -10,6 +10,8 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Output};
+use std::thread;
+use std::time::Duration;
 
 use serde::Deserialize;
 use thiserror::Error;
@@ -18,6 +20,8 @@ pub const CANONICAL_REPOSITORY: &str = "robchristie/bokkie";
 pub const CANONICAL_DEFAULT_BRANCH: &str = "main";
 pub const GARDENER_BRANCH_PREFIX: &str = "codex/gardener-";
 const CANONICAL_HTTPS_URL: &str = "https://github.com/robchristie/bokkie.git";
+const EXECUTABLE_FILE_BUSY_ATTEMPTS: usize = 4;
+const EXECUTABLE_FILE_BUSY_BACKOFF: Duration = Duration::from_millis(5);
 
 /// An exact SHA-1 Git commit identity.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -704,16 +708,18 @@ impl GitWorkspace {
     {
         let arguments = arguments.into_iter().map(Into::into).collect::<Vec<_>>();
         let displayed_arguments = display_arguments(&arguments);
-        let output = Command::new(program)
-            .args(&arguments)
-            .current_dir(cwd)
-            .output()
-            .map_err(|source| GitWorkspaceError::Spawn {
-                program: program.to_owned(),
-                arguments: displayed_arguments.clone(),
-                cwd: cwd.to_owned(),
-                source,
-            })?;
+        let output = retry_executable_file_busy(|| {
+            Command::new(program)
+                .args(&arguments)
+                .current_dir(cwd)
+                .output()
+        })
+        .map_err(|source| GitWorkspaceError::Spawn {
+            program: program.to_owned(),
+            arguments: displayed_arguments.clone(),
+            cwd: cwd.to_owned(),
+            source,
+        })?;
         Ok(ExecutedOutput {
             output,
             arguments: displayed_arguments,
@@ -735,6 +741,21 @@ impl GitWorkspace {
             stderr: String::from_utf8_lossy(&executed.output.stderr).into_owned(),
         })
     }
+}
+
+fn retry_executable_file_busy<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    for attempt in 0..EXECUTABLE_FILE_BUSY_ATTEMPTS {
+        match operation() {
+            Err(source)
+                if source.kind() == io::ErrorKind::ExecutableFileBusy
+                    && attempt + 1 < EXECUTABLE_FILE_BUSY_ATTEMPTS =>
+            {
+                thread::sleep(EXECUTABLE_FILE_BUSY_BACKOFF);
+            }
+            result => return result,
+        }
+    }
+    unreachable!("the final executable-file-busy attempt returns")
 }
 
 #[derive(Clone, Copy)]
@@ -908,10 +929,13 @@ fn display_arguments(arguments: &[OsString]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::fs;
+    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use tempfile::TempDir;
 
@@ -1381,6 +1405,31 @@ mod tests {
         assert!(validate_branch("codex/gardener-../main").is_err());
     }
 
+    #[test]
+    fn retries_only_pre_start_executable_file_busy_errors() {
+        let busy_attempts = Cell::new(0);
+        let result = retry_executable_file_busy(|| {
+            let attempt = busy_attempts.get();
+            busy_attempts.set(attempt + 1);
+            if attempt < 2 {
+                Err(io::Error::from(io::ErrorKind::ExecutableFileBusy))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.is_ok());
+        assert_eq!(busy_attempts.get(), 3);
+
+        let other_attempts = Cell::new(0);
+        let error = retry_executable_file_busy(|| {
+            other_attempts.set(other_attempts.get() + 1);
+            Err::<(), _>(io::Error::from(io::ErrorKind::PermissionDenied))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(other_attempts.get(), 1);
+    }
+
     fn fake_gh(root: &Path, log: &Path, json: &str) -> PathBuf {
         let script = root.join(format!("gh-{}", log.file_stem().unwrap().to_string_lossy()));
         let contents = format!(
@@ -1388,10 +1437,7 @@ mod tests {
             shell_single_quote(log),
             shell_single_quote(Path::new(json)),
         );
-        fs::write(&script, contents).unwrap();
-        let mut permissions = fs::metadata(&script).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script, permissions).unwrap();
+        write_executable(&script, &contents);
         script
     }
 
@@ -1406,11 +1452,30 @@ mod tests {
             shell_single_quote(log),
             shell_single_quote(Path::new(&rewrite)),
         );
-        fs::write(&script, contents).unwrap();
-        let mut permissions = fs::metadata(&script).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script, permissions).unwrap();
+        write_executable(&script, &contents);
         script
+    }
+
+    fn write_executable(path: &Path, contents: &str) {
+        static NEXT_TEMPORARY_FILE: AtomicUsize = AtomicUsize::new(0);
+
+        let temporary_path = path.with_file_name(format!(
+            ".{}.{}.tmp",
+            path.file_name().unwrap().to_string_lossy(),
+            NEXT_TEMPORARY_FILE.fetch_add(1, Ordering::Relaxed),
+        ));
+        let mut temporary = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+            .unwrap();
+        temporary.write_all(contents.as_bytes()).unwrap();
+        let mut permissions = temporary.metadata().unwrap().permissions();
+        permissions.set_mode(0o755);
+        temporary.set_permissions(permissions).unwrap();
+        temporary.sync_all().unwrap();
+        drop(temporary);
+        fs::rename(temporary_path, path).unwrap();
     }
 
     fn shell_single_quote(path: &Path) -> String {
