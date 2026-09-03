@@ -1,0 +1,5 @@
+{
+  "state": "cancelled",
+  "last_audit_event": "cancelled",
+  "classification": "direct real HTTP/store read after native physical confirmation"
+}

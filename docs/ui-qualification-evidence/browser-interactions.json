@@ -1,0 +1,223 @@
+{
+  "browser": {
+    "version": "151.0.7922.34",
+    "backend": "browser WebGPU requested through eframe/wgpu",
+    "source_revision": "8b368e9197ecac4c9dd38a478f6e5485325af60b",
+    "webgpu": {
+      "navigator_gpu": true,
+      "adapter_available": true,
+      "adapter": {
+        "vendor": "nvidia",
+        "architecture": "ampere",
+        "device": "",
+        "description": ""
+      }
+    }
+  },
+  "journeys": [
+    {
+      "name": "exact gardener confirmation",
+      "classification": "direct physical pointer plus Rust semantic state",
+      "obligation": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "confirmation_bounds": {
+        "min_x": 440,
+        "min_y": 221,
+        "max_x": 1000,
+        "max_y": 679.90625
+      },
+      "observed_measured_components": 88,
+      "consequence_action": "approve_exact_gardener_proposal",
+      "occurrence": 1,
+      "consequence": "Schedule implementation of this exact immutable proposal",
+      "fingerprint": "d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "prompt": "Review the operator projection and implement the smallest exact-head improvement.\n\nPreserve the trust boundary and retain exact source, tool, environment and input identities. This intentionally long immutable prompt must wrap and remain selectable in the confirmation surface.",
+      "submitted": false
+    },
+    {
+      "name": "safe cancel lifecycle",
+      "classification": "direct physical pointer, real HTTP/store path, refreshed durable projection",
+      "durable_result": {
+        "state": "cancelled",
+        "last_event": "cancelled"
+      }
+    },
+    {
+      "name": "stale confirmation conflict",
+      "classification": "direct physical confirmation against externally advanced temporary store state",
+      "conflict": "The state changed before this action could be applied: transition conflict: cannot cancel terminal state cancelled. Bokkie has refreshed the obligation; your actor and note are retained. Review the current state before trying again.",
+      "connection": "stale retained data",
+      "submit_enabled": false
+    },
+    {
+      "name": "keyboard focus traversal",
+      "classification": "direct keyboard input and Rust current-frame focus semantics",
+      "focused": [
+        "action.refresh_operator_state"
+      ]
+    },
+    {
+      "name": "selection and scroll across refresh",
+      "classification": "direct wheel, physical refresh action and Rust visible-range observation",
+      "selected": "attention-nonretryable",
+      "visible_start_before": 7,
+      "visible_start_after": 7
+    }
+  ],
+  "states": {
+    "full": {
+      "fixture": {
+        "address": "127.0.0.1:36835",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-96dffc4d-74a9-44a5-a255-6630cf33bdce",
+        "variant": "full"
+      },
+      "ready": {
+        "obligations": "193",
+        "nodes": 20,
+        "text_coverage": {
+          "measured_components": "73",
+          "native_text_controls": "2",
+          "observed_native_controls": "0",
+          "excluded_categories": [
+            "ordinary_egui_labels",
+            "native_combo_box_text",
+            "native_selectable_text"
+          ]
+        },
+        "semantic_audit": [],
+        "text_audit": []
+      },
+      "warmed_idle": {
+        "before": "155",
+        "after": "155",
+        "stable": true,
+        "interval_ms": 1000
+      }
+    },
+    "empty": {
+      "fixture": {
+        "address": "127.0.0.1:44005",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-394d6236-ce19-4c7e-8850-b56cf7b0df24",
+        "variant": "empty"
+      },
+      "result": {
+        "total_rows": "0",
+        "classification": "direct real-router empty temporary SQLite database"
+      }
+    },
+    "loading": {
+      "nodes": 6,
+      "classification": "direct Rust current-frame state before the first HTTP snapshot completed"
+    },
+    "empty-inbox": {
+      "fixture": {
+        "address": "127.0.0.1:38259",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-84eed24d-a020-43ad-ba76-2dd03ad70376",
+        "variant": "empty-inbox"
+      }
+    },
+    "empty_inbox": {
+      "total_rows": "1",
+      "inbox_rows": 0,
+      "classification": "direct real-router terminal-only temporary SQLite database"
+    },
+    "large": {
+      "fixture": {
+        "address": "127.0.0.1:35123",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-f68045c8-6872-49c8-8785-3ed798bda795",
+        "variant": "large"
+      },
+      "result": {
+        "total_rows": "5000",
+        "visible_rows": [
+          "0",
+          "5"
+        ],
+        "materialised_rows": [
+          "0",
+          "9"
+        ],
+        "materialised_count": 9,
+        "classification": "direct current-frame Rust virtualisation observation"
+      }
+    },
+    "disconnected_request": "network: GET http://127.0.0.1:35123/operator/snapshot net::ERR_CONNECTION_REFUSED",
+    "disconnected_console": "console: Failed to load resource: net::ERR_CONNECTION_REFUSED",
+    "disconnected": {
+      "network_disconnected": true,
+      "app_stale_surface": "covered by conflict journey; post-shutdown repaint unavailable in headless harness",
+      "classification": "direct failed same-origin fetch after fixture shutdown; app surface classification approximate"
+    }
+  },
+  "viewports": [
+    {
+      "width": 1440,
+      "height": 900,
+      "label": "1440x900",
+      "screenshot": "browser-1440x900.png",
+      "node_count": 21,
+      "selected": "attention-nonretryable",
+      "active_pane": 3,
+      "layout": {
+        "document_width": 1440,
+        "document_scroll_width": 1440,
+        "document_height": 900,
+        "document_scroll_height": 900,
+        "canvas": {
+          "width": 1440,
+          "height": 900
+        }
+      }
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "label": "1280x720",
+      "screenshot": "browser-1280x720.png",
+      "node_count": 19,
+      "selected": "attention-nonretryable",
+      "active_pane": 3,
+      "layout": {
+        "document_width": 1280,
+        "document_scroll_width": 1280,
+        "document_height": 720,
+        "document_scroll_height": 720,
+        "canvas": {
+          "width": 1280,
+          "height": 720
+        }
+      }
+    },
+    {
+      "width": 480,
+      "height": 720,
+      "label": "narrow-480x720",
+      "screenshot": "browser-narrow-480x720.png",
+      "node_count": 10,
+      "selected": "attention-nonretryable",
+      "active_pane": 3,
+      "layout": {
+        "document_width": 480,
+        "document_scroll_width": 480,
+        "document_height": 720,
+        "document_scroll_height": 720,
+        "canvas": {
+          "width": 480,
+          "height": 720
+        }
+      }
+    }
+  ],
+  "errors": [],
+  "last_operator_response": {
+    "url": "http://127.0.0.1:35123/operator/obligations/large%2D00000/topic",
+    "status": 200
+  }
+}
