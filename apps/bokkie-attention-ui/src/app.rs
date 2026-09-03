@@ -1,7 +1,10 @@
 use std::{
+    cell::RefCell,
+    rc::Rc,
     sync::mpsc::{self, Receiver, Sender},
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 use bokkie_operator_api::{
     ApprovalSubject, AttentionCause, DurableLiveness, ExceptionReason, ObligationTopic,
@@ -11,10 +14,12 @@ use eframe::egui;
 use polyorama_core::{DockNodeId, PaneId, Workspace, virtual_rows};
 use polyorama_ui_egui::{
     ActionButtonSpec, ActionEmphasis, ActionKey, ActionScope, ActionSpec, ActionTarget,
-    Availability, DesignTokens, DockBehaviour, DockTextContext, PanePresenter, StatusTone,
-    TextInteraction, TextLayoutObservation, TextOverflow, TextRole, UiPreferences, action_button,
+    Availability, DesignTokens, DockBehaviour, DockTextContext, NativeTextControlKind,
+    PanePresenter, SemanticUiId, StatusTone, TextInteraction, TextLayoutObservation, TextOverflow,
+    TextRole, UiNode, UiPreferences, UiRole, action_button, action_semantic_node,
     application_bar_frame, application_bar_height, apply_design_system, dock_workspace,
-    measured_content_label, property_row, section_heading, status_badge,
+    measured_content_label, property_row, record_native_text_control, section_heading,
+    status_badge,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -27,6 +32,9 @@ use crate::{
         operator_workspace,
     },
     transport::{ActionRequest, ApiFailure, ApiMessage, ApiPayload, ApiRequest, Transport},
+    ui_observation::{
+        InteractionObservation, TestSnapshot, VirtualisationObservation, finish_snapshot, root_node,
+    },
 };
 
 const NARROW_WORKSPACE_WIDTH: f32 = 760.0;
@@ -201,10 +209,20 @@ pub struct AttentionApp {
     preferences: UiPreferences,
     next_poll_at: Option<Instant>,
     topic_requests: TopicRequestGate,
+    frame_number: u64,
+    last_test_snapshot: TestSnapshot,
+    test_observer: Option<Rc<RefCell<TestSnapshot>>>,
 }
 
 impl AttentionApp {
     pub fn new(creation: &eframe::CreationContext<'_>) -> Self {
+        Self::new_observed(creation, None)
+    }
+
+    pub(crate) fn new_observed(
+        creation: &eframe::CreationContext<'_>,
+        test_observer: Option<Rc<RefCell<TestSnapshot>>>,
+    ) -> Self {
         let preferences = UiPreferences::default();
         apply_design_system(&creation.egui_ctx, preferences);
         let (sender, receiver) = mpsc::channel();
@@ -232,9 +250,29 @@ impl AttentionApp {
             preferences,
             next_poll_at: None,
             topic_requests: TopicRequestGate::default(),
+            frame_number: 0,
+            last_test_snapshot: TestSnapshot::default(),
+            test_observer,
         };
         app.dispatch(ApiRequest::Snapshot, &creation.egui_ctx);
         app
+    }
+
+    pub fn test_snapshot(&self) -> TestSnapshot {
+        self.last_test_snapshot.clone()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write_native_test_snapshot(&self) {
+        let Ok(path) = std::env::var("BOKKIE_UI_TEST_SNAPSHOT_PATH") else {
+            return;
+        };
+        if let Ok(json) = serde_json::to_vec_pretty(&self.last_test_snapshot) {
+            let temporary = format!("{path}.tmp");
+            if std::fs::write(&temporary, json).is_ok() {
+                let _ = std::fs::rename(temporary, path);
+            }
+        }
     }
 
     fn dispatch(&mut self, request: ApiRequest, context: &egui::Context) {
@@ -374,6 +412,7 @@ impl AttentionApp {
                     if let Err(error) = self.model.begin_confirmation(action) {
                         self.model.status = error;
                     }
+                    context.request_repaint();
                 }
                 OperatorIntent::UpdateConfirmation { actor, note } => {
                     if let Some(confirmation) = self.model.confirmation.as_mut() {
@@ -381,7 +420,10 @@ impl AttentionApp {
                         confirmation.note = note;
                     }
                 }
-                OperatorIntent::DismissConfirmation => self.model.confirmation = None,
+                OperatorIntent::DismissConfirmation => {
+                    self.model.confirmation = None;
+                    context.request_repaint();
+                }
                 OperatorIntent::SubmitConfirmation => self.submit_confirmation(context),
             }
         }
@@ -467,6 +509,7 @@ impl AttentionApp {
 
 impl eframe::App for AttentionApp {
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.frame_number = self.frame_number.saturating_add(1);
         let context = root_ui.ctx().clone();
         self.poll_transport(&context);
         self.drive_polling(&context);
@@ -474,7 +517,10 @@ impl eframe::App for AttentionApp {
             .preferences
             .tokens(context.theme() == egui::Theme::Dark);
         let mut intents = Vec::new();
-        egui::Panel::top("bokkie-application-bar")
+        let mut semantic_nodes = vec![root_node(root_ui.max_rect())];
+        let mut text_observations = Vec::new();
+        let mut virtualisation = VirtualisationObservation::default();
+        let bar = egui::Panel::top("bokkie-application-bar")
             .frame(application_bar_frame(&tokens))
             .exact_size(application_bar_height(&tokens, self.preferences.font_scale))
             .show(root_ui, |ui| {
@@ -501,26 +547,41 @@ impl eframe::App for AttentionApp {
                         } else {
                             Availability::Enabled
                         };
-                        if action_button(
+                        let target = ActionTarget::application(ShellAction::Refresh);
+                        let response = action_button(
                             ui,
                             ActionButtonSpec {
-                                target: ActionTarget::application(ShellAction::Refresh),
-                                availability,
+                                target,
+                                availability: availability.clone(),
                                 selected: false,
                                 emphasis: ActionEmphasis::Quiet,
                                 compact: false,
                             },
                             &tokens,
                             self.preferences.font_scale,
-                            &mut Vec::new(),
-                        )
-                        .clicked()
-                        {
+                            &mut text_observations,
+                        );
+                        semantic_nodes.push(action_semantic_node(
+                            &response,
+                            target,
+                            &availability,
+                            false,
+                            SemanticUiId::root(),
+                        ));
+                        if response.clicked() {
                             intents.push(OperatorIntent::Refresh);
                         }
                     });
                 });
             });
+        let mut bar_node = UiNode::container(
+            SemanticUiId::new("bokkie.application-bar"),
+            Some(SemanticUiId::root()),
+            UiRole::ApplicationBar,
+            bar.response.rect.into(),
+        );
+        bar_node.name = APPLICATION_NAME.to_owned();
+        semantic_nodes.push(bar_node);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
@@ -577,6 +638,8 @@ impl eframe::App for AttentionApp {
                     tokens,
                     font_scale: self.preferences.font_scale,
                     text: Vec::new(),
+                    semantic_nodes: Vec::new(),
+                    virtualisation: VirtualisationObservation::default(),
                 };
                 if narrow {
                     presenter.pane_ui(ui, self.workspace.active_pane, ui.max_rect());
@@ -592,6 +655,9 @@ impl eframe::App for AttentionApp {
                         },
                     );
                 }
+                text_observations.extend(presenter.text);
+                semantic_nodes.extend(presenter.semantic_nodes);
+                virtualisation = presenter.virtualisation;
             });
 
         if let Some(confirmation) = self.model.confirmation.clone() {
@@ -604,9 +670,40 @@ impl eframe::App for AttentionApp {
                 &tokens,
                 self.preferences.font_scale,
                 &mut intents,
+                &mut semantic_nodes,
+                &mut text_observations,
             );
         }
         self.apply_intents(intents, &context);
+        let confirmation = self.model.confirmation.as_ref();
+        self.last_test_snapshot = finish_snapshot(
+            &context,
+            self.frame_number,
+            semantic_nodes,
+            text_observations,
+            virtualisation,
+            InteractionObservation {
+                selected_obligation: self.model.selected_obligation.clone(),
+                active_pane: self.workspace.active_pane.0,
+                connection: freshness_state(&self.model.connection).to_owned(),
+                confirmation_action: confirmation.map(|value| value.action.stable_id().to_owned()),
+                confirmation_obligation: confirmation.map(|value| value.obligation_id.clone()),
+                confirmation_occurrence: confirmation.map(|value| value.occurrence),
+                confirmation_consequence: confirmation.map(|value| value.consequence.clone()),
+                confirmation_fingerprint: confirmation
+                    .and_then(|value| value.gardener.as_ref())
+                    .map(|value| value.fingerprint.clone()),
+                confirmation_prompt: confirmation
+                    .and_then(|value| value.gardener.as_ref())
+                    .map(|value| value.prompt.clone()),
+                confirmation_conflict: confirmation.and_then(|value| value.conflict.clone()),
+            },
+        );
+        if let Some(observer) = &self.test_observer {
+            *observer.borrow_mut() = self.last_test_snapshot.clone();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.write_native_test_snapshot();
     }
 }
 
@@ -648,6 +745,8 @@ struct OperatorPanePresenter<'a> {
     tokens: DesignTokens,
     font_scale: f32,
     text: Vec<TextLayoutObservation>,
+    semantic_nodes: Vec<UiNode>,
+    virtualisation: VirtualisationObservation,
 }
 
 impl PanePresenter for OperatorPanePresenter<'_> {
@@ -660,7 +759,16 @@ impl PanePresenter for OperatorPanePresenter<'_> {
         }
     }
 
-    fn pane_ui(&mut self, ui: &mut egui::Ui, pane: PaneId, _pane_rect: egui::Rect) {
+    fn pane_ui(&mut self, ui: &mut egui::Ui, pane: PaneId, pane_rect: egui::Rect) {
+        let mut pane_node = UiNode::container(
+            SemanticUiId::pane(pane),
+            Some(SemanticUiId::root()),
+            UiRole::Pane,
+            pane_rect.into(),
+        );
+        pane_node.name = self.title(pane).to_owned();
+        pane_node.pane = Some(pane);
+        self.semantic_nodes.push(pane_node);
         match pane {
             INBOX_PANE_ID => show_inbox(
                 ui,
@@ -669,6 +777,7 @@ impl PanePresenter for OperatorPanePresenter<'_> {
                 &self.tokens,
                 self.font_scale,
                 &mut self.text,
+                &mut self.semantic_nodes,
             ),
             OBLIGATIONS_PANE_ID => show_obligations(
                 ui,
@@ -677,6 +786,8 @@ impl PanePresenter for OperatorPanePresenter<'_> {
                 &self.tokens,
                 self.font_scale,
                 &mut self.text,
+                &mut self.semantic_nodes,
+                &mut self.virtualisation,
             ),
             TIMELINE_PANE_ID => show_timeline(
                 ui,
@@ -685,6 +796,7 @@ impl PanePresenter for OperatorPanePresenter<'_> {
                 &self.tokens,
                 self.font_scale,
                 &mut self.text,
+                &mut self.semantic_nodes,
             ),
             _ => {}
         }
@@ -718,7 +830,9 @@ fn show_narrow_navigation(
             (TIMELINE_PANE_ID, "Timeline"),
         ] {
             ui.push_id(("narrow-pane-navigation", pane.0), |ui| {
-                if ui.selectable_label(active == pane, label).clicked() {
+                let response = ui.selectable_label(active == pane, label);
+                record_native_text_control(&response, NativeTextControlKind::Selectable);
+                if response.clicked() {
                     intents.push(OperatorIntent::Navigate(pane));
                 }
             });
@@ -734,6 +848,7 @@ fn show_inbox(
     tokens: &DesignTokens,
     font_scale: f32,
     text: &mut Vec<TextLayoutObservation>,
+    semantic_nodes: &mut Vec<UiNode>,
 ) {
     egui::ScrollArea::vertical()
         .id_salt("bokkie-inbox-scroll")
@@ -787,9 +902,11 @@ fn show_inbox(
                     "inbox",
                     &obligation.id,
                     read.selected == Some(obligation.id.as_str()),
-                    132.0,
+                    164.0,
                     &semantic_label,
                     tokens,
+                    INBOX_PANE_ID,
+                    semantic_nodes,
                     |ui| {
                         measured_content_label(
                             ui,
@@ -857,6 +974,7 @@ fn show_inbox(
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_obligations(
     ui: &mut egui::Ui,
     read: &ObligationsReadModel<'_>,
@@ -864,6 +982,8 @@ fn show_obligations(
     tokens: &DesignTokens,
     font_scale: f32,
     text: &mut Vec<TextLayoutObservation>,
+    semantic_nodes: &mut Vec<UiNode>,
+    virtualisation: &mut VirtualisationObservation,
 ) {
     section_heading(
         ui,
@@ -880,11 +1000,12 @@ fn show_obligations(
             .hint_text("Search identity, description or error")
             .desired_width(f32::INFINITY),
     );
+    record_native_text_control(&search_response, NativeTextControlKind::Selectable);
     if search_response.changed() {
         intents.push(OperatorIntent::Search(search));
     }
     let mut filter = read.filter;
-    egui::ComboBox::from_id_salt("obligation-state-filter")
+    let combo = egui::ComboBox::from_id_salt("obligation-state-filter")
         .selected_text(
             StateFilter::OPTIONS
                 .iter()
@@ -896,6 +1017,7 @@ fn show_obligations(
                 ui.selectable_value(&mut filter, value, label);
             }
         });
+    record_native_text_control(&combo.response, NativeTextControlKind::ComboBox);
     if filter != read.filter {
         intents.push(OperatorIntent::Filter(filter));
     }
@@ -918,7 +1040,7 @@ fn show_obligations(
         );
         return;
     }
-    const ROW_HEIGHT: f32 = 144.0;
+    const ROW_HEIGHT: f32 = 176.0;
     const OVERSCAN: usize = 4;
     egui::ScrollArea::vertical()
         .id_salt("bokkie-obligations-scroll")
@@ -930,6 +1052,9 @@ fn show_obligations(
                 read.obligations.len(),
                 OVERSCAN,
             );
+            virtualisation.total_rows = read.obligations.len();
+            virtualisation.visible_rows = (rows.visible.start, rows.visible.end);
+            virtualisation.materialised_rows = (rows.materialised.start, rows.materialised.end);
             let origin = ui.min_rect().min;
             ui.set_min_height(read.obligations.len() as f32 * ROW_HEIGHT);
             for index in rows.materialised {
@@ -948,6 +1073,8 @@ fn show_obligations(
                         ROW_HEIGHT - 4.0,
                         &semantic_label,
                         tokens,
+                        OBLIGATIONS_PANE_ID,
+                        semantic_nodes,
                         |ui| {
                             measured_content_label(
                                 ui,
@@ -1044,6 +1171,7 @@ fn show_timeline(
     tokens: &DesignTokens,
     font_scale: f32,
     text: &mut Vec<TextLayoutObservation>,
+    semantic_nodes: &mut Vec<UiNode>,
 ) {
     egui::ScrollArea::vertical()
         .id_salt("bokkie-timeline-scroll")
@@ -1161,11 +1289,12 @@ fn show_timeline(
                             reason: "Select an obligation first".into(),
                         });
                     let enabled = availability.enabled();
+                    let target = ActionTarget::pane(action, TIMELINE_PANE_ID);
                     let response = action_button(
                         ui,
                         ActionButtonSpec {
-                            target: ActionTarget::pane(action, TIMELINE_PANE_ID),
-                            availability,
+                            target,
+                            availability: availability.clone(),
                             selected: false,
                             emphasis: if matches!(
                                 action,
@@ -1181,6 +1310,13 @@ fn show_timeline(
                         font_scale,
                         text,
                     );
+                    semantic_nodes.push(action_semantic_node(
+                        &response,
+                        target,
+                        &availability,
+                        false,
+                        SemanticUiId::pane(TIMELINE_PANE_ID),
+                    ));
                     if response.clicked() && enabled {
                         intents.push(OperatorIntent::BeginAction(action));
                     }
@@ -1312,6 +1448,7 @@ fn show_topic_item(
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_confirmation(
     context: &egui::Context,
     confirmation: &Confirmation,
@@ -1320,9 +1457,15 @@ fn show_confirmation(
     tokens: &DesignTokens,
     font_scale: f32,
     intents: &mut Vec<OperatorIntent>,
+    semantic_nodes: &mut Vec<UiNode>,
+    text: &mut Vec<TextLayoutObservation>,
 ) {
-    egui::Window::new("Confirm lifecycle action")
+    let shown = egui::Window::new("Confirm lifecycle action")
         .id(egui::Id::new("bokkie-lifecycle-confirmation"))
+        .frame(
+            egui::Frame::window(&context.style_of(context.theme()))
+                .fill(tokens.colours.surface_raised.into()),
+        )
         .collapsible(false)
         .resizable(true)
         .default_width(560.0)
@@ -1379,22 +1522,28 @@ fn show_confirmation(
                         }
                     });
                 let submit_enabled = submit_availability.enabled();
-                if action_button(
+                let target = ActionTarget::application(ConfirmationAction::Submit);
+                let response = action_button(
                     ui,
                     ActionButtonSpec {
-                        target: ActionTarget::application(ConfirmationAction::Submit),
-                        availability: submit_availability,
+                        target,
+                        availability: submit_availability.clone(),
                         selected: false,
                         emphasis: ActionEmphasis::Primary,
                         compact: false,
                     },
                     tokens,
                     font_scale,
-                    &mut Vec::new(),
-                )
-                .clicked()
-                    && submit_enabled
-                {
+                    text,
+                );
+                semantic_nodes.push(action_semantic_node(
+                    &response,
+                    target,
+                    &submit_availability,
+                    false,
+                    SemanticUiId::new("bokkie.lifecycle-confirmation"),
+                ));
+                if response.clicked() && submit_enabled {
                     intents.push(OperatorIntent::SubmitConfirmation);
                 }
                 let dismiss_availability = if busy {
@@ -1405,22 +1554,28 @@ fn show_confirmation(
                     Availability::Enabled
                 };
                 let dismiss_enabled = dismiss_availability.enabled();
-                if action_button(
+                let target = ActionTarget::application(ConfirmationAction::Dismiss);
+                let response = action_button(
                     ui,
                     ActionButtonSpec {
-                        target: ActionTarget::application(ConfirmationAction::Dismiss),
-                        availability: dismiss_availability,
+                        target,
+                        availability: dismiss_availability.clone(),
                         selected: false,
                         emphasis: ActionEmphasis::Quiet,
                         compact: false,
                     },
                     tokens,
                     font_scale,
-                    &mut Vec::new(),
-                )
-                .clicked()
-                    && dismiss_enabled
-                {
+                    text,
+                );
+                semantic_nodes.push(action_semantic_node(
+                    &response,
+                    target,
+                    &dismiss_availability,
+                    false,
+                    SemanticUiId::new("bokkie.lifecycle-confirmation"),
+                ));
+                if response.clicked() && dismiss_enabled {
                     intents.push(OperatorIntent::DismissConfirmation);
                 }
                 if busy {
@@ -1428,6 +1583,16 @@ fn show_confirmation(
                 }
             });
         });
+    if let Some(shown) = shown {
+        let mut node = UiNode::container(
+            SemanticUiId::new("bokkie.lifecycle-confirmation"),
+            Some(SemanticUiId::root()),
+            UiRole::Section,
+            shown.response.rect.into(),
+        );
+        node.name = "Confirm lifecycle action".to_owned();
+        semantic_nodes.push(node);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1439,6 +1604,8 @@ fn ledger_row(
     height: f32,
     semantic_label: &str,
     tokens: &DesignTokens,
+    pane: PaneId,
+    semantic_nodes: &mut Vec<UiNode>,
     content: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
     let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width().max(1.0), height));
@@ -1465,6 +1632,24 @@ fn ledger_row(
         node.set_author_id(format!("bokkie.{scope}-row.{stable_id}"));
         node.set_selected(selected);
         node.add_action(Action::Click);
+    });
+    semantic_nodes.push(UiNode {
+        id: SemanticUiId::new(format!("bokkie.{scope}-row.{stable_id}")),
+        parent: Some(SemanticUiId::pane(pane)),
+        role: UiRole::ResultRow,
+        name: semantic_label.to_owned(),
+        description: None,
+        rect: response.rect.into(),
+        enabled: true,
+        focused: response.has_focus(),
+        selected,
+        checked: None,
+        expanded: None,
+        pane: Some(pane),
+        domain_reference: None,
+        actions: Vec::new(),
+        text_selectable: false,
+        disabled_reason: None,
     });
     if selected || response.hovered() {
         ui.painter()
@@ -1514,9 +1699,13 @@ fn empty_message(
 }
 
 fn stable_text_instance(text: &str) -> u64 {
-    text.bytes().fold(14_695_981_039_346_656_037, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(1_099_511_628_211)
-    })
+    text.bytes()
+        .fold(14_695_981_039_346_656_037, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(1_099_511_628_211)
+        })
+        // Polyorama property rows derive two child identities as `2n` and
+        // `2n + 1`; keep application-owned stable hashes inside that domain.
+        & (u64::MAX >> 2)
 }
 
 fn row_text_instance(scope: &str, stable_id: &str, field: u8) -> u64 {

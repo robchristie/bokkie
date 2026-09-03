@@ -45,3 +45,18 @@ cargo clippy -p bokkie-attention-ui --all-targets --all-features -- -D warnings
 cargo build -p bokkie-attention-ui --bin bokkie-attention-ui
 cargo build -p bokkie-attention-ui --lib --target wasm32-unknown-unknown
 ```
+
+Run deterministic UI qualification from the repository root with:
+
+```sh
+tools/qualify-ui.sh
+```
+
+Prerequisites are `wasm32-unknown-unknown`, `wasm-bindgen-cli 0.2.127`, Node
+20 or later with `npm ci` already completed, a Playwright Chromium download,
+`jq`, `curl`, Bubblewrap, ImageMagick, and Linux Xvfb/xdotool libraries. The
+script builds native and Wasm assets, creates only fixture-owned temporary
+SQLite databases, runs real browser and Xvfb native interaction smokes, and
+removes its explicit runtime root. It never accepts an operator database path
+or enables the coding-gardener runtime. Retained results and their limitations
+are indexed in `docs/ui-qualification-evidence/README.md`.
