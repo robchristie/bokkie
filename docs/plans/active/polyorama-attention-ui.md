@@ -113,7 +113,7 @@ primary action. The decision and its necessary evidence remain visible at
 | Read projections and capabilities | Bokkie domain/store/HTTP | Authoritative inbox, liveness, timeline and legal-action projection with deterministic store/API tests | Selected seam | Complete at `ad0afe37c24ec4876f18244e5dbdc6dc9cf6e7bb` |
 | Operational workspace | Bokkie application | Three connected panes, typed intents, virtualisation, refresh/stale/conflict handling and responsive semantics | Projection contract | Complete at `340fc3a3324fdfde20951627bb4ae34380f25e78` |
 | Qualification and documentation | Bokkie application/tooling | Temporary-service native/browser physical journeys, semantic/text/visual/idle evidence and operator docs | Complete workspace | Complete: application/harness `8b368e9197ecac4c9dd38a478f6e5485325af60b`; evidence `8672da7d1de2783083ed72f4ef3ed5a7d948bf47` |
-| Terminal review and landing | Bokkie campaign | Canonical check, exact-head independent review, CI, squash merge and cleanup | All acceptance proof | Pending |
+| Terminal review and landing | Bokkie campaign | Canonical check, exact-head independent review, CI, squash merge and cleanup | All acceptance proof | Canonical check complete at `c22d4886537d1ddf5feeebec17a7230359ae228f`; review and landing pending |
 
 Add a Polyorama owner node before its consumer only if a demonstrated reusable
 gap makes one necessary.
@@ -141,7 +141,7 @@ gap makes one necessary.
 - [x] Primary workflows pass at 1280×720, 1440×900 and one narrow layout.
 - [x] Native and browser physical interaction tests pass against temporary data.
 - [x] Visual captures, semantic snapshots and text-layout evidence are inspected.
-- [ ] Bokkie's canonical test, strict Clippy and format checks pass.
+- [x] Bokkie's canonical test, strict Clippy and format checks pass.
 - [x] No Polyorama change was required.
 - [ ] Final exact heads receive independent review; blocking findings are
   repaired and re-reviewed; owner dependencies land before consumers.
@@ -166,7 +166,9 @@ Qualification and documentation are complete at application/harness revision
 Fixture-only native and browser journeys exercised the real HTTP/store
 cancellation path, gardener confirmation inspection, stale/conflict safety,
 responsiveness, semantics, text layout, captures and idle behaviour. No
-reusable Polyorama gap was found. The local-scale gardener-history scan remains
-the known performance risk. Next: run the canonical check at the exact head,
-obtain independent review, create a ready pull request, pass CI, squash merge
-and reconcile the landed revision.
+reusable Polyorama gap was found. At `c22d4886537d1ddf5feeebec17a7230359ae228f`,
+the canonical check, strict Clippy, formatting, native/Wasm builds and evidence
+hashes passed; a separate Lantern flow found no layout, console, network or
+HTTP failure at 1440×900. The local-scale gardener-history scan remains the
+known performance risk. Next: create a ready pull request, obtain exact-head
+independent review, pass CI, squash merge and reconcile the landed revision.
