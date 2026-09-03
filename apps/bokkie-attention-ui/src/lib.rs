@@ -3,10 +3,12 @@ mod model;
 mod transport;
 
 pub use app::AttentionApp;
-pub use model::{ATTENTION_PANE_ID, AttentionIntent, fixed_workspace};
+pub use model::{
+    INBOX_PANE_ID, LifecycleAction, OBLIGATIONS_PANE_ID, TIMELINE_PANE_ID, operator_workspace,
+};
 pub use transport::{ApiRequest, Transport};
 
-pub const APPLICATION_NAME: &str = "Bokkie Attention";
+pub const APPLICATION_NAME: &str = "Bokkie Operator";
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

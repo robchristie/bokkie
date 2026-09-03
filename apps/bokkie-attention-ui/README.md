@@ -1,11 +1,16 @@
-# Bokkie Attention transport probe
+# Bokkie Operator workspace
 
-This exploratory application renders one fixed Polyorama pane from one Rust
-application model. Native builds accept only an HTTP base with a literal
-loopback address. Browser builds always call relative Bokkie API paths, so the
-UI must be served by the same loopback Bokkie process.
+This application presents Bokkie's backend-projected exception inbox, ordered
+obligation ledger and selected-obligation evidence timeline through one Rust
+application model on native desktop and WebAssembly/WebGPU. Lifecycle controls
+use the backend's typed capabilities and always require a separate confirmation.
 
-Build and run the native application against the default service:
+Native builds accept only an HTTP base with a literal loopback address. Browser
+builds call relative API paths, so the UI must be served by the same loopback
+Bokkie process. Use only a disposable database while developing or testing
+lifecycle actions.
+
+Build and run the native application against a disposable local service:
 
 ```sh
 cargo build -p bokkie-attention-ui --bin bokkie-attention-ui
@@ -29,5 +34,14 @@ cargo run -p bokkie -- \
 ```
 
 Then open `http://127.0.0.1:7744/ui/`. The generated `web/pkg` directory is
-ignored. The service still refuses non-loopback binding, and this arrangement
-does not add CORS, authentication changes, a proxy, or another database path.
+ignored. This arrangement adds no CORS policy, authentication change, proxy,
+non-loopback listener or second database path.
+
+Run the focused application checks with:
+
+```sh
+cargo test -p bokkie-attention-ui --all-targets
+cargo clippy -p bokkie-attention-ui --all-targets --all-features -- -D warnings
+cargo build -p bokkie-attention-ui --bin bokkie-attention-ui
+cargo build -p bokkie-attention-ui --lib --target wasm32-unknown-unknown
+```

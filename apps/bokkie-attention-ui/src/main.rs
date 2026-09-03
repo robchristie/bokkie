@@ -7,8 +7,8 @@ fn main() -> eframe::Result {
         eframe::NativeOptions {
             renderer: eframe::Renderer::Wgpu,
             viewport: eframe::egui::ViewportBuilder::default()
-                .with_inner_size([960.0, 640.0])
-                .with_min_inner_size([640.0, 480.0]),
+                .with_inner_size([1280.0, 720.0])
+                .with_min_inner_size([360.0, 480.0]),
             ..Default::default()
         },
         Box::new(|creation| Ok(Box::new(AttentionApp::new(creation)))),

@@ -1,30 +1,55 @@
 use std::{sync::mpsc::Sender, time::Duration};
 
+use bokkie_operator_api::{ObligationTopic, OperatorSnapshot};
 use eframe::egui;
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use bokkie_operator_api::OperatorSnapshot;
+use crate::model::LifecycleAction;
 
-use crate::model::{AuditEventReadModel, ObligationReadModel};
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActionRequest {
+    pub action: LifecycleAction,
+    pub obligation_id: String,
+    pub fingerprint: Option<String>,
+    pub actor: String,
+    pub note: String,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApiRequest {
-    List,
-    Events { obligation_id: String },
-    Cancel { obligation_id: String },
+    Snapshot,
+    Topic {
+        obligation_id: String,
+        generation: u64,
+    },
+    Act(ActionRequest),
 }
 
 #[derive(Debug)]
 pub enum ApiPayload {
-    Obligations(Vec<ObligationReadModel>),
-    Events(Vec<AuditEventReadModel>),
-    Cancelled { obligation_id: String },
+    Snapshot(OperatorSnapshot),
+    Topic(ObligationTopic),
+    ActionAccepted,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ApiFailure {
+    Conflict(String),
+    Other(String),
+}
+
+impl std::fmt::Display for ApiFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Conflict(message) | Self::Other(message) => formatter.write_str(message),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct ApiMessage {
     pub request: ApiRequest,
-    pub result: Result<ApiPayload, String>,
+    pub result: Result<ApiPayload, ApiFailure>,
 }
 
 pub struct Transport {
@@ -64,14 +89,29 @@ impl Transport {
     pub fn send(&self, request: ApiRequest, sender: Sender<ApiMessage>, context: egui::Context) {
         let endpoint = self.endpoint(&request);
         let mut http = match &request {
-            ApiRequest::List | ApiRequest::Events { .. } => ehttp::Request::get(endpoint),
-            ApiRequest::Cancel { .. } => ehttp::Request::post(endpoint, Vec::new()),
+            ApiRequest::Snapshot | ApiRequest::Topic { .. } => ehttp::Request::get(endpoint),
+            ApiRequest::Act(action) => {
+                let body = if action.action.requires_decision_body() {
+                    serde_json::to_vec(&DecisionBody {
+                        actor: &action.actor,
+                        note: (!action.note.trim().is_empty()).then_some(action.note.trim()),
+                    })
+                    .expect("decision body is serialisable")
+                } else {
+                    Vec::new()
+                };
+                let mut request = ehttp::Request::post(endpoint, body);
+                if action.action.requires_decision_body() {
+                    request.headers.insert("Content-Type", "application/json");
+                }
+                request
+            }
         };
         http.timeout = Some(Duration::from_secs(5));
         http.headers.insert("Accept", "application/json");
         ehttp::fetch(http, move |response| {
             let result = response
-                .map_err(|error| error.to_string())
+                .map_err(|error| ApiFailure::Other(error.to_string()))
                 .and_then(|response| decode(&request, response));
             let _ = sender.send(ApiMessage { request, result });
             context.request_repaint();
@@ -80,13 +120,12 @@ impl Transport {
 
     fn endpoint(&self, request: &ApiRequest) -> String {
         let path = match request {
-            ApiRequest::List => "/operator/snapshot".to_owned(),
-            ApiRequest::Events { obligation_id } => {
-                format!("/obligations/{}/events", encode_path_segment(obligation_id))
-            }
-            ApiRequest::Cancel { obligation_id } => {
-                format!("/obligations/{}/cancel", encode_path_segment(obligation_id))
-            }
+            ApiRequest::Snapshot => "/operator/snapshot".to_owned(),
+            ApiRequest::Topic { obligation_id, .. } => format!(
+                "/operator/obligations/{}/topic",
+                encode_path_segment(obligation_id)
+            ),
+            ApiRequest::Act(action) => action_endpoint(action),
         };
         #[cfg(not(target_arch = "wasm32"))]
         return format!("{}{path}", self.base);
@@ -102,36 +141,97 @@ impl Default for Transport {
     }
 }
 
-fn decode(request: &ApiRequest, response: ehttp::Response) -> Result<ApiPayload, String> {
-    if !response.ok {
-        return Err(format!(
-            "request failed with HTTP {} {}",
-            response.status, response.status_text
-        ));
-    }
-    match request {
-        ApiRequest::List => decode_json::<OperatorSnapshot>(&response)
-            .map(|snapshot| ApiPayload::Obligations(snapshot.obligations)),
-        ApiRequest::Events { .. } => decode_json(&response).map(ApiPayload::Events),
-        ApiRequest::Cancel { obligation_id } => Ok(ApiPayload::Cancelled {
-            obligation_id: obligation_id.clone(),
-        }),
+fn action_endpoint(request: &ActionRequest) -> String {
+    match request.action {
+        LifecycleAction::Approve => format!(
+            "/obligations/{}/approve",
+            encode_path_segment(&request.obligation_id)
+        ),
+        LifecycleAction::Reject => format!(
+            "/obligations/{}/reject",
+            encode_path_segment(&request.obligation_id)
+        ),
+        LifecycleAction::Retry => format!(
+            "/obligations/{}/retry",
+            encode_path_segment(&request.obligation_id)
+        ),
+        LifecycleAction::Cancel => format!(
+            "/obligations/{}/cancel",
+            encode_path_segment(&request.obligation_id)
+        ),
+        LifecycleAction::ApproveGardenerProposal => format!(
+            "/gardener/proposals/{}/approve",
+            encode_path_segment(request.fingerprint.as_deref().unwrap_or_default())
+        ),
+        LifecycleAction::RejectGardenerProposal => format!(
+            "/gardener/proposals/{}/reject",
+            encode_path_segment(request.fingerprint.as_deref().unwrap_or_default())
+        ),
     }
 }
 
-fn decode_json<T: DeserializeOwned>(response: &ehttp::Response) -> Result<T, String> {
+fn decode(request: &ApiRequest, response: ehttp::Response) -> Result<ApiPayload, ApiFailure> {
+    if !response.ok {
+        let message = serde_json::from_slice::<ErrorEnvelope>(&response.bytes)
+            .map(|body| body.error.message)
+            .unwrap_or_else(|_| {
+                format!(
+                    "request failed with HTTP {} {}",
+                    response.status, response.status_text
+                )
+            });
+        return if response.status == 409 {
+            Err(ApiFailure::Conflict(message))
+        } else {
+            Err(ApiFailure::Other(message))
+        };
+    }
+    match request {
+        ApiRequest::Snapshot => decode_json(&response).map(ApiPayload::Snapshot),
+        ApiRequest::Topic { .. } => decode_json(&response).map(ApiPayload::Topic),
+        ApiRequest::Act(_) => Ok(ApiPayload::ActionAccepted),
+    }
+}
+
+fn decode_json<T: DeserializeOwned>(response: &ehttp::Response) -> Result<T, ApiFailure> {
     response
         .json()
-        .map_err(|error| format!("invalid API response: {error}"))
+        .map_err(|error| ApiFailure::Other(format!("invalid API response: {error}")))
 }
 
 fn encode_path_segment(value: &str) -> String {
     percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
 
+#[derive(Serialize)]
+struct DecisionBody<'a> {
+    actor: &'a str,
+    note: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
+struct ErrorEnvelope {
+    error: ErrorBody,
+}
+
+#[derive(Deserialize)]
+struct ErrorBody {
+    message: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn action(action: LifecycleAction) -> ApiRequest {
+        ApiRequest::Act(ActionRequest {
+            action,
+            obligation_id: "obligation/1".to_owned(),
+            fingerprint: Some("abc def".to_owned()),
+            actor: "operator".to_owned(),
+            note: String::new(),
+        })
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -145,11 +245,45 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn native_endpoint_retains_the_validated_loopback_base() {
+    fn endpoints_use_operator_reads_and_exact_lifecycle_paths() {
         let transport = Transport::new("http://127.0.0.1:7744/").unwrap();
         assert_eq!(
-            transport.endpoint(&ApiRequest::List),
+            transport.endpoint(&ApiRequest::Snapshot),
             "http://127.0.0.1:7744/operator/snapshot"
         );
+        assert_eq!(
+            transport.endpoint(&ApiRequest::Topic {
+                obligation_id: "obligation/1".to_owned(),
+                generation: 7,
+            }),
+            "http://127.0.0.1:7744/operator/obligations/obligation%2F1/topic"
+        );
+        assert!(
+            transport
+                .endpoint(&action(LifecycleAction::ApproveGardenerProposal))
+                .ends_with("/gardener/proposals/abc%20def/approve")
+        );
+        assert!(
+            transport
+                .endpoint(&action(LifecycleAction::Cancel))
+                .ends_with("/obligations/obligation%2F1/cancel")
+        );
+    }
+
+    #[test]
+    fn transition_conflict_is_classified_separately_from_transport_failure() {
+        let response = ehttp::Response {
+            url: "http://127.0.0.1:7744/obligations/id/approve".to_owned(),
+            ok: false,
+            status: 409,
+            status_text: "Conflict".to_owned(),
+            headers: ehttp::Headers::default(),
+            bytes: br#"{"error":{"code":"transition_conflict","message":"occurrence changed"}}"#
+                .to_vec(),
+        };
+        assert!(matches!(
+            decode(&action(LifecycleAction::Approve), response),
+            Err(ApiFailure::Conflict(message)) if message == "occurrence changed"
+        ));
     }
 }
