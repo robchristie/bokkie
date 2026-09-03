@@ -2,7 +2,7 @@
 
 ## Start here
 
-- Read `README.md` and the active plan under `docs/plans/active/` before making
+- Read `README.md` and the relevant plan under `docs/plans/` before making
   architectural changes.
 - Keep obligation lifecycle rules in the domain/store layer; CLI, HTTP, and
   runners are adapters and must not invent state transitions.

@@ -25,8 +25,8 @@ human-attention condition. Runner execution is at least once; leases and stable
 execution identities prevent stale workers from overwriting newer outcomes and
 allow side-effecting adapters to reconcile retries safely.
 
-See the [active obligation-kernel plan](docs/plans/active/obligation-kernel.md)
-for the complete first-slice acceptance criteria.
+See the [obligation-kernel delivery plan](docs/plans/completed/obligation-kernel.md)
+for the complete first-slice acceptance criteria and evidence.
 
 ## Development
 
@@ -42,3 +42,14 @@ cargo fmt --all -- --check
 The supplied systemd unit is an example artefact only. Installing or enabling
 it is deliberately outside repository verification and requires an explicit
 operator decision.
+
+## Command and service adapters
+
+The `bokkie` executable provides JSON-producing `create`, `list`, `show`,
+`approve`, `reject`, `retry`, `cancel`, `events`, and `attempts` commands. Its
+`serve` command runs the scheduler and unauthenticated HTTP API together and
+refuses non-loopback binding.
+
+See the [operator guide](docs/operator-guide.md) for command examples, HTTP
+routes, crash and graceful-shutdown behaviour, the trust boundary, and the
+hardened example systemd service.
