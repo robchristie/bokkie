@@ -16,9 +16,11 @@ use crate::{
     ApprovalDecision, Attempt, AttemptOutcome, AuditEvent, Claim, Completion, NewObligation,
     Obligation, ObligationState, Recurrence,
     gardener::{
-        CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerEvent, GardenerInspection,
-        InspectionResult, NewGardenerInspection, NewRepositoryRegistration, Proposal,
-        ProposalObservation, RepositoryRegistration, normalise_goal_prompt, proposal_fingerprint,
+        CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerEvent, GardenerImplementationRun,
+        GardenerInspection, GardenerRunEvent, GardenerRunPhase, GardenerVerificationVerdict,
+        InspectionResult, NewGardenerImplementationRun, NewGardenerInspection,
+        NewRepositoryRegistration, Proposal, ProposalObservation, RepositoryRegistration,
+        normalise_goal_prompt, proposal_fingerprint,
     },
     recurrence::RecurrenceError,
 };
@@ -38,6 +40,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         3,
         "0003_coding_gardener_state.sql",
         include_str!("../migrations/0003_coding_gardener_state.sql"),
+    ),
+    (
+        4,
+        "0004_coding_gardener_runs.sql",
+        include_str!("../migrations/0004_coding_gardener_runs.sql"),
     ),
 ];
 
@@ -774,6 +781,659 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// Persist the local intent for one approved implementation claim before
+    /// any implementation process or Git side effect starts.
+    pub fn create_gardener_implementation_run(
+        &mut self,
+        claim: &Claim,
+        new: NewGardenerImplementationRun,
+        now: i64,
+    ) -> Result<GardenerImplementationRun, StoreError> {
+        validate_new_implementation_run(&new)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let obligation = require_obligation(&transaction, &claim.obligation_id)?;
+        verify_claim(&obligation, claim, now)?;
+        require_gardener_kind(&transaction, &claim.obligation_id, "implementation")?;
+
+        let (fingerprint, repository): (String, String) = transaction
+            .query_row(
+                "SELECT p.fingerprint, p.repository
+                 FROM gardener_proposals p
+                 WHERE p.implementation_obligation_id = ?1
+                   AND EXISTS (
+                       SELECT 1 FROM approvals a
+                       WHERE a.obligation_id = p.implementation_obligation_id
+                         AND a.occurrence = ?2 AND a.decision = 'approved'
+                   )",
+                params![claim.obligation_id, claim.occurrence],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                StoreError::Conflict(format!(
+                    "implementation obligation {:?} lacks a current approved proposal",
+                    claim.obligation_id
+                ))
+            })?;
+        let source_commit: String = transaction
+            .query_row(
+                "SELECT source_commit FROM gardener_proposal_observations
+                 WHERE proposal_fingerprint = ?1 ORDER BY id DESC LIMIT 1",
+                [&fingerprint],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                StoreError::Conflict(format!(
+                    "proposal {fingerprint:?} has no source observation"
+                ))
+            })?;
+
+        if let Some(existing) = gardener_implementation_run_for_lease(
+            &transaction,
+            &claim.obligation_id,
+            claim.lease_generation,
+        )? {
+            if existing.id == new.id
+                && existing.proposal_fingerprint == fingerprint
+                && existing.occurrence == claim.occurrence
+                && existing.attempt_number == claim.attempt_number
+                && existing.source_commit == source_commit
+                && existing.implementation_worktree_path == new.implementation_worktree_path
+                && existing.branch == new.branch
+            {
+                transaction.commit()?;
+                return Ok(existing);
+            }
+            return Err(StoreError::Conflict(format!(
+                "claim {:?} generation {} already has a different implementation run",
+                claim.obligation_id, claim.lease_generation
+            )));
+        }
+        if gardener_implementation_run(&transaction, &new.id)?.is_some() {
+            return Err(StoreError::Conflict(format!(
+                "implementation run id {:?} is already in use",
+                new.id
+            )));
+        }
+
+        transaction.execute(
+            "INSERT INTO gardener_implementation_runs(
+                id, repository, proposal_fingerprint, obligation_id, occurrence,
+                attempt_number, lease_generation, lease_token, source_commit,
+                implementation_worktree_path, branch, phase, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'created', ?12, ?12)",
+            params![
+                new.id,
+                repository,
+                fingerprint,
+                claim.obligation_id,
+                claim.occurrence,
+                claim.attempt_number,
+                claim.lease_generation,
+                claim.lease_token,
+                source_commit,
+                new.implementation_worktree_path,
+                new.branch,
+                now,
+            ],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            &new.id,
+            "implementation_run_created",
+            now,
+            json!({
+                "proposal_fingerprint": fingerprint,
+                "source_commit": source_commit,
+                "worktree_path": new.implementation_worktree_path,
+                "branch": new.branch,
+                "occurrence": claim.occurrence,
+                "attempt_number": claim.attempt_number,
+                "lease_generation": claim.lease_generation
+            }),
+        )?;
+        let created = gardener_implementation_run(&transaction, &new.id)?
+            .expect("implementation run was inserted");
+        transaction.commit()?;
+        Ok(created)
+    }
+
+    pub fn gardener_implementation_run(
+        &self,
+        id: &str,
+    ) -> Result<Option<GardenerImplementationRun>, StoreError> {
+        gardener_implementation_run(&self.connection, id)
+    }
+
+    pub fn gardener_implementation_runs(
+        &self,
+    ) -> Result<Vec<GardenerImplementationRun>, StoreError> {
+        query_gardener_implementation_runs(
+            &self.connection,
+            "SELECT * FROM gardener_implementation_runs ORDER BY created_at, id",
+            [],
+        )
+    }
+
+    pub fn gardener_implementation_runs_for_obligation(
+        &self,
+        obligation_id: &str,
+    ) -> Result<Vec<GardenerImplementationRun>, StoreError> {
+        query_gardener_implementation_runs(
+            &self.connection,
+            "SELECT * FROM gardener_implementation_runs
+             WHERE obligation_id = ?1 ORDER BY lease_generation, id",
+            [obligation_id],
+        )
+    }
+
+    pub fn gardener_run_events(&self, run_id: &str) -> Result<Vec<GardenerRunEvent>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT sequence, run_id, event_type, occurred_at, details_json
+             FROM gardener_run_events WHERE run_id = ?1 ORDER BY sequence",
+        )?;
+        let rows = statement.query_map([run_id], |row| {
+            Ok(GardenerRunEvent {
+                sequence: row.get(0)?,
+                run_id: row.get(1)?,
+                event_type: row.get(2)?,
+                occurred_at: row.get(3)?,
+                details_json: row.get(4)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn record_implementation_codex_thread(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        thread_id: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_nonempty("implementation Codex thread id", thread_id)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        if idempotent_or_conflict(
+            run_id,
+            "implementation Codex thread id",
+            run.implementation_thread_id.as_deref(),
+            thread_id,
+        )? {
+            transaction.commit()?;
+            return Ok(());
+        }
+        require_run_phase(&run, GardenerRunPhase::Created)?;
+        transaction.execute(
+            "UPDATE gardener_implementation_runs
+             SET implementation_thread_id = ?2, implementation_thread_recorded_at = ?3,
+                 phase = 'implementation_thread_recorded', updated_at = ?3
+             WHERE id = ?1",
+            params![run_id, thread_id, now],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            run_id,
+            "implementation_thread_recorded",
+            now,
+            json!({"thread_id": thread_id}),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn record_implementation_codex_turn(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        turn_id: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_nonempty("implementation Codex turn id", turn_id)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        if idempotent_or_conflict(
+            run_id,
+            "implementation Codex turn id",
+            run.implementation_turn_id.as_deref(),
+            turn_id,
+        )? {
+            transaction.commit()?;
+            return Ok(());
+        }
+        require_run_phase(&run, GardenerRunPhase::ImplementationThreadRecorded)?;
+        transaction.execute(
+            "UPDATE gardener_implementation_runs
+             SET implementation_turn_id = ?2, implementation_turn_recorded_at = ?3,
+                 phase = 'implementation_turn_recorded', updated_at = ?3
+             WHERE id = ?1",
+            params![run_id, turn_id, now],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            run_id,
+            "implementation_turn_recorded",
+            now,
+            json!({"turn_id": turn_id}),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn finish_gardener_implementation(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        final_message_json: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_structured_message(final_message_json)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        if idempotent_or_conflict(
+            run_id,
+            "implementation final message",
+            run.implementation_final_message_json.as_deref(),
+            final_message_json,
+        )? {
+            transaction.commit()?;
+            return Ok(());
+        }
+        require_run_phase(&run, GardenerRunPhase::ImplementationTurnRecorded)?;
+        transaction.execute(
+            "UPDATE gardener_implementation_runs
+             SET implementation_final_message_json = ?2, implementation_finished_at = ?3,
+                 phase = 'implementation_finished', updated_at = ?3
+             WHERE id = ?1",
+            params![run_id, final_message_json, now],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            run_id,
+            "implementation_finished",
+            now,
+            json!({
+                "final_message": serde_json::from_str::<serde_json::Value>(final_message_json)
+                    .expect("structured message was validated")
+            }),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn record_gardener_git_commit(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        git_commit: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_hex_identity("Git commit", git_commit, &[40, 64])?;
+        self.record_gardener_run_head(
+            claim,
+            run_id,
+            git_commit,
+            GardenerRunPhase::ImplementationFinished,
+            "git_commit",
+            "git_commit_recorded_at",
+            GardenerRunPhase::GitCommitRecorded,
+            "git_commit_recorded",
+            now,
+        )
+    }
+
+    pub fn record_gardener_push_observation(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        pushed_head: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_hex_identity("pushed head", pushed_head, &[40, 64])?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        if idempotent_or_conflict(
+            run_id,
+            "pushed head",
+            run.pushed_head.as_deref(),
+            pushed_head,
+        )? {
+            transaction.commit()?;
+            return Ok(());
+        }
+        require_run_phase(&run, GardenerRunPhase::GitCommitRecorded)?;
+        if run.git_commit.as_deref() != Some(pushed_head) {
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} pushed head does not equal its recorded Git commit"
+            )));
+        }
+        transaction.execute(
+            "UPDATE gardener_implementation_runs
+             SET pushed_head = ?2, push_observed_at = ?3,
+                 phase = 'push_observed', updated_at = ?3 WHERE id = ?1",
+            params![run_id, pushed_head, now],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            run_id,
+            "push_observed",
+            now,
+            json!({"head": pushed_head, "branch": run.branch}),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Record a GitHub pull request only after it has been observed ready.
+    pub fn record_gardener_ready_pull_request(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        number: u64,
+        url: &str,
+        head: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        if number == 0 || number > i64::MAX as u64 {
+            return Err(StoreError::Invalid(
+                "GitHub pull-request number must be positive".to_owned(),
+            ));
+        }
+        let expected_url = format!("https://github.com/{CANONICAL_REPOSITORY}/pull/{number}");
+        if url != expected_url {
+            return Err(StoreError::Invalid(format!(
+                "GitHub pull-request URL must be {expected_url:?}"
+            )));
+        }
+        validate_hex_identity("pull-request head", head, &[40, 64])?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        if let Some(existing_number) = run.pull_request_number {
+            if existing_number == number
+                && run.pull_request_url.as_deref() == Some(url)
+                && run.pull_request_head.as_deref() == Some(head)
+            {
+                transaction.commit()?;
+                return Ok(());
+            }
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} already has a different GitHub pull request"
+            )));
+        }
+        require_run_phase(&run, GardenerRunPhase::PushObserved)?;
+        if run.git_commit.as_deref() != Some(head) {
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} pull-request head does not equal its recorded Git commit"
+            )));
+        }
+        transaction.execute(
+            "UPDATE gardener_implementation_runs
+             SET pull_request_number = ?2, pull_request_url = ?3, pull_request_head = ?4,
+                 pull_request_recorded_at = ?5, phase = 'pull_request_ready', updated_at = ?5
+             WHERE id = ?1",
+            params![run_id, number as i64, url, head, now],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            run_id,
+            "pull_request_ready",
+            now,
+            json!({"number": number, "url": url, "head": head}),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn start_gardener_verification(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        worktree_path: &str,
+        head: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_absolute_path("verification worktree path", worktree_path)?;
+        validate_hex_identity("verification head", head, &[40, 64])?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        if let Some(existing_path) = run.verification_worktree_path.as_deref() {
+            if existing_path == worktree_path && run.verification_head.as_deref() == Some(head) {
+                transaction.commit()?;
+                return Ok(());
+            }
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} already has a different verification intent"
+            )));
+        }
+        require_run_phase(&run, GardenerRunPhase::PullRequestReady)?;
+        if run.pull_request_head.as_deref() != Some(head) {
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} verification head does not equal its stored pull-request head"
+            )));
+        }
+        if run.implementation_worktree_path == worktree_path {
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} verification must use a separate worktree"
+            )));
+        }
+        transaction.execute(
+            "UPDATE gardener_implementation_runs
+             SET verification_worktree_path = ?2, verification_head = ?3,
+                 verification_started_at = ?4, phase = 'verification_started', updated_at = ?4
+             WHERE id = ?1",
+            params![run_id, worktree_path, head, now],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            run_id,
+            "verification_started",
+            now,
+            json!({"worktree_path": worktree_path, "head": head}),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn record_verification_codex_thread(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        thread_id: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_nonempty("verification Codex thread id", thread_id)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        if idempotent_or_conflict(
+            run_id,
+            "verification Codex thread id",
+            run.verification_thread_id.as_deref(),
+            thread_id,
+        )? {
+            transaction.commit()?;
+            return Ok(());
+        }
+        require_run_phase(&run, GardenerRunPhase::VerificationStarted)?;
+        if run.implementation_thread_id.as_deref() == Some(thread_id) {
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} verification must use a fresh Codex thread"
+            )));
+        }
+        transaction.execute(
+            "UPDATE gardener_implementation_runs
+             SET verification_thread_id = ?2, verification_thread_recorded_at = ?3,
+                 phase = 'verification_thread_recorded', updated_at = ?3 WHERE id = ?1",
+            params![run_id, thread_id, now],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            run_id,
+            "verification_thread_recorded",
+            now,
+            json!({"thread_id": thread_id}),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn record_verification_codex_turn(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        turn_id: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_nonempty("verification Codex turn id", turn_id)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        if idempotent_or_conflict(
+            run_id,
+            "verification Codex turn id",
+            run.verification_turn_id.as_deref(),
+            turn_id,
+        )? {
+            transaction.commit()?;
+            return Ok(());
+        }
+        require_run_phase(&run, GardenerRunPhase::VerificationThreadRecorded)?;
+        if run.implementation_turn_id.as_deref() == Some(turn_id) {
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} verification must use a fresh Codex turn"
+            )));
+        }
+        transaction.execute(
+            "UPDATE gardener_implementation_runs
+             SET verification_turn_id = ?2, verification_turn_recorded_at = ?3,
+                 phase = 'verification_turn_recorded', updated_at = ?3 WHERE id = ?1",
+            params![run_id, turn_id, now],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            run_id,
+            "verification_turn_recorded",
+            now,
+            json!({"turn_id": turn_id}),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn finish_gardener_verification(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        verdict: GardenerVerificationVerdict,
+        reported_head: &str,
+        summary: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_hex_identity("verification reported head", reported_head, &[40, 64])?;
+        validate_nonempty("verification summary", summary)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        if let Some(existing) = run.verification_verdict {
+            if existing == verdict
+                && run.verification_reported_head.as_deref() == Some(reported_head)
+                && run.verification_summary.as_deref() == Some(summary)
+            {
+                transaction.commit()?;
+                return Ok(());
+            }
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} already has a different verification verdict"
+            )));
+        }
+        require_run_phase(&run, GardenerRunPhase::VerificationTurnRecorded)?;
+        if run.pull_request_head.as_deref() != Some(reported_head)
+            || run.verification_head.as_deref() != Some(reported_head)
+        {
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} verification reported a head other than the stored pull-request head"
+            )));
+        }
+        transaction.execute(
+            "UPDATE gardener_implementation_runs
+             SET verification_verdict = ?2, verification_reported_head = ?3,
+                 verification_summary = ?4, verification_finished_at = ?5,
+                 phase = 'verification_finished', updated_at = ?5 WHERE id = ?1",
+            params![run_id, verdict.to_string(), reported_head, summary, now],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            run_id,
+            "verification_finished",
+            now,
+            json!({"verdict": verdict, "reported_head": reported_head, "summary": summary}),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_gardener_run_head(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        value: &str,
+        expected_phase: GardenerRunPhase,
+        column: &str,
+        timestamp_column: &str,
+        next_phase: GardenerRunPhase,
+        event_type: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        let existing = match column {
+            "git_commit" => run.git_commit.as_deref(),
+            _ => unreachable!("run head columns are fixed by callers"),
+        };
+        if idempotent_or_conflict(run_id, column, existing, value)? {
+            transaction.commit()?;
+            return Ok(());
+        }
+        require_run_phase(&run, expected_phase)?;
+        let query = format!(
+            "UPDATE gardener_implementation_runs SET {column} = ?2, {timestamp_column} = ?3,
+             phase = ?4, updated_at = ?3 WHERE id = ?1"
+        );
+        transaction.execute(&query, params![run_id, value, now, next_phase.to_string()])?;
+        append_gardener_run_event(
+            &transaction,
+            run_id,
+            event_type,
+            now,
+            json!({"head": value}),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn renew_lease(
         &mut self,
         claim: &Claim,
@@ -1077,6 +1737,198 @@ fn require_current_inspection(
     Ok(inspection)
 }
 
+fn validate_new_implementation_run(new: &NewGardenerImplementationRun) -> Result<(), StoreError> {
+    validate_nonempty("implementation run id", &new.id)?;
+    validate_absolute_path(
+        "implementation worktree path",
+        &new.implementation_worktree_path,
+    )?;
+    let suffix = new.branch.strip_prefix("codex/gardener-").ok_or_else(|| {
+        StoreError::Invalid("implementation branch must start with \"codex/gardener-\"".to_owned())
+    })?;
+    if suffix.is_empty()
+        || suffix.starts_with('/')
+        || suffix.ends_with('/')
+        || suffix.contains("..")
+        || suffix.chars().any(char::is_whitespace)
+    {
+        return Err(StoreError::Invalid(
+            "implementation branch must be a dedicated codex/gardener-* name".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_absolute_path(name: &str, value: &str) -> Result<(), StoreError> {
+    if value.trim().is_empty() || !Path::new(value).is_absolute() {
+        return Err(StoreError::Invalid(format!("{name} must be absolute")));
+    }
+    Ok(())
+}
+
+fn validate_nonempty(name: &str, value: &str) -> Result<(), StoreError> {
+    if value.trim().is_empty() {
+        return Err(StoreError::Invalid(format!("{name} must not be empty")));
+    }
+    Ok(())
+}
+
+fn validate_structured_message(message: &str) -> Result<(), StoreError> {
+    let value: serde_json::Value = serde_json::from_str(message).map_err(|error| {
+        StoreError::Invalid(format!(
+            "implementation final message must be valid JSON: {error}"
+        ))
+    })?;
+    if !value.is_object() {
+        return Err(StoreError::Invalid(
+            "implementation final message must be a JSON object".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn gardener_implementation_run(
+    connection: &Connection,
+    id: &str,
+) -> Result<Option<GardenerImplementationRun>, StoreError> {
+    connection
+        .query_row(
+            "SELECT * FROM gardener_implementation_runs WHERE id = ?1",
+            [id],
+            gardener_implementation_run_from_row,
+        )
+        .optional()
+        .map_err(StoreError::from)
+}
+
+fn gardener_implementation_run_for_lease(
+    connection: &Connection,
+    obligation_id: &str,
+    lease_generation: u64,
+) -> Result<Option<GardenerImplementationRun>, StoreError> {
+    connection
+        .query_row(
+            "SELECT * FROM gardener_implementation_runs
+             WHERE obligation_id = ?1 AND lease_generation = ?2",
+            params![obligation_id, lease_generation],
+            gardener_implementation_run_from_row,
+        )
+        .optional()
+        .map_err(StoreError::from)
+}
+
+fn query_gardener_implementation_runs<P: rusqlite::Params>(
+    connection: &Connection,
+    query: &str,
+    parameters: P,
+) -> Result<Vec<GardenerImplementationRun>, StoreError> {
+    let mut statement = connection.prepare(query)?;
+    let rows = statement.query_map(parameters, gardener_implementation_run_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
+}
+
+fn gardener_implementation_run_from_row(
+    row: &Row<'_>,
+) -> rusqlite::Result<GardenerImplementationRun> {
+    let verdict_index = row.as_ref().column_index("verification_verdict")?;
+    let verdict = row
+        .get::<_, Option<String>>(verdict_index)?
+        .map(|value| parse_value(value, verdict_index))
+        .transpose()?;
+    Ok(GardenerImplementationRun {
+        id: row.get("id")?,
+        repository: row.get("repository")?,
+        proposal_fingerprint: row.get("proposal_fingerprint")?,
+        obligation_id: row.get("obligation_id")?,
+        occurrence: row.get("occurrence")?,
+        attempt_number: row.get("attempt_number")?,
+        lease_generation: row.get("lease_generation")?,
+        lease_token: row.get("lease_token")?,
+        source_commit: row.get("source_commit")?,
+        implementation_worktree_path: row.get("implementation_worktree_path")?,
+        branch: row.get("branch")?,
+        phase: parse_column(row, "phase")?,
+        implementation_thread_id: row.get("implementation_thread_id")?,
+        implementation_turn_id: row.get("implementation_turn_id")?,
+        implementation_final_message_json: row.get("implementation_final_message_json")?,
+        git_commit: row.get("git_commit")?,
+        pushed_head: row.get("pushed_head")?,
+        pull_request_number: row.get("pull_request_number")?,
+        pull_request_url: row.get("pull_request_url")?,
+        pull_request_head: row.get("pull_request_head")?,
+        verification_worktree_path: row.get("verification_worktree_path")?,
+        verification_head: row.get("verification_head")?,
+        verification_thread_id: row.get("verification_thread_id")?,
+        verification_turn_id: row.get("verification_turn_id")?,
+        verification_verdict: verdict,
+        verification_reported_head: row.get("verification_reported_head")?,
+        verification_summary: row.get("verification_summary")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+        implementation_thread_recorded_at: row.get("implementation_thread_recorded_at")?,
+        implementation_turn_recorded_at: row.get("implementation_turn_recorded_at")?,
+        implementation_finished_at: row.get("implementation_finished_at")?,
+        git_commit_recorded_at: row.get("git_commit_recorded_at")?,
+        push_observed_at: row.get("push_observed_at")?,
+        pull_request_recorded_at: row.get("pull_request_recorded_at")?,
+        verification_started_at: row.get("verification_started_at")?,
+        verification_thread_recorded_at: row.get("verification_thread_recorded_at")?,
+        verification_turn_recorded_at: row.get("verification_turn_recorded_at")?,
+        verification_finished_at: row.get("verification_finished_at")?,
+    })
+}
+
+fn require_current_gardener_run(
+    transaction: &Transaction<'_>,
+    claim: &Claim,
+    run_id: &str,
+    now: i64,
+) -> Result<GardenerImplementationRun, StoreError> {
+    let obligation = require_obligation(transaction, &claim.obligation_id)?;
+    verify_claim(&obligation, claim, now)?;
+    require_gardener_kind(transaction, &claim.obligation_id, "implementation")?;
+    let run = gardener_implementation_run(transaction, run_id)?
+        .ok_or_else(|| StoreError::NotFound(run_id.to_owned()))?;
+    if run.obligation_id != claim.obligation_id
+        || run.occurrence != claim.occurrence
+        || run.attempt_number != claim.attempt_number
+        || run.lease_generation != claim.lease_generation
+        || run.lease_token != claim.lease_token
+    {
+        return Err(StoreError::Fenced);
+    }
+    Ok(run)
+}
+
+fn require_run_phase(
+    run: &GardenerImplementationRun,
+    expected: GardenerRunPhase,
+) -> Result<(), StoreError> {
+    if run.phase != expected {
+        return Err(StoreError::Conflict(format!(
+            "run {:?} is in phase {}, expected {}",
+            run.id, run.phase, expected
+        )));
+    }
+    Ok(())
+}
+
+fn idempotent_or_conflict(
+    run_id: &str,
+    identity: &str,
+    existing: Option<&str>,
+    proposed: &str,
+) -> Result<bool, StoreError> {
+    match existing {
+        None => Ok(false),
+        Some(existing) if existing == proposed => Ok(true),
+        Some(_) => Err(StoreError::Conflict(format!(
+            "run {run_id:?} already has a different {identity}"
+        ))),
+    }
+}
+
 fn proposal(connection: &Connection, fingerprint: &str) -> Result<Option<Proposal>, StoreError> {
     connection
         .query_row(
@@ -1132,6 +1984,21 @@ fn append_gardener_event(
             now,
             details.to_string()
         ],
+    )?;
+    Ok(())
+}
+
+fn append_gardener_run_event(
+    transaction: &Transaction<'_>,
+    run_id: &str,
+    event_type: &str,
+    now: i64,
+    details: serde_json::Value,
+) -> Result<(), StoreError> {
+    transaction.execute(
+        "INSERT INTO gardener_run_events(run_id, event_type, occurred_at, details_json)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![run_id, event_type, now, details.to_string()],
     )?;
     Ok(())
 }
@@ -2001,7 +2868,8 @@ mod tests {
             [
                 (1, "0001_obligation_kernel.sql".to_owned()),
                 (2, "0002_append_only_guards.sql".to_owned()),
-                (3, "0003_coding_gardener_state.sql".to_owned())
+                (3, "0003_coding_gardener_state.sql".to_owned()),
+                (4, "0004_coding_gardener_runs.sql".to_owned())
             ]
         );
         drop(store);
@@ -2311,6 +3179,86 @@ mod tests {
             summary: "One bounded improvement was found".to_owned(),
             proposed_goal_prompts: vec![prompt.to_owned()],
         }
+    }
+
+    fn approved_implementation_claim(store: &mut Store, lease_seconds: i64) -> (Claim, Proposal) {
+        store
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let inspection_claim = store.claim_due_gardener(1_000, 60, 1).unwrap().remove(0);
+        store
+            .start_gardener_inspection(
+                &inspection_claim,
+                new_inspection("inspection-for-run", 'a'),
+                1_001,
+            )
+            .unwrap();
+        let proposal = store
+            .finish_gardener_inspection(
+                &inspection_claim,
+                "inspection-for-run",
+                &inspection_result("Implement one bounded store improvement."),
+                1_002,
+            )
+            .unwrap()
+            .remove(0);
+        store
+            .decide_gardener_proposal(
+                &proposal.fingerprint,
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                1_003,
+            )
+            .unwrap();
+        let claim = store
+            .claim_due_gardener(1_003, lease_seconds, 10)
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.obligation_id == proposal.implementation_obligation_id)
+            .unwrap();
+        (claim, proposal)
+    }
+
+    fn new_implementation_run(id: &str) -> NewGardenerImplementationRun {
+        NewGardenerImplementationRun {
+            id: id.to_owned(),
+            implementation_worktree_path: format!("/tmp/{id}-implementation"),
+            branch: format!("codex/gardener-{id}"),
+        }
+    }
+
+    fn advance_run_to_pull_request(store: &mut Store, claim: &Claim, run_id: &str, head: &str) {
+        store
+            .record_implementation_codex_thread(claim, run_id, "implementation-thread", 1_005)
+            .unwrap();
+        store
+            .record_implementation_codex_turn(claim, run_id, "implementation-turn", 1_006)
+            .unwrap();
+        store
+            .finish_gardener_implementation(
+                claim,
+                run_id,
+                r#"{"summary":"implementation completed"}"#,
+                1_007,
+            )
+            .unwrap();
+        store
+            .record_gardener_git_commit(claim, run_id, head, 1_008)
+            .unwrap();
+        store
+            .record_gardener_push_observation(claim, run_id, head, 1_009)
+            .unwrap();
+        store
+            .record_gardener_ready_pull_request(
+                claim,
+                run_id,
+                42,
+                "https://github.com/robchristie/bokkie/pull/42",
+                head,
+                1_010,
+            )
+            .unwrap();
     }
 
     #[test]
@@ -2692,5 +3640,345 @@ mod tests {
                 .is_err()
         );
         assert!(!store.gardener_events().unwrap().is_empty());
+    }
+
+    #[test]
+    fn implementation_run_enforces_ordering_write_once_heads_and_fresh_verification() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (claim, proposal) = approved_implementation_claim(&mut store, 1_000);
+        let run = store
+            .create_gardener_implementation_run(&claim, new_implementation_run("run-1"), 1_004)
+            .unwrap();
+        assert_eq!(run.phase, GardenerRunPhase::Created);
+        assert_eq!(run.proposal_fingerprint, proposal.fingerprint);
+        assert_eq!(run.source_commit, "a".repeat(40));
+        assert_eq!(run.occurrence, claim.occurrence);
+        assert_eq!(run.attempt_number, claim.attempt_number);
+        assert_eq!(run.lease_generation, claim.lease_generation);
+        assert_eq!(run.lease_token, claim.lease_token);
+
+        let repeated = store
+            .create_gardener_implementation_run(&claim, new_implementation_run("run-1"), 1_004)
+            .unwrap();
+        assert_eq!(repeated, run);
+        assert!(matches!(
+            store.create_gardener_implementation_run(
+                &claim,
+                new_implementation_run("different-run"),
+                1_004
+            ),
+            Err(StoreError::Conflict(_))
+        ));
+        assert!(matches!(
+            store.record_implementation_codex_turn(&claim, "run-1", "too-early", 1_005),
+            Err(StoreError::Conflict(_))
+        ));
+
+        store
+            .record_implementation_codex_thread(&claim, "run-1", "implementation-thread", 1_005)
+            .unwrap();
+        store
+            .record_implementation_codex_thread(&claim, "run-1", "implementation-thread", 1_006)
+            .unwrap();
+        assert!(matches!(
+            store.record_implementation_codex_thread(&claim, "run-1", "replacement-thread", 1_006),
+            Err(StoreError::Conflict(_))
+        ));
+        store
+            .record_implementation_codex_turn(&claim, "run-1", "implementation-turn", 1_006)
+            .unwrap();
+        assert!(matches!(
+            store.finish_gardener_implementation(&claim, "run-1", "not JSON", 1_007),
+            Err(StoreError::Invalid(_))
+        ));
+        store
+            .finish_gardener_implementation(&claim, "run-1", r#"{"summary":"done"}"#, 1_007)
+            .unwrap();
+
+        let head = "b".repeat(40);
+        let other_head = "c".repeat(40);
+        store
+            .record_gardener_git_commit(&claim, "run-1", &head, 1_008)
+            .unwrap();
+        assert!(matches!(
+            store.record_gardener_git_commit(&claim, "run-1", &other_head, 1_008),
+            Err(StoreError::Conflict(_))
+        ));
+        assert!(matches!(
+            store.record_gardener_push_observation(&claim, "run-1", &other_head, 1_009),
+            Err(StoreError::Conflict(_))
+        ));
+        store
+            .record_gardener_push_observation(&claim, "run-1", &head, 1_009)
+            .unwrap();
+        assert!(matches!(
+            store.record_gardener_ready_pull_request(
+                &claim,
+                "run-1",
+                42,
+                "https://github.com/robchristie/bokkie/pull/42",
+                &other_head,
+                1_010
+            ),
+            Err(StoreError::Conflict(_))
+        ));
+        store
+            .record_gardener_ready_pull_request(
+                &claim,
+                "run-1",
+                42,
+                "https://github.com/robchristie/bokkie/pull/42",
+                &head,
+                1_010,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            store.start_gardener_verification(
+                &claim,
+                "run-1",
+                "/tmp/run-1-implementation",
+                &head,
+                1_011
+            ),
+            Err(StoreError::Conflict(_))
+        ));
+        assert!(matches!(
+            store.start_gardener_verification(
+                &claim,
+                "run-1",
+                "/tmp/run-1-verification",
+                &other_head,
+                1_011
+            ),
+            Err(StoreError::Conflict(_))
+        ));
+        store
+            .start_gardener_verification(&claim, "run-1", "/tmp/run-1-verification", &head, 1_011)
+            .unwrap();
+        assert!(matches!(
+            store.record_verification_codex_thread(&claim, "run-1", "implementation-thread", 1_012),
+            Err(StoreError::Conflict(_))
+        ));
+        store
+            .record_verification_codex_thread(&claim, "run-1", "verification-thread", 1_012)
+            .unwrap();
+        assert!(matches!(
+            store.record_verification_codex_turn(&claim, "run-1", "implementation-turn", 1_013),
+            Err(StoreError::Conflict(_))
+        ));
+        store
+            .record_verification_codex_turn(&claim, "run-1", "verification-turn", 1_013)
+            .unwrap();
+        assert!(matches!(
+            store.finish_gardener_verification(
+                &claim,
+                "run-1",
+                GardenerVerificationVerdict::Pass,
+                &other_head,
+                "wrong head",
+                1_014
+            ),
+            Err(StoreError::Conflict(_))
+        ));
+        store
+            .finish_gardener_verification(
+                &claim,
+                "run-1",
+                GardenerVerificationVerdict::Pass,
+                &head,
+                "Exact head passes independent verification.",
+                1_014,
+            )
+            .unwrap();
+        assert!(matches!(
+            store.finish_gardener_verification(
+                &claim,
+                "run-1",
+                GardenerVerificationVerdict::Blocking,
+                &head,
+                "changed",
+                1_015
+            ),
+            Err(StoreError::Conflict(_))
+        ));
+
+        let finished = store.gardener_implementation_run("run-1").unwrap().unwrap();
+        assert_eq!(finished.phase, GardenerRunPhase::VerificationFinished);
+        assert_eq!(
+            finished.verification_verdict,
+            Some(GardenerVerificationVerdict::Pass)
+        );
+        assert_eq!(finished.pull_request_head.as_deref(), Some(head.as_str()));
+        assert_eq!(
+            finished.verification_reported_head.as_deref(),
+            Some(head.as_str())
+        );
+        assert_eq!(store.gardener_implementation_runs().unwrap(), [finished]);
+        assert_eq!(
+            store
+                .gardener_implementation_runs_for_obligation(&claim.obligation_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(store.gardener_run_events("run-1").unwrap().len(), 11);
+    }
+
+    #[test]
+    fn implementation_run_captures_the_latest_proposal_observation_commit() {
+        let mut store = Store::open_in_memory().unwrap();
+        let registration = store
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let first_claim = store.claim_due_gardener(1_000, 60, 1).unwrap().remove(0);
+        store
+            .start_gardener_inspection(
+                &first_claim,
+                new_inspection("source-a-inspection", 'a'),
+                1_001,
+            )
+            .unwrap();
+        let prompt = "Implement the observed improvement.";
+        let proposal = store
+            .finish_gardener_inspection(
+                &first_claim,
+                "source-a-inspection",
+                &inspection_result(prompt),
+                1_002,
+            )
+            .unwrap()
+            .remove(0);
+        store
+            .complete(
+                &first_claim,
+                Completion::Succeeded { evidence: None },
+                1_003,
+            )
+            .unwrap();
+
+        let next_at = store
+            .get(&registration.inspection_obligation_id)
+            .unwrap()
+            .unwrap()
+            .next_wake_at
+            .unwrap();
+        let second_claim = store.claim_due_gardener(next_at, 60, 1).unwrap().remove(0);
+        store
+            .start_gardener_inspection(
+                &second_claim,
+                new_inspection("source-b-inspection", 'b'),
+                next_at + 1,
+            )
+            .unwrap();
+        store
+            .finish_gardener_inspection(
+                &second_claim,
+                "source-b-inspection",
+                &inspection_result(prompt),
+                next_at + 2,
+            )
+            .unwrap();
+        store
+            .decide_gardener_proposal(
+                &proposal.fingerprint,
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                next_at + 3,
+            )
+            .unwrap();
+        let implementation_claim = store
+            .claim_due_gardener(next_at + 3, 1_000, 10)
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.obligation_id == proposal.implementation_obligation_id)
+            .unwrap();
+        let run = store
+            .create_gardener_implementation_run(
+                &implementation_claim,
+                new_implementation_run("latest-source-run"),
+                next_at + 4,
+            )
+            .unwrap();
+        assert_eq!(run.source_commit, "b".repeat(40));
+    }
+
+    #[test]
+    fn every_run_write_is_fenced_after_the_claim_expires() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (claim, _) = approved_implementation_claim(&mut store, 10);
+        store
+            .create_gardener_implementation_run(&claim, new_implementation_run("fenced-run"), 1_004)
+            .unwrap();
+        store.recover_expired_leases(1_013).unwrap();
+        assert!(matches!(
+            store.record_implementation_codex_thread(&claim, "fenced-run", "late-thread", 1_013),
+            Err(StoreError::Fenced)
+        ));
+        let retained = store
+            .gardener_implementation_run("fenced-run")
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.phase, GardenerRunPhase::Created);
+        assert!(retained.implementation_thread_id.is_none());
+    }
+
+    #[test]
+    fn implementation_run_and_append_only_events_survive_reopen() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("state.sqlite3");
+        let mut store = Store::open(&path).unwrap();
+        let (claim, _) = approved_implementation_claim(&mut store, 1_000);
+        store
+            .create_gardener_implementation_run(
+                &claim,
+                new_implementation_run("durable-run"),
+                1_004,
+            )
+            .unwrap();
+        let head = "d".repeat(40);
+        advance_run_to_pull_request(&mut store, &claim, "durable-run", &head);
+        let before = store
+            .gardener_implementation_run("durable-run")
+            .unwrap()
+            .unwrap();
+        let events_before = store.gardener_run_events("durable-run").unwrap();
+        assert_eq!(events_before.len(), 7);
+        assert!(
+            store
+                .connection
+                .execute("DELETE FROM gardener_run_events", [])
+                .is_err()
+        );
+        assert!(
+            store
+                .connection
+                .execute(
+                    "UPDATE gardener_run_events SET event_type = 'changed' WHERE run_id = ?1",
+                    ["durable-run"]
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .connection
+                .execute(
+                    "UPDATE gardener_implementation_runs SET git_commit = ?2 WHERE id = ?1",
+                    params!["durable-run", "e".repeat(40)]
+                )
+                .is_err()
+        );
+        drop(store);
+
+        let reopened = Store::open(path).unwrap();
+        assert_eq!(
+            reopened.gardener_implementation_run("durable-run").unwrap(),
+            Some(before)
+        );
+        assert_eq!(
+            reopened.gardener_run_events("durable-run").unwrap(),
+            events_before
+        );
     }
 }
