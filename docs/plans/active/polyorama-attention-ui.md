@@ -1,6 +1,6 @@
 # Polyorama attention UI
 
-- Status: exploration
+- Status: implementation
 - Owner: `bokkie`
 - Bokkie baseline: `78558bf915eb9ed0ffb3a676676bf18dc0a5c908`
 - Polyorama baseline: `0e725f5a97a6d99a6bc4c961dfc05b4e9252ba1d`
@@ -54,12 +54,12 @@ Smallest representative probe:
    HTTP/store path, followed by refresh and observation of its audit event.
 4. Native and Wasm builds plus a real-browser same-origin journey.
 
-Candidate seam: a target-specific, application-owned transport behind one
-narrow request interface. Native calls the configured loopback API directly.
-The browser calls a relative scoped API path on a Bokkie-owned, loopback-only
-UI host that proxies to the loopback service. This uses browser same-origin
-requests without CORS, non-loopback binding, authentication changes or direct
-SQLite access.
+Selected seam: an application-owned transport behind one narrow request
+interface. Native calls a validated literal-loopback HTTP base. The browser
+calls relative API paths and the existing loopback-only Bokkie service
+optionally serves explicit built UI assets at `/ui`. This uses one same-origin
+listener without CORS, a proxy, non-loopback binding, authentication changes or
+direct SQLite access.
 
 Evidence owner: this plan records the exact revisions and retain/reject
 decision; focused Bokkie integration tests and retained UI evidence own detailed
@@ -68,6 +68,19 @@ probe results.
 Exit condition: one coherent structure performs the read and harmless fixture
 action on native and browser builds, the same-origin boundary is executable and
 documented, and no unresolved transport ambiguity blocks the full slice.
+
+Retain decision: retained at Bokkie revision
+`3910f2bd4076f82042c9017da2fe12e674bf736e`, consuming Polyorama revision
+`0e725f5a97a6d99a6bc4c961dfc05b4e9252ba1d`. Workspace tests (70), strict
+Clippy, formatting, native build and Wasm build passed. A temporary fake-only
+service exposed an approval-bound fixture, accepted cancellation through the
+HTTP/store path and returned audit sequence 2 after refresh. A disposable
+Chrome 151 WebGPU session loaded `/ui/` from the same loopback origin, reported
+no console/network/layout errors and physically triggered that cancellation.
+The provisional 1279×756 capture had SHA-256
+`38b365b01dfd36d205b7766cc94825fb5d77249ee170f0908b16afb43db3ff27`.
+The separate-proxy option was rejected because it adds a listener and routing
+boundary without improving this local same-origin arrangement.
 
 ## Interaction direction
 
@@ -96,7 +109,7 @@ primary action. The decision and its necessary evidence remain visible at
 
 | Increment | Semantic owner | Outcome and proof | Dependency | Status |
 | --- | --- | --- | --- | --- |
-| Transport exploration | Bokkie application/HTTP adapter | Fixed pane, fixture read/action, native+Wasm build and browser same-origin probe | Baselines above | In progress |
+| Transport exploration | Bokkie application/HTTP adapter | Fixed pane, fixture read/action, native+Wasm build and browser same-origin probe | Baselines above | Complete at `3910f2bd4076f82042c9017da2fe12e674bf736e` |
 | Read projections and capabilities | Bokkie domain/store/HTTP | Authoritative inbox, liveness, timeline and legal-action projection with deterministic store/API tests | Selected seam | Pending |
 | Operational workspace | Bokkie application | Three connected panes, typed intents, virtualisation, refresh/stale/conflict handling and responsive semantics | Projection contract | Pending |
 | Qualification and documentation | Bokkie application/tooling | Temporary-service native/browser physical journeys, semantic/text/visual/idle evidence and operator docs | Complete workspace | Pending |
@@ -147,8 +160,11 @@ gap makes one necessary.
 
 ## Current phase
 
-The repository maps and Git preflight are complete. Both baselines are clean,
-match their live `main` heads and have no open pull requests. The selected
-exploration candidate is the Bokkie-owned target-specific transport with a
-loopback-only same-origin browser host. Next, implement only the representative
-probe and record its exact observed result before expanding the API or panes.
+The transport exploration is complete and retained at the exact revision above.
+The boundary is a Bokkie-owned native/Wasm application plus optional static
+assets on Bokkie's existing loopback listener. The current UI is deliberately
+only a probe and its presentation-side cancellation mapping is not a final
+capability contract. Next, add the smallest authoritative read projection for
+exception classification, durable liveness, complete topic provenance and
+legal action availability, with store and HTTP tests before expanding the
+three-pane workspace.
