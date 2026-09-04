@@ -235,7 +235,11 @@ impl AppServerClient {
 }
 
 trait LineTransport {
-    fn send(&mut self, message: &Value) -> Result<(), AppServerError>;
+    fn send(
+        &mut self,
+        message: &Value,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<(), AppServerError>;
     fn receive(&mut self, heartbeat: &mut dyn ProcessHeartbeat) -> Result<Receive, AppServerError>;
 }
 
@@ -266,7 +270,7 @@ impl ChildTransport {
                 executable: executable.to_owned(),
                 source: match source {
                     ProcessError::Spawn(source) | ProcessError::Io(source) => source,
-                    ProcessError::ReaderPanicked => io::Error::other("output reader panicked"),
+                    ProcessError::IoWorkerPanicked => io::Error::other("I/O worker panicked"),
                 },
             })?;
         Ok(Self { child })
@@ -291,8 +295,17 @@ impl ChildTransport {
 }
 
 impl LineTransport for ChildTransport {
-    fn send(&mut self, message: &Value) -> Result<(), AppServerError> {
-        self.child.write_json(message).map_err(Into::into)
+    fn send(
+        &mut self,
+        message: &Value,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<(), AppServerError> {
+        match self.child.write_json(message, heartbeat)? {
+            None => Ok(()),
+            Some(outcome) => Err(AppServerError::Supervision {
+                outcome: Box::new(outcome),
+            }),
+        }
     }
 
     fn receive(&mut self, heartbeat: &mut dyn ProcessHeartbeat) -> Result<Receive, AppServerError> {
@@ -322,31 +335,37 @@ fn run_protocol(
     final_message_limit: usize,
 ) -> Result<TurnResult, AppServerError> {
     let mut heartbeat = AppHeartbeat(observer);
-    transport.send(&json!({
-        "id": INITIALIZE_REQUEST_ID,
-        "method": "initialize",
-        "params": {
-            "clientInfo": {
-                "name": "bokkie",
-                "version": env!("CARGO_PKG_VERSION"),
+    transport.send(
+        &json!({
+            "id": INITIALIZE_REQUEST_ID,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {
+                    "name": "bokkie",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+                "capabilities": {
+                    "experimentalApi": false,
+                },
             },
-            "capabilities": {
-                "experimentalApi": false,
-            },
-        },
-    }))?;
+        }),
+        &mut heartbeat,
+    )?;
     wait_for_response(transport, INITIALIZE_REQUEST_ID, &mut heartbeat)?;
 
-    transport.send(&json!({ "method": "initialized" }))?;
-    transport.send(&json!({
-        "id": THREAD_START_REQUEST_ID,
-        "method": "thread/start",
-        "params": {
-            "cwd": cwd,
-            "sandbox": request.kind.thread_sandbox(),
-            "approvalPolicy": "never",
-        },
-    }))?;
+    transport.send(&json!({ "method": "initialized" }), &mut heartbeat)?;
+    transport.send(
+        &json!({
+            "id": THREAD_START_REQUEST_ID,
+            "method": "thread/start",
+            "params": {
+                "cwd": cwd,
+                "sandbox": request.kind.thread_sandbox(),
+                "approvalPolicy": "never",
+            },
+        }),
+        &mut heartbeat,
+    )?;
     let thread_response = wait_for_response(transport, THREAD_START_REQUEST_ID, &mut heartbeat)?;
     let thread_id = required_string(&thread_response, &["thread", "id"], "thread/start response")?;
     heartbeat
@@ -357,20 +376,23 @@ fn run_protocol(
             message,
         })?;
 
-    transport.send(&json!({
-        "id": TURN_START_REQUEST_ID,
-        "method": "turn/start",
-        "params": {
-            "threadId": thread_id,
-            "input": [{
-                "type": "text",
-                "text": request.prompt,
-            }],
-            "outputSchema": request.output_schema,
-            "approvalPolicy": "never",
-            "sandboxPolicy": request.kind.turn_sandbox(cwd),
-        },
-    }))?;
+    transport.send(
+        &json!({
+            "id": TURN_START_REQUEST_ID,
+            "method": "turn/start",
+            "params": {
+                "threadId": thread_id,
+                "input": [{
+                    "type": "text",
+                    "text": request.prompt,
+                }],
+                "outputSchema": request.output_schema,
+                "approvalPolicy": "never",
+                "sandboxPolicy": request.kind.turn_sandbox(cwd),
+            },
+        }),
+        &mut heartbeat,
+    )?;
     let turn_response = wait_for_response(transport, TURN_START_REQUEST_ID, &mut heartbeat)?;
     let turn_id = required_string(&turn_response, &["turn", "id"], "turn/start response")?;
     heartbeat
@@ -418,7 +440,7 @@ fn wait_for_response(
                 }
                 Message::Notification { .. } => {}
                 Message::ServerRequest { id, method } => {
-                    return deny_server_request(transport, id, &method);
+                    return deny_server_request(transport, id, &method, heartbeat);
                 }
             },
             #[cfg(test)]
@@ -444,7 +466,7 @@ fn wait_for_completion(
             }
             Receive::Line(line) => match parse_message(&line)? {
                 Message::ServerRequest { id, method } => {
-                    return deny_server_request(transport, id, &method);
+                    return deny_server_request(transport, id, &method, heartbeat);
                 }
                 Message::Response { id, .. } => {
                     return Err(AppServerError::Protocol(format!(
@@ -563,6 +585,7 @@ fn deny_server_request<T>(
     transport: &mut dyn LineTransport,
     id: Value,
     method: &str,
+    heartbeat: &mut dyn ProcessHeartbeat,
 ) -> Result<T, AppServerError> {
     let result = match method {
         "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
@@ -573,7 +596,7 @@ fn deny_server_request<T>(
         }
         _ => return Err(unexpected_server_request(id, method)),
     };
-    transport.send(&json!({"id": id, "result": result}))?;
+    transport.send(&json!({"id": id, "result": result}), heartbeat)?;
     Err(unexpected_server_request(id, method))
 }
 
@@ -668,7 +691,11 @@ mod tests {
     }
 
     impl LineTransport for FakeTransport {
-        fn send(&mut self, message: &Value) -> Result<(), AppServerError> {
+        fn send(
+            &mut self,
+            message: &Value,
+            _heartbeat: &mut dyn ProcessHeartbeat,
+        ) -> Result<(), AppServerError> {
             self.sent.push(message.clone());
             Ok(())
         }
@@ -1124,5 +1151,132 @@ mod tests {
             outcome.as_ref(),
             ProcessOutcome::HeartbeatFailure { message, .. } if message.contains("fenced")
         ));
+    }
+
+    #[test]
+    fn stopped_stdin_reader_cannot_block_heartbeats_or_deadline() {
+        #[derive(Default)]
+        struct CountingObserver {
+            heartbeats: usize,
+            thread_recorded: bool,
+        }
+        impl AppServerObserver for CountingObserver {
+            fn record_thread(&mut self, _thread_id: &str) -> Result<(), String> {
+                self.thread_recorded = true;
+                self.heartbeats = 0;
+                Ok(())
+            }
+
+            fn heartbeat(&mut self) -> Result<(), String> {
+                self.heartbeats += 1;
+                Ok(())
+            }
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let executable = stopped_reader_app_server(directory.path());
+        let prompt = "x".repeat(512 * 1024);
+        let schema = json!({"type": "object"});
+        let request = TurnRequest {
+            kind: TurnKind::Inspection,
+            cwd: directory.path(),
+            prompt: &prompt,
+            output_schema: &schema,
+        };
+        let mut observer = CountingObserver::default();
+        let started = Instant::now();
+
+        let error = AppServerClient::new(&executable)
+            .with_heartbeat_interval(Duration::from_millis(5))
+            .with_execution_timeout(Duration::from_millis(150))
+            .run(&request, &mut observer)
+            .unwrap_err();
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(observer.thread_recorded);
+        assert!(observer.heartbeats > 0);
+        let AppServerError::Supervision { outcome } = error else {
+            panic!("expected supervised deadline");
+        };
+        assert!(matches!(outcome.as_ref(), ProcessOutcome::TimedOut(_)));
+    }
+
+    #[test]
+    fn stopped_stdin_reader_cannot_block_shutdown_cancellation() {
+        struct CancellingObserver {
+            cancellation: CancellationToken,
+            thread: Option<thread::JoinHandle<()>>,
+        }
+        impl AppServerObserver for CancellingObserver {
+            fn record_thread(&mut self, _thread_id: &str) -> Result<(), String> {
+                let cancellation = self.cancellation.clone();
+                self.thread = Some(thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(20));
+                    cancellation.cancel();
+                }));
+                Ok(())
+            }
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let executable = stopped_reader_app_server(directory.path());
+        let prompt = "x".repeat(512 * 1024);
+        let schema = json!({"type": "object"});
+        let request = TurnRequest {
+            kind: TurnKind::Inspection,
+            cwd: directory.path(),
+            prompt: &prompt,
+            output_schema: &schema,
+        };
+        let cancellation = CancellationToken::new();
+        let mut observer = CancellingObserver {
+            cancellation: cancellation.clone(),
+            thread: None,
+        };
+        let started = Instant::now();
+
+        let error = AppServerClient::new(&executable)
+            .with_heartbeat_interval(Duration::from_millis(5))
+            .with_execution_timeout(Duration::from_secs(2))
+            .with_cancellation(cancellation)
+            .run(&request, &mut observer)
+            .unwrap_err();
+        observer
+            .thread
+            .take()
+            .expect("thread identity starts cancellation")
+            .join()
+            .unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let AppServerError::Supervision { outcome } = error else {
+            panic!("expected supervised cancellation");
+        };
+        assert!(matches!(outcome.as_ref(), ProcessOutcome::Cancelled(_)));
+    }
+
+    fn stopped_reader_app_server(directory: &Path) -> PathBuf {
+        let executable = directory.join("stopped-reader-app-server.py");
+        fs::write(
+            &executable,
+            r#"#!/usr/bin/env python3
+import json
+import sys
+import time
+
+initialize = json.loads(sys.stdin.readline())
+print(json.dumps({"id": initialize["id"], "result": {}}), flush=True)
+sys.stdin.readline()
+thread_start = json.loads(sys.stdin.readline())
+print(json.dumps({"id": thread_start["id"], "result": {"thread": {"id": "thread-stopped-reader"}}}), flush=True)
+while True:
+    time.sleep(1)
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).unwrap();
+        executable
     }
 }

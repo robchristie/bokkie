@@ -51,6 +51,7 @@ impl CancellationToken {
 /// Limits applied while a child is running. They do not depend on lease length.
 #[derive(Clone, Copy, Debug)]
 pub struct ProcessLimits {
+    pub stdin_message_bytes: usize,
     pub stdout_bytes: usize,
     pub stderr_bytes: usize,
     pub jsonl_line_bytes: usize,
@@ -62,6 +63,7 @@ pub struct ProcessLimits {
 impl Default for ProcessLimits {
     fn default() -> Self {
         Self {
+            stdin_message_bytes: 1024 * 1024,
             stdout_bytes: 1024 * 1024,
             stderr_bytes: 256 * 1024,
             jsonl_line_bytes: 256 * 1024,
@@ -221,8 +223,8 @@ pub enum ProcessError {
     Spawn(#[source] io::Error),
     #[error("child process I/O failed: {0}")]
     Io(#[from] io::Error),
-    #[error("child output reader panicked")]
-    ReaderPanicked,
+    #[error("child I/O worker panicked")]
+    IoWorkerPanicked,
 }
 
 /// Heartbeat callback invoked synchronously outside Store transactions.
@@ -255,7 +257,8 @@ impl ProcessSupervisor {
         if heartbeat_interval.is_zero() {
             return Err("heartbeat interval must be positive".to_owned());
         }
-        if limits.stdout_bytes == 0
+        if limits.stdin_message_bytes == 0
+            || limits.stdout_bytes == 0
             || limits.stderr_bytes == 0
             || limits.jsonl_line_bytes == 0
             || limits.final_message_bytes == 0
@@ -292,15 +295,20 @@ impl ProcessSupervisor {
             .stderr(Stdio::piped());
         command.process_group(0);
         let mut child = command.spawn().map_err(ProcessError::Spawn)?;
-        let stdin = child.stdin.take();
+        let stdin = child.stdin.take().expect("piped stdin is available");
         let stdout = child.stdout.take().expect("piped stdout is available");
         let stderr = child.stderr.take().expect("piped stderr is available");
         let (sender, receiver) = mpsc::sync_channel(32);
         let stdout_reader = spawn_reader(stdout, Stream::Stdout, sender.clone());
         let stderr_reader = spawn_reader(stderr, Stream::Stderr, sender);
+        let (stdin_sender, stdin_receiver) = mpsc::sync_channel(1);
+        let (writer_sender, writer_receiver) = mpsc::sync_channel(1);
+        let stdin_writer = spawn_writer(stdin, stdin_receiver, writer_sender);
         Ok(SupervisedChild {
             child: Some(child),
-            stdin,
+            stdin_sender: Some(stdin_sender),
+            writer_receiver,
+            stdin_writer: Some(stdin_writer),
             receiver,
             stdout_reader: Some(stdout_reader),
             stderr_reader: Some(stderr_reader),
@@ -344,7 +352,9 @@ pub enum JsonlReceive {
 
 pub struct SupervisedChild {
     child: Option<Child>,
-    stdin: Option<ChildStdin>,
+    stdin_sender: Option<SyncSender<Vec<u8>>>,
+    writer_receiver: Receiver<io::Result<()>>,
+    stdin_writer: Option<JoinHandle<()>>,
     receiver: Receiver<ReaderEvent>,
     stdout_reader: Option<JoinHandle<()>>,
     stderr_reader: Option<JoinHandle<()>>,
@@ -364,22 +374,72 @@ pub struct SupervisedChild {
 }
 
 impl SupervisedChild {
-    pub fn write_json(&mut self, value: &serde_json::Value) -> Result<(), ProcessError> {
-        let stdin = self.stdin.as_mut().ok_or_else(|| {
-            ProcessError::Io(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "child stdin is closed",
-            ))
-        })?;
-        serde_json::to_writer(&mut *stdin, value)
-            .map_err(|error| ProcessError::Io(io::Error::other(error)))?;
-        stdin.write_all(b"\n")?;
-        stdin.flush()?;
-        Ok(())
+    pub fn write_json(
+        &mut self,
+        value: &serde_json::Value,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<Option<ProcessOutcome>, ProcessError> {
+        let mut message = BoundedMessage::new(self.limits.stdin_message_bytes);
+        if let Err(error) = serde_json::to_writer(&mut message, value) {
+            if message.exceeded {
+                return self
+                    .interrupt(Interruption::OutputLimit {
+                        stream: "stdin JSONL message",
+                        limit: self.limits.stdin_message_bytes,
+                    })
+                    .map(Some);
+            }
+            return Err(ProcessError::Io(io::Error::other(error)));
+        }
+        if message.bytes.len() == self.limits.stdin_message_bytes {
+            return self
+                .interrupt(Interruption::OutputLimit {
+                    stream: "stdin JSONL message",
+                    limit: self.limits.stdin_message_bytes,
+                })
+                .map(Some);
+        }
+        message.bytes.push(b'\n');
+        self.stdin_sender
+            .as_ref()
+            .ok_or_else(|| {
+                ProcessError::Io(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "child stdin is closed",
+                ))
+            })?
+            .try_send(message.bytes)
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => ProcessError::Io(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "a child stdin write is already pending",
+                )),
+                mpsc::TrySendError::Disconnected(_) => ProcessError::Io(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "child stdin writer stopped",
+                )),
+            })?;
+
+        loop {
+            match self.writer_receiver.try_recv() {
+                Ok(Ok(())) => return Ok(None),
+                Ok(Err(error)) => return Err(ProcessError::Io(error)),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    return Err(ProcessError::Io(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "child stdin writer stopped without a result",
+                    )));
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            if let Some(outcome) = self.pump(heartbeat)? {
+                return Ok(Some(outcome));
+            }
+        }
     }
 
     pub fn close_stdin(&mut self) {
-        self.stdin.take();
+        self.stdin_sender.take();
     }
 
     pub fn receive_jsonl(
@@ -473,6 +533,7 @@ impl SupervisedChild {
 
         // Observable completion wins a simultaneous deadline/cancellation race.
         if let Some(status) = self.try_wait()? {
+            self.close_stdin();
             self.drain_to_close()?;
             if let Some(reason) = self.terminal.clone() {
                 return self.interrupt(reason).map(Some);
@@ -659,9 +720,13 @@ impl SupervisedChild {
     }
 
     fn finish_readers(&mut self) -> Result<(), ProcessError> {
-        for handle in [&mut self.stdout_reader, &mut self.stderr_reader] {
+        for handle in [
+            &mut self.stdin_writer,
+            &mut self.stdout_reader,
+            &mut self.stderr_reader,
+        ] {
             if let Some(handle) = handle.take() {
-                handle.join().map_err(|_| ProcessError::ReaderPanicked)?;
+                handle.join().map_err(|_| ProcessError::IoWorkerPanicked)?;
             }
         }
         Ok(())
@@ -758,6 +823,53 @@ fn spawn_reader(
     })
 }
 
+fn spawn_writer(
+    mut stdin: ChildStdin,
+    receiver: Receiver<Vec<u8>>,
+    sender: SyncSender<io::Result<()>>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        while let Ok(message) = receiver.recv() {
+            let result = stdin.write_all(&message).and_then(|()| stdin.flush());
+            let failed = result.is_err();
+            if sender.send(result).is_err() || failed {
+                return;
+            }
+        }
+    })
+}
+
+struct BoundedMessage {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl BoundedMessage {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            exceeded: false,
+        }
+    }
+}
+
+impl Write for BoundedMessage {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
+            self.exceeded = true;
+            return Err(io::Error::other("stdin JSONL message exceeds its bound"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 struct Capture {
     limit: usize,
     total: u64,
@@ -806,6 +918,7 @@ mod tests {
 
     fn limits() -> ProcessLimits {
         ProcessLimits {
+            stdin_message_bytes: 4 * 1024,
             stdout_bytes: 4 * 1024,
             stderr_bytes: 4 * 1024,
             jsonl_line_bytes: 1024,
@@ -967,6 +1080,43 @@ mod tests {
                 limit: 128,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn oversized_stdin_message_is_rejected_with_a_typed_limit_outcome() {
+        let mut configured = limits();
+        configured.stdin_message_bytes = 128;
+        let supervisor = ProcessSupervisor::new(
+            Duration::from_millis(5),
+            configured,
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let mut command = shell("while :; do :; done");
+        let mut child = supervisor
+            .spawn(
+                &mut command,
+                Instant::now() + Duration::from_secs(1),
+                EffectRisk::None,
+            )
+            .unwrap();
+
+        let outcome = child
+            .write_json(
+                &serde_json::json!({"payload": "x".repeat(1024)}),
+                &mut NoopHeartbeat,
+            )
+            .unwrap()
+            .expect("oversized input terminates the child");
+
+        assert!(matches!(
+            outcome,
+            ProcessOutcome::OutputLimit {
+                stream: "stdin JSONL message",
+                limit: 128,
+                ..
+            }
         ));
     }
 

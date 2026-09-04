@@ -971,7 +971,7 @@ impl GitWorkspace {
                 .spawn(&mut command, deadline, risk)
                 .map_err(|error| match error {
                     ProcessError::Spawn(source) | ProcessError::Io(source) => source,
-                    ProcessError::ReaderPanicked => io::Error::other("output reader panicked"),
+                    ProcessError::IoWorkerPanicked => io::Error::other("I/O worker panicked"),
                 })
         })
         .map_err(|source| GitWorkspaceError::Spawn {
@@ -989,7 +989,7 @@ impl GitWorkspace {
                 cwd: cwd.to_owned(),
                 source: match error {
                     ProcessError::Spawn(source) | ProcessError::Io(source) => source,
-                    ProcessError::ReaderPanicked => io::Error::other("output reader panicked"),
+                    ProcessError::IoWorkerPanicked => io::Error::other("I/O worker panicked"),
                 },
             })?;
         match outcome {
