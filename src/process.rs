@@ -984,8 +984,10 @@ mod tests {
         let state = fs::read_to_string(format!("/proc/{descendant}/stat"))
             .ok()
             .and_then(|stat| stat.split_whitespace().nth(2).map(str::to_owned));
+        // Linux can expose a killed process briefly as either zombie (`Z`) or
+        // dead (`X`) before removing its procfs entry. Neither state executes.
         assert!(
-            state.is_none() || state.as_deref() == Some("Z"),
+            state.is_none() || matches!(state.as_deref(), Some("Z" | "X")),
             "descendant {descendant} survived group cancellation in state {state:?}"
         );
     }
