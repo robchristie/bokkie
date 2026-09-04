@@ -173,7 +173,7 @@ impl AppServerClient {
         }
         executable.verify_unchanged()?;
         Ok(Self {
-            executable: executable.path().to_owned(),
+            executable: executable.invocation_path().to_owned(),
             executable_identity: Some(executable),
             environment,
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,

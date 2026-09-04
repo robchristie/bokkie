@@ -59,6 +59,9 @@ CREATE TABLE gardener_candidate_qualifications (
     qualified_at        INTEGER NOT NULL
 );
 
+-- New P2 runs leave the base row at ready_pending after recording ready intent.
+-- Store projections derive observable ready state only when this immutable
+-- post-mutation observation exists; direct diagnostic readers must join it.
 CREATE TABLE gardener_pull_request_ready_observations (
     run_id      TEXT PRIMARY KEY REFERENCES gardener_implementation_runs(id),
     number      INTEGER NOT NULL CHECK (number > 0),

@@ -12,7 +12,7 @@ StartLimitBurst=5
 Type=simple
 # Registration is a separate operator action. This unit only runs an already
 # registered gardener against its own explicitly selected database.
-ExecStart=/usr/bin/bokkie --database /var/lib/bokkie-gardener/bokkie.sqlite serve --bind 127.0.0.1:7745 --lease-seconds 30 --enable-coding-gardener --gardener-worktree-root /var/lib/bokkie-gardener/worktrees --gardener-home /var/lib/bokkie-gardener --gardener-codex-executable /usr/bin/codex --gardener-git-executable /usr/bin/git --gardener-gh-executable /usr/bin/gh --gardener-cargo-executable /usr/bin/cargo --gardener-github-token-file ${CREDENTIALS_DIRECTORY}/github_token --gardener-heartbeat-ms 10000 --gardener-process-timeout-ms 1800000
+ExecStart=/usr/bin/bokkie --database /var/lib/bokkie-gardener/bokkie.sqlite serve --bind 127.0.0.1:7745 --lease-seconds 30 --enable-coding-gardener --gardener-worktree-root /var/lib/bokkie-gardener/worktrees --gardener-home /var/lib/bokkie-gardener --gardener-codex-executable /usr/bin/codex --gardener-git-executable /usr/bin/git --gardener-gh-executable /usr/bin/gh --gardener-github-public-observer-executable /usr/bin/curl --gardener-cargo-executable /usr/bin/cargo --gardener-candidate-sandbox-executable /usr/bin/bwrap --gardener-github-token-file ${CREDENTIALS_DIRECTORY}/github_token --gardener-heartbeat-ms 10000 --gardener-process-timeout-ms 1800000
 Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=30s
@@ -49,12 +49,15 @@ ProcSubset=pid
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 RemoveIPC=yes
-RestrictNamespaces=yes
+# Bubblewrap needs these namespace and mount operations to create the fixed,
+# network-off candidate-check boundary. Bokkie supplies its arguments; candidate
+# code cannot select the sandbox executable, mounts or namespace policy.
+RestrictNamespaces=user mnt pid net ipc uts cgroup
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
+SystemCallFilter=@system-service @mount
 ReadOnlyPaths=/srv/src/bokkie
 ReadWritePaths=/var/lib/bokkie-gardener
 

@@ -31,6 +31,8 @@ struct Fixture {
     git_log: PathBuf,
     gh: PathBuf,
     gh_log: PathBuf,
+    github_public_observer: PathBuf,
+    github_public_observer_log: PathBuf,
     candidate_check: PathBuf,
     clock: ManualClock,
 }
@@ -144,7 +146,6 @@ for raw in sys.stdin:
         write_executable(&codex, &codex_script);
 
         let gh_log = root.path().join("gh.log");
-        let gh_count = root.path().join("gh.count");
         let gh = root.path().join("fake-gh.py");
         let gh_script = format!(
             r#"#!/usr/bin/env python3
@@ -158,7 +159,6 @@ if args == ["--version"]:
     print("fake-gh 1.0")
     raise SystemExit(0)
 log = pathlib.Path({log})
-count_path = pathlib.Path({count})
 draft_path = pathlib.Path({draft})
 with log.open("a") as output:
     output.write(json.dumps(args) + "\n")
@@ -166,21 +166,55 @@ if args[:2] == ["pr", "create"]:
     draft_path.write_text("draft")
 elif args[:2] == ["pr", "ready"]:
     draft_path.unlink(missing_ok=True)
-if args[:2] == ["pr", "view"]:
-    count = int(count_path.read_text()) + 1 if count_path.exists() else 1
-    count_path.write_text(str(count))
-    branch = args[2]
-    head = subprocess.check_output(["git", "rev-parse", branch], text=True).strip()
-    if {changed_pr_head} and count >= 2:
-        head = "b" * 40
-    print(json.dumps({{"number": 42, "url": "https://github.com/robchristie/bokkie/pull/42", "headRefOid": head, "state": "OPEN", "isDraft": draft_path.exists()}}))
 "#,
             log = serde_json::to_string(gh_log.to_str().unwrap()).unwrap(),
-            count = serde_json::to_string(gh_count.to_str().unwrap()).unwrap(),
+            draft = serde_json::to_string(root.path().join("gh.draft").to_str().unwrap()).unwrap(),
+        );
+        write_executable(&gh, &gh_script);
+
+        let observer_count = root.path().join("observer.count");
+        let github_public_observer_log = root.path().join("observer.log");
+        let github_public_observer = root.path().join("fake-curl.py");
+        let observer_script = format!(
+            r#"#!/usr/bin/env python3
+import json
+import pathlib
+import subprocess
+import sys
+import urllib.parse
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("fake-curl 1.0")
+    raise SystemExit(0)
+count_path = pathlib.Path({count})
+log = pathlib.Path({log})
+draft_path = pathlib.Path({draft})
+with log.open("a") as output:
+    output.write(json.dumps(args) + "\n")
+count = int(count_path.read_text()) + 1 if count_path.exists() else 1
+count_path.write_text(str(count))
+query = urllib.parse.parse_qs(urllib.parse.urlparse(args[-1]).query)
+branch = query["head"][0].split(":", 1)[1]
+head = subprocess.check_output(["git", "rev-parse", branch], text=True).strip()
+if {changed_pr_head} and count >= 2:
+    head = "b" * 40
+base = subprocess.check_output(["git", "rev-parse", "main"], text=True).strip()
+print(json.dumps([{{
+    "number": 42,
+    "html_url": "https://github.com/robchristie/bokkie/pull/42",
+    "state": "open",
+    "draft": draft_path.exists(),
+    "head": {{"ref": branch, "sha": head, "repo": {{"full_name": "robchristie/bokkie"}}}},
+    "base": {{"ref": "main", "sha": base, "repo": {{"full_name": "robchristie/bokkie"}}}}
+}}]))
+"#,
+            count = serde_json::to_string(observer_count.to_str().unwrap()).unwrap(),
+            log = serde_json::to_string(github_public_observer_log.to_str().unwrap()).unwrap(),
             draft = serde_json::to_string(root.path().join("gh.draft").to_str().unwrap()).unwrap(),
             changed_pr_head = if changed_pr_head { "True" } else { "False" },
         );
-        write_executable(&gh, &gh_script);
+        write_executable(&github_public_observer, &observer_script);
 
         let candidate_check = root.path().join("fake-check.sh");
         write_executable(
@@ -200,6 +234,8 @@ if args[:2] == ["pr", "view"]:
             git_log,
             gh,
             gh_log,
+            github_public_observer,
+            github_public_observer_log,
             candidate_check,
             clock: ManualClock::new(1_000),
         }
@@ -225,6 +261,7 @@ if args[:2] == ["pr", "view"]:
     fn config(&self) -> GardenerRuntimeConfig {
         GardenerRuntimeConfig::new(&self.worktrees, &self.codex, &self.git_executable, &self.gh)
             .with_heartbeat_interval(Duration::from_millis(5))
+            .with_github_public_observer(&self.github_public_observer)
             .with_github_credential(GitHubCredential::new("fake-test-token").unwrap())
             .with_candidate_checks(&self.candidate_check, [["check"]])
     }
@@ -357,11 +394,13 @@ fn complete_process_flow_persists_exact_identities_and_passes_verification() {
     assert!(gh_log.contains("\"create\""));
     assert!(gh_log.contains("\"--draft\""));
     assert!(gh_log.contains("\"ready\""));
-    assert!(gh_log.contains("\"view\""));
+    assert!(!gh_log.contains("\"view\""));
     assert!(gh_log.lines().all(|line| {
         let arguments: Vec<String> = serde_json::from_str(line).unwrap();
         arguments.get(1).is_none_or(|command| command != "merge")
     }));
+    let observer_log = fs::read_to_string(&fixture.github_public_observer_log).unwrap();
+    assert!(observer_log.contains("https://api.github.com/repos/robchristie/bokkie/pulls"));
 }
 
 #[test]
@@ -499,15 +538,11 @@ fn changed_pr_head_on_final_observation_enters_attention_without_a_verdict() {
             .unwrap()
             .contains("observed bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     );
-    let views = fs::read_to_string(&fixture.gh_log)
+    let observations = fs::read_to_string(&fixture.github_public_observer_log)
         .unwrap()
         .lines()
-        .filter(|line| {
-            let arguments: Vec<String> = serde_json::from_str(line).unwrap();
-            arguments.get(1).is_some_and(|command| command == "view")
-        })
         .count();
-    assert_eq!(views, 2);
+    assert_eq!(observations, 2);
 }
 
 #[test]

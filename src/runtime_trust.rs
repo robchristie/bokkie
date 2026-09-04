@@ -13,6 +13,7 @@ use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -24,6 +25,8 @@ use crate::process::{
 };
 
 const VERSION_OUTPUT_BYTES: usize = 16 * 1024;
+const EXECUTABLE_FILE_BUSY_ATTEMPTS: usize = 4;
+const EXECUTABLE_FILE_BUSY_BACKOFF: Duration = Duration::from_millis(5);
 const BOT_NAME: &str = "Bokkie Gardener";
 const BOT_EMAIL: &str = "bokkie-gardener@users.noreply.github.com";
 
@@ -34,13 +37,16 @@ pub enum ExecutableRole {
     Codex,
     Git,
     GitHub,
+    GitHubPublicObserver,
     CandidateCheck,
+    CandidateSandbox,
 }
 
 /// Canonical, content-bound identity of one executable.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ExecutableIdentity {
     role: ExecutableRole,
+    invocation_path: PathBuf,
     path: PathBuf,
     sha256: String,
     version: String,
@@ -53,6 +59,10 @@ impl ExecutableIdentity {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn invocation_path(&self) -> &Path {
+        &self.invocation_path
     }
 
     pub fn sha256(&self) -> &str {
@@ -79,20 +89,34 @@ impl ExecutableIdentity {
                 "tool identity timeout must be positive".to_owned(),
             ));
         }
-        let path = resolve_executable(configured.as_ref(), environment.search_path())?;
+        let (invocation_path, path) =
+            resolve_executable(configured.as_ref(), environment.search_path())?;
         let sha256 = executable_digest(&path)?;
-        let mut command = Command::new(&path);
+        let mut command = Command::new(&invocation_path);
         command.args(version_arguments);
         environment.apply(&mut command, ProcessPolicy::for_role(role), None)?;
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(RuntimeTrustError::DeadlineOutOfRange)?;
-        let mut child = supervisor
-            .spawn(&mut command, deadline, EffectRisk::None)
-            .map_err(|source| RuntimeTrustError::VersionSpawn {
-                path: path.clone(),
-                source,
-            })?;
+        let mut attempts = 0;
+        let mut child = loop {
+            match supervisor.spawn(&mut command, deadline, EffectRisk::None) {
+                Ok(child) => break child,
+                Err(ProcessError::Spawn(source))
+                    if source.raw_os_error() == Some(26)
+                        && attempts + 1 < EXECUTABLE_FILE_BUSY_ATTEMPTS =>
+                {
+                    attempts += 1;
+                    thread::sleep(EXECUTABLE_FILE_BUSY_BACKOFF);
+                }
+                Err(source) => {
+                    return Err(RuntimeTrustError::VersionSpawn {
+                        path: path.clone(),
+                        source,
+                    });
+                }
+            }
+        };
         child.close_stdin();
         let outcome = child
             .wait(heartbeat)
@@ -125,6 +149,7 @@ impl ExecutableIdentity {
         }
         Ok(Self {
             role,
+            invocation_path,
             path,
             sha256,
             version,
@@ -133,9 +158,9 @@ impl ExecutableIdentity {
 
     /// Rejects replacement, permission changes, or retargeting before spawn.
     pub fn verify_unchanged(&self) -> Result<(), RuntimeTrustError> {
-        let canonical = fs::canonicalize(&self.path).map_err(|source| {
+        let canonical = fs::canonicalize(&self.invocation_path).map_err(|source| {
             RuntimeTrustError::ExecutableFilesystem {
-                path: self.path.clone(),
+                path: self.invocation_path.clone(),
                 source,
             }
         })?;
@@ -152,19 +177,43 @@ impl ExecutableIdentity {
     }
 }
 
-/// Startup-resolved identities for the three gardener tools.
+/// Explicit executable names or paths resolved at gardener startup.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GardenerExecutablePaths {
+    pub codex: PathBuf,
+    pub git: PathBuf,
+    pub gh: PathBuf,
+    pub github_public_observer: PathBuf,
+}
+
+impl GardenerExecutablePaths {
+    pub fn new(
+        codex: impl Into<PathBuf>,
+        git: impl Into<PathBuf>,
+        gh: impl Into<PathBuf>,
+        github_public_observer: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            codex: codex.into(),
+            git: git.into(),
+            gh: gh.into(),
+            github_public_observer: github_public_observer.into(),
+        }
+    }
+}
+
+/// Startup-resolved identities for the gardener's privileged tool boundary.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct GardenerExecutableIdentities {
     pub codex: ExecutableIdentity,
     pub git: ExecutableIdentity,
     pub gh: ExecutableIdentity,
+    pub github_public_observer: ExecutableIdentity,
 }
 
 impl GardenerExecutableIdentities {
     pub fn resolve(
-        codex: impl AsRef<Path>,
-        git: impl AsRef<Path>,
-        gh: impl AsRef<Path>,
+        configured: &GardenerExecutablePaths,
         environment: &ChildEnvironment,
         supervisor: &ProcessSupervisor,
         timeout: Duration,
@@ -173,7 +222,7 @@ impl GardenerExecutableIdentities {
         Ok(Self {
             codex: ExecutableIdentity::resolve(
                 ExecutableRole::Codex,
-                codex,
+                &configured.codex,
                 &["--version"],
                 environment,
                 supervisor,
@@ -182,7 +231,7 @@ impl GardenerExecutableIdentities {
             )?,
             git: ExecutableIdentity::resolve(
                 ExecutableRole::Git,
-                git,
+                &configured.git,
                 &["--version"],
                 environment,
                 supervisor,
@@ -191,7 +240,16 @@ impl GardenerExecutableIdentities {
             )?,
             gh: ExecutableIdentity::resolve(
                 ExecutableRole::GitHub,
-                gh,
+                &configured.gh,
+                &["--version"],
+                environment,
+                supervisor,
+                timeout,
+                heartbeat,
+            )?,
+            github_public_observer: ExecutableIdentity::resolve(
+                ExecutableRole::GitHubPublicObserver,
+                &configured.github_public_observer,
                 &["--version"],
                 environment,
                 supervisor,
@@ -310,7 +368,7 @@ impl ChildEnvironment {
         policy: ProcessPolicy,
         credential: Option<&GitHubCredential>,
     ) -> Result<(), RuntimeTrustError> {
-        if credential.is_some() && !policy.is_github_mutation() {
+        if credential.is_some() && !policy.accepts_github_credential() {
             return Err(RuntimeTrustError::CredentialScope);
         }
         command.env_clear();
@@ -351,6 +409,7 @@ impl ChildEnvironment {
                     command.env("GH_TOKEN", credential.expose());
                 }
             }
+            ProcessPolicy::GitHubPublicRead => {}
             ProcessPolicy::CandidateCheck => {
                 command
                     .env("CARGO_HOME", self.home.join(".cargo"))
@@ -359,6 +418,7 @@ impl ChildEnvironment {
                     .env("CARGO_TERM_COLOR", "never");
                 apply_git_policy(command, None)?;
             }
+            ProcessPolicy::CandidateSandbox => {}
         }
         Ok(())
     }
@@ -374,7 +434,9 @@ pub enum ProcessPolicy {
     GitHubMutationGit,
     GitHubRead,
     GitHubMutationCli,
+    GitHubPublicRead,
     CandidateCheck,
+    CandidateSandbox,
 }
 
 impl ProcessPolicy {
@@ -383,11 +445,13 @@ impl ProcessPolicy {
             ExecutableRole::Codex => Self::Codex,
             ExecutableRole::Git => Self::GitLocal,
             ExecutableRole::GitHub => Self::GitHubRead,
+            ExecutableRole::GitHubPublicObserver => Self::GitHubPublicRead,
             ExecutableRole::CandidateCheck => Self::CandidateCheck,
+            ExecutableRole::CandidateSandbox => Self::CandidateSandbox,
         }
     }
 
-    fn is_github_mutation(self) -> bool {
+    fn accepts_github_credential(self) -> bool {
         matches!(self, Self::GitHubMutationGit | Self::GitHubMutationCli)
     }
 }
@@ -476,7 +540,7 @@ pub enum RuntimeTrustError {
 fn resolve_executable(
     configured: &Path,
     search_path: &[PathBuf],
-) -> Result<PathBuf, RuntimeTrustError> {
+) -> Result<(PathBuf, PathBuf), RuntimeTrustError> {
     let candidate = if configured.is_absolute() {
         configured.to_owned()
     } else if configured.components().count() == 1 {
@@ -492,13 +556,26 @@ fn resolve_executable(
             configured.to_owned(),
         ));
     };
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| RuntimeTrustError::InvalidExecutablePath(candidate.clone()))?;
+    let parent =
+        fs::canonicalize(parent).map_err(|source| RuntimeTrustError::ExecutableFilesystem {
+            path: parent.to_owned(),
+            source,
+        })?;
+    let invocation_path = parent.join(
+        candidate
+            .file_name()
+            .ok_or_else(|| RuntimeTrustError::InvalidExecutablePath(candidate.clone()))?,
+    );
     let canonical =
         fs::canonicalize(&candidate).map_err(|source| RuntimeTrustError::ExecutableFilesystem {
             path: candidate.clone(),
             source,
         })?;
     validate_executable_file(&canonical)?;
-    Ok(canonical)
+    Ok((invocation_path, canonical))
 }
 
 fn validate_executable_file(path: &Path) -> Result<(), RuntimeTrustError> {
@@ -609,7 +686,7 @@ fn apply_git_policy(
 mod tests {
     use crate::process::{CancellationToken, NoopHeartbeat, ProcessLimits};
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     use super::*;
 
@@ -688,6 +765,34 @@ mod tests {
     }
 
     #[test]
+    fn canonical_identity_retains_a_multicall_invocation_name() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("bin/multicall");
+        let link = root.path().join("bin/candidate-check");
+        executable(
+            &target,
+            "#!/bin/sh\n[ \"${0##*/}\" = candidate-check ] || exit 19\nprintf 'candidate-check 3\\n'\n",
+        );
+        symlink("multicall", &link).unwrap();
+
+        let identity = ExecutableIdentity::resolve(
+            ExecutableRole::CandidateCheck,
+            &link,
+            &["--version"],
+            &environment(root.path()),
+            &supervisor(),
+            Duration::from_secs(1),
+            &mut NoopHeartbeat,
+        )
+        .unwrap();
+
+        assert_eq!(identity.path(), fs::canonicalize(&target).unwrap());
+        assert_eq!(identity.invocation_path(), link);
+        assert_eq!(identity.version(), "candidate-check 3");
+        identity.verify_unchanged().unwrap();
+    }
+
+    #[test]
     fn hostile_ambient_values_are_cleared_and_credential_scope_is_narrow() {
         let root = tempfile::tempdir().unwrap();
         let dump = root.path().join("dump");
@@ -717,8 +822,18 @@ mod tests {
 
         let gh_read = run(ProcessPolicy::GitHubRead, None);
         assert!(!gh_read.contains("GH_TOKEN="));
+        let public_read = run(ProcessPolicy::GitHubPublicRead, None);
+        assert!(!public_read.contains("GH_TOKEN="));
         let gh_mutation = run(ProcessPolicy::GitHubMutationCli, Some(&credential));
         assert!(gh_mutation.contains("GH_TOKEN=explicit-token"));
+        assert!(matches!(
+            environment.apply(
+                &mut Command::new(&dump),
+                ProcessPolicy::GitHubPublicRead,
+                Some(&credential)
+            ),
+            Err(RuntimeTrustError::CredentialScope)
+        ));
         assert!(matches!(
             environment.apply(
                 &mut Command::new(&dump),

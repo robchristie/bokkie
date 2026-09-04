@@ -47,6 +47,9 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+// Clap requires the serve options inline; this short-lived CLI value is not
+// cloned or retained, so boxing individual path arguments adds no useful bound.
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Create an obligation.
     Create {
@@ -127,9 +130,15 @@ enum Command {
         gardener_git_executable: PathBuf,
         #[arg(long, default_value = "/usr/bin/gh")]
         gardener_gh_executable: PathBuf,
+        /// Absolute curl executable used only for credential-free public PR observation.
+        #[arg(long, default_value = "/usr/bin/curl")]
+        gardener_github_public_observer_executable: PathBuf,
         /// Absolute cargo executable used for fixed, credential-free candidate checks.
         #[arg(long, default_value = "/usr/bin/cargo")]
         gardener_cargo_executable: PathBuf,
+        /// Absolute bubblewrap executable used to isolate candidate checks.
+        #[arg(long, default_value = "/usr/bin/bwrap")]
+        gardener_candidate_sandbox_executable: PathBuf,
         /// Controlled HOME for Codex, Git, gh and candidate-check children.
         #[arg(long, requires = "enable_coding_gardener")]
         gardener_home: Option<PathBuf>,
@@ -246,7 +255,9 @@ struct ServeOptions {
     gardener_codex_executable: PathBuf,
     gardener_git_executable: PathBuf,
     gardener_gh_executable: PathBuf,
+    gardener_github_public_observer_executable: PathBuf,
     gardener_cargo_executable: PathBuf,
+    gardener_candidate_sandbox_executable: PathBuf,
     gardener_home: Option<PathBuf>,
     gardener_github_token_file: Option<PathBuf>,
     gardener_codex_profile: Option<String>,
@@ -346,7 +357,9 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             gardener_codex_executable,
             gardener_git_executable,
             gardener_gh_executable,
+            gardener_github_public_observer_executable,
             gardener_cargo_executable,
+            gardener_candidate_sandbox_executable,
             gardener_home,
             gardener_github_token_file,
             gardener_codex_profile,
@@ -368,7 +381,9 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                     gardener_codex_executable,
                     gardener_git_executable,
                     gardener_gh_executable,
+                    gardener_github_public_observer_executable,
                     gardener_cargo_executable,
+                    gardener_candidate_sandbox_executable,
                     gardener_home,
                     gardener_github_token_file,
                     gardener_codex_profile,
@@ -648,7 +663,9 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
             &options.gardener_codex_executable,
             &options.gardener_git_executable,
             &options.gardener_gh_executable,
+            &options.gardener_github_public_observer_executable,
             &options.gardener_cargo_executable,
+            &options.gardener_candidate_sandbox_executable,
         ])?;
         let environment = ChildEnvironment::new(
             &gardener_home,
@@ -669,6 +686,8 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
             options.gardener_gh_executable,
         )
         .with_child_environment(environment)
+        .with_github_public_observer(options.gardener_github_public_observer_executable)
+        .with_candidate_sandbox(options.gardener_candidate_sandbox_executable)
         .with_candidate_checks(
             options.gardener_cargo_executable,
             [

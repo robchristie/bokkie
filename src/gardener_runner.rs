@@ -32,7 +32,7 @@ use crate::{
     },
     runtime_trust::{
         ChildEnvironment, ExecutableIdentity, ExecutableRole, GardenerExecutableIdentities,
-        GitHubCredential, ProcessPolicy, RuntimeTrustError,
+        GardenerExecutablePaths, GitHubCredential, ProcessPolicy, RuntimeTrustError,
     },
 };
 
@@ -65,6 +65,8 @@ pub struct GardenerRuntimeConfig {
     codex_executable: PathBuf,
     git_executable: PathBuf,
     gh_executable: PathBuf,
+    github_public_observer_executable: PathBuf,
+    candidate_sandbox_executable: PathBuf,
     candidate_check_executable: PathBuf,
     candidate_check_arguments: Vec<Vec<OsString>>,
     child_environment: ChildEnvironment,
@@ -89,6 +91,8 @@ impl GardenerRuntimeConfig {
             codex_executable: codex_executable.into(),
             git_executable: git_executable.into(),
             gh_executable: gh_executable.into(),
+            github_public_observer_executable: PathBuf::from("curl"),
+            candidate_sandbox_executable: PathBuf::from("bwrap"),
             candidate_check_executable: PathBuf::from("cargo"),
             candidate_check_arguments: canonical_check_arguments(),
             child_environment: ChildEnvironment::captured_current()
@@ -144,6 +148,16 @@ impl GardenerRuntimeConfig {
             .into_iter()
             .map(|arguments| arguments.into_iter().map(Into::into).collect())
             .collect();
+        self
+    }
+
+    pub fn with_candidate_sandbox(mut self, executable: impl Into<PathBuf>) -> Self {
+        self.candidate_sandbox_executable = executable.into();
+        self
+    }
+
+    pub fn with_github_public_observer(mut self, executable: impl Into<PathBuf>) -> Self {
+        self.github_public_observer_executable = executable.into();
         self
     }
 
@@ -206,9 +220,12 @@ impl GardenerRuntimeConfig {
         .map_err(GardenerRunnerError::Configuration)?;
         let mut heartbeat = NoopHeartbeat;
         let executable_identities = GardenerExecutableIdentities::resolve(
-            &self.codex_executable,
-            &self.git_executable,
-            &self.gh_executable,
+            &GardenerExecutablePaths::new(
+                &self.codex_executable,
+                &self.git_executable,
+                &self.gh_executable,
+                &self.github_public_observer_executable,
+            ),
             &self.child_environment,
             &supervisor,
             self.process_timeout,
@@ -223,10 +240,25 @@ impl GardenerRuntimeConfig {
             self.process_timeout,
             &mut heartbeat,
         )?;
+        let sandbox_identity = ExecutableIdentity::resolve(
+            ExecutableRole::CandidateSandbox,
+            &self.candidate_sandbox_executable,
+            &["--version"],
+            &self.child_environment,
+            &supervisor,
+            self.process_timeout,
+            &mut heartbeat,
+        )?;
         let candidate_checks = self
             .candidate_check_arguments
             .iter()
-            .map(|arguments| CandidateCheckCommand::new(check_identity.clone(), arguments.clone()))
+            .map(|arguments| {
+                CandidateCheckCommand::sandboxed(
+                    sandbox_identity.clone(),
+                    check_identity.clone(),
+                    arguments.clone(),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(ValidatedGardenerRuntime {
             worktree_root,
@@ -249,6 +281,7 @@ impl GardenerRuntimeConfig {
             checkout,
             runtime.executable_identities.git.clone(),
             runtime.executable_identities.gh.clone(),
+            runtime.executable_identities.github_public_observer.clone(),
             runtime.child_environment.clone(),
             heartbeat,
         )?;
@@ -990,8 +1023,17 @@ fn reproducibility_manifest(
         &runtime.executable_identities.codex,
         &runtime.executable_identities.git,
         &runtime.executable_identities.gh,
+        &runtime.executable_identities.github_public_observer,
     ];
     for check in &runtime.candidate_checks {
+        if let Some(sandbox) = check.sandbox() {
+            if !executables
+                .iter()
+                .any(|identity| identity.path() == sandbox.path())
+            {
+                executables.push(sandbox);
+            }
+        }
         if !executables
             .iter()
             .any(|identity| identity.path() == check.executable().path())
@@ -1015,6 +1057,7 @@ fn reproducibility_manifest(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(json!({
+                "sandbox": check.sandbox(),
                 "executable": check.executable(),
                 "arguments": arguments,
             }))
@@ -1028,14 +1071,23 @@ fn reproducibility_manifest(
             ProcessPolicy::GitRemoteRead,
             ProcessPolicy::GitHubMutationGit,
             ProcessPolicy::GitHubRead,
+            ProcessPolicy::GitHubPublicRead,
             ProcessPolicy::GitHubMutationCli,
             ProcessPolicy::CandidateCheck,
+            ProcessPolicy::CandidateSandbox,
         ]
     });
     let sandbox_policy = json!({
         "inspection": {"access": "read_only", "network": false},
         "implementation": {"access": "workspace_write", "network": false},
         "verification": {"access": "read_only", "network": false},
+        "candidate_checks": {
+            "access": "isolated_copy_write",
+            "network": false,
+            "process_namespace": "private",
+            "home": "ephemeral",
+            "authoritative_state": "not_mounted"
+        },
         "approval_policy": "never",
     });
     Ok(GardenerReproducibilityManifest {

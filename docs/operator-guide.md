@@ -132,13 +132,14 @@ fingerprint. Do not blindly retry an ambiguous implementation: inspect the run
 and its append-only events to reconcile its persisted Codex, Git, and GitHub
 identities first.
 
-The runtime requires explicit absolute paths for `codex`, `git`, `gh`, and the
-`cargo` used by fixed candidate checks. At start-up it resolves and records
-their canonical paths, content digests and bounded version output, then
-revalidates each executable before use. Its worktree root and controlled child
-home must already exist
-and be absolute; configuration validation does not create directories or alter
-a repository. Before fetching or creating a worktree, the runtime requires
+The runtime requires explicit absolute paths for `codex`, `git`, `gh`, the
+credential-free public-observation `curl`, the `cargo` used by fixed candidate
+checks, and the Bubblewrap sandbox. At start-up it resolves and records their
+canonical paths, content digests and bounded version output, then revalidates
+each executable before use. Its worktree root and controlled child home must
+already exist and be absolute; configuration validation does not create
+directories or alter a repository. Before fetching or creating a worktree, the
+runtime requires
 Git's effective fetch and push URLs for `origin` to resolve to the canonical
 `robchristie/bokkie` GitHub repository. It rechecks the effective push URL
 immediately before pushing, including any Git URL rewrite rules.
@@ -153,7 +154,9 @@ bokkie --database ./bokkie.sqlite serve \
   --gardener-codex-executable /usr/bin/codex \
   --gardener-git-executable /usr/bin/git \
   --gardener-gh-executable /usr/bin/gh \
+  --gardener-github-public-observer-executable /usr/bin/curl \
   --gardener-cargo-executable /usr/bin/cargo \
+  --gardener-candidate-sandbox-executable /usr/bin/bwrap \
   --gardener-github-token-file /run/credentials/bokkie-gardener/github_token \
   --gardener-heartbeat-ms 10000 \
   --gardener-process-timeout-ms 1800000
@@ -162,7 +165,9 @@ bokkie --database ./bokkie.sqlite serve \
 The optional token file must be absolute, private and at most 16 KiB. Bokkie
 reads it at start-up and injects its value only into the Git push, draft PR
 creation and ready-promotion processes; it is absent from Codex, local checks,
-read-only Git/`gh` observations and retained output. A missing credential lets
+read-only Git and public `curl` observations, and retained output. Public PR
+state observation is HTTPS-only, bounded and fails closed if unavailable or
+rate limited. A missing credential lets
 inspection run but makes publication fail closed. The heartbeat must be
 positive and no more than one third of the lease. The
 process timeout is an absolute deadline for each Codex, Git, or `gh` child and
@@ -176,7 +181,10 @@ it is not inferred to have succeeded from process exit or narrative output. An
 inspection resolves `origin/main`, records its exact commit, and uses a
 disposable detached worktree with read-only, network-off Codex access. An
 approved implementation uses a separate isolated branch worktree with
-workspace-write, network-off access. Verification uses a fresh read-only Codex
+workspace-write, network-off access. Fixed candidate checks run on a
+manifest-derived disposable copy through Bubblewrap, with private HOME, mount,
+PID and network namespaces and no worker credential, database, Git metadata or
+authoritative worktree mounted. Verification uses a fresh read-only Codex
 thread in a detached worktree at the independently observed pull-request head.
 Unexpected command and file-change approvals receive an explicit cancellation;
 permission escalation receives an empty turn-scoped permission grant. The

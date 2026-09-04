@@ -44,9 +44,10 @@ wrapper to add convenience settings.
 replacement binaries can turn a requested Codex, Git, or `gh` invocation into
 another program. The launcher accepts only configured absolute executable
 paths, records their identities where available, and invokes them without a
-shell. Operators must keep `/usr/bin/codex`, `/usr/bin/git`, and `/usr/bin/gh`
-owned and writable only by trusted administrators. The service's restrictive
-`PATH` is defence in depth, not a substitute for absolute executable paths.
+shell. Operators must keep `/usr/bin/codex`, `/usr/bin/git`, `/usr/bin/gh`,
+`/usr/bin/curl`, `/usr/bin/cargo`, and `/usr/bin/bwrap` owned and writable only
+by trusted administrators. The service's restrictive `PATH` is defence in
+depth, not a substitute for absolute executable paths.
 
 ### Git configuration, hooks, and repository metadata
 
@@ -55,8 +56,11 @@ attributes, hooks, submodules, and a substituted `.git` file can change what
 Git fetches, pushes, or executes. The runner must disable system/global Git
 configuration, reject or neutralise hooks, use a controlled Git directory and
 worktree, and obtain effective fetch and push origins from Git itself. It must
-verify that both resolve to the canonical repository before network use, then
-recheck the effective push URL and exact head immediately before a
+verify that both resolve to the canonical repository before network use. Before
+every Git operation it rejects repository/worktree configuration capable of
+executing helpers or changing credentials, HTTP proxy/TLS, filters, hooks,
+transports, remotes, attributes or diff/merge behaviour. It rechecks that
+configuration, the effective push URL and the exact head immediately before a
 credential-bearing push. The worker profile sets `GIT_CONFIG_NOSYSTEM=1` and
 `GIT_CONFIG_GLOBAL=/dev/null`; these settings reduce ambient configuration but
 do not make an untrusted checkout safe by themselves.
@@ -70,10 +74,13 @@ homes, or the kernel service. Deliver a short-lived, repository-scoped
 credential only to the gardener worker through host configuration approved by
 the operator; keep its credential/configuration directory mode `0700` and
 separate from the kernel state directory. The credential must be absent from
-inspection, proposal and verification children, which are network-off. It is
-available only for the narrowly bounded Git/GitHub publication step after
-metadata revalidation. Revocation, expiry, accidental disclosure, or an
-ambiguous external result requires visible human reconciliation.
+inspection, proposal, verification, candidate-check and public-observation
+children. It is available only to Git push, `gh pr create`, and `gh pr ready`
+after metadata revalidation. Exact draft/ready state is observed separately
+through a bounded, HTTPS-only public GitHub API request made by the identified
+`curl` binary with configuration disabled and no credential. Revocation,
+expiry, public API rate limiting, accidental disclosure, or an ambiguous
+external result requires visible human reconciliation.
 
 ### Worktree metadata substitution and candidate code
 
@@ -85,24 +92,34 @@ under an operator-owned root; validate their canonical paths and Git metadata;
 and record the source commit, branch, worktree and child identities. Treat
 candidate code as untrusted: inspection and verification use read-only,
 network-off model sandboxes, while implementation is isolated to its own
-workspace-write, network-off worktree. No candidate may choose executable
-paths, credentials, remote names, or the promotion state.
+workspace-write, network-off worktree. Before candidate checks, Bokkie copies
+only entries in the exact Git tree manifest into a private disposable
+directory, excluding Git metadata. It runs the fixed command through the
+startup-identified Bubblewrap executable with new user, mount, PID and network
+namespaces, an empty root, private HOME and `/tmp`, read-only system/toolchain
+and dependency-cache mounts, and no mount for the worker database, credential
+directory, authoritative worktree or daemon processes. The disposable copy is
+writable only inside that boundary and is removed after each check. No
+candidate may choose executable paths, mounts, credentials, remote names, or
+the promotion state.
 
 ### Publication order and GitHub CI
 
 Publication is an evidence sequence, not an assertion in a pull-request body:
 
 1. Commit the candidate locally, record its source-to-candidate diff and full
-   tracked-tree manifest, then run the fixed locked checks without credentials.
+   tracked-tree manifest, then run the fixed locked checks in the OS-enforced,
+   network-off candidate sandbox without credentials or authoritative state.
    Retain each invocation, bounded output identity, outcome, duration and exact
    candidate head. A failed or interrupted check prevents publication.
 2. Revalidate the Git topology and exact head, push only that head, and create
    or retain the pull request as a **draft** at the independently observed
    remote head.
 3. GitHub CI for that exact pull-request head runs on a
-   GitHub-hosted unprivileged runner with read-only repository permission and
-   no secret use; it runs the pinned Rust toolchain and locked tests, Clippy,
-   and formatting checks.
+   GitHub-hosted unprivileged runner with read-only repository permission,
+   checkout credential persistence disabled and no secret use. A pre-check
+   rejects token-bearing environment or local Git authentication configuration
+   before the pinned locked tests, Clippy, and formatting checks run.
 4. Independently verify the exact observed pull-request head in a fresh,
    read-only, network-off worktree and retain the verdict.
 5. Re-observe the pull-request head and recorded evidence. Promote the draft to
@@ -117,8 +134,9 @@ releases, or restarts Bokkie.
 
 These controls do not make the local single-user HTTP API authenticated, prove
 the identity or intent of an operator, protect a compromised host or trusted
-administrator, prove GitHub's availability or integrity, or make arbitrary
-candidate code safe to execute. GitHub CI can execute candidate build/test code
+administrator, prove GitHub's availability or integrity, or protect against a
+kernel, Bubblewrap, Cargo/toolchain or trusted dependency-cache compromise.
+GitHub CI can execute candidate build/test code
 inside its disposable runner; its reduced token and secret boundary limits the
 blast radius but is not a sandbox for the candidate. GitHub branch protection,
 credential issuance, service installation, and any external publication remain
