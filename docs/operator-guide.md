@@ -161,7 +161,11 @@ bokkie --database ./bokkie.sqlite serve \
   --gardener-process-timeout-ms 1800000
 ```
 
-The optional `--gardener-github-token-stdin` flag reads at most 16 KiB once from
+The configured Bubblewrap executable is mandatory for two distinct boundaries:
+every Codex turn receives a private PID namespace and private procfs so no
+daemonised model child can survive into publication, and candidate checks run
+in the stronger network-off disposable-tree sandbox described below. The
+optional `--gardener-github-token-stdin` flag reads at most 16 KiB once from
 standard input, closes the descriptor and makes the credential-holding Linux
 process non-dumpable before resolving or spawning a child. Supply it only
 through a one-shot broker or supervisor-opened descriptor whose backing object
@@ -336,6 +340,11 @@ and closes the descriptor before any child starts. Do not use
 same-UID descendants. Do not put a token in the unit, repository, command line,
 broad service environment, worker-readable file, or kernel service. No real
 credential is included or exercised by this repository.
+
+The Bubblewrap path must remain administrator-owned and executable; startup
+fails closed if its identity or version cannot be obtained. Do not remove the
+unit's user, mount or PID namespace allowance: it is required for the private
+Codex PID boundary as well as candidate checks.
 
 Current limitations include one scheduler worker, no authentication, no remote
 exposure, no notification delivery, no automatic merge or deployment, and a

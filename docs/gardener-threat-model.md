@@ -79,8 +79,16 @@ before any child starts. A systemd service-owned credential mount is not used
 because same-UID descendants could read it by path. The credential must be
 absent from
 inspection, proposal, verification, candidate-check and public-observation
-children. It is available only to Git push, `gh pr create`, and `gh pr ready`
-after metadata revalidation. Exact draft/ready state is observed separately
+children. Every untrusted Codex app-server turn additionally runs behind the
+startup-identified Bubblewrap executable in a private PID namespace with a
+private `/proc`. When that namespace's init exits, the kernel kills any
+remaining descendant, including a process that daemonised or used `setsid` to
+leave its original process group. Bokkie's supervisor does not continue to a
+later publication operation until the boundary exits. This prevents a hostile
+same-UID Codex survivor from reading a later credential-bearing Git or `gh`
+environment through host procfs. The credential is available only to Git push,
+`gh pr create`, and `gh pr ready` after metadata revalidation. Exact draft/ready
+state is observed separately
 through a bounded, HTTPS-only public GitHub API request made by the identified
 `curl` binary with configuration disabled and no credential. Revocation,
 expiry, public API rate limiting, accidental disclosure, or an ambiguous
@@ -99,8 +107,11 @@ metadata;
 and record the source commit, branch, worktree and child identities. Treat
 candidate code as untrusted: inspection and verification use read-only,
 network-off model sandboxes, while implementation is isolated to its own
-workspace-write, network-off worktree. Before candidate checks, Bokkie copies
-only entries in the exact Git tree manifest into a private disposable
+workspace-write, network-off worktree. Those model sandboxes are nested inside
+the mandatory Codex PID boundary; the PID boundary supplies descendant
+teardown and procfs separation, while Codex's sandbox policy supplies the
+per-turn file and tool network restrictions. Before candidate checks, Bokkie
+copies only entries in the exact Git tree manifest into a private disposable
 directory, excluding Git metadata. It runs the fixed command through the
 startup-identified Bubblewrap executable with new user, mount, PID and network
 namespaces, an empty root, private HOME and `/tmp`, read-only system/toolchain

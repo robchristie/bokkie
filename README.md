@@ -19,8 +19,9 @@ The initial implementation is intentionally narrow:
 General infrastructure actions, automatic merge or deployment, notifications,
 memory, and the graphical interface remain outside this slice. The narrow
 gardener uses Codex only through isolated, network-off worktrees, runs candidate
-checks in a separate OS-enforced network/filesystem boundary, and preserves
-human approval before implementation.
+turns in a private PID namespace that cannot retain daemonised descendants,
+runs candidate checks in a separate OS-enforced network/filesystem boundary,
+and preserves human approval before implementation.
 
 ## Design guarantee
 

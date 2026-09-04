@@ -139,6 +139,7 @@ pub enum AppServerError {
 pub struct AppServerClient {
     executable: PathBuf,
     executable_identity: Option<ExecutableIdentity>,
+    process_boundary_identity: Option<ExecutableIdentity>,
     environment: ChildEnvironment,
     heartbeat_interval: Duration,
     execution_timeout: Duration,
@@ -151,6 +152,7 @@ impl AppServerClient {
         Self {
             executable: executable.into(),
             executable_identity: None,
+            process_boundary_identity: None,
             environment: ChildEnvironment::captured_current()
                 .expect("the compatibility child environment is valid"),
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
@@ -164,6 +166,7 @@ impl AppServerClient {
     /// explicit worker environment. This is the production gardener path.
     pub fn from_trust(
         executable: ExecutableIdentity,
+        process_boundary: ExecutableIdentity,
         environment: ChildEnvironment,
     ) -> Result<Self, AppServerError> {
         if executable.role() != ExecutableRole::Codex {
@@ -171,10 +174,17 @@ impl AppServerClient {
                 "app-server executable identity must have the Codex role".to_owned(),
             ));
         }
+        if process_boundary.role() != ExecutableRole::CodexProcessBoundary {
+            return Err(AppServerError::InvalidRequest(
+                "Codex process boundary executable has the wrong role".to_owned(),
+            ));
+        }
         executable.verify_unchanged()?;
+        process_boundary.verify_unchanged()?;
         Ok(Self {
             executable: executable.invocation_path().to_owned(),
             executable_identity: Some(executable),
+            process_boundary_identity: Some(process_boundary),
             environment,
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
             execution_timeout: DEFAULT_EXECUTION_TIMEOUT,
@@ -216,6 +226,9 @@ impl AppServerClient {
         if let Some(identity) = &self.executable_identity {
             identity.verify_unchanged()?;
         }
+        if let Some(identity) = &self.process_boundary_identity {
+            identity.verify_unchanged()?;
+        }
         if self.heartbeat_interval.is_zero() || self.execution_timeout.is_zero() {
             return Err(AppServerError::InvalidRequest(
                 "heartbeat interval and execution timeout must be positive".to_owned(),
@@ -244,6 +257,7 @@ impl AppServerClient {
         let mut transport = ChildTransport::spawn(
             &supervisor,
             &self.executable,
+            self.process_boundary_identity.as_ref(),
             &self.environment,
             request.cwd,
             deadline,
@@ -304,12 +318,12 @@ impl ChildTransport {
     fn spawn(
         supervisor: &ProcessSupervisor,
         executable: &Path,
+        process_boundary: Option<&ExecutableIdentity>,
         environment: &ChildEnvironment,
         cwd: &Path,
         deadline: Instant,
     ) -> Result<Self, AppServerError> {
-        let mut command = Command::new(executable);
-        command.arg("app-server").current_dir(cwd);
+        let mut command = codex_command(executable, process_boundary, cwd);
         environment.apply(&mut command, ProcessPolicy::Codex, None)?;
         let child = supervisor
             .spawn(&mut command, deadline, EffectRisk::None)
@@ -338,6 +352,43 @@ impl ChildTransport {
 
     fn abort(&mut self) -> Result<crate::process::ProcessEvidence, AppServerError> {
         self.child.abort().map_err(Into::into)
+    }
+}
+
+fn codex_command(
+    executable: &Path,
+    process_boundary: Option<&ExecutableIdentity>,
+    cwd: &Path,
+) -> Command {
+    if let Some(process_boundary) = process_boundary {
+        // The private PID namespace has its own procfs. When its init process
+        // exits, the kernel kills every remaining process in that namespace,
+        // including children that daemonised or escaped their original
+        // process group with setsid(2). `--die-with-parent` covers abrupt loss
+        // of the supervising Bokkie process.
+        let mut command = Command::new(process_boundary.invocation_path());
+        command
+            .args([
+                "--die-with-parent",
+                "--unshare-pid",
+                "--new-session",
+                "--dev-bind",
+                "/",
+                "/",
+                "--proc",
+                "/proc",
+                "--chdir",
+            ])
+            .arg(cwd)
+            .arg("--")
+            .arg(executable)
+            .arg("app-server")
+            .current_dir(cwd);
+        command
+    } else {
+        let mut command = Command::new(executable);
+        command.arg("app-server").current_dir(cwd);
+        command
     }
 }
 
@@ -721,7 +772,43 @@ fn parse_message(line: &str) -> Result<Message, AppServerError> {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
-    use std::{fs, os::unix::fs::PermissionsExt, thread};
+    use std::{fs, os::unix::fs::PermissionsExt, process::Stdio, thread};
+
+    fn executable(path: &Path, contents: &str) {
+        fs::write(path, contents).unwrap();
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn test_environment(root: &Path, path: Vec<PathBuf>) -> ChildEnvironment {
+        let home = root.join("home");
+        let config = root.join("config");
+        let cache = root.join("cache");
+        for directory in [&home, &config, &cache, &config.join("bokkie-gh-empty")] {
+            fs::create_dir_all(directory).unwrap();
+        }
+        ChildEnvironment::new(home, config, cache, path).unwrap()
+    }
+
+    fn boundary_identity(path: &Path, environment: &ChildEnvironment) -> ExecutableIdentity {
+        let supervisor = ProcessSupervisor::new(
+            Duration::from_millis(10),
+            ProcessLimits::default(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        ExecutableIdentity::resolve(
+            ExecutableRole::CodexProcessBoundary,
+            path,
+            &["--version"],
+            environment,
+            &supervisor,
+            Duration::from_secs(1),
+            &mut crate::process::NoopHeartbeat,
+        )
+        .unwrap()
+    }
 
     struct FakeTransport {
         received: VecDeque<Receive>,
@@ -915,6 +1002,148 @@ mod tests {
                 "excludeSlashTmp": true,
                 "excludeTmpdirEnvVar": true,
             })
+        );
+    }
+
+    #[test]
+    fn trusted_codex_command_uses_a_private_pid_namespace_boundary() {
+        let directory = tempfile::tempdir().unwrap();
+        let boundary = directory.path().join("bwrap");
+        executable(&boundary, "#!/bin/sh\nprintf 'bubblewrap 1\\n'\n");
+        let environment = test_environment(directory.path(), vec![directory.path().to_owned()]);
+        let identity = boundary_identity(&boundary, &environment);
+        let command = codex_command(
+            Path::new("/usr/bin/codex"),
+            Some(&identity),
+            Path::new("/worktree"),
+        );
+
+        assert_eq!(command.get_program(), boundary.as_os_str());
+        assert_eq!(
+            command
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            [
+                "--die-with-parent",
+                "--unshare-pid",
+                "--new-session",
+                "--dev-bind",
+                "/",
+                "/",
+                "--proc",
+                "/proc",
+                "--chdir",
+                "/worktree",
+                "--",
+                "/usr/bin/codex",
+                "app-server",
+            ]
+        );
+        assert_eq!(command.get_current_dir(), Some(Path::new("/worktree")));
+    }
+
+    #[test]
+    fn real_pid_boundary_kills_a_daemonised_codex_descendant_before_mutation() {
+        let Some(boundary) = [
+            Path::new("/usr/bin/bwrap"),
+            Path::new("/usr/local/bin/bwrap"),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.is_file()) else {
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let ready = directory.path().join("daemon-ready");
+        let daemon_pid = directory.path().join("daemon.pid");
+        let target_pid = directory.path().join("mutation.pid");
+        let leaked = directory.path().join("credential-leaked");
+        let codex = directory.path().join("hostile-codex");
+        executable(
+            &codex,
+            &format!(
+                "#!/bin/sh\n[ \"$1\" = app-server ] || exit 2\nsetsid sh -c 'printf %s \"$$\" > \"{}\"; printf ready > \"{}\"; while :; do if [ -s \"{}\" ]; then pid=$(cat \"{}\"); grep -azq \"BOKKIE_LATER_MUTATION_SENTINEL=unavailable-to-codex\" \"/proc/$pid/environ\" 2>/dev/null && printf leaked > \"{}\"; fi; sleep 0.01; done' </dev/null >/dev/null 2>&1 &\nwhile [ ! -s \"{}\" ]; do sleep 0.01; done\n",
+                daemon_pid.display(),
+                ready.display(),
+                target_pid.display(),
+                target_pid.display(),
+                leaked.display(),
+                ready.display(),
+            ),
+        );
+        let environment = test_environment(
+            directory.path(),
+            vec![PathBuf::from("/usr/bin"), PathBuf::from("/bin")],
+        );
+        let identity = boundary_identity(boundary, &environment);
+        let run_codex = |process_boundary: Option<&ExecutableIdentity>| {
+            let supervisor = ProcessSupervisor::new(
+                Duration::from_millis(10),
+                ProcessLimits::default(),
+                CancellationToken::new(),
+            )
+            .unwrap();
+            let mut command = codex_command(&codex, process_boundary, directory.path());
+            environment
+                .apply(&mut command, ProcessPolicy::Codex, None)
+                .unwrap();
+            supervisor.run(
+                &mut command,
+                Instant::now() + Duration::from_secs(2),
+                EffectRisk::None,
+                &mut crate::process::NoopHeartbeat,
+            )
+        };
+        let run_mutation = || {
+            let mut mutation = Command::new("/bin/sh")
+                .args(["-c", "sleep 0.25"])
+                .env("BOKKIE_LATER_MUTATION_SENTINEL", "unavailable-to-codex")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            fs::write(&target_pid, mutation.id().to_string()).unwrap();
+            mutation.wait().unwrap();
+        };
+
+        let control = run_codex(None).unwrap();
+        assert!(matches!(
+            control,
+            ProcessOutcome::Completed { status, .. } if status.success()
+        ));
+        run_mutation();
+        assert!(
+            leaked.exists(),
+            "the hostile control did not observe a same-UID mutation environment"
+        );
+        let daemon: i32 = fs::read_to_string(&daemon_pid).unwrap().parse().unwrap();
+        unsafe { libc::kill(-daemon, libc::SIGKILL) };
+        for path in [&ready, &daemon_pid, &target_pid, &leaked] {
+            fs::remove_file(path).unwrap();
+        }
+
+        let outcome = match run_codex(Some(&identity)) {
+            Ok(outcome) => outcome,
+            Err(ProcessError::Spawn(error))
+                if matches!(error.raw_os_error(), Some(libc::EPERM | libc::EACCES)) =>
+            {
+                return;
+            }
+            Err(error) => panic!("cannot run Bubblewrap PID-boundary probe: {error}"),
+        };
+        assert!(
+            matches!(
+                &outcome,
+                ProcessOutcome::Completed { status, .. } if status.success()
+            ),
+            "unexpected Bubblewrap PID-boundary outcome: {outcome}"
+        );
+        assert!(ready.exists(), "the hostile descendant did not start");
+        run_mutation();
+        assert!(
+            !leaked.exists(),
+            "a daemonised Codex descendant observed the later mutation environment"
         );
     }
 

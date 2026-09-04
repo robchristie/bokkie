@@ -538,15 +538,19 @@ impl SupervisedChild {
             if let Some(reason) = self.terminal.clone() {
                 return self.interrupt(reason).map(Some);
             }
-            if !(self.stdout_closed && self.stderr_closed) {
-                let pgid = self
-                    .child
-                    .as_ref()
-                    .expect("completed child is present")
-                    .id() as i32;
-                signal_group(pgid, libc::SIGKILL)?;
-                self.drain_to_close()?;
-            }
+            // Completion of the direct child is not proof that its process
+            // group is empty: a descendant may have closed the captured pipes
+            // and kept running. Always terminate the original group before
+            // reporting completion. Callers executing untrusted programs must
+            // additionally use a PID namespace because setsid(2) can escape a
+            // process group.
+            let pgid = self
+                .child
+                .as_ref()
+                .expect("completed child is present")
+                .id() as i32;
+            signal_group(pgid, libc::SIGKILL)?;
+            self.drain_to_close()?;
             if let Some(reason) = self.terminal.clone() {
                 return self.interrupt(reason).map(Some);
             }
@@ -989,6 +993,51 @@ mod tests {
         assert!(
             state.is_none() || matches!(state.as_deref(), Some("Z" | "X")),
             "descendant {descendant} survived group cancellation in state {state:?}"
+        );
+    }
+
+    #[test]
+    fn normal_completion_kills_silent_descendants_in_the_original_group() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_path = directory.path().join("descendant.pid");
+        let script = format!(
+            "sleep 30 </dev/null >/dev/null 2>&1 & echo $! > '{}'",
+            shell_quote(&pid_path)
+        );
+        let mut command = shell(&script);
+        let outcome = supervisor(CancellationToken::new())
+            .run(
+                &mut command,
+                Instant::now() + Duration::from_secs(1),
+                EffectRisk::None,
+                &mut NoopHeartbeat,
+            )
+            .unwrap();
+        assert!(matches!(
+            outcome,
+            ProcessOutcome::Completed { status, .. } if status.success()
+        ));
+        let descendant: i32 = fs::read_to_string(&pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let end = Instant::now() + Duration::from_secs(1);
+        let state = loop {
+            let state = fs::read_to_string(format!("/proc/{descendant}/stat"))
+                .ok()
+                .and_then(|stat| stat.split_whitespace().nth(2).map(str::to_owned));
+            if state.is_none() || matches!(state.as_deref(), Some("Z" | "X")) {
+                break state;
+            }
+            if Instant::now() >= end {
+                break state;
+            }
+            thread::sleep(Duration::from_millis(2));
+        };
+        assert!(
+            state.is_none() || matches!(state.as_deref(), Some("Z" | "X")),
+            "silent descendant {descendant} survived normal completion in state {state:?}"
         );
     }
 

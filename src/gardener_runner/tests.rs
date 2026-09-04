@@ -230,16 +230,19 @@ if args == ["--version"]:
     print("fake-bwrap 1.0")
     raise SystemExit(0)
 mounts = {}
-child_env = {}
+child_env = os.environ.copy()
 child_cwd = None
 index = 0
 while index < len(args):
     argument = args[index]
-    if argument in ("--die-with-parent", "--new-session", "--unshare-all", "--clearenv"):
+    if argument in ("--die-with-parent", "--new-session", "--unshare-all", "--unshare-pid"):
+        index += 1
+    elif argument == "--clearenv":
+        child_env = {}
         index += 1
     elif argument in ("--proc", "--dev", "--tmpfs", "--dir"):
         index += 2
-    elif argument in ("--bind", "--ro-bind"):
+    elif argument in ("--bind", "--dev-bind", "--ro-bind"):
         mounts[args[index + 2]] = args[index + 1]
         index += 3
     elif argument == "--symlink":
@@ -250,6 +253,9 @@ while index < len(args):
     elif argument == "--chdir":
         child_cwd = args[index + 1]
         index += 2
+    elif argument == "--":
+        index += 1
+        break
     else:
         break
 command = mounts.get(args[index], args[index])
@@ -389,6 +395,11 @@ fn complete_process_flow_persists_exact_identities_and_passes_verification() {
     assert_eq!(manifest.source_commit, run.source_commit);
     assert!(manifest.bokkie_build.contains("\"sha256\""));
     assert!(manifest.executable_manifest_json.contains("fake-codex 1.0"));
+    assert!(
+        manifest
+            .executable_manifest_json
+            .contains("codex_process_boundary")
+    );
     let qualification = store
         .gardener_candidate_qualification(&run.id)
         .unwrap()

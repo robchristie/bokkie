@@ -135,7 +135,7 @@ enum Command {
         /// Absolute cargo executable used for fixed, credential-free candidate checks.
         #[arg(long, default_value = "/usr/bin/cargo")]
         gardener_cargo_executable: PathBuf,
-        /// Absolute bubblewrap executable used to isolate candidate checks.
+        /// Absolute Bubblewrap executable used for Codex PID and candidate-check isolation.
         #[arg(long, default_value = "/usr/bin/bwrap")]
         gardener_candidate_sandbox_executable: PathBuf,
         /// Controlled HOME for Codex, Git, gh and candidate-check children.

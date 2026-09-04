@@ -249,6 +249,15 @@ impl GardenerRuntimeConfig {
             self.process_timeout,
             &mut heartbeat,
         )?;
+        let codex_process_boundary_identity = ExecutableIdentity::resolve(
+            ExecutableRole::CodexProcessBoundary,
+            &self.candidate_sandbox_executable,
+            &["--version"],
+            &self.child_environment,
+            &supervisor,
+            self.process_timeout,
+            &mut heartbeat,
+        )?;
         let candidate_checks = self
             .candidate_check_arguments
             .iter()
@@ -264,6 +273,7 @@ impl GardenerRuntimeConfig {
             worktree_root,
             child_environment: self.child_environment.clone(),
             executable_identities,
+            codex_process_boundary_identity,
             candidate_checks,
             github_credential: self.github_credential.clone(),
             codex_profile: self.codex_profile.clone(),
@@ -303,6 +313,7 @@ pub(crate) struct ValidatedGardenerRuntime {
     worktree_root: PathBuf,
     child_environment: ChildEnvironment,
     executable_identities: GardenerExecutableIdentities,
+    codex_process_boundary_identity: ExecutableIdentity,
     candidate_checks: Vec<CandidateCheckCommand>,
     github_credential: Option<GitHubCredential>,
     codex_profile: Option<String>,
@@ -464,6 +475,7 @@ impl<'a> GardenerRunner<'a> {
                 );
                 AppServerClient::from_trust(
                     self.runtime.executable_identities.codex.clone(),
+                    self.runtime.codex_process_boundary_identity.clone(),
                     self.runtime.child_environment.clone(),
                 )
                 .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
@@ -571,6 +583,7 @@ impl<'a> GardenerRunner<'a> {
                 );
                 AppServerClient::from_trust(
                     self.runtime.executable_identities.codex.clone(),
+                    self.runtime.codex_process_boundary_identity.clone(),
                     self.runtime.child_environment.clone(),
                 )
                 .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
@@ -723,6 +736,7 @@ impl<'a> GardenerRunner<'a> {
                 );
                 AppServerClient::from_trust(
                     self.runtime.executable_identities.codex.clone(),
+                    self.runtime.codex_process_boundary_identity.clone(),
                     self.runtime.child_environment.clone(),
                 )
                 .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
@@ -1021,6 +1035,7 @@ fn reproducibility_manifest(
 ) -> Result<GardenerReproducibilityManifest, GardenerRunnerError> {
     let mut executables = vec![
         &runtime.executable_identities.codex,
+        &runtime.codex_process_boundary_identity,
         &runtime.executable_identities.git,
         &runtime.executable_identities.gh,
         &runtime.executable_identities.github_public_observer,
@@ -1073,11 +1088,18 @@ fn reproducibility_manifest(
             ProcessPolicy::GitHubRead,
             ProcessPolicy::GitHubPublicRead,
             ProcessPolicy::GitHubMutationCli,
+            ProcessPolicy::CodexProcessBoundary,
             ProcessPolicy::CandidateCheck,
             ProcessPolicy::CandidateSandbox,
         ]
     });
     let sandbox_policy = json!({
+        "codex_process_boundary": {
+            "pid_namespace": "private",
+            "procfs": "private",
+            "remaining_descendants": "killed_when_namespace_init_exits",
+            "parent_loss": "die_with_parent"
+        },
         "inspection": {"access": "read_only", "network": false},
         "implementation": {"access": "workspace_write", "network": false},
         "verification": {"access": "read_only", "network": false},

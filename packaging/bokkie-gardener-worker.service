@@ -52,9 +52,10 @@ LockPersonality=yes
 # MemoryDenyWriteExecute is deliberately omitted: the commonly packaged Codex
 # launcher uses Node/V8 and fails under that restriction.
 RemoveIPC=yes
-# Bubblewrap needs these namespace and mount operations to create the fixed,
-# network-off candidate-check boundary. Bokkie supplies its arguments; candidate
-# code cannot select the sandbox executable, mounts or namespace policy.
+# Bubblewrap needs these namespace and mount operations for every Codex turn's
+# private PID/procfs boundary and for the stronger network-off candidate-check
+# boundary. Bokkie supplies its arguments; candidate code cannot select the
+# executable, mounts or namespace policy.
 RestrictNamespaces=user mnt pid net ipc uts cgroup
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

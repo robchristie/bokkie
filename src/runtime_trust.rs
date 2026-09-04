@@ -35,6 +35,7 @@ const BOT_EMAIL: &str = "bokkie-gardener@users.noreply.github.com";
 #[serde(rename_all = "snake_case")]
 pub enum ExecutableRole {
     Codex,
+    CodexProcessBoundary,
     Git,
     GitHub,
     GitHubPublicObserver,
@@ -410,6 +411,7 @@ impl ChildEnvironment {
                 }
             }
             ProcessPolicy::GitHubPublicRead => {}
+            ProcessPolicy::CodexProcessBoundary => {}
             ProcessPolicy::CandidateCheck => {
                 command
                     .env("CARGO_HOME", self.home.join(".cargo"))
@@ -435,6 +437,7 @@ pub enum ProcessPolicy {
     GitHubRead,
     GitHubMutationCli,
     GitHubPublicRead,
+    CodexProcessBoundary,
     CandidateCheck,
     CandidateSandbox,
 }
@@ -443,6 +446,7 @@ impl ProcessPolicy {
     fn for_role(role: ExecutableRole) -> Self {
         match role {
             ExecutableRole::Codex => Self::Codex,
+            ExecutableRole::CodexProcessBoundary => Self::CodexProcessBoundary,
             ExecutableRole::Git => Self::GitLocal,
             ExecutableRole::GitHub => Self::GitHubRead,
             ExecutableRole::GitHubPublicObserver => Self::GitHubPublicRead,
