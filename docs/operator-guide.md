@@ -132,10 +132,14 @@ fingerprint. Do not blindly retry an ambiguous implementation: inspect the run
 and its append-only events to reconcile its persisted Codex, Git, and GitHub
 identities first.
 
-The runtime requires `codex`, `git`, and an authenticated `gh` installation.
-Executable locations are configurable. Its worktree root must already exist
-and be absolute; configuration validation does not create directories or alter
-a repository. Before fetching or creating a worktree, the runtime requires
+The runtime requires explicit absolute paths for `codex`, `git`, `gh`, the
+credential-free public-observation `curl`, the `cargo` used by fixed candidate
+checks, and the Bubblewrap sandbox. At start-up it resolves and records their
+canonical paths, content digests and bounded version output, then revalidates
+each executable before use. Its worktree root and controlled child home must
+already exist and be absolute; configuration validation does not create
+directories or alter a repository. Before fetching or creating a worktree, the
+runtime requires
 Git's effective fetch and push URLs for `origin` to resolve to the canonical
 `robchristie/bokkie` GitHub repository. It rechecks the effective push URL
 immediately before pushing, including any Git URL rewrite rules.
@@ -146,14 +150,33 @@ bokkie --database ./bokkie.sqlite serve \
   --lease-seconds 30 \
   --enable-coding-gardener \
   --gardener-worktree-root /srv/bokkie-gardener-worktrees \
+  --gardener-home /var/lib/bokkie-gardener \
   --gardener-codex-executable /usr/bin/codex \
   --gardener-git-executable /usr/bin/git \
   --gardener-gh-executable /usr/bin/gh \
+  --gardener-github-public-observer-executable /usr/bin/curl \
+  --gardener-cargo-executable /usr/bin/cargo \
+  --gardener-candidate-sandbox-executable /usr/bin/bwrap \
   --gardener-heartbeat-ms 10000 \
   --gardener-process-timeout-ms 1800000
 ```
 
-The heartbeat must be positive and no more than one third of the lease. The
+The configured Bubblewrap executable is mandatory for two distinct boundaries:
+every Codex turn receives a private PID namespace and private procfs so no
+daemonised model child can survive into publication, and candidate checks run
+in the stronger network-off disposable-tree sandbox described below. The
+optional `--gardener-github-token-stdin` flag reads at most 16 KiB once from
+standard input, closes the descriptor and makes the credential-holding Linux
+process non-dumpable before resolving or spawning a child. Supply it only
+through a one-shot broker or supervisor-opened descriptor whose backing object
+the worker account cannot traverse or read; never redirect it from a
+worker-readable file. Bokkie injects the value only into the Git push, draft PR
+creation and ready-promotion processes. It is absent from Codex, local checks,
+read-only Git and public `curl` observations, and retained output. Public PR
+state observation is HTTPS-only, bounded and fails closed if unavailable or
+rate limited. A missing credential lets
+inspection run but makes publication fail closed. The heartbeat must be
+positive and no more than one third of the lease. The
 process timeout is an absolute deadline for each Codex, Git, or `gh` child and
 is deliberately independent of the renewable lease duration. All three use the
 same supervised process boundary: shutdown cancellation and deadline expiry
@@ -165,18 +188,39 @@ it is not inferred to have succeeded from process exit or narrative output. An
 inspection resolves `origin/main`, records its exact commit, and uses a
 disposable detached worktree with read-only, network-off Codex access. An
 approved implementation uses a separate isolated branch worktree with
-workspace-write, network-off access. Verification uses a fresh read-only Codex
+workspace-write, network-off access. Fixed candidate checks run on a
+manifest-derived disposable copy through Bubblewrap, with private HOME, mount,
+PID and network namespaces and no worker credential, database, Git metadata or
+authoritative worktree mounted. Verification uses a fresh read-only Codex
 thread in a detached worktree at the independently observed pull-request head.
 Unexpected command and file-change approvals receive an explicit cancellation;
 permission escalation receives an empty turn-scoped permission grant. The
 configured sandboxes prevent unplanned writes or network access, and the
 session then terminates as failed for operator reconciliation.
 
+Read the [coding gardener threat model](gardener-threat-model.md) before
+enabling this runtime. In particular, do not inherit a login shell's environment
+or share GitHub credentials with the kernel service. Keep configured executable
+paths administrator-owned, use a dedicated gardener state/configuration
+directory, and treat any changed Git metadata, pull-request head, timeout or
+missing evidence as an attention condition.
+
+The publication sequence is deliberate: the runner records a draft pull
+request at its exact pushed head after retaining locked local-check evidence,
+then independently verifies that head in a fresh read-only worktree. It
+re-observes the head and evidence before promoting the pull request to ready.
+The separate secret-free, read-only CI workflow also checks that exact
+candidate for the human merge gate. A changed head or failed, missing, or
+ambiguous local check must prevent publication or leave the pull request draft
+for reconciliation; ready status never authorises a merge.
+
 SQLite retains inspection source commits and Codex thread/turn identities;
 proposal fingerprints, prompts, observations and source commits; and each
 implementation run's obligation/lease, worktree, branch, Codex thread/turn,
 Git commit, pushed head, pull-request number/URL/head, verification head and
-verdict. Gardening events and run events are append-only evidence. The gardener
+verdict. Each run also retains its prompt/schema, executable/version,
+environment/sandbox policy and fixed-check identities, plus its exact tree,
+source diff, bounded check output/status and duration. Gardening events and run events are append-only evidence. The gardener
 never automatically merges, deploys, releases, or restarts Bokkie.
 
 ## HTTP API
@@ -256,6 +300,51 @@ files all remain under `/var/lib/bokkie`.
 Back up the database and its WAL consistently using SQLite-aware tooling or
 while the service is stopped. Logs are diagnostic; inspect the database-backed
 obligation, attempt, and event records when determining lifecycle state.
+
+### Separate gardener worker example
+
+[`packaging/bokkie-gardener-worker.service`](../packaging/bokkie-gardener-worker.service)
+is a separate example profile only. It is not installed by this repository and
+must not replace or relax [`packaging/bokkie.service`](../packaging/bokkie.service).
+Unlike the kernel service, a gardener worker needs external GitHub access for
+the explicitly bounded publication step, so it uses a distinct state directory,
+loopback listener, dedicated static `bokkie-gardener` system account and
+hardened systemd boundary.
+
+Before installation, configuration management must create that non-login
+account and a private `/var/lib/bokkie-gardener`. As that account, create the
+worker checkout with Git's separate-directory form so its working tree is
+`/var/lib/bokkie-gardener/checkout`, its `.git` indirection points to the
+writable `/var/lib/bokkie-gardener/repository.git`, and no common Git directory
+is outside the worker state. Register that checkout against the worker's
+`bokkie.sqlite` while the service is stopped. The unit mounts the checkout tree
+read-only but permits the sibling common Git directory and disposable worktree
+root to change. Bokkie's startup topology identity and immediate pre-mutation
+checks must observe exactly those paths; a normal clone with `.git` inside the
+read-only checkout will fail closed.
+
+Review the threat model, local paths, systemd namespace/address-family support,
+credential-delivery mechanism and network policy before installation. The
+example permits `AF_NETLINK` only because Bubblewrap needs `NETLINK_ROUTE` to
+initialise the isolated network namespace. It deliberately omits
+`MemoryDenyWriteExecute` because the common Codex launcher uses Node/V8; an
+operator using a verified native Codex binary may add that restriction after a
+representative service-manager probe.
+
+The example has PID 1 open `/etc/bokkie-gardener/github-token` as standard input
+before it drops to the worker account. Configuration management must keep the
+parent directory root-owned mode `0700` and the source root-owned mode `0400`,
+so neither Bokkie nor any descendant can open the backing path. Bokkie consumes
+and closes the descriptor before any child starts. Do not use
+`LoadCredential=` here: its service-owned credential mount remains readable to
+same-UID descendants. Do not put a token in the unit, repository, command line,
+broad service environment, worker-readable file, or kernel service. No real
+credential is included or exercised by this repository.
+
+The Bubblewrap path must remain administrator-owned and executable; startup
+fails closed if its identity or version cannot be obtained. Do not remove the
+unit's user, mount or PID namespace allowance: it is required for the private
+Codex PID boundary as well as candidate checks.
 
 Current limitations include one scheduler worker, no authentication, no remote
 exposure, no notification delivery, no automatic merge or deployment, and a

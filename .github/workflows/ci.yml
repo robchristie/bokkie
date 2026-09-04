@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# This workflow reads candidate code only. It has no write token, secrets, or
+# deployment credentials.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Locked Rust checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: 1.85.0
+      CARGO_TERM_COLOR: always
+      # Candidate-controlled build and test code receives no GitHub or Actions
+      # service token. Checkout receives its read token through the pinned
+      # action input and removes it before these commands run.
+      GH_TOKEN: ""
+      GITHUB_TOKEN: ""
+      ACTIONS_RUNTIME_TOKEN: ""
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: ""
+      ACTIONS_ID_TOKEN_REQUEST_URL: ""
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Verify checkout credentials are absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "${GH_TOKEN-}${GITHUB_TOKEN-}${ACTIONS_RUNTIME_TOKEN-}"
+          test -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN-}${ACTIONS_ID_TOKEN_REQUEST_URL-}"
+          if git config --local --name-only --get-regexp \
+            '(^|\.)(extraheader|credentialhelper|credential\.helper)$' \
+            >/dev/null 2>&1; then
+            echo "checkout authentication configuration remains" >&2
+            exit 1
+          fi
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy rustfmt
+
+      - name: Test
+        run: cargo test --all-targets --locked
+
+      - name: Lint
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check

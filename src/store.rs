@@ -10,6 +10,7 @@ use rusqlite::{
     Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params, types::Type,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -17,11 +18,12 @@ use crate::{
     ApprovalDecision, Attempt, AttemptOutcome, AuditEvent, Claim, Completion, NewObligation,
     Obligation, ObligationState, Recurrence,
     gardener::{
-        CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerEvent, GardenerImplementationRun,
-        GardenerInspection, GardenerRunEvent, GardenerRunPhase, GardenerVerificationVerdict,
-        InspectionResult, NewGardenerImplementationRun, NewGardenerInspection,
-        NewRepositoryRegistration, Proposal, ProposalObservation, RepositoryRegistration,
-        normalise_goal_prompt, proposal_fingerprint,
+        CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerCandidateQualification,
+        GardenerEvent, GardenerImplementationRun, GardenerInspection, GardenerPublicationState,
+        GardenerReproducibilityManifest, GardenerRunEvent, GardenerRunPhase,
+        GardenerVerificationVerdict, InspectionResult, NewGardenerImplementationRun,
+        NewGardenerInspection, NewRepositoryRegistration, Proposal, ProposalObservation,
+        RepositoryRegistration, normalise_goal_prompt, proposal_fingerprint,
     },
     recurrence::RecurrenceError,
 };
@@ -46,6 +48,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         4,
         "0004_coding_gardener_runs.sql",
         include_str!("../migrations/0004_coding_gardener_runs.sql"),
+    ),
+    (
+        5,
+        "0005_gardener_trust_publication.sql",
+        include_str!("../migrations/0005_gardener_trust_publication.sql"),
     ),
 ];
 
@@ -1043,7 +1050,13 @@ impl Store {
     ) -> Result<Vec<GardenerImplementationRun>, StoreError> {
         query_gardener_implementation_runs(
             &self.connection,
-            "SELECT * FROM gardener_implementation_runs ORDER BY created_at, id",
+            "SELECT r.*,
+                    CASE WHEN ready.run_id IS NULL THEN r.publication_state ELSE 'ready' END
+                        AS effective_publication_state,
+                    ready.ready_at AS effective_pull_request_ready_at
+             FROM gardener_implementation_runs r
+             LEFT JOIN gardener_pull_request_ready_observations ready ON ready.run_id = r.id
+             ORDER BY r.created_at, r.id",
             [],
         )
     }
@@ -1054,10 +1067,165 @@ impl Store {
     ) -> Result<Vec<GardenerImplementationRun>, StoreError> {
         query_gardener_implementation_runs(
             &self.connection,
-            "SELECT * FROM gardener_implementation_runs
-             WHERE obligation_id = ?1 ORDER BY lease_generation, id",
+            "SELECT r.*,
+                    CASE WHEN ready.run_id IS NULL THEN r.publication_state ELSE 'ready' END
+                        AS effective_publication_state,
+                    ready.ready_at AS effective_pull_request_ready_at
+             FROM gardener_implementation_runs r
+             LEFT JOIN gardener_pull_request_ready_observations ready ON ready.run_id = r.id
+             WHERE r.obligation_id = ?1 ORDER BY r.lease_generation, r.id",
             [obligation_id],
         )
+    }
+
+    /// Persist the immutable tool, prompt, schema and policy identities before
+    /// implementation execution begins.
+    pub fn record_gardener_reproducibility_manifest(
+        &mut self,
+        claim: &Claim,
+        manifest: &GardenerReproducibilityManifest,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_reproducibility_manifest(manifest)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, &manifest.run_id, now)?;
+        require_run_phase(&run, GardenerRunPhase::Created)?;
+        if run.source_commit != manifest.source_commit {
+            return Err(StoreError::Conflict(format!(
+                "run {:?} reproducibility source does not match its immutable source commit",
+                manifest.run_id
+            )));
+        }
+        if let Some(existing) = gardener_reproducibility_manifest(&transaction, &manifest.run_id)? {
+            if existing == *manifest {
+                transaction.commit()?;
+                return Ok(());
+            }
+            return Err(StoreError::Conflict(format!(
+                "run {:?} already has a different reproducibility manifest",
+                manifest.run_id
+            )));
+        }
+        transaction.execute(
+            "INSERT INTO gardener_run_reproducibility(
+                run_id, bokkie_build, source_commit, prompt_digest,
+                implementation_schema_digest, verification_schema_digest,
+                codex_profile, codex_model, executable_manifest_json,
+                sandbox_policy_digest, environment_policy_digest,
+                check_commands_json, recorded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                manifest.run_id,
+                manifest.bokkie_build,
+                manifest.source_commit,
+                manifest.prompt_digest,
+                manifest.implementation_schema_digest,
+                manifest.verification_schema_digest,
+                manifest.codex_profile,
+                manifest.codex_model,
+                manifest.executable_manifest_json,
+                manifest.sandbox_policy_digest,
+                manifest.environment_policy_digest,
+                manifest.check_commands_json,
+                manifest.recorded_at,
+            ],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            &manifest.run_id,
+            "reproducibility_manifest_recorded",
+            now,
+            json!({
+                "source_commit": manifest.source_commit,
+                "prompt_digest": manifest.prompt_digest,
+                "environment_policy_digest": manifest.environment_policy_digest,
+                "sandbox_policy_digest": manifest.sandbox_policy_digest,
+            }),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn gardener_reproducibility_manifest(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<GardenerReproducibilityManifest>, StoreError> {
+        gardener_reproducibility_manifest(&self.connection, run_id)
+    }
+
+    /// Record Bokkie's credential-free candidate manifests and passing checks
+    /// before a branch may be pushed.
+    pub fn record_gardener_candidate_qualification(
+        &mut self,
+        claim: &Claim,
+        qualification: &GardenerCandidateQualification,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_candidate_qualification(qualification)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, &qualification.run_id, now)?;
+        require_run_phase(&run, GardenerRunPhase::GitCommitRecorded)?;
+        if run.git_commit.as_deref() != Some(&qualification.head) {
+            return Err(StoreError::Conflict(format!(
+                "run {:?} candidate qualification does not match its recorded Git commit",
+                qualification.run_id
+            )));
+        }
+        if let Some(existing) =
+            gardener_candidate_qualification(&transaction, &qualification.run_id)?
+        {
+            if existing == *qualification {
+                transaction.commit()?;
+                return Ok(());
+            }
+            return Err(StoreError::Conflict(format!(
+                "run {:?} already has different candidate qualification evidence",
+                qualification.run_id
+            )));
+        }
+        transaction.execute(
+            "INSERT INTO gardener_candidate_qualifications(
+                run_id, head, diff_manifest_json, tree_manifest_json,
+                checks_json, duration_ms, qualified_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                qualification.run_id,
+                qualification.head,
+                qualification.diff_manifest_json,
+                qualification.tree_manifest_json,
+                qualification.checks_json,
+                i64::try_from(qualification.duration_ms).map_err(|_| StoreError::Invalid(
+                    "candidate qualification duration is out of range".to_owned()
+                ))?,
+                qualification.qualified_at,
+            ],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            &qualification.run_id,
+            "candidate_qualified",
+            now,
+            json!({
+                "head": qualification.head,
+                "duration_ms": qualification.duration_ms,
+                "diff_manifest_digest": json_digest(&qualification.diff_manifest_json),
+                "tree_manifest_digest": json_digest(&qualification.tree_manifest_json),
+                "checks_digest": json_digest(&qualification.checks_json),
+            }),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn gardener_candidate_qualification(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<GardenerCandidateQualification>, StoreError> {
+        gardener_candidate_qualification(&self.connection, run_id)
     }
 
     pub fn gardener_run_events(&self, run_id: &str) -> Result<Vec<GardenerRunEvent>, StoreError> {
@@ -1249,6 +1417,22 @@ impl Store {
                 "run {run_id:?} pushed head does not equal its recorded Git commit"
             )));
         }
+        let qualification =
+            gardener_candidate_qualification(&transaction, run_id)?.ok_or_else(|| {
+                StoreError::Conflict(format!(
+                    "run {run_id:?} has no passing candidate qualification"
+                ))
+            })?;
+        if qualification.head != pushed_head {
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} candidate qualification does not match its pushed head"
+            )));
+        }
+        if !candidate_checks_all_passed(&qualification.checks_json)? {
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} candidate checks did not all pass"
+            )));
+        }
         transaction.execute(
             "UPDATE gardener_implementation_runs
              SET pushed_head = ?2, push_observed_at = ?3,
@@ -1267,8 +1451,8 @@ impl Store {
     }
 
     #[allow(clippy::too_many_arguments)]
-    /// Record a GitHub pull request only after it has been observed ready.
-    pub fn record_gardener_ready_pull_request(
+    /// Record the exact identity of a newly created draft pull request.
+    pub fn record_gardener_draft_pull_request(
         &mut self,
         claim: &Claim,
         run_id: &str,
@@ -1277,18 +1461,7 @@ impl Store {
         head: &str,
         now: i64,
     ) -> Result<(), StoreError> {
-        if number == 0 || number > i64::MAX as u64 {
-            return Err(StoreError::Invalid(
-                "GitHub pull-request number must be positive".to_owned(),
-            ));
-        }
-        let expected_url = format!("https://github.com/{CANONICAL_REPOSITORY}/pull/{number}");
-        if url != expected_url {
-            return Err(StoreError::Invalid(format!(
-                "GitHub pull-request URL must be {expected_url:?}"
-            )));
-        }
-        validate_hex_identity("pull-request head", head, &[40, 64])?;
+        validate_pull_request_identity(number, url, head)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1314,19 +1487,34 @@ impl Store {
         transaction.execute(
             "UPDATE gardener_implementation_runs
              SET pull_request_number = ?2, pull_request_url = ?3, pull_request_head = ?4,
-                 pull_request_recorded_at = ?5, phase = 'pull_request_ready', updated_at = ?5
+                 pull_request_recorded_at = ?5, phase = 'pull_request_ready',
+                 publication_state = 'draft', updated_at = ?5
              WHERE id = ?1",
             params![run_id, number as i64, url, head, now],
         )?;
         append_gardener_run_event(
             &transaction,
             run_id,
-            "pull_request_ready",
+            "pull_request_draft_recorded",
             now,
             json!({"number": number, "url": url, "head": head}),
         )?;
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Backwards-compatible name retained for callers compiled against P1.
+    /// P2 always records the pull request as a draft at this boundary.
+    pub fn record_gardener_ready_pull_request(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        number: u64,
+        url: &str,
+        head: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        self.record_gardener_draft_pull_request(claim, run_id, number, url, head, now)
     }
 
     pub fn start_gardener_verification(
@@ -1353,6 +1541,11 @@ impl Store {
             )));
         }
         require_run_phase(&run, GardenerRunPhase::PullRequestReady)?;
+        if run.publication_state != GardenerPublicationState::Draft {
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} verification must start from a recorded draft pull request"
+            )));
+        }
         if run.pull_request_head.as_deref() != Some(head) {
             return Err(StoreError::Conflict(format!(
                 "run {run_id:?} verification head does not equal its stored pull-request head"
@@ -1480,6 +1673,11 @@ impl Store {
     ) -> Result<(), StoreError> {
         validate_hex_identity("verification reported head", reported_head, &[40, 64])?;
         validate_nonempty("verification summary", summary)?;
+        if summary.len() > 16 * 1024 {
+            return Err(StoreError::Invalid(
+                "verification summary must be at most 16384 bytes".to_owned(),
+            ));
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1504,11 +1702,20 @@ impl Store {
                 "run {run_id:?} verification reported a head other than the stored pull-request head"
             )));
         }
-        transaction.execute(
+        let update = if verdict == GardenerVerificationVerdict::Pass {
             "UPDATE gardener_implementation_runs
              SET verification_verdict = ?2, verification_reported_head = ?3,
                  verification_summary = ?4, verification_finished_at = ?5,
-                 phase = 'verification_finished', updated_at = ?5 WHERE id = ?1",
+                 phase = 'verification_finished', publication_state = 'ready_pending',
+                 updated_at = ?5 WHERE id = ?1"
+        } else {
+            "UPDATE gardener_implementation_runs
+             SET verification_verdict = ?2, verification_reported_head = ?3,
+                 verification_summary = ?4, verification_finished_at = ?5,
+                 phase = 'verification_finished', updated_at = ?5 WHERE id = ?1"
+        };
+        transaction.execute(
+            update,
             params![run_id, verdict.to_string(), reported_head, summary, now],
         )?;
         append_gardener_run_event(
@@ -1517,6 +1724,94 @@ impl Store {
             "verification_finished",
             now,
             json!({"verdict": verdict, "reported_head": reported_head, "summary": summary}),
+        )?;
+        if verdict == GardenerVerificationVerdict::Pass {
+            append_gardener_run_event(
+                &transaction,
+                run_id,
+                "pull_request_ready_requested",
+                now,
+                json!({"head": reported_head}),
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Persist the intent to promote a verified draft before the credentialed
+    /// GitHub effect occurs. A crash leaves a visible state to reconcile.
+    pub fn request_gardener_pull_request_ready(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        head: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_hex_identity("pull-request head", head, &[40, 64])?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        if run.publication_state == GardenerPublicationState::ReadyPending
+            && run.pull_request_head.as_deref() == Some(head)
+            && run.verification_verdict == Some(GardenerVerificationVerdict::Pass)
+        {
+            transaction.commit()?;
+            return Ok(());
+        }
+        Err(StoreError::Conflict(format!(
+            "run {run_id:?} cannot promote without a persisted passing exact-head verification intent"
+        )))
+    }
+
+    /// Record the independently re-observed ready identity after GitHub has
+    /// accepted the promotion.
+    pub fn record_gardener_pull_request_ready(
+        &mut self,
+        claim: &Claim,
+        run_id: &str,
+        number: u64,
+        url: &str,
+        head: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_pull_request_identity(number, url, head)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = require_current_gardener_run(&transaction, claim, run_id, now)?;
+        if let Some((existing_number, existing_url, existing_head, _)) =
+            gardener_ready_observation(&transaction, run_id)?
+        {
+            if existing_number == number && existing_url == url && existing_head == head {
+                transaction.commit()?;
+                return Ok(());
+            }
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} is ready with a different pull-request identity"
+            )));
+        }
+        if run.publication_state != GardenerPublicationState::ReadyPending
+            || run.pull_request_number != Some(number)
+            || run.pull_request_url.as_deref() != Some(url)
+            || run.pull_request_head.as_deref() != Some(head)
+            || run.verification_verdict != Some(GardenerVerificationVerdict::Pass)
+        {
+            return Err(StoreError::Conflict(format!(
+                "run {run_id:?} ready observation does not match its verified draft"
+            )));
+        }
+        transaction.execute(
+            "INSERT INTO gardener_pull_request_ready_observations(run_id, number, url, head, ready_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![run_id, number as i64, url, head, now],
+        )?;
+        append_gardener_run_event(
+            &transaction,
+            run_id,
+            "pull_request_ready_recorded",
+            now,
+            json!({"number": number, "url": url, "head": head}),
         )?;
         transaction.commit()?;
         Ok(())
@@ -1847,15 +2142,177 @@ fn validate_hex_identity(name: &str, value: &str, lengths: &[usize]) -> Result<(
     Ok(())
 }
 
-fn validate_inspection_result(result: &InspectionResult) -> Result<(), StoreError> {
-    if result.summary.trim().is_empty() {
+const MAX_GARDENER_MANIFEST_BYTES: usize = 1024 * 1024;
+
+fn validate_json_array(name: &str, value: &str) -> Result<serde_json::Value, StoreError> {
+    if value.len() > MAX_GARDENER_MANIFEST_BYTES {
+        return Err(StoreError::Invalid(format!(
+            "{name} exceeds {MAX_GARDENER_MANIFEST_BYTES} bytes"
+        )));
+    }
+    let parsed: serde_json::Value = serde_json::from_str(value)
+        .map_err(|error| StoreError::Invalid(format!("{name} is invalid JSON: {error}")))?;
+    if !parsed.is_array() {
+        return Err(StoreError::Invalid(format!("{name} must be a JSON array")));
+    }
+    Ok(parsed)
+}
+
+fn validate_optional_bounded(name: &str, value: Option<&str>) -> Result<(), StoreError> {
+    if value.is_some_and(|value| value.trim().is_empty() || value.len() > 256) {
+        return Err(StoreError::Invalid(format!(
+            "{name} must be non-empty and at most 256 bytes when present"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_reproducibility_manifest(
+    manifest: &GardenerReproducibilityManifest,
+) -> Result<(), StoreError> {
+    validate_nonempty("reproducibility run id", &manifest.run_id)?;
+    if manifest.bokkie_build.trim().is_empty() || manifest.bokkie_build.len() > 256 {
         return Err(StoreError::Invalid(
-            "inspection result summary must not be empty".to_owned(),
+            "Bokkie build identity must be non-empty and at most 256 bytes".to_owned(),
+        ));
+    }
+    validate_hex_identity(
+        "reproducibility source commit",
+        &manifest.source_commit,
+        &[40, 64],
+    )?;
+    validate_hex_identity("prompt digest", &manifest.prompt_digest, &[64])?;
+    validate_hex_identity(
+        "implementation schema digest",
+        &manifest.implementation_schema_digest,
+        &[64],
+    )?;
+    validate_hex_identity(
+        "verification schema digest",
+        &manifest.verification_schema_digest,
+        &[64],
+    )?;
+    validate_hex_identity(
+        "sandbox policy digest",
+        &manifest.sandbox_policy_digest,
+        &[64],
+    )?;
+    validate_hex_identity(
+        "environment policy digest",
+        &manifest.environment_policy_digest,
+        &[64],
+    )?;
+    validate_optional_bounded("Codex profile", manifest.codex_profile.as_deref())?;
+    validate_optional_bounded("Codex model", manifest.codex_model.as_deref())?;
+    let executables =
+        validate_json_array("executable manifest", &manifest.executable_manifest_json)?;
+    if executables.as_array().is_none_or(Vec::is_empty) {
+        return Err(StoreError::Invalid(
+            "executable manifest must identify at least one executable".to_owned(),
+        ));
+    }
+    let checks = validate_json_array("check commands", &manifest.check_commands_json)?;
+    if checks.as_array().is_none_or(Vec::is_empty) {
+        return Err(StoreError::Invalid(
+            "check commands must not be empty".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_candidate_qualification(
+    qualification: &GardenerCandidateQualification,
+) -> Result<(), StoreError> {
+    validate_nonempty("candidate qualification run id", &qualification.run_id)?;
+    validate_hex_identity(
+        "candidate qualification head",
+        &qualification.head,
+        &[40, 64],
+    )?;
+    validate_json_array("candidate diff manifest", &qualification.diff_manifest_json)?;
+    validate_json_array("candidate tree manifest", &qualification.tree_manifest_json)?;
+    let checks = validate_json_array("candidate checks", &qualification.checks_json)?;
+    let checks = checks.as_array().expect("array was validated");
+    if checks.is_empty()
+        || checks.iter().any(|check| {
+            check
+                .get("executable")
+                .is_none_or(|executable| !executable.is_object())
+                || check
+                    .get("arguments")
+                    .is_none_or(|arguments| !arguments.is_array())
+                || check
+                    .get("duration_millis")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_none()
+                || check.get("status").is_none_or(|status| {
+                    !matches!(
+                        status.get("kind").and_then(serde_json::Value::as_str),
+                        Some("passed" | "failed" | "interrupted")
+                    )
+                })
+                || check
+                    .get("evidence")
+                    .is_none_or(|evidence| !evidence.is_object())
+        })
+    {
+        return Err(StoreError::Invalid(
+            "candidate checks must be a non-empty array of typed bounded results".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn candidate_checks_all_passed(value: &str) -> Result<bool, StoreError> {
+    let checks = validate_json_array("candidate checks", value)?;
+    Ok(checks.as_array().is_some_and(|checks| {
+        !checks.is_empty()
+            && checks.iter().all(|check| {
+                check
+                    .pointer("/status/kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("passed")
+            })
+    }))
+}
+
+fn validate_pull_request_identity(number: u64, url: &str, head: &str) -> Result<(), StoreError> {
+    if number == 0 || number > i64::MAX as u64 {
+        return Err(StoreError::Invalid(
+            "GitHub pull-request number must be positive".to_owned(),
+        ));
+    }
+    let expected_url = format!("https://github.com/{CANONICAL_REPOSITORY}/pull/{number}");
+    if url != expected_url {
+        return Err(StoreError::Invalid(format!(
+            "GitHub pull-request URL must be {expected_url:?}"
+        )));
+    }
+    validate_hex_identity("pull-request head", head, &[40, 64])
+}
+
+fn json_digest(value: &str) -> String {
+    format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
+fn validate_inspection_result(result: &InspectionResult) -> Result<(), StoreError> {
+    if result.summary.trim().is_empty() || result.summary.len() > 16 * 1024 {
+        return Err(StoreError::Invalid(
+            "inspection result summary must be non-empty and at most 16384 bytes".to_owned(),
         ));
     }
     if result.proposed_goal_prompts.len() > 3 {
         return Err(StoreError::Invalid(
             "inspection result may contain at most three proposed goal prompts".to_owned(),
+        ));
+    }
+    if result
+        .proposed_goal_prompts
+        .iter()
+        .any(|prompt| prompt.trim().is_empty() || prompt.len() > 16 * 1024)
+    {
+        return Err(StoreError::Invalid(
+            "inspection goal prompts must be non-empty and at most 16384 bytes".to_owned(),
         ));
     }
     Ok(())
@@ -1953,6 +2410,11 @@ fn validate_nonempty(name: &str, value: &str) -> Result<(), StoreError> {
 }
 
 fn validate_structured_message(message: &str) -> Result<(), StoreError> {
+    if message.len() > 256 * 1024 {
+        return Err(StoreError::Invalid(
+            "implementation final message must be at most 262144 bytes".to_owned(),
+        ));
+    }
     let value: serde_json::Value = serde_json::from_str(message).map_err(|error| {
         StoreError::Invalid(format!(
             "implementation final message must be valid JSON: {error}"
@@ -1972,7 +2434,13 @@ fn gardener_implementation_run(
 ) -> Result<Option<GardenerImplementationRun>, StoreError> {
     connection
         .query_row(
-            "SELECT * FROM gardener_implementation_runs WHERE id = ?1",
+            "SELECT r.*,
+                    CASE WHEN ready.run_id IS NULL THEN r.publication_state ELSE 'ready' END
+                        AS effective_publication_state,
+                    ready.ready_at AS effective_pull_request_ready_at
+             FROM gardener_implementation_runs r
+             LEFT JOIN gardener_pull_request_ready_observations ready ON ready.run_id = r.id
+             WHERE r.id = ?1",
             [id],
             gardener_implementation_run_from_row,
         )
@@ -1987,10 +2455,104 @@ fn gardener_implementation_run_for_lease(
 ) -> Result<Option<GardenerImplementationRun>, StoreError> {
     connection
         .query_row(
-            "SELECT * FROM gardener_implementation_runs
-             WHERE obligation_id = ?1 AND lease_generation = ?2",
+            "SELECT r.*,
+                    CASE WHEN ready.run_id IS NULL THEN r.publication_state ELSE 'ready' END
+                        AS effective_publication_state,
+                    ready.ready_at AS effective_pull_request_ready_at
+             FROM gardener_implementation_runs r
+             LEFT JOIN gardener_pull_request_ready_observations ready ON ready.run_id = r.id
+             WHERE r.obligation_id = ?1 AND r.lease_generation = ?2",
             params![obligation_id, lease_generation],
             gardener_implementation_run_from_row,
+        )
+        .optional()
+        .map_err(StoreError::from)
+}
+
+fn gardener_reproducibility_manifest(
+    connection: &Connection,
+    run_id: &str,
+) -> Result<Option<GardenerReproducibilityManifest>, StoreError> {
+    connection
+        .query_row(
+            "SELECT run_id, bokkie_build, source_commit, prompt_digest,
+                    implementation_schema_digest, verification_schema_digest,
+                    codex_profile, codex_model, executable_manifest_json,
+                    sandbox_policy_digest, environment_policy_digest,
+                    check_commands_json, recorded_at
+             FROM gardener_run_reproducibility WHERE run_id = ?1",
+            [run_id],
+            |row| {
+                Ok(GardenerReproducibilityManifest {
+                    run_id: row.get(0)?,
+                    bokkie_build: row.get(1)?,
+                    source_commit: row.get(2)?,
+                    prompt_digest: row.get(3)?,
+                    implementation_schema_digest: row.get(4)?,
+                    verification_schema_digest: row.get(5)?,
+                    codex_profile: row.get(6)?,
+                    codex_model: row.get(7)?,
+                    executable_manifest_json: row.get(8)?,
+                    sandbox_policy_digest: row.get(9)?,
+                    environment_policy_digest: row.get(10)?,
+                    check_commands_json: row.get(11)?,
+                    recorded_at: row.get(12)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(StoreError::from)
+}
+
+fn gardener_candidate_qualification(
+    connection: &Connection,
+    run_id: &str,
+) -> Result<Option<GardenerCandidateQualification>, StoreError> {
+    connection
+        .query_row(
+            "SELECT run_id, head, diff_manifest_json, tree_manifest_json,
+                    checks_json, duration_ms, qualified_at
+             FROM gardener_candidate_qualifications WHERE run_id = ?1",
+            [run_id],
+            |row| {
+                let duration: i64 = row.get(5)?;
+                Ok(GardenerCandidateQualification {
+                    run_id: row.get(0)?,
+                    head: row.get(1)?,
+                    diff_manifest_json: row.get(2)?,
+                    tree_manifest_json: row.get(3)?,
+                    checks_json: row.get(4)?,
+                    duration_ms: u64::try_from(duration).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(5, Type::Integer, Box::new(error))
+                    })?,
+                    qualified_at: row.get(6)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(StoreError::from)
+}
+
+fn gardener_ready_observation(
+    connection: &Connection,
+    run_id: &str,
+) -> Result<Option<(u64, String, String, i64)>, StoreError> {
+    connection
+        .query_row(
+            "SELECT number, url, head, ready_at
+             FROM gardener_pull_request_ready_observations WHERE run_id = ?1",
+            [run_id],
+            |row| {
+                let number: i64 = row.get(0)?;
+                Ok((
+                    u64::try_from(number).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(0, Type::Integer, Box::new(error))
+                    })?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                ))
+            },
         )
         .optional()
         .map_err(StoreError::from)
@@ -2036,6 +2598,8 @@ fn gardener_implementation_run_from_row(
         pull_request_number: row.get("pull_request_number")?,
         pull_request_url: row.get("pull_request_url")?,
         pull_request_head: row.get("pull_request_head")?,
+        publication_state: parse_column(row, "effective_publication_state")?,
+        pull_request_ready_at: row.get("effective_pull_request_ready_at")?,
         verification_worktree_path: row.get("verification_worktree_path")?,
         verification_head: row.get("verification_head")?,
         verification_thread_id: row.get("verification_thread_id")?,
@@ -3122,7 +3686,8 @@ mod tests {
                 (1, "0001_obligation_kernel.sql".to_owned()),
                 (2, "0002_append_only_guards.sql".to_owned()),
                 (3, "0003_coding_gardener_state.sql".to_owned()),
-                (4, "0004_coding_gardener_runs.sql".to_owned())
+                (4, "0004_coding_gardener_runs.sql".to_owned()),
+                (5, "0005_gardener_trust_publication.sql".to_owned())
             ]
         );
         drop(store);
@@ -3522,6 +4087,40 @@ mod tests {
         }
     }
 
+    fn passing_candidate_qualification(
+        run_id: &str,
+        head: &str,
+        qualified_at: i64,
+    ) -> GardenerCandidateQualification {
+        GardenerCandidateQualification {
+            run_id: run_id.to_owned(),
+            head: head.to_owned(),
+            diff_manifest_json: r#"[{"path":"src/lib.rs","mode":"100644","kind":"text","size":1}]"#.to_owned(),
+            tree_manifest_json: r#"[{"path":"src/lib.rs","mode":"100644","kind":"text","size":1}]"#.to_owned(),
+            checks_json: r#"[{"executable":{"role":"candidate_check","path":"/test/cargo","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","version":"cargo test"},"arguments":["test","--all-targets","--locked"],"duration_millis":1,"status":{"kind":"passed"},"evidence":{"stdout":{},"stderr":{}}}]"#.to_owned(),
+            duration_ms: 1,
+            qualified_at,
+        }
+    }
+
+    fn reproducibility_manifest(run_id: &str, source: &str) -> GardenerReproducibilityManifest {
+        GardenerReproducibilityManifest {
+            run_id: run_id.to_owned(),
+            bokkie_build: "bokkie 0.1.0 test-build".to_owned(),
+            source_commit: source.to_owned(),
+            prompt_digest: "1".repeat(64),
+            implementation_schema_digest: "2".repeat(64),
+            verification_schema_digest: "3".repeat(64),
+            codex_profile: Some("test-profile".to_owned()),
+            codex_model: Some("test-model".to_owned()),
+            executable_manifest_json: r#"[{"role":"codex","path":"/test/codex","version":"codex test","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]"#.to_owned(),
+            sandbox_policy_digest: "4".repeat(64),
+            environment_policy_digest: "5".repeat(64),
+            check_commands_json: r#"[{"executable":"/test/cargo","arguments":["test","--locked"]}]"#.to_owned(),
+            recorded_at: 1_004,
+        }
+    }
+
     fn advance_run_to_pull_request(store: &mut Store, claim: &Claim, run_id: &str, head: &str) {
         store
             .record_implementation_codex_thread(claim, run_id, "implementation-thread", 1_005)
@@ -3539,6 +4138,13 @@ mod tests {
             .unwrap();
         store
             .record_gardener_git_commit(claim, run_id, head, 1_008)
+            .unwrap();
+        store
+            .record_gardener_candidate_qualification(
+                claim,
+                &passing_candidate_qualification(run_id, head, 1_008),
+                1_008,
+            )
             .unwrap();
         store
             .record_gardener_push_observation(claim, run_id, head, 1_009)
@@ -3950,6 +4556,23 @@ mod tests {
         assert_eq!(run.attempt_number, claim.attempt_number);
         assert_eq!(run.lease_generation, claim.lease_generation);
         assert_eq!(run.lease_token, claim.lease_token);
+        let manifest = reproducibility_manifest("run-1", &run.source_commit);
+        store
+            .record_gardener_reproducibility_manifest(&claim, &manifest, 1_004)
+            .unwrap();
+        store
+            .record_gardener_reproducibility_manifest(&claim, &manifest, 1_004)
+            .unwrap();
+        let mut changed_manifest = manifest.clone();
+        changed_manifest.environment_policy_digest = "6".repeat(64);
+        assert!(matches!(
+            store.record_gardener_reproducibility_manifest(&claim, &changed_manifest, 1_004),
+            Err(StoreError::Conflict(_))
+        ));
+        assert_eq!(
+            store.gardener_reproducibility_manifest("run-1").unwrap(),
+            Some(manifest)
+        );
 
         let repeated = store
             .create_gardener_implementation_run(&claim, new_implementation_run("run-1"), 1_004)
@@ -3993,6 +4616,17 @@ mod tests {
         let other_head = "c".repeat(40);
         store
             .record_gardener_git_commit(&claim, "run-1", &head, 1_008)
+            .unwrap();
+        assert!(matches!(
+            store.record_gardener_push_observation(&claim, "run-1", &head, 1_009),
+            Err(StoreError::Conflict(_))
+        ));
+        store
+            .record_gardener_candidate_qualification(
+                &claim,
+                &passing_candidate_qualification("run-1", &head, 1_008),
+                1_008,
+            )
             .unwrap();
         assert!(matches!(
             store.record_gardener_git_commit(&claim, "run-1", &other_head, 1_008),
@@ -4085,6 +4719,19 @@ mod tests {
                 1_014,
             )
             .unwrap();
+        store
+            .request_gardener_pull_request_ready(&claim, "run-1", &head, 1_015)
+            .unwrap();
+        store
+            .record_gardener_pull_request_ready(
+                &claim,
+                "run-1",
+                42,
+                "https://github.com/robchristie/bokkie/pull/42",
+                &head,
+                1_016,
+            )
+            .unwrap();
         assert!(matches!(
             store.finish_gardener_verification(
                 &claim,
@@ -4104,6 +4751,8 @@ mod tests {
             Some(GardenerVerificationVerdict::Pass)
         );
         assert_eq!(finished.pull_request_head.as_deref(), Some(head.as_str()));
+        assert_eq!(finished.publication_state, GardenerPublicationState::Ready);
+        assert_eq!(finished.pull_request_ready_at, Some(1_016));
         assert_eq!(
             finished.verification_reported_head.as_deref(),
             Some(head.as_str())
@@ -4116,7 +4765,7 @@ mod tests {
                 .len(),
             1
         );
-        assert_eq!(store.gardener_run_events("run-1").unwrap().len(), 11);
+        assert_eq!(store.gardener_run_events("run-1").unwrap().len(), 15);
     }
 
     #[test]
@@ -4238,7 +4887,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let events_before = store.gardener_run_events("durable-run").unwrap();
-        assert_eq!(events_before.len(), 7);
+        assert_eq!(events_before.len(), 8);
         assert!(
             store
                 .connection

@@ -15,6 +15,7 @@ pub mod operator;
 pub mod process;
 pub mod recurrence;
 pub mod runner;
+pub mod runtime_trust;
 pub mod service;
 pub mod store;
 
@@ -24,13 +25,19 @@ pub use domain::{
     Obligation, ObligationState, RetryPolicy,
 };
 pub use gardener::{
-    CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerEvent, GardenerImplementationRun,
-    GardenerInspection, GardenerObligationKind, GardenerRunEvent, GardenerRunPhase,
-    GardenerVerificationResult, GardenerVerificationVerdict, InspectionResult,
-    NewGardenerImplementationRun, NewGardenerInspection, NewRepositoryRegistration, Proposal,
-    ProposalObservation, RepositoryRegistration, normalise_goal_prompt, proposal_fingerprint,
+    CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerCandidateQualification, GardenerEvent,
+    GardenerImplementationResult, GardenerImplementationRun, GardenerInspection,
+    GardenerObligationKind, GardenerPublicationState, GardenerReproducibilityManifest,
+    GardenerRunEvent, GardenerRunPhase, GardenerVerificationResult, GardenerVerificationVerdict,
+    InspectionResult, NewGardenerImplementationRun, NewGardenerInspection,
+    NewRepositoryRegistration, Proposal, ProposalObservation, RepositoryRegistration,
+    normalise_goal_prompt, proposal_fingerprint,
 };
 pub use gardener_runner::{GardenerRunner, GardenerRunnerError, GardenerRuntimeConfig};
 pub use recurrence::Recurrence;
 pub use runner::{FakeOutcome, FakeRunner, RunResult, Runner, run_one};
+pub use runtime_trust::{
+    ChildEnvironment, ExecutableIdentity, ExecutableRole, GardenerExecutableIdentities,
+    GitHubCredential, ProcessPolicy, RuntimeTrustError,
+};
 pub use store::{ManualClock, Store, StoreError, SystemClock, UnixClock};

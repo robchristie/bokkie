@@ -1,4 +1,5 @@
 use std::{
+    io::{self, Read},
     net::SocketAddr,
     path::PathBuf,
     process::ExitCode,
@@ -14,6 +15,7 @@ use bokkie::{
     GardenerRuntimeConfig, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
     Store, StoreError, SystemClock, UnixClock,
     http::{error_json, router, router_with_ui, validate_loopback},
+    runtime_trust::{ChildEnvironment, GitHubCredential},
     service::{Scheduler, SchedulerConfig, SchedulerError, ServiceFakeOutcome},
 };
 #[cfg(test)]
@@ -44,6 +46,9 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+// Clap requires the serve options inline; this short-lived CLI value is not
+// cloned or retained, so boxing individual path arguments adds no useful bound.
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Create an obligation.
     Create {
@@ -118,12 +123,33 @@ enum Command {
         /// Existing absolute parent directory for isolated gardener worktrees.
         #[arg(long, requires = "enable_coding_gardener")]
         gardener_worktree_root: Option<PathBuf>,
-        #[arg(long, default_value = "codex")]
+        #[arg(long, default_value = "/usr/bin/codex")]
         gardener_codex_executable: PathBuf,
-        #[arg(long, default_value = "git")]
+        #[arg(long, default_value = "/usr/bin/git")]
         gardener_git_executable: PathBuf,
-        #[arg(long, default_value = "gh")]
+        #[arg(long, default_value = "/usr/bin/gh")]
         gardener_gh_executable: PathBuf,
+        /// Absolute curl executable used only for credential-free public PR observation.
+        #[arg(long, default_value = "/usr/bin/curl")]
+        gardener_github_public_observer_executable: PathBuf,
+        /// Absolute cargo executable used for fixed, credential-free candidate checks.
+        #[arg(long, default_value = "/usr/bin/cargo")]
+        gardener_cargo_executable: PathBuf,
+        /// Absolute Bubblewrap executable used for Codex PID and candidate-check isolation.
+        #[arg(long, default_value = "/usr/bin/bwrap")]
+        gardener_candidate_sandbox_executable: PathBuf,
+        /// Controlled HOME for Codex, Git, gh and candidate-check children.
+        #[arg(long, requires = "enable_coding_gardener")]
+        gardener_home: Option<PathBuf>,
+        /// Read the optional GitHub mutation token once from standard input, then close it.
+        #[arg(long, requires = "enable_coding_gardener")]
+        gardener_github_token_stdin: bool,
+        /// Narrative Codex profile identity retained in the run manifest when supplied.
+        #[arg(long)]
+        gardener_codex_profile: Option<String>,
+        /// Narrative Codex model identity retained in the run manifest when supplied.
+        #[arg(long)]
+        gardener_codex_model: Option<String>,
         #[arg(long, default_value_t = 10_000)]
         gardener_heartbeat_ms: u64,
         /// Absolute wall-clock limit for each gardener child process.
@@ -228,6 +254,13 @@ struct ServeOptions {
     gardener_codex_executable: PathBuf,
     gardener_git_executable: PathBuf,
     gardener_gh_executable: PathBuf,
+    gardener_github_public_observer_executable: PathBuf,
+    gardener_cargo_executable: PathBuf,
+    gardener_candidate_sandbox_executable: PathBuf,
+    gardener_home: Option<PathBuf>,
+    gardener_github_token_stdin: bool,
+    gardener_codex_profile: Option<String>,
+    gardener_codex_model: Option<String>,
     gardener_heartbeat_ms: u64,
     gardener_process_timeout_ms: u64,
     ui_dir: Option<PathBuf>,
@@ -323,6 +356,13 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             gardener_codex_executable,
             gardener_git_executable,
             gardener_gh_executable,
+            gardener_github_public_observer_executable,
+            gardener_cargo_executable,
+            gardener_candidate_sandbox_executable,
+            gardener_home,
+            gardener_github_token_stdin,
+            gardener_codex_profile,
+            gardener_codex_model,
             gardener_heartbeat_ms,
             gardener_process_timeout_ms,
             ui_dir,
@@ -340,6 +380,13 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                     gardener_codex_executable,
                     gardener_git_executable,
                     gardener_gh_executable,
+                    gardener_github_public_observer_executable,
+                    gardener_cargo_executable,
+                    gardener_candidate_sandbox_executable,
+                    gardener_home,
+                    gardener_github_token_stdin,
+                    gardener_codex_profile,
+                    gardener_codex_model,
                     gardener_heartbeat_ms,
                     gardener_process_timeout_ms,
                     ui_dir,
@@ -573,13 +620,13 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
             "lease-seconds must be at least 2 for second-resolution lease renewal".to_owned(),
         ));
     }
-    if let Some(ui_dir) = &options.ui_dir
-        && !ui_dir.is_dir()
-    {
-        return Err(AppError::Configuration(format!(
-            "ui-dir must be an existing directory: {}",
-            ui_dir.display()
-        )));
+    if let Some(ui_dir) = &options.ui_dir {
+        if !ui_dir.is_dir() {
+            return Err(AppError::Configuration(format!(
+                "ui-dir must be an existing directory: {}",
+                ui_dir.display()
+            )));
+        }
     }
 
     // Bind before starting the scheduler so a port conflict cannot execute work in a
@@ -599,14 +646,71 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
                 "gardener-worktree-root is required when coding gardener is enabled".to_owned(),
             )
         })?;
-        let gardener = GardenerRuntimeConfig::new(
+        let gardener_home = options.gardener_home.unwrap_or_else(|| {
+            worktree_root
+                .parent()
+                .unwrap_or(&worktree_root)
+                .to_path_buf()
+        });
+        if !gardener_home.is_absolute() || !gardener_home.is_dir() {
+            return Err(AppError::Configuration(format!(
+                "gardener-home must be an existing absolute directory: {}",
+                gardener_home.display()
+            )));
+        }
+        let child_path = controlled_executable_path(&[
+            &options.gardener_codex_executable,
+            &options.gardener_git_executable,
+            &options.gardener_gh_executable,
+            &options.gardener_github_public_observer_executable,
+            &options.gardener_cargo_executable,
+            &options.gardener_candidate_sandbox_executable,
+        ])?;
+        let environment = ChildEnvironment::new(
+            &gardener_home,
+            gardener_home.join(".config/bokkie-gardener"),
+            gardener_home.join(".cache/bokkie-gardener"),
+            child_path,
+        )
+        .map_err(|error| AppError::Configuration(error.to_string()))?;
+        let credential = options
+            .gardener_github_token_stdin
+            .then(read_github_credential_from_stdin)
+            .transpose()?;
+        if credential.is_some() {
+            protect_process_credentials()?;
+        }
+        let mut gardener = GardenerRuntimeConfig::new(
             worktree_root,
             options.gardener_codex_executable,
             options.gardener_git_executable,
             options.gardener_gh_executable,
         )
+        .with_child_environment(environment)
+        .with_github_public_observer(options.gardener_github_public_observer_executable)
+        .with_candidate_sandbox(options.gardener_candidate_sandbox_executable)
+        .with_candidate_checks(
+            options.gardener_cargo_executable,
+            [
+                vec!["test", "--all-targets", "--locked"],
+                vec![
+                    "clippy",
+                    "--all-targets",
+                    "--all-features",
+                    "--locked",
+                    "--",
+                    "-D",
+                    "warnings",
+                ],
+                vec!["fmt", "--all", "--", "--check"],
+            ],
+        )
+        .with_codex_identity(options.gardener_codex_profile, options.gardener_codex_model)
         .with_heartbeat_interval(Duration::from_millis(options.gardener_heartbeat_ms))
         .with_process_timeout(Duration::from_millis(options.gardener_process_timeout_ms));
+        if let Some(credential) = credential {
+            gardener = gardener.with_github_credential(credential);
+        }
         Scheduler::start_configured(scheduler_config, Some(gardener))?
     } else {
         Scheduler::start(scheduler_config)?
@@ -630,6 +734,69 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
     scheduler_result?;
     eprintln!("{}", json!({"event": "stopped"}));
     Ok(())
+}
+
+fn controlled_executable_path(paths: &[&PathBuf]) -> Result<Vec<PathBuf>, AppError> {
+    let mut directories = Vec::new();
+    for path in paths {
+        if !path.is_absolute() {
+            return Err(AppError::Configuration(format!(
+                "gardener executable paths must be absolute: {}",
+                path.display()
+            )));
+        }
+        let parent = path.parent().ok_or_else(|| {
+            AppError::Configuration(format!(
+                "gardener executable has no parent: {}",
+                path.display()
+            ))
+        })?;
+        if !directories.iter().any(|existing| existing == parent) {
+            directories.push(parent.to_path_buf());
+        }
+    }
+    Ok(directories)
+}
+
+fn read_github_credential_from_stdin() -> Result<GitHubCredential, AppError> {
+    let mut token = Vec::new();
+    let read_result = io::stdin().take(16 * 1024 + 1).read_to_end(&mut token);
+    // SAFETY: serve mode has explicitly consumed standard input as a one-shot
+    // credential channel. Closing the descriptor before any child starts is
+    // the security boundary; every supervised child receives its own pipe.
+    let close_result = unsafe { libc::close(libc::STDIN_FILENO) };
+    read_result.map_err(AppError::Io)?;
+    if close_result != 0 {
+        return Err(AppError::Io(io::Error::last_os_error()));
+    }
+    if token.len() > 16 * 1024 {
+        return Err(AppError::Configuration(
+            "gardener GitHub token input must be no larger than 16384 bytes".to_owned(),
+        ));
+    }
+    let token = String::from_utf8(token).map_err(|_| {
+        AppError::Configuration("gardener GitHub token input must be valid UTF-8".to_owned())
+    })?;
+    GitHubCredential::new(token.trim()).map_err(|error| AppError::Configuration(error.to_string()))
+}
+
+fn protect_process_credentials() -> Result<(), AppError> {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: PR_SET_DUMPABLE changes only the current process attribute.
+        // It prevents same-UID children from attaching to or opening sensitive
+        // `/proc` state belonging to the credential-holding daemon.
+        if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+            return Err(AppError::Io(io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err(AppError::Configuration(
+            "gardener GitHub token input requires Linux process protection".to_owned(),
+        ))
+    }
 }
 
 async fn shutdown_signal(
@@ -675,9 +842,60 @@ fn print_json(value: &impl Serialize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        fs::File,
+        os::unix::fs::PermissionsExt,
+        process::{Command, Stdio},
+    };
 
     #[test]
     fn clap_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn one_shot_credential_input_is_closed_and_unavailable_to_a_child() {
+        const HELPER: &str = "BOKKIE_CREDENTIAL_BOUNDARY_HELPER";
+        if std::env::var_os(HELPER).is_some() {
+            let credential = read_github_credential_from_stdin().unwrap();
+            protect_process_credentials().unwrap();
+            assert_eq!(format!("{credential:?}"), "GitHubCredential([REDACTED])");
+            let sentinel = std::env::var_os("BOKKIE_CREDENTIAL_SENTINEL").unwrap();
+            let parent = std::process::id().to_string();
+            let status = Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "[ ! -r \"$1\" ] || exit 21; [ ! -e \"/proc/$2/fd/0\" ] || exit 22; [ -z \"${GH_TOKEN-}${GITHUB_TOKEN-}${AWS_SECRET_ACCESS_KEY-}${SSH_AUTH_SOCK-}\" ] || exit 23",
+                    "credential-boundary-probe",
+                ])
+                .arg(sentinel)
+                .arg(parent)
+                .env_clear()
+                .stdin(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let sentinel = root.path().join("github-token");
+        std::fs::write(&sentinel, "test-token\n").unwrap();
+        let input = File::open(&sentinel).unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::one_shot_credential_input_is_closed_and_unavailable_to_a_child",
+                "--nocapture",
+            ])
+            .env(HELPER, "1")
+            .env("BOKKIE_CREDENTIAL_SENTINEL", &sentinel)
+            .env("GH_TOKEN", "ambient-secret")
+            .stdin(input)
+            .status()
+            .unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(status.success());
     }
 }

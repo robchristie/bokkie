@@ -5,6 +5,7 @@
 //! never places Git, GitHub, or Codex work inside a database transaction.
 
 use std::{
+    ffi::OsString,
     fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -16,17 +17,46 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    Claim, Completion, GardenerObligationKind, GardenerVerificationResult,
+    Claim, Completion, GardenerCandidateQualification, GardenerImplementationResult,
+    GardenerObligationKind, GardenerReproducibilityManifest, GardenerVerificationResult,
     GardenerVerificationVerdict, InspectionResult, NewGardenerImplementationRun,
     NewGardenerInspection, RunResult, Store, StoreError, UnixClock,
     app_server::{AppServerClient, AppServerError, AppServerObserver, TurnKind, TurnRequest},
     gardener::CANONICAL_REPOSITORY,
-    git_workspace::{CommitId, GitWorkspace, GitWorkspaceError, RegisteredWorktree},
-    process::{CancellationToken, ProcessHeartbeat, ProcessLimits},
+    git_workspace::{
+        CandidateCheckCommand, CandidateCheckStatus, CommitId, GitWorkspace, GitWorkspaceError,
+        RegisteredWorktree,
+    },
+    process::{
+        CancellationToken, NoopHeartbeat, ProcessHeartbeat, ProcessLimits, ProcessSupervisor,
+    },
+    runtime_trust::{
+        ChildEnvironment, ExecutableIdentity, ExecutableRole, GardenerExecutableIdentities,
+        GardenerExecutablePaths, GitHubCredential, ProcessPolicy, RuntimeTrustError,
+    },
 };
 
 const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+fn canonical_check_arguments() -> Vec<Vec<OsString>> {
+    [
+        &["test", "--all-targets", "--locked"][..],
+        &[
+            "clippy",
+            "--all-targets",
+            "--all-features",
+            "--locked",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        &["fmt", "--all", "--", "--check"],
+    ]
+    .into_iter()
+    .map(|arguments| arguments.iter().map(OsString::from).collect())
+    .collect()
+}
 
 /// Executable and isolation configuration required to enable gardener claims.
 #[derive(Clone, Debug)]
@@ -35,6 +65,14 @@ pub struct GardenerRuntimeConfig {
     codex_executable: PathBuf,
     git_executable: PathBuf,
     gh_executable: PathBuf,
+    github_public_observer_executable: PathBuf,
+    candidate_sandbox_executable: PathBuf,
+    candidate_check_executable: PathBuf,
+    candidate_check_arguments: Vec<Vec<OsString>>,
+    child_environment: ChildEnvironment,
+    github_credential: Option<GitHubCredential>,
+    codex_profile: Option<String>,
+    codex_model: Option<String>,
     heartbeat_interval: Duration,
     process_timeout: Duration,
     process_limits: ProcessLimits,
@@ -53,6 +91,15 @@ impl GardenerRuntimeConfig {
             codex_executable: codex_executable.into(),
             git_executable: git_executable.into(),
             gh_executable: gh_executable.into(),
+            github_public_observer_executable: PathBuf::from("curl"),
+            candidate_sandbox_executable: PathBuf::from("bwrap"),
+            candidate_check_executable: PathBuf::from("cargo"),
+            candidate_check_arguments: canonical_check_arguments(),
+            child_environment: ChildEnvironment::captured_current()
+                .expect("current process paths form a valid compatibility environment"),
+            github_credential: None,
+            codex_profile: None,
+            codex_model: None,
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
             process_timeout: DEFAULT_PROCESS_TIMEOUT,
             process_limits: ProcessLimits::default(),
@@ -80,11 +127,54 @@ impl GardenerRuntimeConfig {
         self
     }
 
+    pub fn with_child_environment(mut self, environment: ChildEnvironment) -> Self {
+        self.child_environment = environment;
+        self
+    }
+
+    pub fn with_github_credential(mut self, credential: GitHubCredential) -> Self {
+        self.github_credential = Some(credential);
+        self
+    }
+
+    pub fn with_candidate_checks<I, A>(mut self, executable: impl Into<PathBuf>, checks: I) -> Self
+    where
+        I: IntoIterator<Item = A>,
+        A: IntoIterator,
+        A::Item: Into<OsString>,
+    {
+        self.candidate_check_executable = executable.into();
+        self.candidate_check_arguments = checks
+            .into_iter()
+            .map(|arguments| arguments.into_iter().map(Into::into).collect())
+            .collect();
+        self
+    }
+
+    pub fn with_candidate_sandbox(mut self, executable: impl Into<PathBuf>) -> Self {
+        self.candidate_sandbox_executable = executable.into();
+        self
+    }
+
+    pub fn with_github_public_observer(mut self, executable: impl Into<PathBuf>) -> Self {
+        self.github_public_observer_executable = executable.into();
+        self
+    }
+
+    pub fn with_codex_identity(mut self, profile: Option<String>, model: Option<String>) -> Self {
+        self.codex_profile = profile;
+        self.codex_model = model;
+        self
+    }
+
     pub fn worktree_root(&self) -> &Path {
         &self.worktree_root
     }
 
-    pub(crate) fn validate(&self, lease_seconds: i64) -> Result<PathBuf, GardenerRunnerError> {
+    pub(crate) fn validate(
+        &self,
+        lease_seconds: i64,
+    ) -> Result<ValidatedGardenerRuntime, GardenerRunnerError> {
         if lease_seconds < 3 {
             return Err(GardenerRunnerError::Configuration(
                 "gardener lease duration must be at least three seconds".to_owned(),
@@ -111,22 +201,123 @@ impl GardenerRuntimeConfig {
                 self.worktree_root.display()
             )));
         }
-        fs::canonicalize(&self.worktree_root).map_err(|error| {
+        let worktree_root = fs::canonicalize(&self.worktree_root).map_err(|error| {
             GardenerRunnerError::Configuration(format!(
                 "cannot canonicalise gardener worktree root {}: {error}",
                 self.worktree_root.display()
             ))
+        })?;
+        if self.candidate_check_arguments.is_empty() {
+            return Err(GardenerRunnerError::Configuration(
+                "at least one fixed candidate check is required".to_owned(),
+            ));
+        }
+        let supervisor = ProcessSupervisor::new(
+            self.heartbeat_interval,
+            self.process_limits,
+            self.cancellation.clone(),
+        )
+        .map_err(GardenerRunnerError::Configuration)?;
+        let mut heartbeat = NoopHeartbeat;
+        let executable_identities = GardenerExecutableIdentities::resolve(
+            &GardenerExecutablePaths::new(
+                &self.codex_executable,
+                &self.git_executable,
+                &self.gh_executable,
+                &self.github_public_observer_executable,
+            ),
+            &self.child_environment,
+            &supervisor,
+            self.process_timeout,
+            &mut heartbeat,
+        )?;
+        let check_identity = ExecutableIdentity::resolve(
+            ExecutableRole::CandidateCheck,
+            &self.candidate_check_executable,
+            &["--version"],
+            &self.child_environment,
+            &supervisor,
+            self.process_timeout,
+            &mut heartbeat,
+        )?;
+        let sandbox_identity = ExecutableIdentity::resolve(
+            ExecutableRole::CandidateSandbox,
+            &self.candidate_sandbox_executable,
+            &["--version"],
+            &self.child_environment,
+            &supervisor,
+            self.process_timeout,
+            &mut heartbeat,
+        )?;
+        let codex_process_boundary_identity = ExecutableIdentity::resolve(
+            ExecutableRole::CodexProcessBoundary,
+            &self.candidate_sandbox_executable,
+            &["--version"],
+            &self.child_environment,
+            &supervisor,
+            self.process_timeout,
+            &mut heartbeat,
+        )?;
+        let candidate_checks = self
+            .candidate_check_arguments
+            .iter()
+            .map(|arguments| {
+                CandidateCheckCommand::sandboxed(
+                    sandbox_identity.clone(),
+                    check_identity.clone(),
+                    arguments.clone(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ValidatedGardenerRuntime {
+            worktree_root,
+            child_environment: self.child_environment.clone(),
+            executable_identities,
+            codex_process_boundary_identity,
+            candidate_checks,
+            github_credential: self.github_credential.clone(),
+            codex_profile: self.codex_profile.clone(),
+            codex_model: self.codex_model.clone(),
         })
     }
 
-    fn git_workspace(&self, checkout: &Path) -> Result<GitWorkspace, GitWorkspaceError> {
-        GitWorkspace::new(checkout, &self.git_executable, &self.gh_executable)?.with_supervision(
+    fn git_workspace(
+        &self,
+        runtime: &ValidatedGardenerRuntime,
+        checkout: &Path,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<GitWorkspace, GitWorkspaceError> {
+        let workspace = GitWorkspace::from_trust(
+            checkout,
+            runtime.executable_identities.git.clone(),
+            runtime.executable_identities.gh.clone(),
+            runtime.executable_identities.github_public_observer.clone(),
+            runtime.child_environment.clone(),
+            heartbeat,
+        )?;
+        let workspace = workspace.with_supervision(
             self.heartbeat_interval,
             self.process_timeout,
             self.process_limits,
             self.cancellation.clone(),
-        )
+        )?;
+        Ok(match &runtime.github_credential {
+            Some(credential) => workspace.with_github_credential(credential.clone()),
+            None => workspace,
+        })
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ValidatedGardenerRuntime {
+    worktree_root: PathBuf,
+    child_environment: ChildEnvironment,
+    executable_identities: GardenerExecutableIdentities,
+    codex_process_boundary_identity: ExecutableIdentity,
+    candidate_checks: Vec<CandidateCheckCommand>,
+    github_credential: Option<GitHubCredential>,
+    codex_profile: Option<String>,
+    codex_model: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -137,10 +328,14 @@ pub enum GardenerRunnerError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Git(#[from] GitWorkspaceError),
+    #[error(transparent)]
+    RuntimeTrust(#[from] RuntimeTrustError),
     #[error("Codex app-server failed: {0}")]
     AppServer(#[source] Box<AppServerError>),
     #[error("invalid structured Codex result: {0}")]
     InvalidResult(String),
+    #[error("candidate checks did not pass: {0}")]
+    CandidateChecks(String),
     #[error("worktree cleanup failed after {context}: {cleanup}")]
     Cleanup { context: String, cleanup: String },
 }
@@ -162,6 +357,7 @@ impl GardenerRunnerError {
 /// and lease boundary. The caller remains responsible for `Store::complete`.
 pub struct GardenerRunner<'a> {
     config: &'a GardenerRuntimeConfig,
+    runtime: ValidatedGardenerRuntime,
     lease_seconds: i64,
     clock: &'a dyn UnixClock,
 }
@@ -172,9 +368,10 @@ impl<'a> GardenerRunner<'a> {
         lease_seconds: i64,
         clock: &'a dyn UnixClock,
     ) -> Result<Self, GardenerRunnerError> {
-        config.validate(lease_seconds)?;
+        let runtime = config.validate(lease_seconds)?;
         Ok(Self {
             config,
+            runtime,
             lease_seconds,
             clock,
         })
@@ -227,15 +424,19 @@ impl<'a> GardenerRunner<'a> {
         store: &mut Store,
         claim: &Claim,
     ) -> Result<Success, GardenerRunnerError> {
-        let root = self.config.validate(self.lease_seconds)?;
+        let root = &self.runtime.worktree_root;
         let repository = store.gardener_repository()?.ok_or_else(|| {
             GardenerRunnerError::Configuration(
                 "gardener runtime is enabled without a repository registration".to_owned(),
             )
         })?;
-        let git = self
-            .config
-            .git_workspace(Path::new(&repository.checkout_path))?;
+        let git = self.observe_process(store, claim, |observer| {
+            self.config.git_workspace(
+                &self.runtime,
+                Path::new(&repository.checkout_path),
+                observer,
+            )
+        })?;
 
         self.heartbeat(store, claim)?;
         let source =
@@ -272,21 +473,26 @@ impl<'a> GardenerRunner<'a> {
                     self.clock,
                     self.lease_seconds,
                 );
-                AppServerClient::new(&self.config.codex_executable)
-                    .with_heartbeat_interval(self.config.heartbeat_interval)
-                    .with_execution_timeout(self.config.process_timeout)
-                    .with_process_limits(self.config.process_limits)
-                    .with_cancellation(self.config.cancellation.clone())
-                    .run(
-                        &TurnRequest {
-                            kind: TurnKind::Inspection,
-                            cwd: worktree.path(),
-                            prompt: &prompt,
-                            output_schema: &inspection_schema(),
-                        },
-                        &mut observer,
-                    )
-                    .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
+                AppServerClient::from_trust(
+                    self.runtime.executable_identities.codex.clone(),
+                    self.runtime.codex_process_boundary_identity.clone(),
+                    self.runtime.child_environment.clone(),
+                )
+                .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
+                .with_heartbeat_interval(self.config.heartbeat_interval)
+                .with_execution_timeout(self.config.process_timeout)
+                .with_process_limits(self.config.process_limits)
+                .with_cancellation(self.config.cancellation.clone())
+                .run(
+                    &TurnRequest {
+                        kind: TurnKind::Inspection,
+                        cwd: worktree.path(),
+                        prompt: &prompt,
+                        output_schema: &inspection_schema(),
+                    },
+                    &mut observer,
+                )
+                .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
             };
             let parsed: InspectionResult = serde_json::from_str(&result.final_message)
                 .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))?;
@@ -325,15 +531,19 @@ impl<'a> GardenerRunner<'a> {
         store: &mut Store,
         claim: &Claim,
     ) -> Result<Success, GardenerRunnerError> {
-        let root = self.config.validate(self.lease_seconds)?;
+        let root = &self.runtime.worktree_root;
         let repository = store.gardener_repository()?.ok_or_else(|| {
             GardenerRunnerError::Configuration(
                 "gardener runtime is enabled without a repository registration".to_owned(),
             )
         })?;
-        let git = self
-            .config
-            .git_workspace(Path::new(&repository.checkout_path))?;
+        let git = self.observe_process(store, claim, |observer| {
+            self.config.git_workspace(
+                &self.runtime,
+                Path::new(&repository.checkout_path),
+                observer,
+            )
+        })?;
         let unique = Uuid::new_v4().simple().to_string();
         let run_id = format!("run-{unique}");
         let branch = format!("codex/gardener-{unique}");
@@ -351,6 +561,10 @@ impl<'a> GardenerRunner<'a> {
             .gardener_proposal(&run.proposal_fingerprint)?
             .ok_or_else(|| StoreError::NotFound(run.proposal_fingerprint.clone()))?;
         let source = CommitId::parse(run.source_commit.clone())?;
+        let prompt = implementation_prompt(&source, &proposal.prompt);
+        let manifest =
+            reproducibility_manifest(&self.runtime, &run_id, &source, &prompt, self.clock.now())?;
+        store.record_gardener_reproducibility_manifest(claim, &manifest, self.clock.now())?;
 
         self.heartbeat(store, claim)?;
         let implementation = self.observe_process(store, claim, |observer| {
@@ -359,7 +573,6 @@ impl<'a> GardenerRunner<'a> {
         self.heartbeat(store, claim)?;
         let mut verification: Option<RegisteredWorktree> = None;
         let operation = (|| {
-            let prompt = implementation_prompt(&source, &proposal.prompt);
             let result = {
                 let mut observer = StoreObserver::implementation(
                     store,
@@ -368,29 +581,31 @@ impl<'a> GardenerRunner<'a> {
                     self.clock,
                     self.lease_seconds,
                 );
-                AppServerClient::new(&self.config.codex_executable)
-                    .with_heartbeat_interval(self.config.heartbeat_interval)
-                    .with_execution_timeout(self.config.process_timeout)
-                    .with_process_limits(self.config.process_limits)
-                    .with_cancellation(self.config.cancellation.clone())
-                    .run(
-                        &TurnRequest {
-                            kind: TurnKind::Implementation,
-                            cwd: implementation.path(),
-                            prompt: &prompt,
-                            output_schema: &implementation_schema(),
-                        },
-                        &mut observer,
-                    )
-                    .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
+                AppServerClient::from_trust(
+                    self.runtime.executable_identities.codex.clone(),
+                    self.runtime.codex_process_boundary_identity.clone(),
+                    self.runtime.child_environment.clone(),
+                )
+                .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
+                .with_heartbeat_interval(self.config.heartbeat_interval)
+                .with_execution_timeout(self.config.process_timeout)
+                .with_process_limits(self.config.process_limits)
+                .with_cancellation(self.config.cancellation.clone())
+                .run(
+                    &TurnRequest {
+                        kind: TurnKind::Implementation,
+                        cwd: implementation.path(),
+                        prompt: &prompt,
+                        output_schema: &implementation_schema(),
+                    },
+                    &mut observer,
+                )
+                .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
             };
-            let final_value: Value = serde_json::from_str(&result.final_message)
-                .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))?;
-            if !final_value.is_object() {
-                return Err(GardenerRunnerError::InvalidResult(
-                    "implementation final message is not a JSON object".to_owned(),
-                ));
-            }
+            let final_value: GardenerImplementationResult =
+                serde_json::from_str(&result.final_message)
+                    .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))?;
+            validate_implementation_result(&final_value)?;
             store.finish_gardener_implementation(
                 claim,
                 &run_id,
@@ -407,6 +622,55 @@ impl<'a> GardenerRunner<'a> {
             })?;
             self.heartbeat(store, claim)?;
             store.record_gardener_git_commit(claim, &run_id, commit.as_str(), self.clock.now())?;
+
+            self.heartbeat(store, claim)?;
+            let qualification = self.observe_process(store, claim, |observer| {
+                git.qualify_candidate(
+                    &implementation,
+                    &source,
+                    &commit,
+                    &self.runtime.candidate_checks,
+                    observer,
+                )
+            })?;
+            let candidate_evidence = GardenerCandidateQualification {
+                run_id: run_id.clone(),
+                head: commit.to_string(),
+                diff_manifest_json: serde_json::to_string(&qualification.manifest.diff)
+                    .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))?,
+                tree_manifest_json: serde_json::to_string(&qualification.manifest.tree)
+                    .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))?,
+                checks_json: serde_json::to_string(&qualification.checks)
+                    .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))?,
+                duration_ms: qualification
+                    .checks
+                    .iter()
+                    .map(|check| check.duration_millis)
+                    .sum(),
+                qualified_at: self.clock.now(),
+            };
+            store.record_gardener_candidate_qualification(
+                claim,
+                &candidate_evidence,
+                self.clock.now(),
+            )?;
+            let failed_checks = qualification
+                .checks
+                .iter()
+                .filter(|check| check.status != CandidateCheckStatus::Passed)
+                .map(|check| {
+                    format!(
+                        "{} {:?}",
+                        check.executable.path().display(),
+                        check.arguments
+                    )
+                })
+                .collect::<Vec<_>>();
+            if !failed_checks.is_empty() {
+                return Err(GardenerRunnerError::CandidateChecks(
+                    failed_checks.join(", "),
+                ));
+            }
 
             self.heartbeat(store, claim)?;
             self.observe_process(store, claim, |observer| {
@@ -426,7 +690,7 @@ impl<'a> GardenerRunner<'a> {
 
             self.heartbeat(store, claim)?;
             let pull_request = self.observe_process(store, claim, |observer| {
-                git.create_ready_pull_request(
+                git.create_draft_pull_request(
                     &branch,
                     &commit,
                     &commit_message(&proposal.prompt),
@@ -435,7 +699,7 @@ impl<'a> GardenerRunner<'a> {
                 )
             })?;
             self.heartbeat(store, claim)?;
-            store.record_gardener_ready_pull_request(
+            store.record_gardener_draft_pull_request(
                 claim,
                 &run_id,
                 pull_request.number,
@@ -470,25 +734,31 @@ impl<'a> GardenerRunner<'a> {
                     self.clock,
                     self.lease_seconds,
                 );
-                AppServerClient::new(&self.config.codex_executable)
-                    .with_heartbeat_interval(self.config.heartbeat_interval)
-                    .with_execution_timeout(self.config.process_timeout)
-                    .with_process_limits(self.config.process_limits)
-                    .with_cancellation(self.config.cancellation.clone())
-                    .run(
-                        &TurnRequest {
-                            kind: TurnKind::Verification,
-                            cwd: verification_worktree.path(),
-                            prompt: &verification_prompt,
-                            output_schema: &verification_schema(),
-                        },
-                        &mut observer,
-                    )
-                    .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
+                AppServerClient::from_trust(
+                    self.runtime.executable_identities.codex.clone(),
+                    self.runtime.codex_process_boundary_identity.clone(),
+                    self.runtime.child_environment.clone(),
+                )
+                .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
+                .with_heartbeat_interval(self.config.heartbeat_interval)
+                .with_execution_timeout(self.config.process_timeout)
+                .with_process_limits(self.config.process_limits)
+                .with_cancellation(self.config.cancellation.clone())
+                .run(
+                    &TurnRequest {
+                        kind: TurnKind::Verification,
+                        cwd: verification_worktree.path(),
+                        prompt: &verification_prompt,
+                        output_schema: &verification_schema(),
+                    },
+                    &mut observer,
+                )
+                .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
             };
             let verdict: GardenerVerificationResult =
                 serde_json::from_str(&result.final_message)
                     .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))?;
+            validate_verification_result(&verdict)?;
             let reported_head = CommitId::parse(verdict.head.clone())?;
             if reported_head != pull_request.head {
                 return Err(GardenerRunnerError::InvalidResult(format!(
@@ -502,7 +772,7 @@ impl<'a> GardenerRunner<'a> {
             })?;
             self.heartbeat(store, claim)?;
             self.observe_process(store, claim, |observer| {
-                git.observe_pull_request(&branch, &pull_request.head, observer)
+                git.observe_draft_pull_request(&branch, &pull_request.head, observer)
             })?;
             store.finish_gardener_verification(
                 claim,
@@ -512,6 +782,30 @@ impl<'a> GardenerRunner<'a> {
                 &verdict.summary,
                 self.clock.now(),
             )?;
+            let pull_request = if verdict.verdict == GardenerVerificationVerdict::Pass {
+                store.request_gardener_pull_request_ready(
+                    claim,
+                    &run_id,
+                    pull_request.head.as_str(),
+                    self.clock.now(),
+                )?;
+                self.heartbeat(store, claim)?;
+                let ready = self.observe_process(store, claim, |observer| {
+                    git.mark_pull_request_ready(&branch, &pull_request.head, observer)
+                })?;
+                self.heartbeat(store, claim)?;
+                store.record_gardener_pull_request_ready(
+                    claim,
+                    &run_id,
+                    ready.number,
+                    &ready.url,
+                    ready.head.as_str(),
+                    self.clock.now(),
+                )?;
+                ready
+            } else {
+                pull_request
+            };
             Ok::<_, GardenerRunnerError>((commit, pull_request, verdict))
         })();
 
@@ -525,7 +819,7 @@ impl<'a> GardenerRunner<'a> {
             (Ok((commit, pull_request, verdict)), Ok(())) => {
                 if verdict.verdict == GardenerVerificationVerdict::Pass {
                     Ok(Success::Implementation(format!(
-                        "created ready pull request {} at exact head {commit} and passed independent verification",
+                        "promoted pull request {} to ready at exact head {commit} after passing candidate checks and independent verification",
                         pull_request.url
                     )))
                 } else {
@@ -535,7 +829,7 @@ impl<'a> GardenerRunner<'a> {
                             verdict.verdict
                         ),
                         evidence: format!(
-                            "ready pull request {} is preserved at {commit}; verification summary: {}",
+                            "draft pull request {} is preserved at {commit}; verification summary: {}",
                             pull_request.url, verdict.summary
                         ),
                     })
@@ -544,7 +838,7 @@ impl<'a> GardenerRunner<'a> {
             (Err(error), Ok(())) => Err(error),
             (Ok((commit, pull_request, _)), Err(cleanup)) => Err(GardenerRunnerError::Cleanup {
                 context: format!(
-                    "external work completed for ready pull request {} at {commit}",
+                    "external work completed for pull request {} at {commit}",
                     pull_request.url
                 ),
                 cleanup: cleanup.to_string(),
@@ -732,6 +1026,183 @@ fn inspection_prompt(source: &CommitId) -> String {
     )
 }
 
+fn reproducibility_manifest(
+    runtime: &ValidatedGardenerRuntime,
+    run_id: &str,
+    source: &CommitId,
+    prompt: &str,
+    recorded_at: i64,
+) -> Result<GardenerReproducibilityManifest, GardenerRunnerError> {
+    let mut executables = vec![
+        &runtime.executable_identities.codex,
+        &runtime.codex_process_boundary_identity,
+        &runtime.executable_identities.git,
+        &runtime.executable_identities.gh,
+        &runtime.executable_identities.github_public_observer,
+    ];
+    for check in &runtime.candidate_checks {
+        if let Some(sandbox) = check.sandbox() {
+            if !executables
+                .iter()
+                .any(|identity| identity.path() == sandbox.path())
+            {
+                executables.push(sandbox);
+            }
+        }
+        if !executables
+            .iter()
+            .any(|identity| identity.path() == check.executable().path())
+        {
+            executables.push(check.executable());
+        }
+    }
+    let check_commands = runtime
+        .candidate_checks
+        .iter()
+        .map(|check| {
+            let arguments = check
+                .arguments()
+                .iter()
+                .map(|argument| {
+                    argument.to_str().map(str::to_owned).ok_or_else(|| {
+                        GardenerRunnerError::Configuration(
+                            "candidate check arguments must be valid UTF-8".to_owned(),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(json!({
+                "sandbox": check.sandbox(),
+                "executable": check.executable(),
+                "arguments": arguments,
+            }))
+        })
+        .collect::<Result<Vec<_>, GardenerRunnerError>>()?;
+    let environment_policy = json!({
+        "environment": runtime.child_environment,
+        "roles": [
+            ProcessPolicy::Codex,
+            ProcessPolicy::GitLocal,
+            ProcessPolicy::GitRemoteRead,
+            ProcessPolicy::GitHubMutationGit,
+            ProcessPolicy::GitHubRead,
+            ProcessPolicy::GitHubPublicRead,
+            ProcessPolicy::GitHubMutationCli,
+            ProcessPolicy::CodexProcessBoundary,
+            ProcessPolicy::CandidateCheck,
+            ProcessPolicy::CandidateSandbox,
+        ]
+    });
+    let sandbox_policy = json!({
+        "codex_process_boundary": {
+            "pid_namespace": "private",
+            "procfs": "private",
+            "remaining_descendants": "killed_when_namespace_init_exits",
+            "parent_loss": "die_with_parent"
+        },
+        "inspection": {"access": "read_only", "network": false},
+        "implementation": {"access": "workspace_write", "network": false},
+        "verification": {"access": "read_only", "network": false},
+        "candidate_checks": {
+            "access": "isolated_copy_write",
+            "network": false,
+            "process_namespace": "private",
+            "home": "ephemeral",
+            "authoritative_state": "not_mounted"
+        },
+        "approval_policy": "never",
+    });
+    Ok(GardenerReproducibilityManifest {
+        run_id: run_id.to_owned(),
+        bokkie_build: bokkie_build_identity()?,
+        source_commit: source.to_string(),
+        prompt_digest: digest(prompt),
+        implementation_schema_digest: digest(&implementation_schema().to_string()),
+        verification_schema_digest: digest(&verification_schema().to_string()),
+        codex_profile: runtime.codex_profile.clone(),
+        codex_model: runtime.codex_model.clone(),
+        executable_manifest_json: serde_json::to_string(&executables)
+            .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))?,
+        sandbox_policy_digest: digest(&sandbox_policy.to_string()),
+        environment_policy_digest: digest(&environment_policy.to_string()),
+        check_commands_json: serde_json::to_string(&check_commands)
+            .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))?,
+        recorded_at,
+    })
+}
+
+fn bokkie_build_identity() -> Result<String, GardenerRunnerError> {
+    let path = std::env::current_exe().map_err(|error| {
+        GardenerRunnerError::Configuration(format!(
+            "cannot resolve the running Bokkie executable: {error}"
+        ))
+    })?;
+    let path = fs::canonicalize(&path).map_err(|error| {
+        GardenerRunnerError::Configuration(format!(
+            "cannot canonicalise the running Bokkie executable {}: {error}",
+            path.display()
+        ))
+    })?;
+    let bytes = fs::read(&path).map_err(|error| {
+        GardenerRunnerError::Configuration(format!(
+            "cannot identify the running Bokkie executable {}: {error}",
+            path.display()
+        ))
+    })?;
+    serde_json::to_string(&json!({
+        "package": env!("CARGO_PKG_NAME"),
+        "version": env!("CARGO_PKG_VERSION"),
+        "path": path,
+        "sha256": format!("{:x}", Sha256::digest(bytes)),
+    }))
+    .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))
+}
+
+const MAX_MODEL_TEXT_BYTES: usize = 16 * 1024;
+const MAX_MODEL_ITEMS: usize = 256;
+
+fn validate_implementation_result(
+    result: &GardenerImplementationResult,
+) -> Result<(), GardenerRunnerError> {
+    if result.summary.trim().is_empty()
+        || result.summary.len() > MAX_MODEL_TEXT_BYTES
+        || result.changed_paths.len() > MAX_MODEL_ITEMS
+        || result.checks.len() > MAX_MODEL_ITEMS
+        || result
+            .changed_paths
+            .iter()
+            .chain(&result.checks)
+            .any(|value| value.trim().is_empty() || value.len() > 4096)
+    {
+        return Err(GardenerRunnerError::InvalidResult(
+            "implementation result exceeds the typed field bounds".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_verification_result(
+    result: &GardenerVerificationResult,
+) -> Result<(), GardenerRunnerError> {
+    let invalid_fields = result.summary.trim().is_empty()
+        || result.summary.len() > MAX_MODEL_TEXT_BYTES
+        || result.blocking_findings.len() > MAX_MODEL_ITEMS
+        || result.validation.len() > MAX_MODEL_ITEMS
+        || result
+            .blocking_findings
+            .iter()
+            .chain(&result.validation)
+            .any(|value| value.trim().is_empty() || value.len() > 4096);
+    let contradictory_pass =
+        result.verdict == GardenerVerificationVerdict::Pass && !result.blocking_findings.is_empty();
+    if invalid_fields || contradictory_pass {
+        return Err(GardenerRunnerError::InvalidResult(
+            "verification result exceeds field bounds or contradicts its verdict".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn implementation_prompt(source: &CommitId, approved_prompt: &str) -> String {
     format!(
         "You are implementing one immutable, human-approved coding-gardener goal in only {CANONICAL_REPOSITORY}, from exact base commit {source}. Work only in the supplied isolated worktree. Read and obey AGENTS.md, README.md, and relevant docs/plans material. Network access, permission escalation, commits, pushes, pull-request creation, merges, releases, and deployment are forbidden. Do not change HEAD or create a Git commit; Bokkie owns all Git and GitHub effects after your turn. Implement and locally verify only the approved goal below. Return a JSON object summarising the changes and checks.\n\n<approved-goal>\n{approved_prompt}\n</approved-goal>"
@@ -750,29 +1221,52 @@ fn inspection_schema() -> Value {
         "additionalProperties": false,
         "required": ["summary", "proposed_goal_prompts"],
         "properties": {
-            "summary": {"type": "string", "minLength": 1},
+            "summary": {"type": "string", "minLength": 1, "maxLength": 16384},
             "proposed_goal_prompts": {
                 "type": "array",
                 "maxItems": 3,
-                "items": {"type": "string", "minLength": 1}
+                "items": {"type": "string", "minLength": 1, "maxLength": 16384}
             }
         }
     })
 }
 
 fn implementation_schema() -> Value {
-    json!({"type": "object", "additionalProperties": true})
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["summary", "changed_paths", "checks"],
+        "properties": {
+            "summary": {"type": "string", "minLength": 1, "maxLength": 16384},
+            "changed_paths": {
+                "type": "array", "maxItems": 256,
+                "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+            },
+            "checks": {
+                "type": "array", "maxItems": 256,
+                "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+            }
+        }
+    })
 }
 
 fn verification_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["verdict", "head", "summary"],
+        "required": ["verdict", "head", "summary", "blocking_findings", "validation"],
         "properties": {
             "verdict": {"type": "string", "enum": ["pass", "blocking", "inconclusive"]},
             "head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-            "summary": {"type": "string", "minLength": 1}
+            "summary": {"type": "string", "minLength": 1, "maxLength": 16384},
+            "blocking_findings": {
+                "type": "array", "maxItems": 256,
+                "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+            },
+            "validation": {
+                "type": "array", "maxItems": 256,
+                "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+            }
         }
     })
 }
@@ -805,7 +1299,7 @@ fn commit_message(prompt: &str) -> String {
 
 fn pull_request_body(source: &CommitId, prompt: &str) -> String {
     format!(
-        "Automated coding-gardener implementation from exact base `{source}`. This pull request is ready for review and is not merged automatically.\n\nApproved goal:\n\n{prompt}"
+        "Automated coding-gardener implementation from exact base `{source}`. This pull request is a draft pending independent exact-head qualification and is not merged automatically.\n\nApproved goal:\n\n{prompt}"
     )
 }
 

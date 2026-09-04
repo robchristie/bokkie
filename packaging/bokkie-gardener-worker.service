@@ -1,0 +1,71 @@
+# Example only: this is deliberately a separate, privileged-by-necessity
+# gardener worker profile. Do not install it with, or as a replacement for,
+# packaging/bokkie.service.
+[Unit]
+Description=Bokkie coding gardener worker (example only)
+After=local-fs.target network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Registration is a separate operator action. This unit only runs an already
+# registered gardener against its own explicitly selected database.
+ExecStart=/usr/bin/bokkie --database /var/lib/bokkie-gardener/bokkie.sqlite serve --bind 127.0.0.1:7745 --lease-seconds 30 --enable-coding-gardener --gardener-worktree-root /var/lib/bokkie-gardener/worktrees --gardener-home /var/lib/bokkie-gardener --gardener-codex-executable /usr/bin/codex --gardener-git-executable /usr/bin/git --gardener-gh-executable /usr/bin/gh --gardener-github-public-observer-executable /usr/bin/curl --gardener-cargo-executable /usr/bin/cargo --gardener-candidate-sandbox-executable /usr/bin/bwrap --gardener-github-token-stdin --gardener-heartbeat-ms 10000 --gardener-process-timeout-ms 1800000
+# PID 1 opens this root-only source before dropping to User=. Bokkie consumes
+# descriptor 0 once and closes it before resolving or spawning any child.
+StandardInput=file:/etc/bokkie-gardener/github-token
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+
+# Provision this dedicated system account and its state/checkout as described in
+# docs/operator-guide.md before installing the example.
+User=bokkie-gardener
+Group=bokkie-gardener
+StateDirectory=bokkie-gardener
+StateDirectoryMode=0700
+UMask=0077
+Environment=HOME=/var/lib/bokkie-gardener
+Environment=GH_CONFIG_DIR=/var/lib/bokkie-gardener/gh
+Environment=GIT_CONFIG_GLOBAL=/dev/null
+Environment=GIT_CONFIG_NOSYSTEM=1
+Environment=PATH=/usr/bin:/bin
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+ProcSubset=pid
+LockPersonality=yes
+# MemoryDenyWriteExecute is deliberately omitted: the commonly packaged Codex
+# launcher uses Node/V8 and fails under that restriction.
+RemoveIPC=yes
+# Bubblewrap needs these namespace and mount operations for every Codex turn's
+# private PID/procfs boundary and for the stronger network-off candidate-check
+# boundary. Bokkie supplies its arguments; candidate code cannot select the
+# executable, mounts or namespace policy.
+RestrictNamespaces=user mnt pid net ipc uts cgroup
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @mount
+# The checkout uses a .git indirection file to the writable repository.git
+# sibling. Candidate checks receive neither path.
+ReadOnlyPaths=/var/lib/bokkie-gardener/checkout
+ReadWritePaths=/var/lib/bokkie-gardener
+
+[Install]
+WantedBy=multi-user.target

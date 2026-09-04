@@ -2020,10 +2020,10 @@ fn common_evidence(evidence: &Value) -> Vec<(&'static str, String)> {
                 .map(|value| (label, value_text(value)))
         })
         .collect::<Vec<_>>();
-    if let Some(Value::String(details)) = object.get("details_json")
-        && let Ok(parsed) = serde_json::from_str::<Value>(details)
-    {
-        output.extend(common_evidence(&parsed));
+    if let Some(Value::String(details)) = object.get("details_json") {
+        if let Ok(parsed) = serde_json::from_str::<Value>(details) {
+            output.extend(common_evidence(&parsed));
+        }
     }
     output
 }
