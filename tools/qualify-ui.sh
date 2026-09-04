@@ -11,9 +11,9 @@ else
 fi
 mkdir -p "$BOKKIE_UI_EVIDENCE_DIR"
 
-cargo build --bin bokkie-ui-fixture
-cargo build -p bokkie-attention-ui --bin bokkie-attention-ui
-cargo build -p bokkie-attention-ui --lib --target wasm32-unknown-unknown
+cargo +1.97.1 build --locked --bin bokkie-ui-fixture
+cargo +1.97.1 build --locked -p bokkie-attention-ui --bin bokkie-attention-ui
+cargo +1.97.1 build --locked -p bokkie-attention-ui --lib --target wasm32-unknown-unknown
 wasm-bindgen --target web --out-dir apps/bokkie-attention-ui/web/pkg \
   --out-name bokkie_attention_ui \
   target/wasm32-unknown-unknown/debug/bokkie_attention_ui.wasm

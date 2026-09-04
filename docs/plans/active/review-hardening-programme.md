@@ -44,11 +44,11 @@ is not silently interpreted as permission to grant rights.
 | R4 | Candidate checks and evidence precede draft-to-ready promotion; exact PR heads remain authoritative; CI protects candidate code without secrets or privilege | Satisfied by P2 landing `9cf9329f374f545eccca596fd9df8a451a48a065` | P2 |
 | R5 | Approval selects an exact proposal generation and source observation; later source commits stale or supersede earlier instances; terminal goals may recur in later generations | Satisfied by P3 landing `9920006635c01cd266e6f2cd3a3546fe21747867` | P3 |
 | R6 | Migrations run at startup, have immutable recorded digests and reject gaps/newer schemas; blocking DB work is isolated from async handlers; `doctor` reports integrity and reconciliation without repair | Satisfied by P4a landing `87c8d42f1757c9656fbb010723b9e4bb1477dd69` | P4a |
-| R7 | Snapshots are transactionally consistent and cursor-paginated with bounded queries, a global ordering envelope and an incremental change watermark | Open: histories are unbounded and topic projection globally loads then filters | P5b |
-| R8 | Ordinary, gardener and future outbox work use fair, bounded lanes without starvation while preserving existing claim/lease fencing | P5a candidate independently supervises bounded ordinary and gardener lanes with one atomic claim-admission/cancellation boundary and a typed outbox extension point | P5a |
-| R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | P1–P4b establish process, trust, generation, schema and service identities; P5a adds persisted typed failure dispositions, lifecycle text limits and a fixed-seed two-store property model; P5b projection properties remain | P1–P5b |
+| R7 | Snapshots are transactionally consistent and cursor-paginated with bounded queries, a global ordering envelope and an incremental change watermark | P5b candidate adds schema v9 envelope revisions, scoped single-snapshot pages and durable bounded change walks | P5b |
+| R8 | Ordinary, gardener and future outbox work use fair, bounded lanes without starvation while preserving existing claim/lease fencing | Satisfied by P5a landing `b8bda7877e63d73780f04dafe097fb7425cccc7a` | P5a |
+| R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | P1–P5a establish process, trust, generation, schema, service, lane and failure identities; P5b candidate adds distinct durable cursor/watermark identity and large/concurrent projection properties | P1–P5b |
 | R10 | Mutation routes identify runtime/API/schema build, validate local request origin and use a per-process mutation secret without widening loopback exposure | Satisfied by human-authorised P4b landing `4ecc30338c60bf66507558a68b96c65c34014c86` | P4b; human review complete |
-| R11 | Large modules are split along established semantic ownership after contracts settle | P1 establishes `process`; P2 `runtime_trust`; P3 retains proposal lifecycle in Store; P4a establishes `db_executor`; P4b `http_security`; P5a establishes `execution_lane` identity and service supervision while Store retains transitions; P5b projection ownership remains | P1–P5b |
+| R11 | Large modules are split along established semantic ownership after contracts settle | P1–P5a splits remain; P5b candidate establishes `events` and `pagination` while Store retains lifecycle mutation and bounded domain reads | P1–P5b |
 | R12 | Toolchain and locked checks are pinned in CI; completed-plan claims are linted and reconciled; conditional licensing and live branch protection have explicit terminal decisions | P2 pins Rust 1.85.0 and locked canonical checks in read-only secret-free CI; plan linting, protection and licensing decisions remain for P6 | P2/P6 |
 
 Already-satisfied evidence that must be retained includes atomic Store-owned
@@ -69,8 +69,8 @@ Only the next unblocked package is refined after each landing.
 | P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Landed as [PR #9](https://github.com/robchristie/bokkie/pull/9) at `9920006635c01cd266e6f2cd3a3546fe21747867`; reviewed and landed tree `c844e629c88d363497eed5918e4f2553d941ac38` |
 | P4a | Startup-only migration, immutable manifest verification, bounded HTTP database execution, consistent read snapshots and read-only doctor | P3 schema | Landed as [PR #10](https://github.com/robchristie/bokkie/pull/10) at `87c8d42f1757c9656fbb010723b9e4bb1477dd69`; final reviewed and landed tree `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba` |
 | P4b | Reviewed API mutation secret, local Host/Origin validation and runtime/API/schema build identity | P4a storage contract | Human-authorised [PR #11](https://github.com/robchristie/bokkie/pull/11) landed as `4ecc30338c60bf66507558a68b96c65c34014c86`; reviewed and landed tree `952a77d63477412722f0c2cf908a6ca4ae390c10` |
-| P5a | Fair failure-isolated execution lanes, typed lifecycle outcomes, bounded lifecycle fields and model-based temporal tests | P4 storage and P1 process contracts | Terminal candidate owner revision `861713c6fc2c0e2a0acbb6bbb6fe2a011b15cb42`, lane repair through `f5cebeafbe6b15fee53204d74951c789531c00db` and deterministic-check repair `fb38b5d1e4cf5daf5668f5a1e3e40fe3f84079fe` on [PR #12](https://github.com/robchristie/bokkie/pull/12); final exact-head review and landing pending |
-| P5b | Cursor-paginated incremental projections and global event envelope | P5a schema v8 and typed outcome projection | Refined candidate; must not conflate process session, lane state or failure disposition with durable event identity |
+| P5a | Fair failure-isolated execution lanes, typed lifecycle outcomes, bounded lifecycle fields and model-based temporal tests | P4 storage and P1 process contracts | Landed as [PR #12](https://github.com/robchristie/bokkie/pull/12) at `b8bda7877e63d73780f04dafe097fb7425cccc7a`; reviewed tree `365b4c870e5d50ff48c1117092679a4719ff3b83` |
+| P5b | Cursor-paginated incremental projections and global event envelope | P5a schema v8 and typed outcome projection | Repaired implementation reviewed at `3e12d6a59a1a4915c020fba0e6eca1eef676e801` on [PR #13](https://github.com/robchristie/bokkie/pull/13); exact-head CI rerun passed and final plan-head review/landing remain |
 | P6 | Exact-head aggregate qualification, plan reconciliation/linter, toolchain and repository-policy closeout | P1–P5b | Candidate; live branch protection/licence decision may need human review |
 
 ## Acceptance and integration proof
@@ -92,39 +92,30 @@ remote-tracking references and live remote heads.
 
 ## Current phase
 
-P4a is terminal through PR #10 at `87c8d42f1757c9656fbb010723b9e4bb1477dd69`
-with reviewed and landed tree `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba`.
-P4b is terminal through human-authorised PR #11 at
-`4ecc30338c60bf66507558a68b96c65c34014c86`; reviewed and landed trees are
-`952a77d63477412722f0c2cf908a6ca4ae390c10`, and post-merge CI run
-`33867419255` passed.
+P5a is terminal through PR #12: exact-head `94024ae2a9bb266bbfb9102105728fbde99671f8`
+and post-merge CI runs `33872971463` and `33873290907` passed; squash merge
+`b8bda7877e63d73780f04dafe097fb7425cccc7a` has tree
+`365b4c870e5d50ff48c1117092679a4719ff3b83`.
 
-P5 is refined into P5a execution contracts and P5b projection contracts. P5a
-has one terminal candidate at owner revision
-`861713c6fc2c0e2a0acbb6bbb6fe2a011b15cb42`: ordinary work has configurable
-1–32 capacity, gardener capacity is one, an atomic gate stops claims across
-lanes and P1 cancellation reaches active children, typed lane failures stop the
-HTTP service, and joins are bounded. Additive schema v8 persists
-`retry_safe`, `needs_reconciliation`, `human_decision`, `terminal` and
-`cancelled` while retaining the legacy retryable projection; only safe retry is
-automatic. Store/Recurrence own bounded lifecycle text, and a fixed-seed
-two-store property model plus repeated scheduler fixtures prove fencing,
-liveness, lease horizons, typed ambiguity and cross-lane progress. The first
-exact-head review blocked unbounded class fairness and incomplete timeout
-evidence. The repair alternates waiting lane classes at the Store admission
-boundary and retains both the initiating failure and every timed-out worker. A
-second review found that admission closure still drained an active Store call
-without a deadline. Closure now publishes cancellation and returns immediately;
-the supervisor alone owns bounded quiescence, including an active claim's typed
-timeout identity. Locked canonical checks and repeated repaired fixtures pass.
-Independent exact-head review passed without findings at
-`d9e68f70f563936781dfbcdae5727ce2cbe73ed2`; CI run `33872226038` passed. The
-next plan-only head exposed a pre-existing live GitHub CLI assertion in
-canonical CI. The installed-tool probe is now explicit-only while the existing
-controlled credential-stripping test remains canonical; locked local checks
-pass, including the explicit live probe. The next action is final exact-head
-review, CI and landing of [PR #12](https://github.com/robchristie/bokkie/pull/12).
-P5b remains deliberately excluded from this candidate.
+P5b is the active integrated candidate. Additive schema v9 provides an
+append-only envelope over audit, gardener and run events; legacy order is
+deterministic and explicitly non-causal, while new envelopes are transactionally
+inserted. Bounded keyset pages, scoped operator reads and `/operator/changes`
+carry an exact global watermark distinct from P4b session identity, P5a
+lane/failure state and Store action preconditions. The attention UI walks
+bounded initial pages, polls that watermark, refetches only affected projections
+and fails stale on gaps or session rotation. Deterministic Store, adapter and UI
+tests cover concurrent WAL reads, same-second streams, cursor tamper and limits,
+scoped 5,000-row histories and incremental browser/native journeys. The first
+exact-head review found incomplete gardener-decision invalidations, a production
+topic compatibility regression, an HTTP limit mismatch and a non-executable UI
+toolchain claim. The repair restores all ten API-v1 topic categories under
+bounded scoped SQL, derives exact decision identities, accepts the documented
+change limit and pins the separate UI compiler. Independent re-review passed at
+`3e12d6a59a1a4915c020fba0e6eca1eef676e801`; exact-head CI run `33884226007`
+passed on its second attempt after an unchanged process fixture transient. The
+final plan-head review and landing are next; P6 then owns merged-main aggregate
+qualification, plan linting and the human-held repository-policy decisions.
 
 ## Durable evidence
 
@@ -161,6 +152,11 @@ P5b remains deliberately excluded from this candidate.
 | P5a repaired exact-head review | `d9e68f70f563936781dfbcdae5727ce2cbe73ed2` | same | Independent PASS with no findings; reviewed tree `398b1e71cfd86cf9bebd8807c588932f098aa260`; exact-head CI run `33872226038` passed | [Durable PASS evidence](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540363123) |
 | P5a plan-head CI review | `a595df9c48b1d3fdc01ab56c5df49d12ee2d0563` | same | BLOCK: exact-head CI run `33872508645` failed a pre-existing live installed-`gh` exit-status assertion; plan-only delta was accurate and no implementation regression was found | [Durable review verdict](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540414246) |
 | P5a deterministic-check repair | `fb38b5d1e4cf5daf5668f5a1e3e40fe3f84079fe` | terminal plan head | Live installed-`gh` behaviour is explicit-only; controlled credential stripping remains canonical. Locked canonical checks pass with 158 library tests and one explicit-only probe, 2 CLI and 13 adapter tests; the live probe also passes when requested; Clippy/rustfmt/diff pass | `src/git_workspace.rs` and PR #12 repair diff |
+| P5a reviewed landing | `94024ae2a9bb266bbfb9102105728fbde99671f8` | `b8bda7877e63d73780f04dafe097fb7425cccc7a` | Reviewed and landed tree `365b4c870e5d50ff48c1117092679a4719ff3b83`; exact-head and post-merge CI passed | [PR #12 terminal evidence](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540503144) |
+| P5b initial candidate | `14db6a5bcab9065f8b1c8579540439d088c01e8d` | `8b1a51659b357ff2973c260fee1b168795b9b26f` | Schema v9/API v1; locked canonical and UI qualification passed | [PR #13](https://github.com/robchristie/bokkie/pull/13) |
+| P5b first exact-head review | `8b1a51659b357ff2973c260fee1b168795b9b26f` | same | BLOCK: gardener decisions lacked exact invalidation IDs; production topic broke source identity and omitted v1 categories; HTTP limit and UI toolchain claims mismatched | [Durable review verdict](https://github.com/robchristie/bokkie/pull/13#issuecomment-5541733088) |
+| P5b compatibility repair | `4744b85f794a5d6df135afbc7c35c0d552cbe2f2` | terminal plan head | 177 library tests pass with one explicit-only probe ignored, plus 2 CLI, 14 adapter and 38 UI tests; locked Clippy/rustfmt/diff, native/Wasm builds and browser/native qualification pass | PR #13 repair diff, `src/events.rs`, `src/operator.rs`, `src/http.rs` and [`docs/ui-qualification-evidence`](../../ui-qualification-evidence/README.md) |
+| P5b repaired exact-head review | `3e12d6a59a1a4915c020fba0e6eca1eef676e801` | same | Independent PASS with no findings; reviewed tree `c63d016e52415c24e7721d5c28d0f1a493e7da87`; exact-head CI run `33884226007` passed on rerun after an unchanged P1 process-fixture transient | [PASS evidence](https://github.com/robchristie/bokkie/pull/13#issuecomment-5542035444) |
 
 ## Residual questions
 

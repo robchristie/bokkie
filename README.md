@@ -40,6 +40,11 @@ The project pins Rust 1.85.0 in [`rust-toolchain.toml`](rust-toolchain.toml)
 and requires SQLite development support. GitHub CI uses that same pinned
 toolchain on an unprivileged, read-only runner and performs the locked checks
 below without secrets.
+The attention UI separately pins Rust 1.97.1 because its resolved
+Polyorama/egui/wgpu graph requires a newer compiler; its locked commands and
+scoped toolchain are documented in the
+[attention UI README](apps/bokkie-attention-ui/README.md).
+
 Once the initial implementation is present, run the canonical check with:
 
 ```sh
@@ -81,7 +86,12 @@ Service startup is the sole migration owner. Applied migration names and
 SHA-256 content digests form an immutable ordered manifest: never edit an
 applied migration; append a new migration instead. HTTP handlers send owned
 commands through one bounded database thread, so SQLite never blocks a Tokio
-worker, while operator projections are read from one SQLite snapshot.
+worker. List and history surfaces use bounded keyset pages. Operator snapshots,
+topics and incremental change pages each use one deferred SQLite read
+transaction and carry the exact global event-envelope watermark they observed.
+The envelope references the existing domain events; legacy events have an
+explicitly non-causal deterministic backfill and are not misrepresented as a
+historical transaction order.
 
 See the [operator guide](docs/operator-guide.md) for command examples, HTTP
 routes, crash and graceful-shutdown behaviour, the trust boundary, and the
@@ -113,9 +123,11 @@ is audit evidence, not authentication. Every action also submits the
 backend-issued obligation identity, occurrence and append-only state revision
 that the operator reviewed; Store validates it atomically before mutation.
 The UI uses dedicated conditional `/operator` mutation routes, leaving existing
-lifecycle route contracts unchanged. Refresh keeps a surviving selection and
-retained snapshot visible; failed reads and transition conflicts mark it stale
-and disable decisions until Bokkie provides current state again.
+lifecycle route contracts unchanged. It loads bounded initial pages, polls the
+global change watermark and refetches only affected obligation/topic
+projections. Refresh keeps a surviving selection and retained snapshot visible;
+cursor gaps, restarted sessions, failed reads and transition conflicts mark it
+stale and disable decisions until one same-session bounded rebuild completes.
 
 Build, run and qualification instructions, including the retained evidence and
 known accessibility/rendering limits, are in the [attention UI README](apps/bokkie-attention-ui/README.md).

@@ -1,6 +1,7 @@
 //! Authoritative read-only operator projections over the existing durable store.
 
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 use bokkie_operator_api::{
     ActionCapability, ActionConsequence, ActionPrecondition, ApprovalSubject, AttentionCause,
@@ -8,17 +9,18 @@ use bokkie_operator_api::{
     OperatorFailureDisposition, OperatorObligation, OperatorObligationState, OperatorSnapshot,
     TopicItem, TopicSource,
 };
-use rusqlite::params;
-use serde::Serialize;
+use rusqlite::{OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    ApprovalDecision, GardenerImplementationRun, GardenerVerificationVerdict, Obligation,
-    ObligationState, Store, StoreError,
+    ApprovalDecision, AuditEvent, GardenerEvent, GardenerImplementationRun, GardenerRunEvent,
+    GardenerVerificationVerdict, Obligation, ObligationState, ProposalObservation, Store,
+    StoreError,
     gardener::ProposalInstance,
     store::{
-        approval_transition_is_legal, cancel_transition_is_legal,
+        approval_transition_is_legal, attempt_from_row, audit_from_row, cancel_transition_is_legal,
         gardener_proposal_transition_is_legal, generic_approval_transition_is_legal,
-        retry_transition_is_legal,
+        obligation_from_row, proposal_instance_for_obligation, retry_transition_is_legal,
     },
 };
 
@@ -33,34 +35,346 @@ struct ApprovalEvidence {
     decided_at: i64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct SnapshotCursorKey {
+    captured_at: i64,
+    exception_rank: i64,
+    state_rank: i64,
+    wake_rank: i64,
+    updated_at: i64,
+    id: String,
+}
+
+/// API-v1 topic ordering is observable: wall-clock time, source category,
+/// source-local sequence, then stable source identity. The watermark makes
+/// this mutable multi-table projection an exact, restart-on-change walk.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct TopicCursorKey {
+    captured_at: i64,
+    occurred_at: i64,
+    source_rank: i64,
+    source_sequence: String,
+    stable_id: String,
+}
+
+#[derive(Debug)]
+struct TopicCandidate {
+    key: TopicCursorKey,
+    source: TopicSource,
+    source_identity: String,
+    occurrence: Option<u32>,
+    event_type: String,
+}
+
+const TOPIC_CANDIDATES_SQL: &str = "
+    WITH direct_fingerprints(fingerprint) AS (
+        SELECT DISTINCT proposal_fingerprint
+          FROM gardener_proposal_instances
+         WHERE implementation_obligation_id = ?1
+    ), related_inspections(id) AS (
+        SELECT id FROM gardener_inspections WHERE obligation_id = ?1
+        UNION
+        SELECT source_inspection_id FROM gardener_proposal_instances
+         WHERE implementation_obligation_id = ?1
+        UNION
+        SELECT po.inspection_id
+          FROM gardener_proposal_observations po
+         WHERE po.proposal_fingerprint IN (SELECT fingerprint FROM direct_fingerprints)
+    ), related_fingerprints(fingerprint) AS (
+        SELECT fingerprint FROM direct_fingerprints
+        UNION
+        SELECT DISTINCT po.proposal_fingerprint
+          FROM gardener_proposal_observations po
+         WHERE NOT EXISTS (SELECT 1 FROM direct_fingerprints)
+           AND po.inspection_id IN (SELECT id FROM related_inspections)
+    ), topic_items(
+        occurred_at, source_rank, source_sequence, stable_id,
+        source_kind, source_identity, occurrence, event_type
+    ) AS (
+        SELECT occurred_at, 0, CAST(sequence AS TEXT), 'audit:' || sequence,
+               'audit', CAST(sequence AS TEXT), occurrence, event_type
+          FROM audit_events WHERE obligation_id = ?1
+        UNION ALL
+        SELECT decided_at, 1, CAST(id AS TEXT), 'approval:' || id,
+               'approval', CAST(id AS TEXT), occurrence, decision
+          FROM approvals WHERE obligation_id = ?1
+        UNION ALL
+        SELECT claimed_at, 2, CAST(id AS TEXT), 'attempt:' || id,
+               'attempt', CAST(id AS TEXT), occurrence, 'attempt_' || outcome
+          FROM attempts WHERE obligation_id = ?1
+        UNION ALL
+        SELECT started_at, 3, id, 'gardener-inspection:' || id,
+               'inspection', id, occurrence, 'gardener_inspection'
+          FROM gardener_inspections WHERE id IN (SELECT id FROM related_inspections)
+        UNION ALL
+        SELECT p.created_at, 4, p.fingerprint, 'gardener-proposal:' || p.fingerprint,
+               'proposal', p.fingerprint, o.occurrence, 'gardener_proposal'
+          FROM gardener_proposals p
+          JOIN obligations o ON o.id = p.implementation_obligation_id
+         WHERE p.fingerprint IN (SELECT fingerprint FROM related_fingerprints)
+        UNION ALL
+        SELECT pi.created_at, 5, CAST(pi.generation AS TEXT) || ':' || pi.id,
+               'gardener-proposal-instance:' || pi.id,
+               'instance', pi.id, o.occurrence, 'gardener_proposal_instance'
+          FROM gardener_proposal_instances pi
+          JOIN obligations o ON o.id = pi.implementation_obligation_id
+         WHERE pi.proposal_fingerprint IN (SELECT fingerprint FROM related_fingerprints)
+        UNION ALL
+        SELECT po.observed_at, 6, CAST(po.id AS TEXT), 'gardener-observation:' || po.id,
+               'observation', CAST(po.id AS TEXT), NULL, 'gardener_proposal_observed'
+          FROM gardener_proposal_observations po
+         WHERE po.proposal_fingerprint IN (SELECT fingerprint FROM related_fingerprints)
+        UNION ALL
+        SELECT g.occurred_at, 7, CAST(g.sequence AS TEXT), 'gardener-event:' || g.sequence,
+               'gardener_event', CAST(g.sequence AS TEXT), NULL, g.event_type
+          FROM gardener_events g
+         WHERE g.inspection_id IN (SELECT id FROM related_inspections)
+            OR g.proposal_fingerprint IN (SELECT fingerprint FROM related_fingerprints)
+        UNION ALL
+        SELECT r.created_at, 8, r.id, 'gardener-run:' || r.id,
+               'run', r.id, r.occurrence, 'gardener_run_' || r.phase
+          FROM gardener_implementation_runs r WHERE r.obligation_id = ?1
+        UNION ALL
+        SELECT re.occurred_at, 9, CAST(re.sequence AS TEXT),
+               'gardener-run-event:' || re.sequence,
+               'run_event', CAST(re.sequence AS TEXT), NULL, re.event_type
+          FROM gardener_run_events re
+          JOIN gardener_implementation_runs r ON r.id = re.run_id
+         WHERE r.obligation_id = ?1
+    )";
+
+fn approval_evidence_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApprovalEvidence> {
+    let decision = row.get::<_, String>(3)?.parse().map_err(|error: String| {
+        rusqlite::Error::FromSqlConversionFailure(
+            3,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+        )
+    })?;
+    Ok(ApprovalEvidence {
+        id: row.get(0)?,
+        obligation_id: row.get(1)?,
+        occurrence: row.get(2)?,
+        decision,
+        actor: row.get(4)?,
+        note: row.get(5)?,
+        decided_at: row.get(6)?,
+    })
+}
+
 impl Store {
-    pub fn operator_snapshot(&self, captured_at: i64) -> Result<OperatorSnapshot, StoreError> {
-        self.with_deferred_read(|store| store.operator_snapshot_inner(captured_at))
+    pub fn operator_obligation(
+        &self,
+        obligation_id: &str,
+        captured_at: i64,
+    ) -> Result<OperatorObligation, StoreError> {
+        self.operator_obligation_with_watermark(obligation_id, captured_at)
+            .map(|(_, obligation)| obligation)
     }
 
-    fn operator_snapshot_inner(&self, captured_at: i64) -> Result<OperatorSnapshot, StoreError> {
-        let mut proposal_instances = BTreeMap::new();
-        for proposal in self.gardener_proposals()? {
-            for instance in self.gardener_proposal_instances(&proposal.fingerprint)? {
-                proposal_instances.insert(instance.implementation_obligation_id.clone(), instance);
+    pub(crate) fn operator_obligation_with_watermark(
+        &self,
+        obligation_id: &str,
+        captured_at: i64,
+    ) -> Result<(i64, OperatorObligation), StoreError> {
+        self.with_deferred_read(|store| {
+            let watermark = crate::pagination::watermark(&store.connection)?;
+            let (obligation, state_revision) = store
+                .connection
+                .query_row(
+                    "SELECT o.*,
+                        (SELECT sequence FROM audit_events a
+                         WHERE a.obligation_id = o.id ORDER BY sequence DESC LIMIT 1)
+                         AS state_revision
+                 FROM obligations o WHERE o.id = ?1",
+                    [obligation_id],
+                    |row| {
+                        Ok((
+                            obligation_from_row(row)?,
+                            row.get::<_, i64>("state_revision")?,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or_else(|| StoreError::NotFound(obligation_id.to_owned()))?;
+            let proposal = proposal_instance_for_obligation(&store.connection, obligation_id)?;
+            let projection = store.project_operator_obligation(
+                &obligation,
+                proposal.as_ref(),
+                state_revision,
+                captured_at,
+            )?;
+            Ok((watermark, projection))
+        })
+    }
+
+    pub fn operator_snapshot(&self, captured_at: i64) -> Result<OperatorSnapshot, StoreError> {
+        self.operator_snapshot_page(captured_at, None, None, None)
+    }
+
+    pub fn operator_snapshot_page(
+        &self,
+        captured_at: i64,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<OperatorSnapshot, StoreError> {
+        self.with_deferred_read(|store| {
+            store.operator_snapshot_page_inner(
+                captured_at,
+                cursor,
+                requested_watermark,
+                requested_limit,
+            )
+        })
+    }
+
+    fn operator_snapshot_page_inner(
+        &self,
+        captured_at: i64,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<OperatorSnapshot, StoreError> {
+        let scope = "operator_snapshot";
+        let limit = crate::page_limit(requested_limit)?;
+        let current = crate::pagination::watermark(&self.connection)?;
+        let (watermark, after, upper, projection_at) = if let Some(cursor) = cursor {
+            let state = crate::pagination::decode_cursor_exact::<SnapshotCursorKey>(
+                cursor,
+                scope,
+                requested_watermark,
+                current,
+            )?;
+            if state.after.captured_at != state.upper.captured_at {
+                return Err(StoreError::Invalid(
+                    "invalid page cursor: snapshot time is inconsistent".to_owned(),
+                ));
             }
-        }
-        let mut obligations = self
-            .list_with_state_revisions()?
+            let projection_at = state.after.captured_at;
+            (state.watermark, state.after, state.upper, projection_at)
+        } else {
+            (
+                crate::pagination::initial_watermark(current, requested_watermark)?,
+                SnapshotCursorKey {
+                    captured_at,
+                    exception_rank: i64::MIN,
+                    state_rank: i64::MIN,
+                    wake_rank: i64::MIN,
+                    updated_at: i64::MIN,
+                    id: String::new(),
+                },
+                self.connection
+                    .query_row(
+                        "SELECT
+                            CASE WHEN state IN ('awaiting_approval', 'attention')
+                                      OR (state = 'running' AND lease_expires_at <= ?1)
+                                 THEN 0 ELSE 1 END AS exception_rank,
+                            CASE state
+                              WHEN 'awaiting_approval' THEN 0 WHEN 'attention' THEN 1
+                              WHEN 'running' THEN 2 WHEN 'retry_scheduled' THEN 3
+                              WHEN 'pending' THEN 4 WHEN 'completed' THEN 5 ELSE 6 END AS state_rank,
+                            coalesce(next_wake_at, 9223372036854775807), updated_at, id
+                         FROM obligations
+                         ORDER BY exception_rank DESC, state_rank DESC,
+                                  coalesce(next_wake_at, 9223372036854775807) DESC,
+                                  updated_at DESC, id DESC LIMIT 1",
+                        [captured_at],
+                        |row| {
+                            Ok(SnapshotCursorKey {
+                                captured_at,
+                                exception_rank: row.get(0)?,
+                                state_rank: row.get(1)?,
+                                wake_rank: row.get(2)?,
+                                updated_at: row.get(3)?,
+                                id: row.get(4)?,
+                            })
+                        },
+                    )
+                    .optional()?
+                    .unwrap_or(SnapshotCursorKey {
+                        captured_at,
+                        exception_rank: i64::MIN,
+                        state_rank: i64::MIN,
+                        wake_rank: i64::MIN,
+                        updated_at: i64::MIN,
+                        id: String::new(),
+                    }),
+                captured_at,
+            )
+        };
+        let mut statement = self.connection.prepare(
+            "SELECT o.*,
+                    (SELECT sequence FROM audit_events a
+                     WHERE a.obligation_id = o.id ORDER BY sequence DESC LIMIT 1)
+                     AS state_revision,
+                    CASE WHEN o.state IN ('awaiting_approval', 'attention')
+                              OR (o.state = 'running' AND o.lease_expires_at <= ?1)
+                         THEN 0 ELSE 1 END AS exception_rank,
+                    CASE o.state
+                      WHEN 'awaiting_approval' THEN 0 WHEN 'attention' THEN 1
+                      WHEN 'running' THEN 2 WHEN 'retry_scheduled' THEN 3
+                      WHEN 'pending' THEN 4 WHEN 'completed' THEN 5 ELSE 6 END AS state_rank,
+                    coalesce(o.next_wake_at, 9223372036854775807) AS wake_rank
+             FROM obligations o
+             WHERE (exception_rank, state_rank, wake_rank, o.updated_at, o.id)
+                     > (?2, ?3, ?4, ?5, ?6)
+               AND (exception_rank, state_rank, wake_rank, o.updated_at, o.id)
+                     <= (?7, ?8, ?9, ?10, ?11)
+             ORDER BY exception_rank, state_rank, wake_rank, o.updated_at, o.id LIMIT ?12",
+        )?;
+        let rows = statement.query_map(
+            params![
+                projection_at,
+                after.exception_rank,
+                after.state_rank,
+                after.wake_rank,
+                after.updated_at,
+                after.id,
+                upper.exception_rank,
+                upper.state_rank,
+                upper.wake_rank,
+                upper.updated_at,
+                upper.id,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+            |row| {
+                Ok((
+                    obligation_from_row(row)?,
+                    row.get::<_, i64>("state_revision")?,
+                ))
+            },
+        )?;
+        let mut raw = rows.collect::<Result<Vec<_>, _>>()?;
+        let has_more = raw.len() > limit;
+        raw.truncate(limit);
+        let next_cursor = if has_more {
+            Some(crate::pagination::encode_cursor(
+                scope,
+                watermark,
+                snapshot_cursor_key(&raw.last().expect("non-empty page").0, projection_at),
+                upper,
+            )?)
+        } else {
+            None
+        };
+        let obligations = raw
             .into_iter()
             .map(|(obligation, state_revision)| {
+                let proposal = proposal_instance_for_obligation(&self.connection, &obligation.id)?;
                 self.project_operator_obligation(
                     &obligation,
-                    proposal_instances.get(&obligation.id),
+                    proposal.as_ref(),
                     state_revision,
-                    captured_at,
+                    projection_at,
                 )
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        obligations.sort_by_key(operator_sort_key);
+            .collect::<Result<Vec<_>, StoreError>>()?;
         Ok(OperatorSnapshot {
-            captured_at,
+            captured_at: projection_at,
             service: None,
+            next_cursor,
+            watermark,
             obligations,
         })
     }
@@ -70,10 +384,335 @@ impl Store {
         obligation_id: &str,
         captured_at: i64,
     ) -> Result<ObligationTopic, StoreError> {
-        self.with_deferred_read(|store| store.operator_topic_inner(obligation_id, captured_at))
+        self.operator_topic_page(obligation_id, captured_at, None, None, None)
     }
 
-    fn operator_topic_inner(
+    /// Bounded selected-topic projection preserving the observable API-v1
+    /// order: occurrence time, source category, source-local sequence and
+    /// stable source identity. The exact global watermark protects the
+    /// multi-table projection from mixing revisions between pages; it is not
+    /// substituted for the source-local sequence exposed on each item.
+    pub fn operator_topic_page(
+        &self,
+        obligation_id: &str,
+        captured_at: i64,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<ObligationTopic, StoreError> {
+        self.with_deferred_read(|store| {
+            store.operator_topic_page_inner(
+                obligation_id,
+                captured_at,
+                cursor,
+                requested_watermark,
+                requested_limit,
+            )
+        })
+    }
+
+    fn operator_topic_page_inner(
+        &self,
+        obligation_id: &str,
+        captured_at: i64,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<ObligationTopic, StoreError> {
+        self.get(obligation_id)?
+            .ok_or_else(|| StoreError::NotFound(obligation_id.to_owned()))?;
+        let scope = format!("operator_topic:{obligation_id}");
+        let limit = crate::page_limit(requested_limit)?;
+        let current = crate::pagination::watermark(&self.connection)?;
+        let (watermark, after, upper, projection_at) = if let Some(cursor) = cursor {
+            let state = crate::pagination::decode_cursor_exact::<TopicCursorKey>(
+                cursor,
+                &scope,
+                requested_watermark,
+                current,
+            )?;
+            if state.after.captured_at != state.upper.captured_at {
+                return Err(StoreError::Invalid(
+                    "invalid page cursor: topic time is inconsistent".to_owned(),
+                ));
+            }
+            let projection_at = state.after.captured_at;
+            (state.watermark, state.after, state.upper, projection_at)
+        } else {
+            let upper = self
+                .topic_candidate_upper(obligation_id, captured_at)?
+                .unwrap_or_else(|| topic_cursor_min(captured_at));
+            (
+                crate::pagination::initial_watermark(current, requested_watermark)?,
+                topic_cursor_min(captured_at),
+                upper,
+                captured_at,
+            )
+        };
+        let page_query = format!(
+            "{TOPIC_CANDIDATES_SQL}
+             SELECT occurred_at, source_rank, source_sequence, stable_id,
+                    source_kind, source_identity, occurrence, event_type
+               FROM topic_items
+              WHERE (occurred_at, source_rank, source_sequence, stable_id)
+                    > (?2, ?3, ?4, ?5)
+                AND (occurred_at, source_rank, source_sequence, stable_id)
+                    <= (?6, ?7, ?8, ?9)
+              ORDER BY occurred_at, source_rank, source_sequence, stable_id
+              LIMIT ?10"
+        );
+        let mut statement = self.connection.prepare(&page_query)?;
+        let rows = statement.query_map(
+            params![
+                obligation_id,
+                after.occurred_at,
+                after.source_rank,
+                after.source_sequence,
+                after.stable_id,
+                upper.occurred_at,
+                upper.source_rank,
+                upper.source_sequence,
+                upper.stable_id,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+            |row| topic_candidate_from_row(row, projection_at),
+        )?;
+        let mut candidates = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = if candidates.len() > limit {
+            candidates.truncate(limit);
+            Some(crate::pagination::encode_cursor(
+                &scope,
+                watermark,
+                candidates.last().expect("non-empty page").key.clone(),
+                upper,
+            )?)
+        } else {
+            None
+        };
+        drop(statement);
+        let items = candidates
+            .into_iter()
+            .map(|candidate| self.topic_item_from_candidate(candidate))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ObligationTopic {
+            captured_at: projection_at,
+            obligation_id: obligation_id.to_owned(),
+            service: None,
+            next_cursor,
+            watermark,
+            items,
+        })
+    }
+
+    fn topic_candidate_upper(
+        &self,
+        obligation_id: &str,
+        captured_at: i64,
+    ) -> Result<Option<TopicCursorKey>, StoreError> {
+        let query = format!(
+            "{TOPIC_CANDIDATES_SQL}
+             SELECT occurred_at, source_rank, source_sequence, stable_id
+               FROM topic_items
+              ORDER BY occurred_at DESC, source_rank DESC,
+                       source_sequence DESC, stable_id DESC
+              LIMIT 1"
+        );
+        self.connection
+            .query_row(&query, [obligation_id], |row| {
+                Ok(TopicCursorKey {
+                    captured_at,
+                    occurred_at: row.get(0)?,
+                    source_rank: row.get(1)?,
+                    source_sequence: row.get(2)?,
+                    stable_id: row.get(3)?,
+                })
+            })
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    fn topic_item_from_candidate(
+        &self,
+        candidate: TopicCandidate,
+    ) -> Result<TopicItem, StoreError> {
+        let evidence = match candidate.source {
+            TopicSource::AuditEvent => self.topic_audit_evidence(&candidate.source_identity)?,
+            TopicSource::ApprovalDecision => {
+                self.topic_approval_evidence(&candidate.source_identity)?
+            }
+            TopicSource::Attempt => self.topic_attempt_evidence(&candidate.source_identity)?,
+            TopicSource::GardenerInspection => self
+                .gardener_inspection(&candidate.source_identity)?
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(topic_serialisation_error)?
+                .ok_or_else(|| missing_topic_source("inspection", &candidate.source_identity))?,
+            TopicSource::GardenerProposal => self
+                .gardener_proposal(&candidate.source_identity)?
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(topic_serialisation_error)?
+                .ok_or_else(|| missing_topic_source("proposal", &candidate.source_identity))?,
+            TopicSource::GardenerProposalInstance => self
+                .gardener_proposal_instance(&candidate.source_identity)?
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(topic_serialisation_error)?
+                .ok_or_else(|| {
+                    missing_topic_source("proposal instance", &candidate.source_identity)
+                })?,
+            TopicSource::GardenerObservation => {
+                self.topic_observation_evidence(&candidate.source_identity)?
+            }
+            TopicSource::GardenerEvent => {
+                self.topic_gardener_event_evidence(&candidate.source_identity)?
+            }
+            TopicSource::GardenerImplementationRun => self
+                .gardener_implementation_run(&candidate.source_identity)?
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(topic_serialisation_error)?
+                .ok_or_else(|| missing_topic_source("run", &candidate.source_identity))?,
+            TopicSource::GardenerRunEvent => {
+                self.topic_run_event_evidence(&candidate.source_identity)?
+            }
+        };
+        Ok(TopicItem {
+            occurred_at: candidate.key.occurred_at,
+            source: candidate.source,
+            source_sequence: candidate.key.source_sequence,
+            stable_id: candidate.key.stable_id,
+            occurrence: candidate.occurrence,
+            event_type: candidate.event_type,
+            evidence,
+        })
+    }
+
+    fn topic_audit_evidence(&self, identity: &str) -> Result<serde_json::Value, StoreError> {
+        let sequence = topic_numeric_identity("audit event", identity)?;
+        let event: AuditEvent = self
+            .connection
+            .query_row(
+                "SELECT sequence, obligation_id, occurrence, event_type, occurred_at,
+                        from_state, to_state, details_json
+                   FROM audit_events WHERE sequence = ?1",
+                [sequence],
+                audit_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("audit event", identity))?;
+        serde_json::to_value(event).map_err(topic_serialisation_error)
+    }
+
+    fn topic_approval_evidence(&self, identity: &str) -> Result<serde_json::Value, StoreError> {
+        let id = topic_numeric_identity("approval", identity)?;
+        let approval = self
+            .connection
+            .query_row(
+                "SELECT id, obligation_id, occurrence, decision, actor, note, decided_at
+                   FROM approvals WHERE id = ?1",
+                [id],
+                approval_evidence_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("approval", identity))?;
+        serde_json::to_value(approval).map_err(topic_serialisation_error)
+    }
+
+    fn topic_attempt_evidence(&self, identity: &str) -> Result<serde_json::Value, StoreError> {
+        let id = topic_numeric_identity("attempt", identity)?;
+        let attempt = self
+            .connection
+            .query_row(
+                "SELECT id, obligation_id, occurrence, attempt_number, lease_generation,
+                        lease_token, claimed_at, completed_at, outcome, retryable,
+                        failure_disposition, error, evidence
+                   FROM attempts WHERE id = ?1",
+                [id],
+                attempt_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("attempt", identity))?;
+        serde_json::to_value(attempt).map_err(topic_serialisation_error)
+    }
+
+    fn topic_observation_evidence(&self, identity: &str) -> Result<serde_json::Value, StoreError> {
+        let id = topic_numeric_identity("proposal observation", identity)?;
+        let observation: ProposalObservation = self
+            .connection
+            .query_row(
+                "SELECT id, proposal_fingerprint, inspection_id, source_commit, observed_at
+                   FROM gardener_proposal_observations WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok(ProposalObservation {
+                        id: row.get(0)?,
+                        proposal_fingerprint: row.get(1)?,
+                        inspection_id: row.get(2)?,
+                        source_commit: row.get(3)?,
+                        observed_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("proposal observation", identity))?;
+        serde_json::to_value(observation).map_err(topic_serialisation_error)
+    }
+
+    fn topic_gardener_event_evidence(
+        &self,
+        identity: &str,
+    ) -> Result<serde_json::Value, StoreError> {
+        let sequence = topic_numeric_identity("gardener event", identity)?;
+        let event: GardenerEvent = self
+            .connection
+            .query_row(
+                "SELECT sequence, repository, inspection_id, proposal_fingerprint,
+                        event_type, occurred_at, details_json
+                   FROM gardener_events WHERE sequence = ?1",
+                [sequence],
+                |row| {
+                    Ok(GardenerEvent {
+                        sequence: row.get(0)?,
+                        repository: row.get(1)?,
+                        inspection_id: row.get(2)?,
+                        proposal_fingerprint: row.get(3)?,
+                        event_type: row.get(4)?,
+                        occurred_at: row.get(5)?,
+                        details_json: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("gardener event", identity))?;
+        serde_json::to_value(event).map_err(topic_serialisation_error)
+    }
+
+    fn topic_run_event_evidence(&self, identity: &str) -> Result<serde_json::Value, StoreError> {
+        let sequence = topic_numeric_identity("gardener run event", identity)?;
+        let event: GardenerRunEvent = self
+            .connection
+            .query_row(
+                "SELECT sequence, run_id, event_type, occurred_at, details_json
+                   FROM gardener_run_events WHERE sequence = ?1",
+                [sequence],
+                |row| {
+                    Ok(GardenerRunEvent {
+                        sequence: row.get(0)?,
+                        run_id: row.get(1)?,
+                        event_type: row.get(2)?,
+                        occurred_at: row.get(3)?,
+                        details_json: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("gardener run event", identity))?;
+        serde_json::to_value(event).map_err(topic_serialisation_error)
+    }
+
+    #[cfg(test)]
+    fn operator_topic_legacy_for_test(
         &self,
         obligation_id: &str,
         captured_at: i64,
@@ -291,6 +930,9 @@ impl Store {
         Ok(ObligationTopic {
             captured_at,
             obligation_id: obligation_id.to_owned(),
+            service: None,
+            next_cursor: None,
+            watermark: crate::pagination::watermark(&self.connection)?,
             items,
         })
     }
@@ -428,7 +1070,7 @@ impl Store {
         if obligation.state != ObligationState::Attention {
             return Ok(None);
         }
-        let latest_approval = self.approval_evidence(&obligation.id)?.pop();
+        let latest_approval = self.latest_approval_evidence(&obligation.id)?;
         let cause = if let Some(approval) = latest_approval
             .filter(|item| item.occurrence == obligation.occurrence)
             .filter(|item| item.decision == ApprovalDecision::Rejected)
@@ -451,15 +1093,15 @@ impl Store {
                 }
                 _ => failure_cause(
                     obligation,
-                    &self.events(&obligation.id)?,
-                    self.attempts(&obligation.id)?.last(),
+                    self.latest_audit_event(&obligation.id)?.as_ref(),
+                    self.latest_attempt(&obligation.id)?.as_ref(),
                 ),
             }
         } else {
             failure_cause(
                 obligation,
-                &self.events(&obligation.id)?,
-                self.attempts(&obligation.id)?.last(),
+                self.latest_audit_event(&obligation.id)?.as_ref(),
+                self.latest_attempt(&obligation.id)?.as_ref(),
             )
         };
         Ok(Some(ExceptionReason::Attention {
@@ -473,35 +1115,31 @@ impl Store {
         &self,
         obligation_id: &str,
     ) -> Result<Option<GardenerImplementationRun>, StoreError> {
-        Ok(self
-            .gardener_implementation_runs_for_obligation(obligation_id)?
-            .into_iter()
-            .max_by_key(|run| (run.updated_at, run.id.clone())))
+        crate::store::latest_gardener_implementation_run(&self.connection, obligation_id)
     }
 
+    fn latest_approval_evidence(
+        &self,
+        obligation_id: &str,
+    ) -> Result<Option<ApprovalEvidence>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT id, obligation_id, occurrence, decision, actor, note, decided_at
+                 FROM approvals WHERE obligation_id = ?1 ORDER BY id DESC LIMIT 1",
+                [obligation_id],
+                approval_evidence_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    #[cfg(test)]
     fn approval_evidence(&self, obligation_id: &str) -> Result<Vec<ApprovalEvidence>, StoreError> {
         let mut statement = self.connection.prepare(
             "SELECT id, obligation_id, occurrence, decision, actor, note, decided_at
-             FROM approvals WHERE obligation_id = ?1 ORDER BY id",
+             FROM approvals WHERE obligation_id = ?1 ORDER BY id LIMIT 100",
         )?;
-        let rows = statement.query_map(params![obligation_id], |row| {
-            let decision = row.get::<_, String>(3)?.parse().map_err(|error: String| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    3,
-                    rusqlite::types::Type::Text,
-                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
-                )
-            })?;
-            Ok(ApprovalEvidence {
-                id: row.get(0)?,
-                obligation_id: row.get(1)?,
-                occurrence: row.get(2)?,
-                decision,
-                actor: row.get(4)?,
-                note: row.get(5)?,
-                decided_at: row.get(6)?,
-            })
-        })?;
+        let rows = statement.query_map(params![obligation_id], approval_evidence_from_row)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StoreError::from)
     }
@@ -521,11 +1159,10 @@ impl From<crate::FailureDisposition> for OperatorFailureDisposition {
 
 fn failure_cause(
     obligation: &Obligation,
-    events: &[crate::AuditEvent],
+    latest_event: Option<&crate::AuditEvent>,
     latest_attempt: Option<&crate::Attempt>,
 ) -> AttentionCause {
-    let event_type = events
-        .last()
+    let event_type = latest_event
         .map(|event| event.event_type.as_str())
         .unwrap_or("");
     if event_type.starts_with("recurrence_") && event_type.ends_with("_attention") {
@@ -648,6 +1285,7 @@ fn state_disabled_reason(obligation: &Obligation) -> DisabledReason {
     }
 }
 
+#[cfg(test)]
 fn operator_sort_key(item: &OperatorObligation) -> (u8, u8, i64, i64, String) {
     let exception = u8::from(item.exception.is_none());
     let state = match item.state {
@@ -668,6 +1306,139 @@ fn operator_sort_key(item: &OperatorObligation) -> (u8, u8, i64, i64, String) {
     )
 }
 
+fn operator_obligation_sort_key(
+    item: &Obligation,
+    captured_at: i64,
+) -> (i64, i64, i64, i64, String) {
+    let exception = if matches!(
+        item.state,
+        ObligationState::AwaitingApproval | ObligationState::Attention
+    ) || (item.state == ObligationState::Running
+        && item
+            .lease_expires_at
+            .is_some_and(|expiry| expiry <= captured_at))
+    {
+        0
+    } else {
+        1
+    };
+    let state = match item.state {
+        ObligationState::AwaitingApproval => 0,
+        ObligationState::Attention => 1,
+        ObligationState::Running => 2,
+        ObligationState::RetryScheduled => 3,
+        ObligationState::Pending => 4,
+        ObligationState::Completed => 5,
+        ObligationState::Cancelled => 6,
+    };
+    (
+        exception,
+        state,
+        item.next_wake_at.unwrap_or(i64::MAX),
+        item.updated_at,
+        item.id.clone(),
+    )
+}
+
+fn snapshot_cursor_key(item: &Obligation, captured_at: i64) -> SnapshotCursorKey {
+    let key = operator_obligation_sort_key(item, captured_at);
+    SnapshotCursorKey {
+        captured_at,
+        exception_rank: key.0,
+        state_rank: key.1,
+        wake_rank: key.2,
+        updated_at: key.3,
+        id: key.4,
+    }
+}
+
+fn topic_cursor_min(captured_at: i64) -> TopicCursorKey {
+    TopicCursorKey {
+        captured_at,
+        occurred_at: i64::MIN,
+        source_rank: i64::MIN,
+        source_sequence: String::new(),
+        stable_id: String::new(),
+    }
+}
+
+fn topic_candidate_from_row(
+    row: &rusqlite::Row<'_>,
+    captured_at: i64,
+) -> rusqlite::Result<TopicCandidate> {
+    let source_rank: i64 = row.get(1)?;
+    let source = match source_rank {
+        0 => TopicSource::AuditEvent,
+        1 => TopicSource::ApprovalDecision,
+        2 => TopicSource::Attempt,
+        3 => TopicSource::GardenerInspection,
+        4 => TopicSource::GardenerProposal,
+        5 => TopicSource::GardenerProposalInstance,
+        6 => TopicSource::GardenerObservation,
+        7 => TopicSource::GardenerEvent,
+        8 => TopicSource::GardenerImplementationRun,
+        9 => TopicSource::GardenerRunEvent,
+        value => {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                1,
+                rusqlite::types::Type::Integer,
+                format!("unknown topic source rank {value}").into(),
+            ));
+        }
+    };
+    let source_kind: String = row.get(4)?;
+    if source_kind != topic_source_kind(source) {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Text,
+            format!("topic source rank {source_rank} conflicts with {source_kind:?}").into(),
+        ));
+    }
+    Ok(TopicCandidate {
+        key: TopicCursorKey {
+            captured_at,
+            occurred_at: row.get(0)?,
+            source_rank,
+            source_sequence: row.get(2)?,
+            stable_id: row.get(3)?,
+        },
+        source,
+        source_identity: row.get(5)?,
+        occurrence: row.get(6)?,
+        event_type: row.get(7)?,
+    })
+}
+
+fn topic_source_kind(source: TopicSource) -> &'static str {
+    match source {
+        TopicSource::AuditEvent => "audit",
+        TopicSource::ApprovalDecision => "approval",
+        TopicSource::Attempt => "attempt",
+        TopicSource::GardenerInspection => "inspection",
+        TopicSource::GardenerProposal => "proposal",
+        TopicSource::GardenerProposalInstance => "instance",
+        TopicSource::GardenerObservation => "observation",
+        TopicSource::GardenerEvent => "gardener_event",
+        TopicSource::GardenerImplementationRun => "run",
+        TopicSource::GardenerRunEvent => "run_event",
+    }
+}
+
+fn topic_numeric_identity(kind: &str, identity: &str) -> Result<i64, StoreError> {
+    identity.parse::<i64>().map_err(|error| {
+        StoreError::Invalid(format!(
+            "invalid {kind} topic identity {identity:?}: {error}"
+        ))
+    })
+}
+
+fn missing_topic_source(kind: &str, identity: &str) -> StoreError {
+    StoreError::Invalid(format!(
+        "{kind} topic source {identity:?} disappeared inside a stable read snapshot"
+    ))
+}
+
+#[cfg(test)]
 fn topic_item(
     occurred_at: i64,
     source: TopicSource,
@@ -689,6 +1460,10 @@ fn topic_item(
     })
 }
 
+fn topic_serialisation_error(error: serde_json::Error) -> StoreError {
+    StoreError::Invalid(format!("operator evidence failed: {error}"))
+}
+
 impl From<ObligationState> for OperatorObligationState {
     fn from(value: ObligationState) -> Self {
         match value {
@@ -705,6 +1480,8 @@ impl From<ObligationState> for OperatorObligationState {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::{
         Completion, GardenerCandidateQualification, InspectionResult, NewGardenerImplementationRun,
@@ -1199,6 +1976,11 @@ mod tests {
         let topic = store
             .operator_topic(&proposal.implementation_obligation_id, 101)
             .unwrap();
+        let legacy_items = store
+            .operator_topic_legacy_for_test(&proposal.implementation_obligation_id, 101)
+            .unwrap()
+            .items;
+        assert_eq!(topic.items, legacy_items);
         assert_eq!(topic.captured_at, 101);
         assert!(topic.items.windows(2).all(|items| {
             (
@@ -1372,6 +2154,75 @@ mod tests {
         let completed_topic = store
             .operator_topic(&proposal.implementation_obligation_id, 114)
             .unwrap();
+        for source in [
+            TopicSource::AuditEvent,
+            TopicSource::ApprovalDecision,
+            TopicSource::Attempt,
+            TopicSource::GardenerInspection,
+            TopicSource::GardenerProposal,
+            TopicSource::GardenerProposalInstance,
+            TopicSource::GardenerObservation,
+            TopicSource::GardenerEvent,
+            TopicSource::GardenerImplementationRun,
+            TopicSource::GardenerRunEvent,
+        ] {
+            assert!(
+                completed_topic
+                    .items
+                    .iter()
+                    .any(|item| item.source == source),
+                "missing production topic source {source:?}"
+            );
+        }
+        for item in &completed_topic.items {
+            let typed_source_sequence = match item.source {
+                TopicSource::AuditEvent | TopicSource::GardenerEvent => item.evidence["sequence"]
+                    .as_i64()
+                    .map(|value| value.to_string()),
+                TopicSource::ApprovalDecision
+                | TopicSource::Attempt
+                | TopicSource::GardenerObservation => {
+                    item.evidence["id"].as_i64().map(|value| value.to_string())
+                }
+                TopicSource::GardenerRunEvent => item.evidence["sequence"]
+                    .as_i64()
+                    .map(|value| value.to_string()),
+                TopicSource::GardenerInspection | TopicSource::GardenerImplementationRun => {
+                    item.evidence["id"].as_str().map(str::to_owned)
+                }
+                TopicSource::GardenerProposal => {
+                    item.evidence["fingerprint"].as_str().map(str::to_owned)
+                }
+                TopicSource::GardenerProposalInstance => Some(format!(
+                    "{}:{}",
+                    item.evidence["generation"].as_u64().unwrap(),
+                    item.evidence["id"].as_str().unwrap()
+                )),
+            }
+            .expect("complete typed source evidence");
+            assert_eq!(item.source_sequence, typed_source_sequence);
+        }
+        let mut paged_items = Vec::new();
+        let mut cursor = None;
+        let mut watermark = None;
+        loop {
+            let page = store
+                .operator_topic_page(
+                    &proposal.implementation_obligation_id,
+                    114,
+                    cursor.as_deref(),
+                    watermark,
+                    Some(3),
+                )
+                .unwrap();
+            watermark.get_or_insert(page.watermark);
+            paged_items.extend(page.items);
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(paged_items, completed_topic.items);
         let run = completed_topic
             .items
             .iter()
@@ -1562,5 +2413,95 @@ mod tests {
             .unwrap();
         assert_eq!((before, during), (0, 0));
         assert_eq!(reader.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn operator_snapshot_pages_keep_semantic_order_without_duplicates() {
+        let mut store = Store::open_in_memory().unwrap();
+        for index in 0..205 {
+            store
+                .create(
+                    new(&format!("snapshot-{index:03}"), index % 7 == 0),
+                    100 + index,
+                )
+                .unwrap();
+        }
+        let mut cursor = None;
+        let mut watermark = None;
+        let mut items = Vec::new();
+        loop {
+            let page = store
+                .operator_snapshot_page(1_000, cursor.as_deref(), watermark, Some(31))
+                .unwrap();
+            watermark.get_or_insert(page.watermark);
+            items.extend(page.obligations);
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(items.len(), 205);
+        assert!(
+            items
+                .windows(2)
+                .all(|pair| operator_sort_key(&pair[0]) <= operator_sort_key(&pair[1]))
+        );
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| &item.id)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            items.len()
+        );
+    }
+
+    #[test]
+    fn selected_topic_pages_over_large_scoped_history_without_global_materialisation() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.create(new("selected", false), 100).unwrap();
+        store.create(new("unrelated", false), 100).unwrap();
+        for index in 0..5_001_i64 {
+            for obligation_id in ["selected", "unrelated"] {
+                store
+                    .connection
+                    .execute(
+                        "INSERT INTO audit_events(
+                        obligation_id, occurrence, event_type, occurred_at,
+                        from_state, to_state, details_json
+                     ) VALUES (?1, 1, 'fixture', ?2, 'pending', 'pending', '{}')",
+                        params![obligation_id, 101 + index],
+                    )
+                    .unwrap();
+            }
+        }
+
+        let mut cursor = None;
+        let mut watermark = None;
+        let mut revisions = Vec::new();
+        loop {
+            let page = store
+                .operator_topic_page("selected", 10_000, cursor.as_deref(), watermark, Some(113))
+                .unwrap();
+            assert!(page.service.is_none());
+            watermark.get_or_insert(page.watermark);
+            revisions.extend(page.items.iter().map(|item| {
+                item.stable_id
+                    .strip_prefix("audit:")
+                    .unwrap()
+                    .parse::<i64>()
+                    .unwrap()
+            }));
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(revisions.len(), 5_002);
+        assert!(revisions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(
+            revisions.iter().collect::<BTreeSet<_>>().len(),
+            revisions.len()
+        );
     }
 }

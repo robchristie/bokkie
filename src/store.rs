@@ -47,6 +47,8 @@ pub enum StoreError {
     Invalid(String),
     #[error("transition conflict: {0}")]
     Conflict(String),
+    #[error("projection gap: {0}")]
+    ProjectionGap(String),
     #[error("claim is stale or no longer owns the lease")]
     Fenced,
 }
@@ -99,6 +101,13 @@ pub struct Store {
 }
 
 impl Store {
+    /// Minimal bounded health probe; it never materialises domain rows.
+    pub fn check_readable(&self) -> Result<(), StoreError> {
+        self.connection
+            .query_row("SELECT 1 FROM schema_migrations LIMIT 1", [], |_| Ok(()))
+            .map_err(StoreError::from)
+    }
+
     /// Open a database and bring its schema to the current immutable manifest.
     /// Service startup should call this exactly once before starting consumers.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
@@ -190,29 +199,80 @@ impl Store {
     pub fn list(&self) -> Result<Vec<Obligation>, StoreError> {
         let mut statement = self
             .connection
-            .prepare("SELECT * FROM obligations ORDER BY created_at, id")?;
-        let rows = statement.query_map([], obligation_from_row)?;
-        rows.collect::<Result<Vec<_>, _>>()
+            .prepare("SELECT * FROM obligations ORDER BY created_at, id LIMIT 100")?;
+        statement
+            .query_map([], obligation_from_row)?
+            .collect::<Result<Vec<_>, _>>()
             .map_err(StoreError::from)
     }
 
-    /// Read each obligation together with the immutable audit sequence that
-    /// represents its current state. The correlated value and obligation row
-    /// come from one SQLite statement snapshot, so capabilities cannot combine
-    /// an old state with a newer revision (or the reverse).
-    pub(crate) fn list_with_state_revisions(&self) -> Result<Vec<(Obligation, i64)>, StoreError> {
-        let mut statement = self.connection.prepare(
-            "SELECT o.*,
-                    (SELECT sequence FROM audit_events a
-                     WHERE a.obligation_id = o.id
-                     ORDER BY sequence DESC LIMIT 1) AS state_revision
-             FROM obligations o ORDER BY o.created_at, o.id",
+    pub fn obligation_page(
+        &self,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<crate::ReadPage<Obligation>, StoreError> {
+        let scope = "obligations";
+        let limit = crate::page_limit(requested_limit)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let current = crate::pagination::watermark(&transaction)?;
+        let (watermark, after, upper) = if let Some(cursor) = cursor {
+            let state = crate::pagination::decode_cursor_exact::<(i64, String)>(
+                cursor,
+                scope,
+                requested_watermark,
+                current,
+            )?;
+            (state.watermark, state.after, state.upper)
+        } else {
+            let watermark = crate::pagination::initial_watermark(current, requested_watermark)?;
+            let upper = transaction
+                .query_row(
+                    "SELECT created_at, id FROM obligations ORDER BY created_at DESC, id DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .unwrap_or((i64::MIN, String::new()));
+            (watermark, (i64::MIN, String::new()), upper)
+        };
+        let mut statement = transaction.prepare(
+            "SELECT * FROM obligations
+             WHERE (created_at, id) > (?1, ?2) AND (created_at, id) <= (?3, ?4)
+             ORDER BY created_at, id LIMIT ?5",
         )?;
-        let rows = statement.query_map([], |row| {
-            Ok((obligation_from_row(row)?, row.get("state_revision")?))
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let rows = statement.query_map(
+            params![
+                after.0,
+                after.1,
+                upper.0,
+                upper.1,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+            obligation_from_row,
+        )?;
+        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = if items.len() > limit {
+            items.truncate(limit);
+            Some(crate::pagination::encode_cursor(
+                scope,
+                watermark,
+                (
+                    items.last().expect("non-empty page").created_at,
+                    items.last().expect("non-empty page").id.clone(),
+                ),
+                upper,
+            )?)
+        } else {
+            None
+        };
+        drop(statement);
+        transaction.commit()?;
+        Ok(crate::ReadPage {
+            items,
+            next_cursor,
+            watermark,
+        })
     }
 
     pub fn decide_approval(
@@ -531,15 +591,57 @@ impl Store {
     }
 
     pub fn gardener_inspections(&self) -> Result<Vec<GardenerInspection>, StoreError> {
-        let mut statement = self.connection.prepare(
+        Ok(self.gardener_inspection_page(None, None, None)?.items)
+    }
+
+    pub fn gardener_inspection_page(
+        &self,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<crate::ReadPage<GardenerInspection>, StoreError> {
+        let scope = "gardener_inspections";
+        let limit = crate::page_limit(requested_limit)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let current = crate::pagination::watermark(&transaction)?;
+        let (watermark, after, upper) = page_time_string_window(
+            &transaction,
+            scope,
+            cursor,
+            requested_watermark,
+            current,
+            "SELECT started_at, id FROM gardener_inspections ORDER BY started_at DESC, id DESC LIMIT 1",
+        )?;
+        let mut statement = transaction.prepare(
             "SELECT id, repository, obligation_id, occurrence, lease_generation,
                     source_commit, worktree_path, prompt_digest, codex_thread_id,
                     codex_turn_id, result_json, started_at, completed_at
-             FROM gardener_inspections ORDER BY started_at, id",
+             FROM gardener_inspections
+             WHERE (started_at, id) > (?1, ?2) AND (started_at, id) <= (?3, ?4)
+             ORDER BY started_at, id LIMIT ?5",
         )?;
-        let rows = statement.query_map([], gardener_inspection_from_row)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let rows = statement.query_map(
+            params![
+                after.0,
+                after.1,
+                upper.0,
+                upper.1,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+            gardener_inspection_from_row,
+        )?;
+        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor =
+            finish_time_string_page(scope, watermark, &upper, limit, &mut items, |v| {
+                (v.started_at, v.id.clone())
+            })?;
+        drop(statement);
+        transaction.commit()?;
+        Ok(crate::ReadPage {
+            items,
+            next_cursor,
+            watermark,
+        })
     }
 
     pub fn record_inspection_codex_thread(
@@ -773,7 +875,28 @@ impl Store {
     }
 
     pub fn gardener_proposals(&self) -> Result<Vec<Proposal>, StoreError> {
-        let mut statement = self.connection.prepare(
+        Ok(self.gardener_proposal_page(None, None, None)?.items)
+    }
+
+    pub fn gardener_proposal_page(
+        &self,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<crate::ReadPage<Proposal>, StoreError> {
+        let scope = "gardener_proposals";
+        let limit = crate::page_limit(requested_limit)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let current = crate::pagination::watermark(&transaction)?;
+        let (watermark, after, upper) = page_time_string_window(
+            &transaction,
+            scope,
+            cursor,
+            requested_watermark,
+            current,
+            "SELECT created_at, fingerprint FROM gardener_proposals ORDER BY created_at DESC, fingerprint DESC LIMIT 1",
+        )?;
+        let mut statement = transaction.prepare(
             "SELECT p.fingerprint, p.repository, p.prompt, pi.implementation_obligation_id,
                     o.state,
                     (SELECT d.decision FROM gardener_proposal_instance_decisions d
@@ -788,11 +911,32 @@ impl Store {
                                    FROM gardener_proposal_instances current
                                    WHERE current.proposal_fingerprint = p.fingerprint)
              JOIN obligations o ON o.id = pi.implementation_obligation_id
-             ORDER BY p.created_at, p.fingerprint",
+             WHERE (p.created_at, p.fingerprint) > (?1, ?2)
+               AND (p.created_at, p.fingerprint) <= (?3, ?4)
+             ORDER BY p.created_at, p.fingerprint LIMIT ?5",
         )?;
-        let rows = statement.query_map([], proposal_from_row)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let rows = statement.query_map(
+            params![
+                after.0,
+                after.1,
+                upper.0,
+                upper.1,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+            proposal_from_row,
+        )?;
+        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor =
+            finish_time_string_page(scope, watermark, &upper, limit, &mut items, |v| {
+                (v.created_at, v.fingerprint.clone())
+            })?;
+        drop(statement);
+        transaction.commit()?;
+        Ok(crate::ReadPage {
+            items,
+            next_cursor,
+            watermark,
+        })
     }
 
     pub fn gardener_obligation_kind(
@@ -824,22 +968,63 @@ impl Store {
         &self,
         fingerprint: &str,
     ) -> Result<Vec<ProposalObservation>, StoreError> {
-        let mut statement = self.connection.prepare(
+        Ok(self
+            .proposal_observation_page(fingerprint, None, None, None)?
+            .items)
+    }
+
+    pub fn proposal_observation_page(
+        &self,
+        fingerprint: &str,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<crate::ReadPage<ProposalObservation>, StoreError> {
+        let scope = format!("proposal_observations:{fingerprint}");
+        let limit = crate::page_limit(requested_limit)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let current = crate::pagination::watermark(&transaction)?;
+        let (watermark, after, upper) = page_i64_window(
+            &transaction,
+            &scope,
+            cursor,
+            requested_watermark,
+            current,
+            "SELECT coalesce(max(id), 0) FROM gardener_proposal_observations WHERE proposal_fingerprint = ?1",
+            fingerprint,
+        )?;
+        let mut statement = transaction.prepare(
             "SELECT id, proposal_fingerprint, inspection_id, source_commit, observed_at
              FROM gardener_proposal_observations
-             WHERE proposal_fingerprint = ?1 ORDER BY id",
+             WHERE proposal_fingerprint = ?1 AND id > ?2 AND id <= ?3
+             ORDER BY id LIMIT ?4",
         )?;
-        let rows = statement.query_map([fingerprint], |row| {
-            Ok(ProposalObservation {
-                id: row.get(0)?,
-                proposal_fingerprint: row.get(1)?,
-                inspection_id: row.get(2)?,
-                source_commit: row.get(3)?,
-                observed_at: row.get(4)?,
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let rows = statement.query_map(
+            params![
+                fingerprint,
+                after,
+                upper,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+            |row| {
+                Ok(ProposalObservation {
+                    id: row.get(0)?,
+                    proposal_fingerprint: row.get(1)?,
+                    inspection_id: row.get(2)?,
+                    source_commit: row.get(3)?,
+                    observed_at: row.get(4)?,
+                })
+            },
+        )?;
+        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = finish_i64_page(&scope, watermark, upper, limit, &mut items, |v| v.id)?;
+        drop(statement);
+        transaction.commit()?;
+        Ok(crate::ReadPage {
+            items,
+            next_cursor,
+            watermark,
+        })
     }
 
     /// Observations durably mapped to one exact source-bound proposal instance.
@@ -847,26 +1032,66 @@ impl Store {
         &self,
         instance_id: &str,
     ) -> Result<Vec<ProposalObservation>, StoreError> {
-        let mut statement = self.connection.prepare(
+        Ok(self
+            .proposal_instance_observation_page(instance_id, None, None, None)?
+            .items)
+    }
+
+    pub fn proposal_instance_observation_page(
+        &self,
+        instance_id: &str,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<crate::ReadPage<ProposalObservation>, StoreError> {
+        let scope = format!("proposal_instance_observations:{instance_id}");
+        let limit = crate::page_limit(requested_limit)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let current = crate::pagination::watermark(&transaction)?;
+        let (watermark, after, upper) = page_i64_window(
+            &transaction,
+            &scope,
+            cursor,
+            requested_watermark,
+            current,
+            "SELECT coalesce(max(po.id), 0) FROM gardener_proposal_observations po JOIN gardener_proposal_observation_instances oi ON oi.observation_id = po.id WHERE oi.instance_id = ?1",
+            instance_id,
+        )?;
+        let mut statement = transaction.prepare(
             "SELECT po.id, po.proposal_fingerprint, po.inspection_id,
                     po.source_commit, po.observed_at
              FROM gardener_proposal_observations po
              JOIN gardener_proposal_observation_instances oi
                ON oi.observation_id = po.id
-             WHERE oi.instance_id = ?1
-             ORDER BY po.id",
+             WHERE oi.instance_id = ?1 AND po.id > ?2 AND po.id <= ?3
+             ORDER BY po.id LIMIT ?4",
         )?;
-        let rows = statement.query_map([instance_id], |row| {
-            Ok(ProposalObservation {
-                id: row.get(0)?,
-                proposal_fingerprint: row.get(1)?,
-                inspection_id: row.get(2)?,
-                source_commit: row.get(3)?,
-                observed_at: row.get(4)?,
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let rows = statement.query_map(
+            params![
+                instance_id,
+                after,
+                upper,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+            |row| {
+                Ok(ProposalObservation {
+                    id: row.get(0)?,
+                    proposal_fingerprint: row.get(1)?,
+                    inspection_id: row.get(2)?,
+                    source_commit: row.get(3)?,
+                    observed_at: row.get(4)?,
+                })
+            },
+        )?;
+        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = finish_i64_page(&scope, watermark, upper, limit, &mut items, |v| v.id)?;
+        drop(statement);
+        transaction.commit()?;
+        Ok(crate::ReadPage {
+            items,
+            next_cursor,
+            watermark,
+        })
     }
 
     pub fn gardener_proposal_instance(
@@ -880,29 +1105,162 @@ impl Store {
         &self,
         fingerprint: &str,
     ) -> Result<Vec<ProposalInstance>, StoreError> {
-        let mut statement = self.connection.prepare(PROPOSAL_INSTANCE_SELECT)?;
-        let rows = statement.query_map([fingerprint], proposal_instance_from_row)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        Ok(self
+            .gardener_proposal_instance_page(Some(fingerprint), None, None, None)?
+            .items)
     }
 
     /// Read every proposal instance from one SQLite snapshot. The HTTP list
     /// projection must not combine a proposal catalogue from one database
     /// state with per-proposal generations from another.
     pub fn gardener_proposal_instances_all(&self) -> Result<Vec<ProposalInstance>, StoreError> {
-        self.gardener_proposal_instances_all_with_hook(|| Ok(()))
+        Ok(self
+            .gardener_proposal_instance_page(None, None, None, None)?
+            .items)
     }
 
+    pub fn gardener_proposal_instance_page(
+        &self,
+        fingerprint: Option<&str>,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<crate::ReadPage<ProposalInstance>, StoreError> {
+        let scope = fingerprint.map_or_else(
+            || "gardener_proposal_instances".to_owned(),
+            |value| format!("gardener_proposal_instances:{value}"),
+        );
+        let limit = crate::page_limit(requested_limit)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let current = crate::pagination::watermark(&transaction)?;
+        let (watermark, after, upper) = if let Some(cursor) = cursor {
+            let state = crate::pagination::decode_cursor_exact::<(i64, String)>(
+                cursor,
+                &scope,
+                requested_watermark,
+                current,
+            )?;
+            (state.watermark, state.after, state.upper)
+        } else if let Some(fingerprint) = fingerprint {
+            let upper = transaction
+                .query_row(
+                    "SELECT generation, id FROM gardener_proposal_instances
+                     WHERE proposal_fingerprint = ?1
+                     ORDER BY generation DESC, id DESC LIMIT 1",
+                    [fingerprint],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .unwrap_or((i64::MIN, String::new()));
+            (
+                crate::pagination::initial_watermark(current, requested_watermark)?,
+                (i64::MIN, String::new()),
+                upper,
+            )
+        } else {
+            let upper = transaction
+                .query_row(
+                    "SELECT created_at, id FROM gardener_proposal_instances
+                     ORDER BY created_at DESC, id DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .unwrap_or((i64::MIN, String::new()));
+            (
+                crate::pagination::initial_watermark(current, requested_watermark)?,
+                (i64::MIN, String::new()),
+                upper,
+            )
+        };
+        let sql = format!(
+            "{} {} ORDER BY {} LIMIT ?{}",
+            PROPOSAL_INSTANCE_SELECT_PREFIX,
+            if fingerprint.is_some() {
+                "WHERE pi.proposal_fingerprint = ?1
+                   AND (pi.generation, pi.id) > (?2, ?3)
+                   AND (pi.generation, pi.id) <= (?4, ?5)"
+            } else {
+                "WHERE (pi.created_at, pi.id) > (?1, ?2)
+                   AND (pi.created_at, pi.id) <= (?3, ?4)"
+            },
+            if fingerprint.is_some() {
+                "pi.generation, pi.id"
+            } else {
+                "pi.created_at, pi.id"
+            },
+            if fingerprint.is_some() { 6 } else { 5 },
+        );
+        let mut statement = transaction.prepare(&sql)?;
+        let mut items = if let Some(fingerprint) = fingerprint {
+            statement
+                .query_map(
+                    params![
+                        fingerprint,
+                        after.0,
+                        after.1,
+                        upper.0,
+                        upper.1,
+                        i64::try_from(limit + 1).expect("bounded limit")
+                    ],
+                    proposal_instance_from_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            statement
+                .query_map(
+                    params![
+                        after.0,
+                        after.1,
+                        upper.0,
+                        upper.1,
+                        i64::try_from(limit + 1).expect("bounded limit")
+                    ],
+                    proposal_instance_from_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let next_cursor =
+            finish_time_string_page(&scope, watermark, &upper, limit, &mut items, |item| {
+                if fingerprint.is_some() {
+                    (i64::from(item.generation), item.id.clone())
+                } else {
+                    (item.created_at, item.id.clone())
+                }
+            })?;
+        drop(statement);
+        transaction.commit()?;
+        Ok(crate::ReadPage {
+            items,
+            next_cursor,
+            watermark,
+        })
+    }
+
+    #[cfg(test)]
     fn gardener_proposal_instances_all_with_hook(
         &self,
         between_catalogue_and_instances: impl FnOnce() -> Result<(), StoreError>,
     ) -> Result<Vec<ProposalInstance>, StoreError> {
         self.with_deferred_read(|store| {
-            let proposals = store.gardener_proposals()?;
+            let mut proposal_statement = store.connection.prepare(
+                "SELECT fingerprint FROM gardener_proposals ORDER BY created_at, fingerprint LIMIT 500",
+            )?;
+            let proposals = proposal_statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
             between_catalogue_and_instances()?;
             let mut instances = Vec::new();
-            for proposal in proposals {
-                instances.extend(store.gardener_proposal_instances(&proposal.fingerprint)?);
+            for fingerprint in proposals {
+                let mut statement = store.connection.prepare(&format!(
+                    "{PROPOSAL_INSTANCE_SELECT_PREFIX}
+                     WHERE pi.proposal_fingerprint = ?1 ORDER BY pi.generation LIMIT 500"
+                ))?;
+                instances.extend(
+                    statement
+                        .query_map([fingerprint], proposal_instance_from_row)?
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
             }
             Ok(instances)
         })
@@ -916,25 +1274,18 @@ impl Store {
         note: Option<&str>,
         now: i64,
     ) -> Result<Proposal, StoreError> {
-        let instances = self.gardener_proposal_instances(fingerprint)?;
-        if instances.len() != 1 {
+        let instance = sole_proposal_instance(&self.connection, fingerprint)?;
+        let Some(instance) = instance else {
             return Err(StoreError::Conflict(
                 "legacy gardener decision is ambiguous; select an exact proposal instance"
                     .to_owned(),
             ));
-        }
-        self.decide_gardener_proposal_instance_inner(
-            &instances[0].id,
-            decision,
-            actor,
-            note,
-            None,
-            now,
-        )
-        .and_then(|_| {
-            self.gardener_proposal(fingerprint)?
-                .ok_or_else(|| StoreError::NotFound(fingerprint.to_owned()))
-        })
+        };
+        self.decide_gardener_proposal_instance_inner(&instance.id, decision, actor, note, None, now)
+            .and_then(|_| {
+                self.gardener_proposal(fingerprint)?
+                    .ok_or_else(|| StoreError::NotFound(fingerprint.to_owned()))
+            })
     }
 
     pub fn decide_gardener_proposal_if_current(
@@ -946,15 +1297,15 @@ impl Store {
         precondition: &ActionPrecondition,
         now: i64,
     ) -> Result<Proposal, StoreError> {
-        let instances = self.gardener_proposal_instances(fingerprint)?;
-        if instances.len() != 1 {
+        let instance = sole_proposal_instance(&self.connection, fingerprint)?;
+        let Some(instance) = instance else {
             return Err(StoreError::Conflict(
                 "legacy gardener decision is ambiguous; select an exact proposal instance"
                     .to_owned(),
             ));
-        }
+        };
         self.decide_gardener_proposal_instance_inner(
-            &instances[0].id,
+            &instance.id,
             decision,
             actor,
             note,
@@ -1094,24 +1445,61 @@ impl Store {
     }
 
     pub fn gardener_events(&self) -> Result<Vec<GardenerEvent>, StoreError> {
-        let mut statement = self.connection.prepare(
+        Ok(self.gardener_event_page(None, None, None)?.items)
+    }
+
+    pub fn gardener_event_page(
+        &self,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<crate::ReadPage<GardenerEvent>, StoreError> {
+        let scope = "gardener_events";
+        let limit = crate::page_limit(requested_limit)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let current = crate::pagination::watermark(&transaction)?;
+        let (watermark, after, upper) = page_i64_window_no_param(
+            &transaction,
+            scope,
+            cursor,
+            requested_watermark,
+            current,
+            "SELECT coalesce(max(sequence), 0) FROM gardener_events",
+        )?;
+        let mut statement = transaction.prepare(
             "SELECT sequence, repository, inspection_id, proposal_fingerprint,
                     event_type, occurred_at, details_json
-             FROM gardener_events ORDER BY sequence",
+             FROM gardener_events WHERE sequence > ?1 AND sequence <= ?2
+             ORDER BY sequence LIMIT ?3",
         )?;
-        let rows = statement.query_map([], |row| {
-            Ok(GardenerEvent {
-                sequence: row.get(0)?,
-                repository: row.get(1)?,
-                inspection_id: row.get(2)?,
-                proposal_fingerprint: row.get(3)?,
-                event_type: row.get(4)?,
-                occurred_at: row.get(5)?,
-                details_json: row.get(6)?,
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let rows = statement.query_map(
+            params![
+                after,
+                upper,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+            |row| {
+                Ok(GardenerEvent {
+                    sequence: row.get(0)?,
+                    repository: row.get(1)?,
+                    inspection_id: row.get(2)?,
+                    proposal_fingerprint: row.get(3)?,
+                    event_type: row.get(4)?,
+                    occurred_at: row.get(5)?,
+                    details_json: row.get(6)?,
+                })
+            },
+        )?;
+        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor =
+            finish_i64_page(scope, watermark, upper, limit, &mut items, |v| v.sequence)?;
+        drop(statement);
+        transaction.commit()?;
+        Ok(crate::ReadPage {
+            items,
+            next_cursor,
+            watermark,
+        })
     }
 
     /// Persist the local intent for one approved implementation claim before
@@ -1262,8 +1650,31 @@ impl Store {
     pub fn gardener_implementation_runs(
         &self,
     ) -> Result<Vec<GardenerImplementationRun>, StoreError> {
-        query_gardener_implementation_runs(
-            &self.connection,
+        Ok(self
+            .gardener_implementation_run_page(None, None, None)?
+            .items)
+    }
+
+    pub fn gardener_implementation_run_page(
+        &self,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<crate::ReadPage<GardenerImplementationRun>, StoreError> {
+        let scope = "gardener_runs";
+        let limit = crate::page_limit(requested_limit)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let current = crate::pagination::watermark(&transaction)?;
+        let (watermark, after, upper) = page_time_string_window(
+            &transaction,
+            scope,
+            cursor,
+            requested_watermark,
+            current,
+            "SELECT created_at, id FROM gardener_implementation_runs ORDER BY created_at DESC, id DESC LIMIT 1",
+        )?;
+        let items = query_gardener_implementation_runs(
+            &transaction,
             "SELECT r.*,
                     ri.instance_id AS exact_proposal_instance_id,
                     ri.generation AS exact_proposal_generation,
@@ -1276,9 +1687,27 @@ impl Store {
              JOIN gardener_implementation_run_instances ri ON ri.run_id = r.id
              JOIN gardener_proposal_instances pi ON pi.id = ri.instance_id
              LEFT JOIN gardener_pull_request_ready_observations ready ON ready.run_id = r.id
-             ORDER BY r.created_at, r.id",
-            [],
-        )
+             WHERE (r.created_at, r.id) > (?1, ?2) AND (r.created_at, r.id) <= (?3, ?4)
+             ORDER BY r.created_at, r.id LIMIT ?5",
+            params![
+                after.0,
+                after.1,
+                upper.0,
+                upper.1,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+        )?;
+        let mut items = items;
+        let next_cursor =
+            finish_time_string_page(scope, watermark, &upper, limit, &mut items, |v| {
+                (v.created_at, v.id.clone())
+            })?;
+        transaction.commit()?;
+        Ok(crate::ReadPage {
+            items,
+            next_cursor,
+            watermark,
+        })
     }
 
     pub fn gardener_implementation_runs_for_obligation(
@@ -1299,7 +1728,7 @@ impl Store {
              JOIN gardener_implementation_run_instances ri ON ri.run_id = r.id
              JOIN gardener_proposal_instances pi ON pi.id = ri.instance_id
              LEFT JOIN gardener_pull_request_ready_observations ready ON ready.run_id = r.id
-             WHERE r.obligation_id = ?1 ORDER BY r.lease_generation, r.id",
+             WHERE r.obligation_id = ?1 ORDER BY r.lease_generation, r.id LIMIT 100",
             [obligation_id],
         )
     }
@@ -1455,21 +1884,63 @@ impl Store {
     }
 
     pub fn gardener_run_events(&self, run_id: &str) -> Result<Vec<GardenerRunEvent>, StoreError> {
-        let mut statement = self.connection.prepare(
-            "SELECT sequence, run_id, event_type, occurred_at, details_json
-             FROM gardener_run_events WHERE run_id = ?1 ORDER BY sequence",
+        Ok(self
+            .gardener_run_event_page(run_id, None, None, None)?
+            .items)
+    }
+
+    pub fn gardener_run_event_page(
+        &self,
+        run_id: &str,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<crate::ReadPage<GardenerRunEvent>, StoreError> {
+        let scope = format!("gardener_run_events:{run_id}");
+        let limit = crate::page_limit(requested_limit)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let current = crate::pagination::watermark(&transaction)?;
+        let (watermark, after, upper) = page_i64_window(
+            &transaction,
+            &scope,
+            cursor,
+            requested_watermark,
+            current,
+            "SELECT coalesce(max(sequence), 0) FROM gardener_run_events WHERE run_id = ?1",
+            run_id,
         )?;
-        let rows = statement.query_map([run_id], |row| {
-            Ok(GardenerRunEvent {
-                sequence: row.get(0)?,
-                run_id: row.get(1)?,
-                event_type: row.get(2)?,
-                occurred_at: row.get(3)?,
-                details_json: row.get(4)?,
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let mut statement = transaction.prepare(
+            "SELECT sequence, run_id, event_type, occurred_at, details_json
+             FROM gardener_run_events WHERE run_id = ?1 AND sequence > ?2 AND sequence <= ?3
+             ORDER BY sequence LIMIT ?4",
+        )?;
+        let rows = statement.query_map(
+            params![
+                run_id,
+                after,
+                upper,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+            |row| {
+                Ok(GardenerRunEvent {
+                    sequence: row.get(0)?,
+                    run_id: row.get(1)?,
+                    event_type: row.get(2)?,
+                    occurred_at: row.get(3)?,
+                    details_json: row.get(4)?,
+                })
+            },
+        )?;
+        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor =
+            finish_i64_page(&scope, watermark, upper, limit, &mut items, |v| v.sequence)?;
+        drop(statement);
+        transaction.commit()?;
+        Ok(crate::ReadPage {
+            items,
+            next_cursor,
+            watermark,
+        })
     }
 
     pub fn record_implementation_codex_thread(
@@ -2215,26 +2686,132 @@ impl Store {
     }
 
     pub fn attempts(&self, id: &str) -> Result<Vec<Attempt>, StoreError> {
-        let mut statement = self.connection.prepare(
-            "SELECT id, obligation_id, occurrence, attempt_number, lease_generation,
-                    lease_token, claimed_at, completed_at, outcome, retryable,
-                    failure_disposition, error, evidence
-             FROM attempts WHERE obligation_id = ?1 ORDER BY id",
-        )?;
-        let rows = statement.query_map([id], attempt_from_row)?;
-        rows.collect::<Result<Vec<_>, _>>()
+        Ok(self.attempt_page(id, None, None, None)?.items)
+    }
+
+    pub(crate) fn latest_attempt(&self, id: &str) -> Result<Option<Attempt>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT id, obligation_id, occurrence, attempt_number, lease_generation,
+                        lease_token, claimed_at, completed_at, outcome, retryable,
+                        failure_disposition, error, evidence
+                 FROM attempts WHERE obligation_id = ?1 ORDER BY id DESC LIMIT 1",
+                [id],
+                attempt_from_row,
+            )
+            .optional()
             .map_err(StoreError::from)
     }
 
+    pub fn attempt_page(
+        &self,
+        id: &str,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<crate::ReadPage<Attempt>, StoreError> {
+        let scope = format!("attempts:{id}");
+        let limit = crate::page_limit(requested_limit)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let current = crate::pagination::watermark(&transaction)?;
+        let (watermark, after, upper) = page_i64_window_exact(
+            &transaction,
+            &scope,
+            cursor,
+            requested_watermark,
+            current,
+            "SELECT coalesce(max(id), 0) FROM attempts WHERE obligation_id = ?1",
+            id,
+        )?;
+        let mut statement = transaction.prepare(
+            "SELECT id, obligation_id, occurrence, attempt_number, lease_generation,
+                    lease_token, claimed_at, completed_at, outcome, retryable,
+                    failure_disposition, error, evidence
+             FROM attempts WHERE obligation_id = ?1 AND id > ?2 AND id <= ?3
+             ORDER BY id LIMIT ?4",
+        )?;
+        let rows = statement.query_map(
+            params![
+                id,
+                after,
+                upper,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+            attempt_from_row,
+        )?;
+        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = finish_i64_page(&scope, watermark, upper, limit, &mut items, |v| v.id)?;
+        drop(statement);
+        transaction.commit()?;
+        Ok(crate::ReadPage {
+            items,
+            next_cursor,
+            watermark,
+        })
+    }
+
     pub fn events(&self, id: &str) -> Result<Vec<AuditEvent>, StoreError> {
-        let mut statement = self.connection.prepare(
+        Ok(self.audit_event_page(id, None, None, None)?.items)
+    }
+
+    pub(crate) fn latest_audit_event(&self, id: &str) -> Result<Option<AuditEvent>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT sequence, obligation_id, occurrence, event_type, occurred_at,
+                        from_state, to_state, details_json
+                 FROM audit_events WHERE obligation_id = ?1 ORDER BY sequence DESC LIMIT 1",
+                [id],
+                audit_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn audit_event_page(
+        &self,
+        id: &str,
+        cursor: Option<&str>,
+        requested_watermark: Option<i64>,
+        requested_limit: Option<usize>,
+    ) -> Result<crate::ReadPage<AuditEvent>, StoreError> {
+        let scope = format!("audit_events:{id}");
+        let limit = crate::page_limit(requested_limit)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let current = crate::pagination::watermark(&transaction)?;
+        let (watermark, after, upper) = page_i64_window(
+            &transaction,
+            &scope,
+            cursor,
+            requested_watermark,
+            current,
+            "SELECT coalesce(max(sequence), 0) FROM audit_events WHERE obligation_id = ?1",
+            id,
+        )?;
+        let mut statement = transaction.prepare(
             "SELECT sequence, obligation_id, occurrence, event_type, occurred_at,
                     from_state, to_state, details_json
-             FROM audit_events WHERE obligation_id = ?1 ORDER BY sequence",
+             FROM audit_events WHERE obligation_id = ?1 AND sequence > ?2 AND sequence <= ?3
+             ORDER BY sequence LIMIT ?4",
         )?;
-        let rows = statement.query_map([id], audit_from_row)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let rows = statement.query_map(
+            params![
+                id,
+                after,
+                upper,
+                i64::try_from(limit + 1).expect("bounded limit")
+            ],
+            audit_from_row,
+        )?;
+        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor =
+            finish_i64_page(&scope, watermark, upper, limit, &mut items, |v| v.sequence)?;
+        drop(statement);
+        transaction.commit()?;
+        Ok(crate::ReadPage {
+            items,
+            next_cursor,
+            watermark,
+        })
     }
 
     #[cfg(test)]
@@ -2250,6 +2827,156 @@ impl Store {
             .pragma_query_value(None, name, |row| row.get(0))
             .unwrap()
     }
+}
+
+type TimeStringKey = (i64, String);
+type TimeStringWindow = (i64, TimeStringKey, TimeStringKey);
+
+fn page_time_string_window(
+    connection: &Connection,
+    scope: &str,
+    cursor: Option<&str>,
+    requested_watermark: Option<i64>,
+    current_watermark: i64,
+    upper_sql: &str,
+) -> Result<TimeStringWindow, StoreError> {
+    if let Some(cursor) = cursor {
+        let state = crate::pagination::decode_cursor_exact::<(i64, String)>(
+            cursor,
+            scope,
+            requested_watermark,
+            current_watermark,
+        )?;
+        Ok((state.watermark, state.after, state.upper))
+    } else {
+        Ok((
+            crate::pagination::initial_watermark(current_watermark, requested_watermark)?,
+            (i64::MIN, String::new()),
+            connection
+                .query_row(upper_sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()?
+                .unwrap_or((i64::MIN, String::new())),
+        ))
+    }
+}
+
+fn page_i64_window(
+    connection: &Connection,
+    scope: &str,
+    cursor: Option<&str>,
+    requested_watermark: Option<i64>,
+    current_watermark: i64,
+    upper_sql: &str,
+    parameter: &str,
+) -> Result<(i64, i64, i64), StoreError> {
+    if let Some(cursor) = cursor {
+        let state = crate::pagination::decode_cursor::<i64>(
+            cursor,
+            scope,
+            requested_watermark,
+            current_watermark,
+        )?;
+        Ok((state.watermark, state.after, state.upper))
+    } else {
+        Ok((
+            crate::pagination::initial_watermark(current_watermark, requested_watermark)?,
+            0,
+            connection.query_row(upper_sql, [parameter], |row| row.get(0))?,
+        ))
+    }
+}
+
+fn page_i64_window_exact(
+    connection: &Connection,
+    scope: &str,
+    cursor: Option<&str>,
+    requested_watermark: Option<i64>,
+    current_watermark: i64,
+    upper_sql: &str,
+    parameter: &str,
+) -> Result<(i64, i64, i64), StoreError> {
+    if let Some(cursor) = cursor {
+        let state = crate::pagination::decode_cursor_exact::<i64>(
+            cursor,
+            scope,
+            requested_watermark,
+            current_watermark,
+        )?;
+        Ok((state.watermark, state.after, state.upper))
+    } else {
+        Ok((
+            crate::pagination::initial_watermark(current_watermark, requested_watermark)?,
+            0,
+            connection.query_row(upper_sql, [parameter], |row| row.get(0))?,
+        ))
+    }
+}
+
+fn page_i64_window_no_param(
+    connection: &Connection,
+    scope: &str,
+    cursor: Option<&str>,
+    requested_watermark: Option<i64>,
+    current_watermark: i64,
+    upper_sql: &str,
+) -> Result<(i64, i64, i64), StoreError> {
+    if let Some(cursor) = cursor {
+        let state = crate::pagination::decode_cursor::<i64>(
+            cursor,
+            scope,
+            requested_watermark,
+            current_watermark,
+        )?;
+        Ok((state.watermark, state.after, state.upper))
+    } else {
+        Ok((
+            crate::pagination::initial_watermark(current_watermark, requested_watermark)?,
+            0,
+            connection.query_row(upper_sql, [], |row| row.get(0))?,
+        ))
+    }
+}
+
+fn finish_time_string_page<T>(
+    scope: &str,
+    watermark: i64,
+    upper: &(i64, String),
+    limit: usize,
+    items: &mut Vec<T>,
+    key: impl Fn(&T) -> (i64, String),
+) -> Result<Option<String>, StoreError> {
+    if items.len() <= limit {
+        return Ok(None);
+    }
+    items.truncate(limit);
+    crate::pagination::encode_cursor(
+        scope,
+        watermark,
+        key(items.last().expect("non-empty page")),
+        upper.clone(),
+    )
+    .map(Some)
+}
+
+fn finish_i64_page<T>(
+    scope: &str,
+    watermark: i64,
+    upper: i64,
+    limit: usize,
+    items: &mut Vec<T>,
+    key: impl Fn(&T) -> i64,
+) -> Result<Option<String>, StoreError> {
+    if items.len() <= limit {
+        return Ok(None);
+    }
+    items.truncate(limit);
+    crate::pagination::encode_cursor(
+        scope,
+        watermark,
+        key(items.last().expect("non-empty page")),
+        upper,
+    )
+    .map(Some)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2864,6 +3591,30 @@ fn query_gardener_implementation_runs<P: rusqlite::Params>(
         .map_err(StoreError::from)
 }
 
+pub(crate) fn latest_gardener_implementation_run(
+    connection: &Connection,
+    obligation_id: &str,
+) -> Result<Option<GardenerImplementationRun>, StoreError> {
+    let mut runs = query_gardener_implementation_runs(
+        connection,
+        "SELECT r.*,
+                ri.instance_id AS exact_proposal_instance_id,
+                ri.generation AS exact_proposal_generation,
+                pi.source_observation_id AS exact_source_observation_id,
+                pi.source_inspection_id AS exact_source_inspection_id,
+                CASE WHEN ready.run_id IS NULL THEN r.publication_state ELSE 'ready' END
+                    AS effective_publication_state,
+                ready.ready_at AS effective_pull_request_ready_at
+         FROM gardener_implementation_runs r
+         JOIN gardener_implementation_run_instances ri ON ri.run_id = r.id
+         JOIN gardener_proposal_instances pi ON pi.id = ri.instance_id
+         LEFT JOIN gardener_pull_request_ready_observations ready ON ready.run_id = r.id
+         WHERE r.obligation_id = ?1 ORDER BY r.updated_at DESC, r.id DESC LIMIT 1",
+        [obligation_id],
+    )?;
+    Ok(runs.pop())
+}
+
 fn gardener_implementation_run_from_row(
     row: &Row<'_>,
 ) -> rusqlite::Result<GardenerImplementationRun> {
@@ -3036,7 +3787,7 @@ fn proposal_from_row(row: &Row<'_>) -> rusqlite::Result<Proposal> {
     })
 }
 
-const PROPOSAL_INSTANCE_SELECT: &str =
+const PROPOSAL_INSTANCE_SELECT_PREFIX: &str =
     "SELECT pi.id, pi.proposal_fingerprint, p.repository, p.prompt,
             pi.source_commit, pi.source_observation_id, pi.source_inspection_id,
             pi.generation, pi.implementation_obligation_id, o.state,
@@ -3050,9 +3801,7 @@ const PROPOSAL_INSTANCE_SELECT: &str =
      JOIN gardener_proposals p ON p.fingerprint = pi.proposal_fingerprint
      JOIN obligations o ON o.id = pi.implementation_obligation_id
      LEFT JOIN gardener_proposal_instance_supersessions s
-       ON s.superseded_instance_id = pi.id
-     WHERE pi.proposal_fingerprint = ?1
-     ORDER BY pi.generation";
+       ON s.superseded_instance_id = pi.id";
 
 fn proposal_instance(
     connection: &Connection,
@@ -3102,7 +3851,24 @@ fn proposal_instance_for_source(
         .map(Option::flatten)
 }
 
-fn proposal_instance_for_obligation(
+fn sole_proposal_instance(
+    connection: &Connection,
+    fingerprint: &str,
+) -> Result<Option<ProposalInstance>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT id FROM gardener_proposal_instances
+         WHERE proposal_fingerprint = ?1 ORDER BY generation LIMIT 2",
+    )?;
+    let ids = statement
+        .query_map([fingerprint], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if ids.len() != 1 {
+        return Ok(None);
+    }
+    proposal_instance(connection, &ids[0])
+}
+
+pub(crate) fn proposal_instance_for_obligation(
     connection: &Connection,
     obligation_id: &str,
 ) -> Result<Option<ProposalInstance>, StoreError> {
@@ -4282,7 +5048,7 @@ fn require_obligation(transaction: &Transaction<'_>, id: &str) -> Result<Obligat
         .ok_or_else(|| StoreError::NotFound(id.to_owned()))
 }
 
-fn obligation_from_row(row: &Row<'_>) -> rusqlite::Result<Obligation> {
+pub(crate) fn obligation_from_row(row: &Row<'_>) -> rusqlite::Result<Obligation> {
     Ok(Obligation {
         id: row.get("id")?,
         description: row.get("description")?,
@@ -4308,7 +5074,7 @@ fn obligation_from_row(row: &Row<'_>) -> rusqlite::Result<Obligation> {
     })
 }
 
-fn attempt_from_row(row: &Row<'_>) -> rusqlite::Result<Attempt> {
+pub(crate) fn attempt_from_row(row: &Row<'_>) -> rusqlite::Result<Attempt> {
     Ok(Attempt {
         id: row.get(0)?,
         obligation_id: row.get(1)?,
@@ -4326,7 +5092,7 @@ fn attempt_from_row(row: &Row<'_>) -> rusqlite::Result<Attempt> {
     })
 }
 
-fn audit_from_row(row: &Row<'_>) -> rusqlite::Result<AuditEvent> {
+pub(crate) fn audit_from_row(row: &Row<'_>) -> rusqlite::Result<AuditEvent> {
     let from: Option<String> = row.get(5)?;
     Ok(AuditEvent {
         sequence: row.get(0)?,
@@ -4755,7 +5521,8 @@ mod tests {
                 (5, "0005_gardener_trust_publication.sql".to_owned()),
                 (6, "0006_source_bound_proposal_generations.sql".to_owned()),
                 (7, "0007_immutable_migration_manifest.sql".to_owned()),
-                (8, "0008_typed_failure_dispositions.sql".to_owned())
+                (8, "0008_typed_failure_dispositions.sql".to_owned()),
+                (9, "0009_global_event_envelope.sql".to_owned())
             ]
         );
         drop(store);
@@ -7116,5 +7883,130 @@ mod tests {
             Err(StoreError::Fenced)
         ));
         assert!(store.gardener_run_events("legacy-run").unwrap().is_empty());
+    }
+
+    #[test]
+    fn obligation_pages_preserve_public_order_and_reject_tamper_scope_and_revision_mix() {
+        let mut store = Store::open_in_memory().unwrap();
+        for index in 0..205 {
+            store
+                .create(one_off(&format!("item-{index:03}"), 100), 1_000 + index)
+                .unwrap();
+        }
+        let mut plan = store
+            .connection
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT * FROM obligations
+                  WHERE (created_at, id) > (?1, ?2)
+                    AND (created_at, id) <= (?3, ?4)
+                  ORDER BY created_at, id LIMIT 38",
+            )
+            .unwrap();
+        let details = plan
+            .query_map(params![0, "", i64::MAX, "zzzz"], |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("obligations_projection_order_idx")),
+            "unexpected query plan: {details:?}"
+        );
+        drop(plan);
+
+        let mut cursor = None;
+        let mut watermark = None;
+        let mut ids = Vec::new();
+        loop {
+            let page = store
+                .obligation_page(cursor.as_deref(), watermark, Some(37))
+                .unwrap();
+            if watermark.is_none() {
+                watermark = Some(page.watermark);
+            }
+            ids.extend(page.items.into_iter().map(|item| item.id));
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(ids.len(), 205);
+        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(ids.iter().collect::<BTreeSet<_>>().len(), ids.len());
+
+        let first = store.obligation_page(None, None, Some(2)).unwrap();
+        let cursor = first.next_cursor.unwrap();
+        assert!(matches!(
+            store.attempt_page("item-000", Some(&cursor), None, Some(2)),
+            Err(StoreError::Invalid(_))
+        ));
+        let mut tampered = cursor.clone();
+        tampered.replace_range(6..7, if &cursor[6..7] == "0" { "1" } else { "0" });
+        assert!(matches!(
+            store.obligation_page(Some(&tampered), None, Some(2)),
+            Err(StoreError::Invalid(_))
+        ));
+
+        store.create(one_off("later-write", 100), 2_000).unwrap();
+        assert!(matches!(
+            store.obligation_page(Some(&cursor), Some(first.watermark), Some(2)),
+            Err(StoreError::ProjectionGap(_))
+        ));
+    }
+
+    #[test]
+    fn append_only_audit_pages_pin_upper_bound_across_new_wal_writes() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.create(one_off("history", 100), 100).unwrap();
+        for index in 0..600 {
+            store
+                .connection
+                .execute(
+                    "INSERT INTO audit_events(
+                    obligation_id, occurrence, event_type, occurred_at,
+                    from_state, to_state, details_json
+                 ) VALUES ('history', 1, 'fixture', ?1, 'pending', 'pending', '{}')",
+                    [101 + index],
+                )
+                .unwrap();
+        }
+
+        let first = store
+            .audit_event_page("history", None, None, Some(73))
+            .unwrap();
+        let watermark = first.watermark;
+        let mut cursor = first.next_cursor;
+        let mut sequences = first
+            .items
+            .into_iter()
+            .map(|item| item.sequence)
+            .collect::<Vec<_>>();
+        store
+            .connection
+            .execute(
+                "INSERT INTO audit_events(
+                obligation_id, occurrence, event_type, occurred_at,
+                from_state, to_state, details_json
+             ) VALUES ('history', 1, 'late', 9999, 'pending', 'pending', '{}')",
+                [],
+            )
+            .unwrap();
+        while let Some(current) = cursor {
+            let page = store
+                .audit_event_page("history", Some(&current), Some(watermark), Some(73))
+                .unwrap();
+            sequences.extend(page.items.into_iter().map(|item| item.sequence));
+            cursor = page.next_cursor;
+        }
+        assert_eq!(sequences.len(), 601);
+        assert!(sequences.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(
+            sequences.iter().collect::<BTreeSet<_>>().len(),
+            sequences.len()
+        );
     }
 }

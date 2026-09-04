@@ -13,20 +13,22 @@ lifecycle actions.
 Build and run the native application against a disposable local service:
 
 ```sh
-cargo build -p bokkie-attention-ui --bin bokkie-attention-ui
-BOKKIE_API_BASE=http://127.0.0.1:7744 cargo run -p bokkie-attention-ui
+cargo +1.97.1 build --locked -p bokkie-attention-ui --bin bokkie-attention-ui
+BOKKIE_API_BASE=http://127.0.0.1:7744 \
+  cargo +1.97.1 run --locked -p bokkie-attention-ui
 ```
 
 Build the browser module and serve the source assets on Bokkie's origin:
 
 ```sh
-cargo build -p bokkie-attention-ui --lib --target wasm32-unknown-unknown
+cargo +1.97.1 build --locked -p bokkie-attention-ui --lib \
+  --target wasm32-unknown-unknown
 wasm-bindgen \
   --target web \
   --out-dir apps/bokkie-attention-ui/web/pkg \
   --out-name bokkie_attention_ui \
   target/wasm32-unknown-unknown/debug/bokkie_attention_ui.wasm
-cargo run -p bokkie -- \
+cargo +1.97.1 run --locked -p bokkie -- \
   --database /path/to/disposable.sqlite \
   serve \
   --bind 127.0.0.1:7744 \
@@ -42,8 +44,25 @@ non-loopback listener or second database path.
 The workspace reads Bokkie's projected HTTP state; it never reads SQLite. On
 start it acquires the same-origin `/bootstrap` session, validates the Bokkie
 build/API/schema identity, retains the mutation token only in memory and then
-requests a current snapshot. Manual refresh and bounded wake-ups reuse that
+walks the current snapshot in server-bounded pages. Every continuation retains
+the first page's capture time and durable global watermark; duplicate rows,
+repeated cursors or a changed capture, watermark or service identity fail
+closed. The selected evidence topic is assembled through the same bounded,
+identity-checked page contract. Manual refresh and bounded wake-ups reuse that
 session.
+
+After the initial snapshot, ordinary refreshes poll `/operator/changes` from
+the last completely applied global watermark. A multi-page change walk pins
+its first returned watermark as `through`, rejects duplicate or out-of-order
+event revisions, and aggregates affected obligation identities before applying
+anything. The workspace then refetches only those obligation projections,
+restores the backend's semantic ledger ordering, and refetches the selected
+topic only when the selected obligation was affected. An unrelated change
+therefore preserves the topic, selection and open confirmation. A change that
+does affect an open confirmation retains its actor and note, but the changed
+backend precondition disables submission until the operator reviews again.
+The applied global watermark advances only after every affected projection and
+any required selected topic have succeeded.
 While refreshing it retains the last snapshot and a surviving selection and
 scroll position. A failed snapshot or selected-topic request marks retained
 data **Stale** and disables lifecycle decisions until a current snapshot is
@@ -76,6 +95,23 @@ loopback adapter against CSRF, DNS rebinding and stale sessions; it is not a
 user-authentication or authorisation system and does not protect against a
 malicious same-user process.
 
+Cursor gaps, invalid continuations, page-watermark mismatches and failed
+projection reads leave retained data visibly **Stale** with decisions disabled.
+The UI attempts one same-session full paginated rebuild where safe, then uses a
+bounded reconnect delay rather than looping on a failing service. A change
+without an obligation identity is deliberately treated as ambiguous and also
+forces a rebuild. Process identity, the durable global projection watermark
+and an action's obligation-local `state_revision` are separate conditions and
+are never substituted for one another.
+
+Polling remains event- or deadline-driven. In addition to `next_wake_at`, the
+earliest active-lease expiry is a refresh deadline because elapsed time alone
+can change the operator projection. Deadline refreshes add only the known due
+obligations to the affected set while still draining the global change page;
+decisions remain disabled until the complete incremental result is applied.
+Successful lifecycle actions likewise flow through the change feed and a
+bounded affected-obligation refresh rather than an unbounded snapshot read.
+
 The browser module deliberately has no configurable API origin. Serve it only
 from Bokkie's loopback `/ui/` route, using the same origin as its relative API
 requests. The native executable accepts only `http` with a literal IPv4 or IPv6
@@ -83,13 +119,23 @@ loopback base (and rejects credentials, queries and fragments). Do not use
 either form with an operator database until you have separately assessed the
 requested lifecycle action.
 
-Run the focused application checks with:
+The repository root pins Rust 1.85.0 for Bokkie's canonical backend checks.
+The already-resolved Polyorama, egui and wgpu dependency graph requires newer
+Rust, so this application has a separate exact Rust 1.97.1 pin in
+[`rust-toolchain.toml`](rust-toolchain.toml), including Clippy, rustfmt and the
+Wasm target. Commands below remain explicit because they are run from the
+repository root, where Rustup would otherwise select the backend toolchain.
+
+Run the focused, locked application checks from the repository root with:
 
 ```sh
-cargo test -p bokkie-attention-ui --all-targets
-cargo clippy -p bokkie-attention-ui --all-targets --all-features -- -D warnings
-cargo build -p bokkie-attention-ui --bin bokkie-attention-ui
-cargo build -p bokkie-attention-ui --lib --target wasm32-unknown-unknown
+cargo +1.97.1 test --locked -p bokkie-attention-ui --all-targets
+cargo +1.97.1 clippy --locked -p bokkie-attention-ui \
+  --all-targets --all-features -- -D warnings
+cargo +1.97.1 build --locked -p bokkie-attention-ui --bin bokkie-attention-ui
+cargo +1.97.1 build --locked -p bokkie-attention-ui --lib \
+  --target wasm32-unknown-unknown
+cargo +1.97.1 fmt -p bokkie-attention-ui -- --check
 ```
 
 Run deterministic UI qualification from the repository root with:

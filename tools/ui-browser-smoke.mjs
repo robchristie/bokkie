@@ -17,6 +17,7 @@ let fixtureRoot;
 let browser;
 let expectingDisconnect = false;
 const unexpected = [];
+const operatorRequests = [];
 const observations = { browser: {}, journeys: [], states: {}, viewports: [], errors: unexpected };
 const json = value => JSON.stringify(
   value,
@@ -181,11 +182,16 @@ try {
   });
   page.on('requestfailed', request => {
     const failure = `network: ${request.method()} ${request.url()} ${request.failure()?.errorText}`;
-    if (expectingDisconnect && request.url().includes('/operator/snapshot')) {
+    if (expectingDisconnect
+        && (request.url().includes('/operator/snapshot')
+          || request.url().includes('/operator/changes'))) {
       observations.states.disconnected_request = failure;
     } else {
       unexpected.push(failure);
     }
+  });
+  page.on('request', request => {
+    if (request.url().includes('/operator/')) operatorRequests.push(request.url());
   });
   page.on('response', response => {
     if (response.url().includes('/operator/')) observations.last_operator_response = {
@@ -297,18 +303,33 @@ try {
     return state.interaction.confirmation_action === 'cancel_obligation'
       && state.ui_snapshot.nodes.some(candidate => candidate.actions.includes('confirm_lifecycle_action'));
   });
+  const incrementalStart = operatorRequests.length;
   await clickAction(page, 'confirm_lifecycle_action');
-  await page.waitForFunction(() => {
-    const state = window.__BOKKIE_ATTENTION_HANDLE.test_snapshot();
-    return state.interaction.confirmation_action == null
-      && state.interaction.selected_obligation === 'approval-safe-cancel'
-      && state.interaction.connection === 'current';
-  }, null, { timeout: 15_000 });
+  try {
+    await page.waitForFunction(() => {
+      const state = window.__BOKKIE_ATTENTION_HANDLE.test_snapshot();
+      return state.interaction.confirmation_action == null
+        && state.interaction.selected_obligation === 'approval-safe-cancel'
+        && state.interaction.connection === 'current'
+        && !state.interaction.snapshot_busy
+        && !state.interaction.action_busy;
+    }, null, { timeout: 15_000 });
+  } catch (error) {
+    const state = await page.evaluate(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot());
+    throw new Error(`incremental lifecycle refresh did not settle: ${error}; state=${json(state.interaction)}; requests=${json(operatorRequests.slice(incrementalStart))}; last_response=${json(observations.last_operator_response)}; unexpected=${json(unexpected)}`);
+  }
+  const incrementalRequests = operatorRequests.slice(incrementalStart);
+  const decodedIncrementalRequests = incrementalRequests.map(request => decodeURIComponent(request));
+  if (!incrementalRequests.some(request => request.includes('/operator/changes?after='))
+      || !decodedIncrementalRequests.some(request => request.includes('/operator/obligations/approval-safe-cancel'))
+      || incrementalRequests.some(request => request.endsWith('/operator/snapshot'))) {
+    throw new Error(`safe lifecycle did not use bounded incremental projection reads: ${json(incrementalRequests)}`);
+  }
   const durableAction = await page.evaluate(async () => {
-    const current = await (await fetch('/operator/snapshot')).json();
+    const current = await (await fetch('/operator/obligations/approval-safe-cancel')).json();
     const topic = await (await fetch('/operator/obligations/approval-safe-cancel/topic')).json();
     return {
-      state: current.obligations.find(item => item.id === 'approval-safe-cancel')?.state,
+      state: current.obligation?.state,
       last_event: topic.items.filter(item => item.source === 'audit_event').at(-1)?.event_type,
     };
   });
@@ -320,6 +341,7 @@ try {
     name: 'safe cancel lifecycle',
     classification: 'direct physical pointer, real HTTP/store path, refreshed durable projection',
     durable_result: durableAction,
+    incremental_requests: incrementalRequests,
   });
 
   await clickId(page, 'bokkie.inbox-row.attention-nonretryable');
@@ -469,6 +491,7 @@ try {
   };
 
   await page.setViewportSize({ width: 1440, height: 900 });
+  const largeRequestStart = operatorRequests.length;
   url = await startFixture('large');
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await waitCurrent(page);
@@ -478,10 +501,18 @@ try {
   if (Number(state.virtualisation.total_rows) !== 5_000 || materialised > 16) {
     throw new Error(`large-list materialisation bound failed: ${json(state.virtualisation)}`);
   }
+  const largeSnapshotRequests = operatorRequests.slice(largeRequestStart)
+    .filter(request => request.includes('/operator/snapshot'));
+  if (largeSnapshotRequests.length < 2
+      || largeSnapshotRequests.slice(1).some(request => !request.includes('watermark=')
+        || !request.includes('cursor='))) {
+    throw new Error(`large snapshot was not assembled through bounded stable continuations: ${json(largeSnapshotRequests)}`);
+  }
   observations.states.large.result = {
     ...state.virtualisation,
     materialised_count: materialised,
     classification: 'direct current-frame Rust virtualisation observation',
+    snapshot_page_requests: largeSnapshotRequests.length,
   };
 
   expectingDisconnect = true;

@@ -103,26 +103,30 @@ for _ in $(seq 1 12); do
 done
 jq -e '.ui_snapshot.nodes | any(.focused and (.actions | index("confirm_lifecycle_action")))' "$SNAPSHOT" >/dev/null
 
-curl --fail --silent "http://$ADDRESS/operator/snapshot" >"$RUNTIME/native-reviewed-snapshot.json"
+curl --fail --silent \
+  "http://$ADDRESS/operator/obligations/approval-safe-cancel" \
+  >"$RUNTIME/native-reviewed-obligation.json"
 MUTATION_TOKEN="$(curl --fail --silent "http://$ADDRESS/bootstrap" | jq -er '.mutation_token')"
 jq '{
-  precondition: (.obligations[] | select(.id == "approval-safe-cancel") | .capabilities.cancel.precondition),
+  precondition: .obligation.capabilities.cancel.precondition,
   actor: "operator",
   note: null
-}' "$RUNTIME/native-reviewed-snapshot.json" >"$RUNTIME/native-action.json"
+}' "$RUNTIME/native-reviewed-obligation.json" >"$RUNTIME/native-action.json"
 printf 'header = "X-Bokkie-Mutation-Token: %s"\n' "$MUTATION_TOKEN" | curl --config - --fail --silent --request POST \
   --header 'Content-Type: application/json' \
   --data-binary "@$RUNTIME/native-action.json" \
   "http://$ADDRESS/operator/obligations/approval-safe-cancel/cancel" \
   >"$RUNTIME/native-action-response.json"
 
-curl --fail --silent "http://$ADDRESS/operator/snapshot" >"$RUNTIME/native-durable-snapshot.json"
+curl --fail --silent \
+  "http://$ADDRESS/operator/obligations/approval-safe-cancel" \
+  >"$RUNTIME/native-durable-obligation.json"
 curl --fail --silent "http://$ADDRESS/operator/obligations/approval-safe-cancel/topic" >"$RUNTIME/native-durable-topic.json"
 jq -n \
-  --slurpfile snapshot "$RUNTIME/native-durable-snapshot.json" \
+  --slurpfile obligation "$RUNTIME/native-durable-obligation.json" \
   --slurpfile topic "$RUNTIME/native-durable-topic.json" '
   {
-    state: ($snapshot[0].obligations[] | select(.id == "approval-safe-cancel") | .state),
+    state: $obligation[0].obligation.state,
     last_audit_event: ($topic[0].items | map(select(.source == "audit_event")) | last | .event_type),
     classification: "direct conditional HTTP/store write after native pointer confirmation inspection and keyboard focus; browser evidence separately proves UI submission"
   }
