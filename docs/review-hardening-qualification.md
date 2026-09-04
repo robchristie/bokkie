@@ -17,7 +17,11 @@ harness failed cleanup when its evidence directory was beneath `/tmp`.
 
 P6c repairs those two gaps and strengthens generated interleaving coverage and
 explicit diff-manifest size evidence without changing the migration/API
-contract or granting runtime authority. The terminal pull request records the exact
+contract or granting runtime authority. An exact-head canonical rerun also
+exposed the existing cancellation fixture's immediate procfs observation race;
+it now uses the same one-second bounded non-executing-state observation as the
+normal-completion fixture, retaining failure for a surviving descendant.
+The terminal pull request records the exact
 committed qualification head, independent verdict, CI, reviewed/landed trees
 and the repeated checks on final merged `main`. Those future merge identities
 belong to its terminal landing comment, avoiding a recursive evidence commit.

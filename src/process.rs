@@ -985,11 +985,10 @@ mod tests {
         token.cancel();
         let outcome = child.wait(&mut NoopHeartbeat).unwrap();
         assert!(matches!(outcome, ProcessOutcome::Cancelled(_)));
-        let state = fs::read_to_string(format!("/proc/{descendant}/stat"))
-            .ok()
-            .and_then(|stat| stat.split_whitespace().nth(2).map(str::to_owned));
-        // Linux can expose a killed process briefly as either zombie (`Z`) or
-        // dead (`X`) before removing its procfs entry. Neither state executes.
+        // Signal delivery and procfs state publication are asynchronous even
+        // after the direct child is reaped. Observe the same bounded transition
+        // as the normal-completion fixture, rather than sampling immediately.
+        let state = wait_for_nonexecuting_descendant(descendant);
         assert!(
             state.is_none() || matches!(state.as_deref(), Some("Z" | "X")),
             "descendant {descendant} survived group cancellation in state {state:?}"
@@ -1022,8 +1021,16 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
+        let state = wait_for_nonexecuting_descendant(descendant);
+        assert!(
+            state.is_none() || matches!(state.as_deref(), Some("Z" | "X")),
+            "silent descendant {descendant} survived normal completion in state {state:?}"
+        );
+    }
+
+    fn wait_for_nonexecuting_descendant(descendant: i32) -> Option<String> {
         let end = Instant::now() + Duration::from_secs(1);
-        let state = loop {
+        loop {
             let state = fs::read_to_string(format!("/proc/{descendant}/stat"))
                 .ok()
                 .and_then(|stat| stat.split_whitespace().nth(2).map(str::to_owned));
@@ -1034,11 +1041,7 @@ mod tests {
                 break state;
             }
             thread::sleep(Duration::from_millis(2));
-        };
-        assert!(
-            state.is_none() || matches!(state.as_deref(), Some("Z" | "X")),
-            "silent descendant {descendant} survived normal completion in state {state:?}"
-        );
+        }
     }
 
     #[test]
