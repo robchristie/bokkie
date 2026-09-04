@@ -16,6 +16,15 @@ The coding gardener is limited to `robchristie/bokkie`. Registration and
 runtime enablement are separate operator decisions: registering the checkout
 does not allow execution, and an ordinary `serve` remains fake-only.
 
+Repository verification has two explicit compiler boundaries. `tools/check.sh`
+uses the backend/shared-contract MSRV Rust 1.85 with the exact root 1.85.0 pin,
+locked dependencies, plan governance and toolchain-contract checks.
+`tools/check-ui.sh` uses the attention application's MSRV Rust 1.97 with its
+app-scoped exact 1.97.1 pin for locked native and Wasm contracts. The root
+toolchain is not a claim that the resolved Polyorama/egui/wgpu UI graph compiles
+on Rust 1.85. Neither verification command installs, starts or mutates an
+operator service or database.
+
 ## Run locally
 
 All command results are JSON on standard output. Operational events and errors

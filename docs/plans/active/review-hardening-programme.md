@@ -5,161 +5,130 @@
 - Review source: `goal-objective.md` supplied 2026-09-04
 - Baseline: `12f5c65901d07248d152ebf80548116cf0c7b040`
 - Target repository: `robchristie/bokkie`
-- Reorientation budget: 200 lines
-- Last updated: 2026-09-04
+- Reorientation budget: 200
+- Landed pull requests: #5, #6, #7, #8, #9, #10, #11, #12, #13
+- Next action: obtain the P6b human licence and live branch-protection decisions, then run P6c exact merged-main qualification
+- Last updated: 2026-09-05
 
 ## Outcome and terminal rule
 
 Bring the live execution, credential, publication, database and projection
-boundaries up to the obligation kernel's existing durability standard. The
-programme is complete only when every baseline row below is implemented and
-qualified, proved already satisfied or superseded, or explicitly excluded by
-authority present at programme creation. Final qualification must run against
-the exact merged `main` head; a landed internal package is progress, not the
-terminal result.
+boundaries up to the obligation kernel's durability standard. The programme is
+complete only when R1–R12 below are satisfied, superseded or explicitly
+excluded by the necessary authority. P6c must qualify the exact merged `main`
+head; an internal package landing is progress, not programme completion.
 
 ## Scope and authority
 
-Included are the review's bounded lease and process execution repairs, gardener
-trust and publication controls, source-bound proposal generations, database
-lifecycle and diagnostics, fair execution lanes, incremental projections and
-the smaller hardening items needed to prove those outcomes.
-
-Ordinary code, tests, documentation, refactoring and CI workflow changes may
-land under standing reviewed-merge authority. The programme does not deploy or
-restart Bokkie, install a service, exercise production credentials, merge a
+Ordinary code, tests, documentation, refactoring and CI changes may land under
+standing reviewed-merge authority. The programme does not deploy or restart
+Bokkie, install a service, exercise production credentials, merge a
 gardener-created pull request, publish a release or perform destructive data
-work. Live branch-protection changes, new authentication/access-control policy
-and licence selection require explicit human review before mutation or merge.
-The review's licence suggestion is conditional on a public-reuse decision and
-is not silently interpreted as permission to grant rights.
+work. A licence grant and live branch-protection or repository-settings change
+are respectively rights and access-control decisions that require explicit
+human authority. Absence of either mutation is not approval to perform it.
 
-## Re-baselined capability envelope
+## Current R1–R12 capability assessment
 
-| Row | Required observable outcome | Baseline disposition | Package |
-|---|---|---|---|
-| R1 | Renewal targets at most one lease duration after the latest heartbeat; same-time renewal is a no-op; expired running work is not projected as active | Satisfied by P1 landing `8154ca4a5bc4c3aa0356cc74e3874544b4231296` | P1 |
-| R2 | Codex, Git, GitHub and future child processes share heartbeat, deadline, cancellation, process-tree termination, bounded output and typed outcomes; shutdown is bounded | Satisfied by P1 landing `8154ca4a5bc4c3aa0356cc74e3874544b4231296`; terminal fixture repair on PR #7 | P1 |
-| R3 | Child environments, executables, Git configuration, hooks and credentials are explicit and least-authority; exact Git metadata is revalidated before credential-bearing work | Satisfied by P2 landing `9cf9329f374f545eccca596fd9df8a451a48a065` | P2 |
-| R4 | Candidate checks and evidence precede draft-to-ready promotion; exact PR heads remain authoritative; CI protects candidate code without secrets or privilege | Satisfied by P2 landing `9cf9329f374f545eccca596fd9df8a451a48a065` | P2 |
-| R5 | Approval selects an exact proposal generation and source observation; later source commits stale or supersede earlier instances; terminal goals may recur in later generations | Satisfied by P3 landing `9920006635c01cd266e6f2cd3a3546fe21747867` | P3 |
-| R6 | Migrations run at startup, have immutable recorded digests and reject gaps/newer schemas; blocking DB work is isolated from async handlers; `doctor` reports integrity and reconciliation without repair | Satisfied by P4a landing `87c8d42f1757c9656fbb010723b9e4bb1477dd69` | P4a |
-| R7 | Snapshots are transactionally consistent and cursor-paginated with bounded queries, a global ordering envelope and an incremental change watermark | P5b candidate adds schema v9 envelope revisions, scoped single-snapshot pages and durable bounded change walks | P5b |
-| R8 | Ordinary, gardener and future outbox work use fair, bounded lanes without starvation while preserving existing claim/lease fencing | Satisfied by P5a landing `b8bda7877e63d73780f04dafe097fb7425cccc7a` | P5a |
-| R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | P1–P5a establish process, trust, generation, schema, service, lane and failure identities; P5b candidate adds distinct durable cursor/watermark identity and large/concurrent projection properties | P1–P5b |
-| R10 | Mutation routes identify runtime/API/schema build, validate local request origin and use a per-process mutation secret without widening loopback exposure | Satisfied by human-authorised P4b landing `4ecc30338c60bf66507558a68b96c65c34014c86` | P4b; human review complete |
-| R11 | Large modules are split along established semantic ownership after contracts settle | P1–P5a splits remain; P5b candidate establishes `events` and `pagination` while Store retains lifecycle mutation and bounded domain reads | P1–P5b |
-| R12 | Toolchain and locked checks are pinned in CI; completed-plan claims are linted and reconciled; conditional licensing and live branch protection have explicit terminal decisions | P2 pins Rust 1.85.0 and locked canonical checks in read-only secret-free CI; plan linting, protection and licensing decisions remain for P6 | P2/P6 |
+This assessment is against merged `main`
+`d73f8417bbdce989c289ee3905da7ac28357964e` (tree
+`75374dc8a2799b1774fa894ad8d2e14427a6dc4e`, schema v9/API v1).
 
-Already-satisfied evidence that must be retained includes atomic Store-owned
-lifecycle transitions, append-only audit events, generation/token fencing,
-expired-claim recovery, network-off model sandboxes, canonical effective Git
+| Row | Current disposition | Evidence owner |
+|---|---|---|
+| R1 | Satisfied: bounded lease renewal, same-time no-op and expired-work projection | P1/PR #6 |
+| R2 | Satisfied: supervised process tree, deadline, cancellation, output and typed failure boundaries; descendant fixture repaired | P1/PRs #6–#7 |
+| R3 | Satisfied: explicit least-authority child environments, executable identity, Git configuration and credential revalidation | P2/PR #8 |
+| R4 | Satisfied: candidate evidence gates draft-to-ready promotion and exact PR heads; CI is secret-free and unprivileged | P2/PR #8 |
+| R5 | Satisfied: approval binds immutable proposal generation, observation and source commit | P3/PR #9 |
+| R6 | Satisfied: startup-only immutable migration manifest, bounded DB execution and read-only diagnosis | P4a/PR #10 |
+| R7 | Satisfied: schema-v9 global envelope, bounded consistent pages and incremental watermark | P5b/PR #13 |
+| R8 | Satisfied: fair bounded failure-isolated ordinary and gardener execution lanes | P5a/PR #12 |
+| R9 | Satisfied across P1–P5b: typed persisted process, trust, proposal, schema, failure, lane and projection identities have executable temporal/scale tests | PRs #6–#13 |
+| R10 | Satisfied with human authority: runtime/API/schema identity, exact local-origin checks and per-process mutation secret | P4b/PR #11 |
+| R11 | Satisfied: process, trust, execution-lane, events and pagination owners are split while Store retains lifecycle transitions and bounded domain reads | PRs #6–#13 |
+| R12 | Partially satisfied: locked backend CI/toolchain landed in P2; P6a owns executable plan truth, dual-toolchain contracts and CI reconciliation; P6b retains licence and live-protection decisions | P2/P6 |
+
+Already-satisfied guarantees retained by these dispositions include atomic
+Store-owned lifecycle transitions, append-only audit events, generation/token
+fencing, expired-claim recovery, network-off model sandboxes, canonical Git
 origin checks, detached exact-head verification, immutable run identities and
-conditional operator state preconditions.
+conditional operator-state preconditions.
 
-## Candidate work packages
+## Work packages
 
-Only the next unblocked package is refined after each landing.
-
-| Package | Outcome | Dependencies | State and terminal evidence |
-|---|---|---|---|
-| P0 | Land this re-baselined programme checkpoint | `main` baseline above | Landed as [PR #5](https://github.com/robchristie/bokkie/pull/5) at `e8d3218433f97c8dfc542c80d0ac813d283d86b5` |
-| P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Landed as [PR #6](https://github.com/robchristie/bokkie/pull/6) at `8154ca4a5bc4c3aa0356cc74e3874544b4231296`; terminal fixture repair on [PR #7](https://github.com/robchristie/bokkie/pull/7) |
-| P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Landed as [PR #8](https://github.com/robchristie/bokkie/pull/8) at `9cf9329f374f545eccca596fd9df8a451a48a065`; reviewed and landed tree `49fe98d01d6f8969be9f0bad19f815f31719b11e` |
-| P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Landed as [PR #9](https://github.com/robchristie/bokkie/pull/9) at `9920006635c01cd266e6f2cd3a3546fe21747867`; reviewed and landed tree `c844e629c88d363497eed5918e4f2553d941ac38` |
-| P4a | Startup-only migration, immutable manifest verification, bounded HTTP database execution, consistent read snapshots and read-only doctor | P3 schema | Landed as [PR #10](https://github.com/robchristie/bokkie/pull/10) at `87c8d42f1757c9656fbb010723b9e4bb1477dd69`; final reviewed and landed tree `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba` |
-| P4b | Reviewed API mutation secret, local Host/Origin validation and runtime/API/schema build identity | P4a storage contract | Human-authorised [PR #11](https://github.com/robchristie/bokkie/pull/11) landed as `4ecc30338c60bf66507558a68b96c65c34014c86`; reviewed and landed tree `952a77d63477412722f0c2cf908a6ca4ae390c10` |
-| P5a | Fair failure-isolated execution lanes, typed lifecycle outcomes, bounded lifecycle fields and model-based temporal tests | P4 storage and P1 process contracts | Landed as [PR #12](https://github.com/robchristie/bokkie/pull/12) at `b8bda7877e63d73780f04dafe097fb7425cccc7a`; reviewed tree `365b4c870e5d50ff48c1117092679a4719ff3b83` |
-| P5b | Cursor-paginated incremental projections and global event envelope | P5a schema v8 and typed outcome projection | Repaired implementation reviewed at `3e12d6a59a1a4915c020fba0e6eca1eef676e801` on [PR #13](https://github.com/robchristie/bokkie/pull/13); exact-head CI rerun passed and final plan-head review/landing remain |
-| P6 | Exact-head aggregate qualification, plan reconciliation/linter, toolchain and repository-policy closeout | P1–P5b | Candidate; live branch protection/licence decision may need human review |
+| Package | Outcome | State and terminal evidence |
+|---|---|---|
+| P0 | Re-baselined programme checkpoint | [PR #5](https://github.com/robchristie/bokkie/pull/5) landed as `e8d3218433f97c8dfc542c80d0ac813d283d86b5` |
+| P1 | Bounded leases and supervised execution | [PR #6](https://github.com/robchristie/bokkie/pull/6) landed as `8154ca4a5bc4c3aa0356cc74e3874544b4231296`; fixture repair [PR #7](https://github.com/robchristie/bokkie/pull/7) landed as `60535e6ecd5f882c17cce8a2f2222d7a190faa1e` |
+| P2 | Gardener runtime trust and publication controls | [PR #8](https://github.com/robchristie/bokkie/pull/8) landed as `9cf9329f374f545eccca596fd9df8a451a48a065` |
+| P3 | Source-bound proposal generations | [PR #9](https://github.com/robchristie/bokkie/pull/9) landed as `9920006635c01cd266e6f2cd3a3546fe21747867` |
+| P4a | Storage lifecycle, bounded DB execution and doctor | [PR #10](https://github.com/robchristie/bokkie/pull/10) landed as `87c8d42f1757c9656fbb010723b9e4bb1477dd69` |
+| P4b | Local mutation access boundary and service identity | Human-authorised [PR #11](https://github.com/robchristie/bokkie/pull/11) landed as `4ecc30338c60bf66507558a68b96c65c34014c86` |
+| P5a | Fair execution lanes and typed outcomes | [PR #12](https://github.com/robchristie/bokkie/pull/12) landed as `b8bda7877e63d73780f04dafe097fb7425cccc7a` |
+| P5b | Incremental bounded projections and global event envelope | [PR #13](https://github.com/robchristie/bokkie/pull/13) landed as `d73f8417bbdce989c289ee3905da7ac28357964e` |
+| P6a | Executable plan truth, repository reconciliation, dual toolchain contracts and CI governance | Current terminal governance package; its pull request owns exact-head review, CI, merge and cleanup evidence |
+| P6b | Explicit licence and live `main` protection decisions | Human decision required; no licence, rights grant, rule or setting change is authorised by P6a |
+| P6c | Aggregate exact-head qualification and programme closeout | Run only after P6b has an explicit apply-or-defer disposition; no deployment or release |
 
 ## Acceptance and integration proof
 
-Every package must add deterministic focused tests, run the repository's
-canonical check with `--locked` once the pinned toolchain package lands, receive
-independent exact-head review, pass applicable GitHub CI, squash-merge and clean
-its task worktree/branches. Process packages must exercise never-exit,
-descendant, output-overflow, cancellation, deadline-race and heartbeat-failure
-fixtures. Persistence packages must prove reopen, incompatible-schema rejection,
-source-generation fencing and read-only diagnosis. Projection packages must
-prove bounded pages and a stable watermark; lane packages must prove fair
-progress and the core nonterminal-liveness invariant.
-
-Final integration reruns all canonical checks on exact merged `main`, exercises
-the safe fake-process and temporary-database journeys, validates completed plan
-state, and reconciles pull requests, local worktrees, local branches,
-remote-tracking references and live remote heads.
+Every ordinary package receives deterministic focused tests, locked canonical
+checks, independent exact-head review, applicable CI, squash merge and cleanup.
+P6c reruns the plan linter, locked backend and UI checks, safe fake-process and
+temporary-database journeys on exact merged `main`, then reconciles pull
+requests, worktrees, local branches, remote-tracking references and live heads.
 
 ## Current phase
 
-P5a is terminal through PR #12: exact-head `94024ae2a9bb266bbfb9102105728fbde99671f8`
-and post-merge CI runs `33872971463` and `33873290907` passed; squash merge
-`b8bda7877e63d73780f04dafe097fb7425cccc7a` has tree
-`365b4c870e5d50ff48c1117092679a4719ff3b83`.
+P6a reconciles executable repository truth. It adds a network-independent plan
+linter with fixtures to enforce completed-plan landing metadata, terminal item
+dispositions, historical worktree labelling and active-plan phase/budget/landed
+PR invariants. It also makes dependency-resolving canonical commands locked,
+records the Rust 1.85 backend MSRV with exact 1.85.0 toolchain and the UI Rust
+1.97 MSRV with app-scoped exact 1.97.1 toolchain, and runs both contract surfaces
+in least-authority CI. Historical review details remain with their owning pull
+requests; the compact checkpoints below are the programme routing record.
 
-P5b is the active integrated candidate. Additive schema v9 provides an
-append-only envelope over audit, gardener and run events; legacy order is
-deterministic and explicitly non-causal, while new envelopes are transactionally
-inserted. Bounded keyset pages, scoped operator reads and `/operator/changes`
-carry an exact global watermark distinct from P4b session identity, P5a
-lane/failure state and Store action preconditions. The attention UI walks
-bounded initial pages, polls that watermark, refetches only affected projections
-and fails stale on gaps or session rotation. Deterministic Store, adapter and UI
-tests cover concurrent WAL reads, same-second streams, cursor tamper and limits,
-scoped 5,000-row histories and incremental browser/native journeys. The first
-exact-head review found incomplete gardener-decision invalidations, a production
-topic compatibility regression, an HTTP limit mismatch and a non-executable UI
-toolchain claim. The repair restores all ten API-v1 topic categories under
-bounded scoped SQL, derives exact decision identities, accepts the documented
-change limit and pins the separate UI compiler. Independent re-review passed at
-`3e12d6a59a1a4915c020fba0e6eca1eef676e801`; exact-head CI run `33884226007`
-passed on its second attempt after an unchanged process fixture transient. The
-final plan-head review and landing are next; P6 then owns merged-main aggregate
-qualification, plan linting and the human-held repository-policy decisions.
+Once this plan revision lands, P6b is the only decision phase. P6c follows the
+operator's explicit P6b apply-or-defer dispositions and qualifies their resulting
+exact merged `main`; P6a does not take either exceptional action.
 
-## Durable evidence
+## Compact terminal checkpoints
 
-| Checkpoint | Owner revision | Consumer revision | Result | Evidence |
+| Checkpoint | Reviewed head | Merge commit | Tree | Result |
 |---|---|---|---|---|
-| Review re-baseline | `12f5c65901d07248d152ebf80548116cf0c7b040` | same | Open rows and preserved guarantees mapped; working tree initially clean | This plan and source paths in the review objective |
-| Initial P1 candidate | `0c91f9a0482df8c40bb6ae444193366ac5c7dde1` | `b46788020a6b3953ac6f3dc20fef2e529d0d9d02` | Exact-head review blocked: app-server stdin writes could stall supervision; programme dispositions were stale | [PR #6 review trajectory](https://github.com/robchristie/bokkie/pull/6#issuecomment-5534515269) |
-| P1 supervised-input repair | `666eef8f66fc1738e55d0994cef63828ecf44cd4` | `42183e75c5a8a69724f918bd9bc4c32ae8fb4922` | 84 library, 1 CLI, 10 adapter and 21 attention-UI tests passed; Clippy and rustfmt passed; deterministic fixtures also prove bounded stopped-reader input deadline, heartbeat and shutdown | `src/process.rs`, app-server fake-process tests, Store/operator tests, and [PR #6](https://github.com/robchristie/bokkie/pull/6) |
-| P1 reviewed landing | `56a140acea93ecd8b71639c54ed0e098de55f515` | `8154ca4a5bc4c3aa0356cc74e3874544b4231296` | Independent PASS; reviewed and landed trees both `36a3aac1c2ef6c3e5b4c66a96d3408e160e5a494`; post-merge descendant fixture exposed terminal-state assertion gap | [PR #6](https://github.com/robchristie/bokkie/pull/6) |
-| P1 descendant fixture repair | `670861e553d81f7c045f4d6607ac82326015afc4` | `2b4a511e74313908cc7df590b763b35bbe04ab15` | Descendant fixture passed 100 consecutive runs; 84 library, 1 CLI, 10 adapter and 21 attention-UI tests passed; Clippy and rustfmt passed | [PR #7](https://github.com/robchristie/bokkie/pull/7) |
-| P1 terminal repair landing | `7804e2bbbd0f9f52587c1ca274c2b347afc0fccc` | `60535e6ecd5f882c17cce8a2f2222d7a190faa1e` | PR #7 merged; starting P2 tree `36fadcfd643739730238f074de48eb3c8e8ea304` includes the repaired Linux terminal-state fixture | [PR #7](https://github.com/robchristie/bokkie/pull/7) |
-| P2 trust/publication implementation | `a6d12e76835cf406e584534ae3ba6b5c11c13272` | PR #8 terminal plan head | 90 library, 1 CLI and 10 adapter tests passed under Rust 1.85.0; locked Clippy, rustfmt and diff checks passed; deterministic fixtures cover hostile environment, tool replacement, Git topology, candidate manifests, failed-check publication denial, draft retention and pass-only promotion | [PR #8](https://github.com/robchristie/bokkie/pull/8) and `src/runtime_trust.rs`, `src/git_workspace.rs`, `src/gardener_runner.rs`, migration 0005 |
-| P2 first exact-head review | `c73c3976077351918934abaf36f1be53230901a6` | same | BLOCK: real `gh` could not observe a public PR unauthenticated; candidate checks lacked an OS boundary; local proxy/TLS Git config survived; checkout credentials persisted in CI | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5534926481) |
-| P2 trust-boundary repair | `1fd723745152aeece226769b24c902bc423eca83` | PR #8 terminal plan head | 93 library, 1 CLI and 10 adapter tests passed; locked Clippy, rustfmt, diff and actionlint checks passed; real env-cleared public `curl` observation and Bubblewrap hostile-sentinel probes passed; worker-unit parsing reports only the expected absent local `/usr/bin/bokkie` | PR #8 repair diff and the first-review verdict above |
-| P2 repaired-head CI probe | `043fd7972a14a86a32fe835634632d938c0df686` | `029d163c6133c9cea061334ed30e57a45b99f162` | Credential-removal check passed; Rust tests failed because the GitHub-hosted image lacks Bubblewrap. Production keeps the startup fail-closed dependency; fake runner fixtures now prove orchestration portably and the real hostile-sentinel probe runs when Bubblewrap exists | [CI run 33832322106](https://github.com/robchristie/bokkie/actions/runs/33832322106) |
-| P2 worker-profile review | `5f74e90de2904e1bfd95e50a8ae6978b493e5848` | `1207beaea6ace76b75a3fd6f2b33c3428fc5dc29` | Code and CI passed, but review BLOCKED the example worker: Bubblewrap needed `AF_NETLINK` and Git needed a writable common directory. The repair adds the address family and a documented worker-owned checkout with separate writable Git metadata; the exact systemd policy probe succeeds | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5535203787) and [CI run 33832528257](https://github.com/robchristie/bokkie/actions/runs/33832528257) |
-| P2 credential-channel review | `6ccf807e4c6cb9403786b2fcf6870b61986aba92` | `5ff18a8ba0aeb5189919cab340e6a4d329480fb3` | Code, CI and worker probes passed, but review BLOCKED the descendant-readable systemd credential mount. The repair replaces the path input with a bounded one-shot standard-input descriptor, closes it before child startup, marks the daemon non-dumpable, requires a root-only worker-inaccessible backing object, and adds a hostile descendant test | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5535284201) and [CI run 33833186151](https://github.com/robchristie/bokkie/actions/runs/33833186151) |
-| P2 descendant-isolation review | `9eff533da3d6f7a34378d3bb2c5b027726600800` | `f43213055767eebdc8bbc58846114ba7e25fbd9e` | Code and CI passed, but review BLOCKED a daemonised Codex descendant that could inspect a later same-UID mutation environment. The repair gives every Codex turn a private PID namespace and procfs with kernel-owned descendant teardown, retains parent-loss teardown, and makes the shared supervisor kill silent same-group descendants on normal completion | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5535325775) and [CI run 33833789310](https://github.com/robchristie/bokkie/actions/runs/33833789310) |
-| P2 reviewed landing | `387e0300c7a7bca2136ab30748a47135c2b8847a` | `9cf9329f374f545eccca596fd9df8a451a48a065` | Independent PASS; exact and post-merge CI passed; reviewed and landed trees both `49fe98d01d6f8969be9f0bad19f815f31719b11e` | [PR #8 terminal evidence](https://github.com/robchristie/bokkie/pull/8#issuecomment-5536130203) |
-| P3 reviewed landing | `1f09350973632bb0fbdf9fd6c7e0103d6c21ed8b` | `9920006635c01cd266e6f2cd3a3546fe21747867` | Independent PASS; exact and post-merge CI passed; reviewed and landed trees both `c844e629c88d363497eed5918e4f2553d941ac38`; R5 and P3 portions of R9/R11 satisfied | [PR #9 terminal evidence](https://github.com/robchristie/bokkie/pull/9#issuecomment-5537029436) |
-| P4a storage design | `9920006635c01cd266e6f2cd3a3546fe21747867` | active package branch | Exact-prefix v1–v6 adoption plus appended digest metadata selected; HTTP and scheduler retain separate bounded storage owners; diagnosis captures database evidence before read-only external reconciliation | `src/store.rs`, migrations 0001–0006, `src/http.rs`, `src/service.rs` and this checkpoint |
-| P4a terminal candidate | P3 landed tree | terminal package branch | 131 library, 2 CLI and 12 adapter tests; locked all-feature Clippy, rustfmt and diff checks pass; temporary databases and repositories prove migrate-once compatibility, executor bounds, snapshot consistency, relational/source invariants and no doctor mutation | Migration, executor, doctor and adapter tests on the package branch |
-| P4a first exact-head review | `ff5871862e1df5bc0b16e6f29eb523e1bd7aeaf6` | same | BLOCK: live remote observation could honour hostile repository transport configuration; proposal-instance listing could combine multiple SQLite snapshots | [PR #10 review trajectory](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537425057) |
-| P4a repaired exact-head review | `45e7b9761b2d8ef19cddfa5b46589805abd22951` | same | Independent PASS; 131 library, 2 CLI and 12 adapter tests plus locked Clippy/rustfmt/diff passed; exact-head CI run `33851124272` passed | [PR #10 PASS evidence](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537523382) |
-| P4a reviewed landing | `0854d10ae9b05b569d8d56113d43bd55d6eebdbe` | `87c8d42f1757c9656fbb010723b9e4bb1477dd69` | Final plan-only review and exact/post-merge CI passed; reviewed and landed trees both `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba`; R6 and P4a portions of R9/R11 satisfied | [PR #10 terminal evidence](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537586056) |
-| P4b local access-control candidate | `87c8d42f1757c9656fbb010723b9e4bb1477dd69` | `22abe68ac093cb16059cc52c89a9048b27f97c83` | 139 library, 2 CLI, 12 adapter and 27 UI tests pass; locked Clippy/rustfmt/diff and native/Wasm builds pass; real same-origin browser/native fixtures prove restart rotation, rejected stale token, cleared confirmation, conditional mutation and retained audit evidence without retaining the token | [`docs/ui-qualification-evidence`](../../ui-qualification-evidence/README.md) and HTTP/UI focused tests |
-| P4b reviewed implementation | `22abe68ac093cb16059cc52c89a9048b27f97c83` | `6b3417c92beb9d503280a57a408f5463d6e6b22f` | Independent exact-head security review passed without findings; exact-head locked CI run `33854712721` passed; access-control policy remains held for explicit human review and merge authority | [PR #11](https://github.com/robchristie/bokkie/pull/11) |
-| P4b reviewed landing | `4cbe4a8fc6aa11e9d2f0c9720ccccc0bf157259f` | `4ecc30338c60bf66507558a68b96c65c34014c86` | Human merge authority granted; candidate and post-merge CI passed; reviewed and landed trees both `952a77d63477412722f0c2cf908a6ca4ae390c10`; R10 and P4b portions of R9/R11 satisfied | [PR #11 terminal evidence](https://github.com/robchristie/bokkie/pull/11#issuecomment-5539710601) |
-| P5a execution-contract candidate | `4ecc30338c60bf66507558a68b96c65c34014c86` | `861713c6fc2c0e2a0acbb6bbb6fe2a011b15cb42` | 156 library, 2 CLI, 13 adapter and 27 attention-UI tests pass; locked Clippy/rustfmt/diff pass; scheduler suite passes 20 consecutive runs; schema v8 backfill, fixed-seed two-store model, atomic claim closure, bounded capacity, lane failure, shutdown cancellation and completion/cancellation race fixtures pass | [PR #12](https://github.com/robchristie/bokkie/pull/12), `src/execution_lane.rs`, `src/service.rs`, migration 0008 and domain/Store tests |
-| P5a first exact-head review | `81af56ee060241d3c8e24411776be247ec3ad1f7` | same | BLOCK: one global mutex did not guarantee waiting lane-class fairness; a primary lane failure masked other workers that missed the join deadline | [Durable review verdict](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540084840) |
-| P5a fairness and shutdown-evidence repair | `f7c15c156949ee9f855de272fc03974b15162599` | `6d5c4fffc00d168ba91c0bb8778a5ac1202635dc` | 158 library, 2 CLI, 13 adapter and 27 attention-UI tests pass; locked Clippy/rustfmt/diff pass; both saturated real-Store lane orders pass 20 consecutive runs; typed supervisor fixture retains the primary gardener failure and every timed-out worker identity | PR #12 repair diff, `src/service.rs` and `tests/adapters.rs` |
-| P5a second exact-head review | `6d5c4fffc00d168ba91c0bb8778a5ac1202635dc` | same | BLOCK: admission closure waited without a deadline for an active Store claim, delaying HTTP shutdown and potentially masking the initiating lane failure | [Durable review verdict](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540254429) |
-| P5a active-claim shutdown repair | `f5cebeafbe6b15fee53204d74951c789531c00db` | terminal plan head | 159 library, 2 CLI, 13 adapter and 27 attention-UI tests pass; locked Clippy/rustfmt/diff pass; service suite passes 20 consecutive runs; held-in-admission Store fixture proves prompt closure, bounded supervision, retained primary failure, complete timeout identities and visible leased recovery evidence | PR #12 repair diff and `src/service.rs` |
-| P5a repaired exact-head review | `d9e68f70f563936781dfbcdae5727ce2cbe73ed2` | same | Independent PASS with no findings; reviewed tree `398b1e71cfd86cf9bebd8807c588932f098aa260`; exact-head CI run `33872226038` passed | [Durable PASS evidence](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540363123) |
-| P5a plan-head CI review | `a595df9c48b1d3fdc01ab56c5df49d12ee2d0563` | same | BLOCK: exact-head CI run `33872508645` failed a pre-existing live installed-`gh` exit-status assertion; plan-only delta was accurate and no implementation regression was found | [Durable review verdict](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540414246) |
-| P5a deterministic-check repair | `fb38b5d1e4cf5daf5668f5a1e3e40fe3f84079fe` | terminal plan head | Live installed-`gh` behaviour is explicit-only; controlled credential stripping remains canonical. Locked canonical checks pass with 158 library tests and one explicit-only probe, 2 CLI and 13 adapter tests; the live probe also passes when requested; Clippy/rustfmt/diff pass | `src/git_workspace.rs` and PR #12 repair diff |
-| P5a reviewed landing | `94024ae2a9bb266bbfb9102105728fbde99671f8` | `b8bda7877e63d73780f04dafe097fb7425cccc7a` | Reviewed and landed tree `365b4c870e5d50ff48c1117092679a4719ff3b83`; exact-head and post-merge CI passed | [PR #12 terminal evidence](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540503144) |
-| P5b initial candidate | `14db6a5bcab9065f8b1c8579540439d088c01e8d` | `8b1a51659b357ff2973c260fee1b168795b9b26f` | Schema v9/API v1; locked canonical and UI qualification passed | [PR #13](https://github.com/robchristie/bokkie/pull/13) |
-| P5b first exact-head review | `8b1a51659b357ff2973c260fee1b168795b9b26f` | same | BLOCK: gardener decisions lacked exact invalidation IDs; production topic broke source identity and omitted v1 categories; HTTP limit and UI toolchain claims mismatched | [Durable review verdict](https://github.com/robchristie/bokkie/pull/13#issuecomment-5541733088) |
-| P5b compatibility repair | `4744b85f794a5d6df135afbc7c35c0d552cbe2f2` | terminal plan head | 177 library tests pass with one explicit-only probe ignored, plus 2 CLI, 14 adapter and 38 UI tests; locked Clippy/rustfmt/diff, native/Wasm builds and browser/native qualification pass | PR #13 repair diff, `src/events.rs`, `src/operator.rs`, `src/http.rs` and [`docs/ui-qualification-evidence`](../../ui-qualification-evidence/README.md) |
-| P5b repaired exact-head review | `3e12d6a59a1a4915c020fba0e6eca1eef676e801` | same | Independent PASS with no findings; reviewed tree `c63d016e52415c24e7721d5c28d0f1a493e7da87`; exact-head CI run `33884226007` passed on rerun after an unchanged P1 process-fixture transient | [PASS evidence](https://github.com/robchristie/bokkie/pull/13#issuecomment-5542035444) |
+| P1 | `56a140acea93ecd8b71639c54ed0e098de55f515` | `8154ca4a5bc4c3aa0356cc74e3874544b4231296` | `36a3aac1c2ef6c3e5b4c66a96d3408e160e5a494` | PASS; PR #7 repaired the post-merge descendant fixture |
+| P2 | `387e0300c7a7bca2136ab30748a47135c2b8847a` | `9cf9329f374f545eccca596fd9df8a451a48a065` | `49fe98d01d6f8969be9f0bad19f815f31719b11e` | PASS |
+| P3 | `1f09350973632bb0fbdf9fd6c7e0103d6c21ed8b` | `9920006635c01cd266e6f2cd3a3546fe21747867` | `c844e629c88d363497eed5918e4f2553d941ac38` | PASS |
+| P4a | `0854d10ae9b05b569d8d56113d43bd55d6eebdbe` | `87c8d42f1757c9656fbb010723b9e4bb1477dd69` | `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba` | PASS |
+| P4b | `4cbe4a8fc6aa11e9d2f0c9720ccccc0bf157259f` | `4ecc30338c60bf66507558a68b96c65c34014c86` | `952a77d63477412722f0c2cf908a6ca4ae390c10` | Human-authorised PASS |
+| P5a | `94024ae2a9bb266bbfb9102105728fbde99671f8` | `b8bda7877e63d73780f04dafe097fb7425cccc7a` | `365b4c870e5d50ff48c1117092679a4719ff3b83` | Exact CI `33872971463`; post-merge CI `33873290907`; landed 2026-09-04 |
+| P5b | `30675a92bbf4091a5d09da4a60a62d9e774eaf92` | `d73f8417bbdce989c289ee3905da7ac28357964e` | `75374dc8a2799b1774fa894ad8d2e14427a6dc4e` | Exact CI `33885142461`; post-merge CI `33885489486`; landed 2026-09-05 |
 
-## Residual questions
+P5b's earlier repaired implementation review at
+`3e12d6a59a1a4915c020fba0e6eca1eef676e801` (tree
+`c63d016e52415c24e7721d5c28d0f1a493e7da87`, CI `33884226007`) remains
+historical calibration evidence on PR #13, not the terminal reviewed head.
 
-- Does the operator want to grant public reuse rights and select a licence?
-- Will the operator authorise live `main` branch-protection mutation after the
-  CI workflow has landed and its required check identity is observable?
+## P6b human decision capsule
+
+- Licence: default to no licence grant and no new licence file until the owner
+  explicitly chooses public reuse. If reuse is intended, obtain legal/ownership
+  confirmation and choose MIT (simple permissive terms), Apache-2.0 (permissive
+  terms with an express patent grant), or dual MIT/Apache-2.0. P6a selects none.
+- Live `main` protection: current observed disposition is unprotected. Proposed
+  rules are pull-request-only changes, no force pushes or deletions, conversation
+  resolution, and the exact CI checks `Plan governance`, `Locked backend checks`
+  and `Locked attention UI checks`; do not require an approval count until the
+  owner decides how the independent Codex review becomes host-verifiable. P6a
+  does not create or mutate the rule.
+
+## Bounded residuals
+
+- P6b needs two explicit human apply-or-defer decisions; no rights or settings
+  mutation is implied by this plan.
+- P6c must observe the final protected/unprotected and licensed/unlicensed state
+  and qualify the exact resulting merged head.
+- UI qualification remains fixture-only, not screen-reader certification,
+  physical-GPU performance, production credentials, deployment or release.

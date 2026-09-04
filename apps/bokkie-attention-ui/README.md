@@ -119,24 +119,24 @@ loopback base (and rejects credentials, queries and fragments). Do not use
 either form with an operator database until you have separately assessed the
 requested lifecycle action.
 
-The repository root pins Rust 1.85.0 for Bokkie's canonical backend checks.
-The already-resolved Polyorama, egui and wgpu dependency graph requires newer
-Rust, so this application has a separate exact Rust 1.97.1 pin in
+The backend and shared operator contract declare an MSRV of Rust 1.85 and the
+repository root pins exact Rust 1.85.0 for canonical backend checks. The
+already-resolved Polyorama, egui and wgpu dependency graph requires newer Rust,
+so this application declares an app-scoped MSRV of Rust 1.97 and has a separate
+exact Rust 1.97.1 pin in
 [`rust-toolchain.toml`](rust-toolchain.toml), including Clippy, rustfmt and the
 Wasm target. Commands below remain explicit because they are run from the
-repository root, where Rustup would otherwise select the backend toolchain.
+repository root, where Rustup would otherwise select the backend toolchain. The
+root toolchain is not claimed to compile the attention UI.
 
 Run the focused, locked application checks from the repository root with:
 
 ```sh
-cargo +1.97.1 test --locked -p bokkie-attention-ui --all-targets
-cargo +1.97.1 clippy --locked -p bokkie-attention-ui \
-  --all-targets --all-features -- -D warnings
-cargo +1.97.1 build --locked -p bokkie-attention-ui --bin bokkie-attention-ui
-cargo +1.97.1 build --locked -p bokkie-attention-ui --lib \
-  --target wasm32-unknown-unknown
-cargo +1.97.1 fmt -p bokkie-attention-ui -- --check
+tools/check-ui.sh
 ```
+
+The script uses `--locked` for every dependency-resolving Cargo operation and
+checks formatting separately because `cargo fmt` has no lockfile mode.
 
 Run deterministic UI qualification from the repository root with:
 

@@ -14,14 +14,16 @@ The initial implementation is intentionally narrow:
 - an explicitly enabled coding gardener restricted to `robchristie/bokkie`;
 - persisted inspection, proposal, implementation, and verification evidence;
   and
-- a loopback HTTP API suitable for a future Polyorama interface.
+- a loopback HTTP API with a delivered local Polyorama attention interface.
 
 General infrastructure actions, automatic merge or deployment, notifications,
-memory, and the graphical interface remain outside this slice. The narrow
-gardener uses Codex only through isolated, network-off worktrees, runs candidate
-turns in a private PID namespace that cannot retain daemonised descendants,
-runs candidate checks in a separate OS-enforced network/filesystem boundary,
-and preserves human approval before implementation.
+and memory remain outside the delivered capability. The graphical interface was
+outside the original obligation-kernel slice and subsequently landed as the
+local attention UI in [pull request #4](https://github.com/robchristie/bokkie/pull/4).
+The narrow gardener uses Codex only through isolated, network-off worktrees,
+runs candidate turns in a private PID namespace that cannot retain daemonised
+descendants, runs candidate checks in a separate OS-enforced
+network/filesystem boundary, and preserves human approval before implementation.
 
 ## Design guarantee
 
@@ -36,22 +38,32 @@ for the complete first-slice acceptance criteria and evidence.
 
 ## Development
 
-The project pins Rust 1.85.0 in [`rust-toolchain.toml`](rust-toolchain.toml)
-and requires SQLite development support. GitHub CI uses that same pinned
-toolchain on an unprivileged, read-only runner and performs the locked checks
-below without secrets.
-The attention UI separately pins Rust 1.97.1 because its resolved
-Polyorama/egui/wgpu graph requires a newer compiler; its locked commands and
-scoped toolchain are documented in the
+The backend and shared operator contract declare an MSRV of Rust 1.85 and pin
+the exact Rust 1.85.0 toolchain in [`rust-toolchain.toml`](rust-toolchain.toml).
+The attention UI declares an app-scoped MSRV of Rust 1.97 and pins exact Rust
+1.97.1 because its resolved Polyorama/egui/wgpu graph requires a newer compiler.
+The root toolchain deliberately does not claim to compile the UI package.
+GitHub CI validates both locked boundaries on unprivileged, read-only runners
+without secrets. UI commands and the scoped toolchain are documented in the
 [attention UI README](apps/bokkie-attention-ui/README.md).
 
-Once the initial implementation is present, run the canonical check with:
+Run the canonical governance and backend check with:
 
 ```sh
-cargo test --all-targets
-cargo clippy --all-targets --all-features -- -D warnings
+tools/check.sh
+```
+
+It executes the plan-linter fixtures, current plan lint, exact toolchain
+contract, and these dependency-locked backend commands before formatting:
+
+```sh
+cargo test --all-targets --locked
+cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo fmt --all -- --check
 ```
+
+`cargo fmt` does not resolve dependencies and has no lockfile mode. When the UI
+or its shared API/toolchain boundary changes, also run `tools/check-ui.sh`.
 
 The supplied systemd unit is an example artefact only. Installing or enabling
 it is deliberately outside repository verification and requires an explicit

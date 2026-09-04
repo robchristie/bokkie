@@ -1,14 +1,22 @@
 # Polyorama attention UI
 
-- Status: delivery candidate complete; pull request review and landing pending
+- Status: complete
+- Delivery state: landed
+- Review state: passed
+- CI state: not-applicable: GitHub status checks were not configured
+- Merge state: landed
 - Owner: `bokkie`
 - Pull request: [Bokkie #4](https://github.com/robchristie/bokkie/pull/4)
 - Bokkie baseline: `78558bf915eb9ed0ffb3a676676bf18dc0a5c908`
 - Polyorama baseline: `0e725f5a97a6d99a6bc4c961dfc05b4e9252ba1d`
-- Branch: `codex/polyorama-attention-ui`
-- Worktree: `/nvme/development/bokkie-worktrees/polyorama-attention-ui`
+- Historical branch: `codex/polyorama-attention-ui` (removed after landing)
+- Historical worktree: `/nvme/development/bokkie-worktrees/polyorama-attention-ui` (removed after landing)
+- Reviewed head: `856f7f5eaf71e8dc0bbc74502680efc62b9f075e`
+- Reviewed and landed tree: `686f5d399330e1472264e90626cf533e8ffa1027`
+- Landed commit: `12f5c65901d07248d152ebf80548116cf0c7b040`
+- Landed date: 2026-09-03
 - Reorientation budget: 200 lines
-- Last updated: 2026-09-03
+- Last updated: 2026-09-05
 
 ## Outcome
 
@@ -114,7 +122,7 @@ primary action. The decision and its necessary evidence remain visible at
 | Read projections and capabilities | Bokkie domain/store/HTTP | Authoritative inbox, liveness, timeline and legal-action projection with deterministic store/API tests | Selected seam | Complete at `ad0afe37c24ec4876f18244e5dbdc6dc9cf6e7bb` |
 | Operational workspace | Bokkie application | Three connected panes, typed intents, virtualisation, refresh/stale/conflict handling and responsive semantics | Projection contract | Complete at `340fc3a3324fdfde20951627bb4ae34380f25e78` |
 | Qualification and documentation | Bokkie application/tooling | Temporary-service native/browser physical journeys, semantic/text/visual/idle evidence and operator docs | Complete workspace | Complete: repaired application/harness `12ba204901386169fad63664cb8a87af51dbcfaa`; evidence `d60f6e4ea16980222ba6468febb32b1a09312f41` |
-| Terminal review and landing | Bokkie campaign | Canonical check, exact-head independent review, CI, squash merge and cleanup | All acceptance proof | Pull request [#4](https://github.com/robchristie/bokkie/pull/4); head `736554d76df1a4d7bf1898ba55c0bde92b367897` rejected for a stale-action race; conditional-operator repair and requalification complete; exact-head re-review and landing pending |
+| Terminal review and landing | Bokkie campaign | Canonical check, exact-head independent review, CI, squash merge and cleanup | All acceptance proof | Rejected head `736554d76df1a4d7bf1898ba55c0bde92b367897` was repaired; `856f7f5eaf71e8dc0bbc74502680efc62b9f075e` passed re-review and landed as `12f5c65901d07248d152ebf80548116cf0c7b040` with an identical tree |
 
 Add a Polyorama owner node before its consumer only if a demonstrated reusable
 gap makes one necessary.
@@ -146,7 +154,7 @@ gap makes one necessary.
 - [x] Visual captures, semantic snapshots and text-layout evidence are inspected.
 - [x] Bokkie's canonical test, strict Clippy and format checks pass.
 - [x] No Polyorama change was required.
-- [ ] Final exact heads receive independent review; blocking findings are
+- [x] Final exact heads receive independent review; blocking findings are
   repaired and re-reviewed; owner dependencies land before consumers.
 - [x] README, operator guide and completed plan document running, the trust
   boundary, refresh behaviour, evidence, limitations and exact landed revisions.
@@ -161,9 +169,9 @@ gap makes one necessary.
 - Ordinary code, tests, docs and CI may land under standing reviewed-merge
   authority. Stop before any exceptional operation named in repository policy.
 
-## Current phase
+## Historical landing evidence
 
-Qualification and documentation are complete at application/harness revision
+Qualification and documentation completed at application/harness revision
 `12ba204901386169fad63664cb8a87af51dbcfaa`; retained evidence is revision
 `d60f6e4ea16980222ba6468febb32b1a09312f41` in the [UI qualification evidence index](../../ui-qualification-evidence/README.md).
 Fixture-only native and browser journeys exercised the real HTTP/store
@@ -175,6 +183,10 @@ uses a dedicated, compatibility-preserving conditional `/operator` route and
 binds every UI action to the reviewed obligation, occurrence and append-only
 audit sequence inside the Store transaction; later-occurrence and same-cycle
 races now return 409. A separate earlier Lantern flow found no layout, console,
-network or HTTP failure at 1440×900. The local-scale gardener-history scan
-remains the known performance risk. Next: run final canonical verification,
-obtain exact-head re-review, pass CI, squash merge and reconcile landing.
+network or HTTP failure at 1440×900. Exact head
+`856f7f5eaf71e8dc0bbc74502680efc62b9f075e` passed independent re-review and
+squash-merged as `12f5c65901d07248d152ebf80548116cf0c7b040`; reviewed and landed trees are both
+`686f5d399330e1472264e90626cf533e8ffa1027`. Canonical post-merge qualification
+and all retained evidence hashes passed, and the task worktree/branches were
+removed. The local-scale gardener-history scan remains the known performance
+risk.
