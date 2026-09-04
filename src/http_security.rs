@@ -103,7 +103,7 @@ impl ApiRuntime {
     pub(crate) fn deterministic(address: SocketAddr, token_byte: u8, session: &str) -> Self {
         Self::from_parts(
             address,
-            7,
+            bokkie_operator_api::SUPPORTED_SCHEMA_VERSION,
             session.to_owned(),
             hex(&[token_byte; TOKEN_BYTES]),
         )

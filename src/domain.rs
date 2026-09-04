@@ -4,6 +4,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::recurrence::Recurrence;
 
+pub const MAX_OBLIGATION_ID_CHARS: usize = 256;
+pub const MAX_OBLIGATION_DESCRIPTION_CHARS: usize = 16_384;
+pub const MAX_APPROVAL_ACTOR_CHARS: usize = 256;
+pub const MAX_APPROVAL_NOTE_CHARS: usize = 4_096;
+pub const MAX_RECURRENCE_EXPRESSION_CHARS: usize = 512;
+pub const MAX_RECURRENCE_TIMEZONE_CHARS: usize = 128;
+pub const MAX_COMPLETION_ERROR_CHARS: usize = 16_384;
+pub const MAX_COMPLETION_EVIDENCE_CHARS: usize = 65_536;
+pub const MAX_AUDIT_EVENT_TYPE_CHARS: usize = 128;
+pub const MAX_AUDIT_DETAILS_BYTES: usize = 524_288;
+
 /// The complete set of durable obligation projection states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -116,6 +127,58 @@ impl FromStr for AttemptOutcome {
     }
 }
 
+/// Durable reason that an attempt did not complete successfully.
+///
+/// Only `RetrySafe` grants the kernel authority to schedule another attempt
+/// automatically. Every other disposition remains visible for an operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureDisposition {
+    RetrySafe,
+    NeedsReconciliation,
+    HumanDecision,
+    Terminal,
+    Cancelled,
+}
+
+impl FailureDisposition {
+    pub fn is_retry_safe(self) -> bool {
+        self == Self::RetrySafe
+    }
+
+    /// Compatibility projection for clients that still consume `retryable`.
+    pub fn legacy_retryable(self) -> bool {
+        self.is_retry_safe()
+    }
+}
+
+impl fmt::Display for FailureDisposition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::RetrySafe => "retry_safe",
+            Self::NeedsReconciliation => "needs_reconciliation",
+            Self::HumanDecision => "human_decision",
+            Self::Terminal => "terminal",
+            Self::Cancelled => "cancelled",
+        })
+    }
+}
+
+impl FromStr for FailureDisposition {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "retry_safe" => Ok(Self::RetrySafe),
+            "needs_reconciliation" => Ok(Self::NeedsReconciliation),
+            "human_decision" => Ok(Self::HumanDecision),
+            "terminal" => Ok(Self::Terminal),
+            "cancelled" => Ok(Self::Cancelled),
+            other => Err(format!("unknown failure disposition {other:?}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetryPolicy {
     pub max_attempts: u32,
@@ -163,6 +226,8 @@ pub struct Obligation {
     pub lease_expires_at: Option<i64>,
     pub last_error: Option<String>,
     pub last_evidence: Option<String>,
+    #[serde(default)]
+    pub failure_disposition: Option<FailureDisposition>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -184,7 +249,7 @@ pub enum Completion {
         evidence: Option<String>,
     },
     Failed {
-        retryable: bool,
+        disposition: FailureDisposition,
         error: String,
         evidence: Option<String>,
     },
@@ -202,6 +267,8 @@ pub struct Attempt {
     pub completed_at: Option<i64>,
     pub outcome: AttemptOutcome,
     pub retryable: Option<bool>,
+    #[serde(default)]
+    pub failure_disposition: Option<FailureDisposition>,
     pub error: Option<String>,
     pub evidence: Option<String>,
 }

@@ -9,6 +9,7 @@ pub mod app_server;
 pub mod db_executor;
 pub mod doctor;
 pub mod domain;
+pub mod execution_lane;
 pub mod gardener;
 pub mod gardener_runner;
 pub mod git_workspace;
@@ -30,9 +31,13 @@ pub use doctor::{
     run_doctor,
 };
 pub use domain::{
-    ApprovalDecision, Attempt, AttemptOutcome, AuditEvent, Claim, Completion, NewObligation,
-    Obligation, ObligationState, RetryPolicy,
+    ApprovalDecision, Attempt, AttemptOutcome, AuditEvent, Claim, Completion, FailureDisposition,
+    MAX_APPROVAL_ACTOR_CHARS, MAX_APPROVAL_NOTE_CHARS, MAX_AUDIT_DETAILS_BYTES,
+    MAX_AUDIT_EVENT_TYPE_CHARS, MAX_COMPLETION_ERROR_CHARS, MAX_COMPLETION_EVIDENCE_CHARS,
+    MAX_OBLIGATION_DESCRIPTION_CHARS, MAX_OBLIGATION_ID_CHARS, MAX_RECURRENCE_EXPRESSION_CHARS,
+    MAX_RECURRENCE_TIMEZONE_CHARS, NewObligation, Obligation, ObligationState, RetryPolicy,
 };
+pub use execution_lane::ExecutionLane;
 pub use gardener::{
     CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerCandidateQualification, GardenerEvent,
     GardenerImplementationResult, GardenerImplementationRun, GardenerInspection,

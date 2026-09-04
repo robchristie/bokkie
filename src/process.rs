@@ -1186,6 +1186,27 @@ mod tests {
     }
 
     #[test]
+    fn completed_child_wins_a_cancellation_race_when_exit_is_already_observable() {
+        let cancellation = CancellationToken::new();
+        let mut command = shell("exit 0");
+        let mut child = supervisor(cancellation.clone())
+            .spawn(
+                &mut command,
+                Instant::now() + Duration::from_secs(1),
+                EffectRisk::None,
+            )
+            .unwrap();
+        thread::sleep(Duration::from_millis(20));
+        cancellation.cancel();
+
+        let outcome = child.wait(&mut NoopHeartbeat).unwrap();
+        assert!(matches!(
+            outcome,
+            ProcessOutcome::Completed { status, .. } if status.success()
+        ));
+    }
+
+    #[test]
     fn heartbeat_failure_stops_the_child_with_a_typed_outcome() {
         struct FailingHeartbeat;
         impl ProcessHeartbeat for FailingHeartbeat {

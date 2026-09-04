@@ -16,8 +16,11 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    ApprovalDecision, Attempt, AttemptOutcome, AuditEvent, Claim, Completion, NewObligation,
-    Obligation, ObligationState, Recurrence,
+    ApprovalDecision, Attempt, AttemptOutcome, AuditEvent, Claim, Completion, FailureDisposition,
+    MAX_APPROVAL_ACTOR_CHARS, MAX_APPROVAL_NOTE_CHARS, MAX_AUDIT_DETAILS_BYTES,
+    MAX_AUDIT_EVENT_TYPE_CHARS, MAX_COMPLETION_ERROR_CHARS, MAX_COMPLETION_EVIDENCE_CHARS,
+    MAX_OBLIGATION_DESCRIPTION_CHARS, MAX_OBLIGATION_ID_CHARS, MAX_RECURRENCE_EXPRESSION_CHARS,
+    MAX_RECURRENCE_TIMEZONE_CHARS, NewObligation, Obligation, ObligationState, Recurrence,
     gardener::{
         CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerCandidateQualification,
         GardenerEvent, GardenerImplementationRun, GardenerInspection, GardenerPublicationState,
@@ -244,10 +247,9 @@ impl Store {
         precondition: Option<&ActionPrecondition>,
         now: i64,
     ) -> Result<(), StoreError> {
-        if actor.trim().is_empty() {
-            return Err(StoreError::Invalid(
-                "approval actor must not be empty".to_owned(),
-            ));
+        validate_bounded_text("approval actor", actor, MAX_APPROVAL_ACTOR_CHARS, false)?;
+        if let Some(note) = note {
+            validate_bounded_text("approval note", note, MAX_APPROVAL_NOTE_CHARS, true)?;
         }
         let transaction = self
             .connection
@@ -1002,10 +1004,9 @@ impl Store {
         precondition: Option<(&ActionPrecondition, bool)>,
         now: i64,
     ) -> Result<ProposalInstance, StoreError> {
-        if actor.trim().is_empty() {
-            return Err(StoreError::Invalid(
-                "approval actor must not be empty".to_owned(),
-            ));
+        validate_bounded_text("approval actor", actor, MAX_APPROVAL_ACTOR_CHARS, false)?;
+        if let Some(note) = note {
+            validate_bounded_text("approval note", note, MAX_APPROVAL_NOTE_CHARS, true)?;
         }
         let transaction = self
             .connection
@@ -2130,6 +2131,7 @@ impl Store {
         completion: Completion,
         now: i64,
     ) -> Result<(), StoreError> {
+        validate_completion(&completion)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -2215,7 +2217,8 @@ impl Store {
     pub fn attempts(&self, id: &str) -> Result<Vec<Attempt>, StoreError> {
         let mut statement = self.connection.prepare(
             "SELECT id, obligation_id, occurrence, attempt_number, lease_generation,
-                    lease_token, claimed_at, completed_at, outcome, retryable, error, evidence
+                    lease_token, claimed_at, completed_at, outcome, retryable,
+                    failure_disposition, error, evidence
              FROM attempts WHERE obligation_id = ?1 ORDER BY id",
         )?;
         let rows = statement.query_map([id], attempt_from_row)?;
@@ -3278,6 +3281,13 @@ fn append_gardener_event(
     now: i64,
     details: serde_json::Value,
 ) -> Result<(), StoreError> {
+    validate_bounded_text(
+        "audit event type",
+        event_type,
+        MAX_AUDIT_EVENT_TYPE_CHARS,
+        false,
+    )?;
+    let details = serialise_audit_details(details)?;
     transaction.execute(
         "INSERT INTO gardener_events(
             repository, inspection_id, proposal_fingerprint, event_type, occurred_at, details_json
@@ -3288,7 +3298,7 @@ fn append_gardener_event(
             proposal_fingerprint,
             event_type,
             now,
-            details.to_string()
+            details
         ],
     )?;
     Ok(())
@@ -3301,10 +3311,17 @@ fn append_gardener_run_event(
     now: i64,
     details: serde_json::Value,
 ) -> Result<(), StoreError> {
+    validate_bounded_text(
+        "audit event type",
+        event_type,
+        MAX_AUDIT_EVENT_TYPE_CHARS,
+        false,
+    )?;
+    let details = serialise_audit_details(details)?;
     transaction.execute(
         "INSERT INTO gardener_run_events(run_id, event_type, occurred_at, details_json)
          VALUES (?1, ?2, ?3, ?4)",
-        params![run_id, event_type, now, details.to_string()],
+        params![run_id, event_type, now, details],
     )?;
     Ok(())
 }
@@ -3528,7 +3545,7 @@ fn apply_transition(
             transaction.execute(
                 "UPDATE obligations SET state = 'running', next_wake_at = NULL,
                     attempts_made = ?2, lease_token = ?3, lease_generation = ?4,
-                    lease_expires_at = ?5, updated_at = ?6
+                    lease_expires_at = ?5, failure_disposition = NULL, updated_at = ?6
                  WHERE id = ?1",
                 params![
                     id,
@@ -3631,10 +3648,13 @@ fn apply_transition(
                         transaction,
                         claim,
                         now,
-                        AttemptOutcome::Succeeded,
-                        None,
-                        None,
-                        evidence.as_deref(),
+                        AttemptCompletion {
+                            outcome: AttemptOutcome::Succeeded,
+                            retryable: None,
+                            disposition: None,
+                            error: None,
+                            evidence: evidence.as_deref(),
+                        },
                     )?;
                     if let (Some(expression), Some(timezone)) = (
                         obligation.recurrence_cron.as_deref(),
@@ -3656,7 +3676,8 @@ fn apply_transition(
                                     "UPDATE obligations SET state = ?2, occurrence = occurrence + 1,
                                         scheduled_at = ?3, next_wake_at = ?4, attempts_made = 0,
                                         lease_token = NULL, lease_expires_at = NULL,
-                                        last_error = NULL, last_evidence = ?5, updated_at = ?6
+                                        last_error = NULL, last_evidence = ?5,
+                                        failure_disposition = NULL, updated_at = ?6
                                      WHERE id = ?1",
                                     params![
                                         claim.obligation_id,
@@ -3712,7 +3733,7 @@ fn apply_transition(
                     }
                 }
                 Completion::Failed {
-                    retryable,
+                    disposition,
                     error,
                     evidence,
                 } => {
@@ -3720,16 +3741,19 @@ fn apply_transition(
                         transaction,
                         claim,
                         now,
-                        AttemptOutcome::Failed,
-                        Some(retryable),
-                        Some(&error),
-                        evidence.as_deref(),
+                        AttemptCompletion {
+                            outcome: AttemptOutcome::Failed,
+                            retryable: Some(disposition.legacy_retryable()),
+                            disposition: Some(disposition),
+                            error: Some(&error),
+                            evidence: evidence.as_deref(),
+                        },
                     )?;
                     schedule_failure(
                         transaction,
                         &obligation,
                         now,
-                        retryable,
+                        disposition,
                         &error,
                         evidence.as_deref(),
                         "failed",
@@ -3748,7 +3772,7 @@ fn apply_transition(
             }
             let changed = transaction.execute(
                 "UPDATE attempts SET completed_at = ?3, outcome = 'lease_expired', retryable = 1,
-                    error = 'lease expired before completion'
+                    failure_disposition = 'retry_safe', error = 'lease expired before completion'
                  WHERE obligation_id = ?1 AND lease_generation = ?2 AND completed_at IS NULL",
                 params![id, obligation.lease_generation, now],
             )?;
@@ -3759,7 +3783,7 @@ fn apply_transition(
                 transaction,
                 &obligation,
                 now,
-                true,
+                FailureDisposition::RetrySafe,
                 "lease expired before completion",
                 None,
                 "lease_expired",
@@ -3781,7 +3805,8 @@ fn apply_transition(
             let next_wake = (!obligation.approval_required).then_some(now);
             transaction.execute(
                 "UPDATE obligations SET state = ?2, next_wake_at = ?3,
-                    last_error = NULL, updated_at = ?4 WHERE id = ?1",
+                    last_error = NULL, failure_disposition = NULL,
+                    updated_at = ?4 WHERE id = ?1",
                 params![id, next_state.to_string(), next_wake, now],
             )?;
             append_event(
@@ -3810,7 +3835,8 @@ fn apply_transition(
             }
             transaction.execute(
                 "UPDATE obligations SET state = 'cancelled', next_wake_at = NULL,
-                    lease_token = NULL, lease_expires_at = NULL, updated_at = ?2 WHERE id = ?1",
+                    lease_token = NULL, lease_expires_at = NULL,
+                    failure_disposition = 'cancelled', updated_at = ?2 WHERE id = ?1",
                 params![id, now],
             )?;
             append_event(
@@ -3821,7 +3847,7 @@ fn apply_transition(
                 now,
                 Some(obligation.state),
                 ObligationState::Cancelled,
-                json!({}),
+                json!({"failure_disposition": FailureDisposition::Cancelled}),
             )?;
         }
     }
@@ -3842,7 +3868,7 @@ fn complete_terminal_success(
     transaction.execute(
         "UPDATE obligations SET state = 'completed', lease_token = NULL,
             lease_expires_at = NULL, last_error = NULL,
-            last_evidence = ?2, updated_at = ?3 WHERE id = ?1",
+            last_evidence = ?2, failure_disposition = NULL, updated_at = ?3 WHERE id = ?1",
         params![obligation.id, evidence, now],
     )?;
     append_event(
@@ -3869,7 +3895,8 @@ fn preserve_success_as_attention(
     transaction.execute(
         "UPDATE obligations SET state = 'attention', next_wake_at = NULL,
             lease_token = NULL, lease_expires_at = NULL, last_error = ?2,
-            last_evidence = ?3, updated_at = ?4 WHERE id = ?1",
+            last_evidence = ?3, failure_disposition = 'needs_reconciliation',
+            updated_at = ?4 WHERE id = ?1",
         params![obligation.id, error, evidence, now],
     )?;
     append_event(
@@ -3880,7 +3907,11 @@ fn preserve_success_as_attention(
         now,
         Some(ObligationState::Running),
         ObligationState::Attention,
-        json!({"error": error, "evidence": evidence}),
+        json!({
+            "error": error,
+            "evidence": evidence,
+            "failure_disposition": FailureDisposition::NeedsReconciliation
+        }),
     )?;
     Ok(())
 }
@@ -3909,12 +3940,13 @@ fn schedule_failure(
     transaction: &Transaction<'_>,
     obligation: &Obligation,
     now: i64,
-    retryable: bool,
+    disposition: FailureDisposition,
     error: &str,
     evidence: Option<&str>,
     event_prefix: &str,
 ) -> Result<(), StoreError> {
-    let can_retry = retryable && obligation.attempts_made < obligation.max_attempts;
+    let can_retry =
+        disposition.is_retry_safe() && obligation.attempts_made < obligation.max_attempts;
     let (next_state, next_wake, event_type) = if can_retry {
         let delay = retry_delay(
             obligation.retry_base_seconds,
@@ -3936,13 +3968,14 @@ fn schedule_failure(
     transaction.execute(
         "UPDATE obligations SET state = ?2, next_wake_at = ?3,
             lease_token = NULL, lease_expires_at = NULL, last_error = ?4,
-            last_evidence = ?5, updated_at = ?6 WHERE id = ?1",
+            last_evidence = ?5, failure_disposition = ?6, updated_at = ?7 WHERE id = ?1",
         params![
             obligation.id,
             next_state.to_string(),
             next_wake,
             error,
             evidence,
+            disposition.to_string(),
             now
         ],
     )?;
@@ -3958,33 +3991,40 @@ fn schedule_failure(
             "attempt_number": obligation.attempts_made,
             "error": error,
             "retry_at": next_wake,
-            "evidence": evidence
+            "evidence": evidence,
+            "failure_disposition": disposition
         }),
     )?;
     Ok(())
+}
+
+struct AttemptCompletion<'a> {
+    outcome: AttemptOutcome,
+    retryable: Option<bool>,
+    disposition: Option<FailureDisposition>,
+    error: Option<&'a str>,
+    evidence: Option<&'a str>,
 }
 
 fn finish_attempt(
     transaction: &Transaction<'_>,
     claim: &Claim,
     now: i64,
-    outcome: AttemptOutcome,
-    retryable: Option<bool>,
-    error: Option<&str>,
-    evidence: Option<&str>,
+    completion: AttemptCompletion<'_>,
 ) -> Result<(), StoreError> {
     let changed = transaction.execute(
         "UPDATE attempts SET completed_at = ?3, outcome = ?4, retryable = ?5,
-            error = ?6, evidence = ?7
+            failure_disposition = ?6, error = ?7, evidence = ?8
          WHERE obligation_id = ?1 AND lease_generation = ?2 AND completed_at IS NULL",
         params![
             claim.obligation_id,
             claim.lease_generation,
             now,
-            outcome.to_string(),
-            retryable,
-            error,
-            evidence
+            completion.outcome.to_string(),
+            completion.retryable,
+            completion.disposition.map(|value| value.to_string()),
+            completion.error,
+            completion.evidence
         ],
     )?;
     if changed != 1 {
@@ -4098,6 +4138,13 @@ fn append_event(
     to: ObligationState,
     details: serde_json::Value,
 ) -> Result<(), StoreError> {
+    validate_bounded_text(
+        "audit event type",
+        event_type,
+        MAX_AUDIT_EVENT_TYPE_CHARS,
+        false,
+    )?;
+    let details = serialise_audit_details(details)?;
     transaction.execute(
         "INSERT INTO audit_events(
             obligation_id, occurrence, event_type, occurred_at, from_state, to_state, details_json
@@ -4109,20 +4156,58 @@ fn append_event(
             now,
             from.map(|value| value.to_string()),
             to.to_string(),
-            details.to_string()
+            details
         ],
     )?;
     Ok(())
 }
 
-fn validate_new(new: &NewObligation) -> Result<(), StoreError> {
-    if new.id.trim().is_empty() {
-        return Err(StoreError::Invalid("id must not be empty".to_owned()));
+fn serialise_audit_details(details: serde_json::Value) -> Result<String, StoreError> {
+    fn contains_nul(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::String(value) => value.contains('\0'),
+            serde_json::Value::Array(values) => values.iter().any(contains_nul),
+            serde_json::Value::Object(values) => values
+                .iter()
+                .any(|(key, value)| key.contains('\0') || contains_nul(value)),
+            _ => false,
+        }
     }
-    if new.description.trim().is_empty() {
+    if contains_nul(&details) {
         return Err(StoreError::Invalid(
-            "description must not be empty".to_owned(),
+            "audit event details must not contain NUL".to_owned(),
         ));
+    }
+    let details = details.to_string();
+    if details.len() > MAX_AUDIT_DETAILS_BYTES {
+        return Err(StoreError::Invalid(format!(
+            "audit event details must be at most {MAX_AUDIT_DETAILS_BYTES} bytes"
+        )));
+    }
+    Ok(details)
+}
+
+fn validate_new(new: &NewObligation) -> Result<(), StoreError> {
+    validate_bounded_text("id", &new.id, MAX_OBLIGATION_ID_CHARS, false)?;
+    validate_bounded_text(
+        "description",
+        &new.description,
+        MAX_OBLIGATION_DESCRIPTION_CHARS,
+        false,
+    )?;
+    if let Some(recurrence) = &new.recurrence {
+        validate_bounded_text(
+            "recurrence expression",
+            recurrence.expression(),
+            MAX_RECURRENCE_EXPRESSION_CHARS,
+            false,
+        )?;
+        validate_bounded_text(
+            "recurrence timezone",
+            recurrence.timezone(),
+            MAX_RECURRENCE_TIMEZONE_CHARS,
+            false,
+        )?;
     }
     if new.retry.max_attempts == 0 {
         return Err(StoreError::Invalid(
@@ -4135,6 +4220,53 @@ fn validate_new(new: &NewObligation) -> Result<(), StoreError> {
         return Err(StoreError::Invalid(
             "retry delays must be positive and bounded above the base".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_completion(completion: &Completion) -> Result<(), StoreError> {
+    match completion {
+        Completion::Succeeded { evidence } => {
+            if let Some(evidence) = evidence {
+                validate_bounded_text(
+                    "completion evidence",
+                    evidence,
+                    MAX_COMPLETION_EVIDENCE_CHARS,
+                    true,
+                )?;
+            }
+        }
+        Completion::Failed {
+            error, evidence, ..
+        } => {
+            validate_bounded_text("completion error", error, MAX_COMPLETION_ERROR_CHARS, false)?;
+            if let Some(evidence) = evidence {
+                validate_bounded_text(
+                    "completion evidence",
+                    evidence,
+                    MAX_COMPLETION_EVIDENCE_CHARS,
+                    true,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_bounded_text(
+    name: &str,
+    value: &str,
+    max_chars: usize,
+    allow_empty: bool,
+) -> Result<(), StoreError> {
+    if value.contains('\0') {
+        return Err(StoreError::Invalid(format!("{name} must not contain NUL")));
+    }
+    if (!allow_empty && value.trim().is_empty()) || value.chars().count() > max_chars {
+        let requirement = if allow_empty { "" } else { "non-empty and " };
+        return Err(StoreError::Invalid(format!(
+            "{name} must be {requirement}at most {max_chars} Unicode characters"
+        )));
     }
     Ok(())
 }
@@ -4170,6 +4302,7 @@ fn obligation_from_row(row: &Row<'_>) -> rusqlite::Result<Obligation> {
         lease_expires_at: row.get("lease_expires_at")?,
         last_error: row.get("last_error")?,
         last_evidence: row.get("last_evidence")?,
+        failure_disposition: parse_optional_column(row, "failure_disposition")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -4187,8 +4320,9 @@ fn attempt_from_row(row: &Row<'_>) -> rusqlite::Result<Attempt> {
         completed_at: row.get(7)?,
         outcome: parse_index(row, 8)?,
         retryable: row.get(9)?,
-        error: row.get(10)?,
-        evidence: row.get(11)?,
+        failure_disposition: parse_optional_index(row, 10)?,
+        error: row.get(11)?,
+        evidence: row.get(12)?,
     })
 }
 
@@ -4225,6 +4359,25 @@ where
     parse_value(value, index)
 }
 
+fn parse_optional_column<T>(row: &Row<'_>, name: &str) -> rusqlite::Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    let index = row.as_ref().column_index(name)?;
+    let value: Option<String> = row.get(index)?;
+    value.map(|value| parse_value(value, index)).transpose()
+}
+
+fn parse_optional_index<T>(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    let value: Option<String> = row.get(index)?;
+    value.map(|value| parse_value(value, index)).transpose()
+}
+
 fn parse_value<T>(value: String, index: usize) -> rusqlite::Result<T>
 where
     T: FromStr,
@@ -4246,6 +4399,8 @@ where
 mod tests {
     use std::collections::BTreeSet;
 
+    use proptest::prelude::*;
+    use proptest::test_runner::RngSeed;
     use tempfile::TempDir;
 
     use super::*;
@@ -4264,6 +4419,309 @@ mod tests {
                 base_delay_seconds: 10,
                 max_delay_seconds: 60,
             },
+        }
+    }
+
+    fn assert_projection_agrees_with_latest_event(store: &Store, id: &str) {
+        let obligation = store.get(id).unwrap().unwrap();
+        let events = store.events(id).unwrap();
+        assert_eq!(events.last().unwrap().to_state, obligation.state);
+        if !obligation.state.is_terminal() {
+            assert!(
+                obligation.next_wake_at.is_some()
+                    || (obligation.state == ObligationState::Running
+                        && obligation.lease_token.is_some()
+                        && obligation.lease_expires_at.is_some())
+                    || matches!(
+                        obligation.state,
+                        ObligationState::AwaitingApproval | ObligationState::Attention
+                    ),
+                "non-terminal obligation {id:?} lost durable liveness: {obligation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lifecycle_text_boundaries_count_unicode_and_reject_nul() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut exact = one_off(&"🦘".repeat(MAX_OBLIGATION_ID_CHARS), 10);
+        exact.description = "界".repeat(MAX_OBLIGATION_DESCRIPTION_CHARS);
+        store.create(exact, 1).unwrap();
+
+        let too_long = one_off(&"🦘".repeat(MAX_OBLIGATION_ID_CHARS + 1), 10);
+        assert!(matches!(
+            store.create(too_long, 1),
+            Err(StoreError::Invalid(_))
+        ));
+        let nul = one_off("bad\0id", 10);
+        assert!(matches!(store.create(nul, 1), Err(StoreError::Invalid(_))));
+
+        let approval = one_off("approval-limits", 10);
+        let approval = NewObligation {
+            approval_required: true,
+            ..approval
+        };
+        store.create(approval, 1).unwrap();
+        store
+            .decide_approval(
+                "approval-limits",
+                ApprovalDecision::Approved,
+                &"人".repeat(MAX_APPROVAL_ACTOR_CHARS),
+                Some(&"注".repeat(MAX_APPROVAL_NOTE_CHARS)),
+                2,
+            )
+            .unwrap();
+
+        let approval = one_off("approval-too-long", 10);
+        let approval = NewObligation {
+            approval_required: true,
+            ..approval
+        };
+        store.create(approval, 1).unwrap();
+        assert!(matches!(
+            store.decide_approval(
+                "approval-too-long",
+                ApprovalDecision::Approved,
+                &"人".repeat(MAX_APPROVAL_ACTOR_CHARS + 1),
+                None,
+                2,
+            ),
+            Err(StoreError::Invalid(_))
+        ));
+
+        let claim = store.claim_due(10, 20, 1).unwrap().remove(0);
+        assert!(matches!(
+            store.complete(
+                &claim,
+                Completion::Failed {
+                    disposition: FailureDisposition::Terminal,
+                    error: "e".repeat(MAX_COMPLETION_ERROR_CHARS + 1),
+                    evidence: None,
+                },
+                11,
+            ),
+            Err(StoreError::Invalid(_))
+        ));
+        // Rejection happens before the attempt update, so the valid claim still owns the lease.
+        store
+            .complete(
+                &claim,
+                Completion::Failed {
+                    disposition: FailureDisposition::HumanDecision,
+                    error: "界".repeat(MAX_COMPLETION_ERROR_CHARS),
+                    evidence: Some("証".repeat(MAX_COMPLETION_EVIDENCE_CHARS)),
+                },
+                11,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn audit_metadata_limits_are_enforced_before_insert() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.create(one_off("audit-limits", 10), 1).unwrap();
+        let transaction = store.connection.transaction().unwrap();
+        assert!(matches!(
+            append_event(
+                &transaction,
+                "audit-limits",
+                1,
+                &"界".repeat(MAX_AUDIT_EVENT_TYPE_CHARS + 1),
+                2,
+                Some(ObligationState::Pending),
+                ObligationState::Pending,
+                json!({}),
+            ),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            append_event(
+                &transaction,
+                "audit-limits",
+                1,
+                "bounded",
+                2,
+                Some(ObligationState::Pending),
+                ObligationState::Pending,
+                json!({"metadata": "contains\0nul"}),
+            ),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            append_event(
+                &transaction,
+                "audit-limits",
+                1,
+                "bounded",
+                2,
+                Some(ObligationState::Pending),
+                ObligationState::Pending,
+                json!({"metadata": "x".repeat(MAX_AUDIT_DETAILS_BYTES)}),
+            ),
+            Err(StoreError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn every_failure_disposition_is_persisted_and_only_retry_safe_auto_retries() {
+        for (index, disposition) in [
+            FailureDisposition::RetrySafe,
+            FailureDisposition::NeedsReconciliation,
+            FailureDisposition::HumanDecision,
+            FailureDisposition::Terminal,
+            FailureDisposition::Cancelled,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut store = Store::open_in_memory().unwrap();
+            let id = format!("disposition-{index}");
+            store.create(one_off(&id, 10), 1).unwrap();
+            let claim = store.claim_due(10, 20, 1).unwrap().remove(0);
+            store
+                .complete(
+                    &claim,
+                    Completion::Failed {
+                        disposition,
+                        error: "typed failure".to_owned(),
+                        evidence: Some("durable intent".to_owned()),
+                    },
+                    11,
+                )
+                .unwrap();
+            let obligation = store.get(&id).unwrap().unwrap();
+            assert_eq!(obligation.failure_disposition, Some(disposition));
+            assert_eq!(
+                store.attempts(&id).unwrap()[0].failure_disposition,
+                Some(disposition)
+            );
+            assert_eq!(
+                obligation.state,
+                if disposition == FailureDisposition::RetrySafe {
+                    ObligationState::RetryScheduled
+                } else {
+                    ObligationState::Attention
+                }
+            );
+            let details: serde_json::Value =
+                serde_json::from_str(&store.events(&id).unwrap().last().unwrap().details_json)
+                    .unwrap();
+            assert_eq!(details["failure_disposition"], disposition.to_string());
+            assert_projection_agrees_with_latest_event(&store, &id);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 12,
+            failure_persistence: None,
+            rng_seed: RngSeed::Fixed(0xB0_11_1E),
+            ..ProptestConfig::default()
+        })]
+
+        #[test]
+        fn two_store_lifecycle_model_preserves_fencing_liveness_and_typed_intent(
+            lease_seconds in 5_i64..40,
+            renewal_delta in 0_i64..5,
+            disposition_index in 0_usize..5,
+        ) {
+            let dispositions = [
+                FailureDisposition::RetrySafe,
+                FailureDisposition::NeedsReconciliation,
+                FailureDisposition::HumanDecision,
+                FailureDisposition::Terminal,
+                FailureDisposition::Cancelled,
+            ];
+            let disposition = dispositions[disposition_index];
+            let directory = TempDir::new().unwrap();
+            let path = directory.path().join("model.sqlite");
+            let mut first = Store::open(&path).unwrap();
+            let mut second = Store::open(&path).unwrap();
+            let mut obligation = one_off("model", 100);
+            obligation.approval_required = true;
+            obligation.retry.max_attempts = 3;
+            first.create(obligation, 90).unwrap();
+            second.decide_approval(
+                "model",
+                ApprovalDecision::Approved,
+                "worker α",
+                Some("generated approval"),
+                95,
+            ).unwrap();
+
+            let stale = first.claim_due(100, lease_seconds, 1).unwrap().remove(0);
+            prop_assert!(second.claim_due(100, lease_seconds, 1).unwrap().is_empty());
+            let renewal_at = 100 + renewal_delta;
+            let renewed_until = second.renew_lease(&stale, renewal_at, lease_seconds).unwrap();
+            prop_assert_eq!(renewed_until, renewal_at.saturating_add(lease_seconds));
+
+            first.recover_expired_leases(renewed_until).unwrap();
+            let stale_is_fenced = matches!(
+                second.complete(
+                    &stale,
+                    Completion::Succeeded { evidence: None },
+                    renewed_until,
+                ),
+                Err(StoreError::Fenced)
+            );
+            prop_assert!(stale_is_fenced);
+            let after_expiry = first.get("model").unwrap().unwrap();
+            prop_assert_eq!(after_expiry.state, ObligationState::RetryScheduled);
+            prop_assert_eq!(after_expiry.failure_disposition, Some(FailureDisposition::RetrySafe));
+
+            let retry_at = after_expiry.next_wake_at.unwrap();
+            let current = second.claim_due(retry_at, lease_seconds, 1).unwrap().remove(0);
+            prop_assert!(first.claim_due(retry_at, lease_seconds, 1).unwrap().is_empty());
+            first.complete(
+                &current,
+                Completion::Failed {
+                    disposition,
+                    error: "generated typed outcome".to_owned(),
+                    evidence: Some("persisted ambiguity or terminal intent".to_owned()),
+                },
+                retry_at + 1,
+            ).unwrap();
+
+            let completed = second.get("model").unwrap().unwrap();
+            prop_assert_eq!(completed.failure_disposition, Some(disposition));
+            prop_assert_eq!(
+                completed.state,
+                if disposition == FailureDisposition::RetrySafe {
+                    ObligationState::RetryScheduled
+                } else {
+                    ObligationState::Attention
+                }
+            );
+            let latest = second.events("model").unwrap().pop().unwrap();
+            prop_assert_eq!(latest.to_state, completed.state);
+            prop_assert!(latest.details_json.contains(&disposition.to_string()));
+            assert_projection_agrees_with_latest_event(&second, "model");
+
+            if completed.state == ObligationState::Attention {
+                first.retry_attention("model", retry_at + 2).unwrap();
+                second.decide_approval(
+                    "model",
+                    ApprovalDecision::Approved,
+                    "operator",
+                    Some("approved reconciled retry"),
+                    retry_at + 2,
+                ).unwrap();
+                let retried = second.claim_due(retry_at + 2, lease_seconds, 1).unwrap().remove(0);
+                first.complete(
+                    &retried,
+                    Completion::Succeeded { evidence: Some("operator reconciled".to_owned()) },
+                    retry_at + 3,
+                ).unwrap();
+            }
+
+            first.create(one_off("cancel-model", retry_at + 10), retry_at + 3).unwrap();
+            second.cancel("cancel-model", retry_at + 4).unwrap();
+            prop_assert_eq!(
+                first.get("cancel-model").unwrap().unwrap().failure_disposition,
+                Some(FailureDisposition::Cancelled)
+            );
+            assert_projection_agrees_with_latest_event(&first, "model");
+            assert_projection_agrees_with_latest_event(&first, "cancel-model");
         }
     }
 
@@ -4296,7 +4754,8 @@ mod tests {
                 (4, "0004_coding_gardener_runs.sql".to_owned()),
                 (5, "0005_gardener_trust_publication.sql".to_owned()),
                 (6, "0006_source_bound_proposal_generations.sql".to_owned()),
-                (7, "0007_immutable_migration_manifest.sql".to_owned())
+                (7, "0007_immutable_migration_manifest.sql".to_owned()),
+                (8, "0008_typed_failure_dispositions.sql".to_owned())
             ]
         );
         drop(store);
@@ -4465,7 +4924,7 @@ mod tests {
             .complete(
                 &first,
                 Completion::Failed {
-                    retryable: true,
+                    disposition: FailureDisposition::RetrySafe,
                     error: "first".to_owned(),
                     evidence: None,
                 },
@@ -4481,7 +4940,7 @@ mod tests {
             .complete(
                 &second,
                 Completion::Failed {
-                    retryable: true,
+                    disposition: FailureDisposition::RetrySafe,
                     error: "second".to_owned(),
                     evidence: None,
                 },
@@ -4540,7 +4999,7 @@ mod tests {
             .complete(
                 &first,
                 Completion::Failed {
-                    retryable: false,
+                    disposition: FailureDisposition::Terminal,
                     error: "operator action needed".to_owned(),
                     evidence: None,
                 },
@@ -5370,7 +5829,7 @@ mod tests {
             .complete(
                 &claim,
                 Completion::Failed {
-                    retryable: false,
+                    disposition: FailureDisposition::Terminal,
                     error: "superseded heartbeat was fenced".to_owned(),
                     evidence: None,
                 },

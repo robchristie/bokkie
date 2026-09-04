@@ -5,8 +5,15 @@ use chrono_tz::Tz;
 use cron::Schedule;
 use thiserror::Error;
 
+use crate::domain::{MAX_RECURRENCE_EXPRESSION_CHARS, MAX_RECURRENCE_TIMEZONE_CHARS};
+
 #[derive(Debug, Error)]
 pub enum RecurrenceError {
+    #[error("{field} must contain no NUL and be at most {max_chars} Unicode characters")]
+    FieldLimit {
+        field: &'static str,
+        max_chars: usize,
+    },
     #[error("unknown IANA time zone {0:?}")]
     TimeZone(String),
     #[error("invalid cron expression: {0}")]
@@ -33,6 +40,16 @@ impl Recurrence {
             expression: expression.into(),
             timezone: timezone.into(),
         };
+        validate_field(
+            "recurrence expression",
+            &recurrence.expression,
+            MAX_RECURRENCE_EXPRESSION_CHARS,
+        )?;
+        validate_field(
+            "recurrence timezone",
+            &recurrence.timezone,
+            MAX_RECURRENCE_TIMEZONE_CHARS,
+        )?;
         recurrence.parsed()?;
         Ok(recurrence)
     }
@@ -68,6 +85,17 @@ impl Recurrence {
             Schedule::from_str(&cron).map_err(|error| RecurrenceError::Cron(error.to_string()))?;
         Ok((schedule, timezone))
     }
+}
+
+fn validate_field(
+    field: &'static str,
+    value: &str,
+    max_chars: usize,
+) -> Result<(), RecurrenceError> {
+    if value.contains('\0') || value.chars().count() > max_chars {
+        return Err(RecurrenceError::FieldLimit { field, max_chars });
+    }
+    Ok(())
 }
 
 fn normalise_cron(expression: &str) -> Result<String, RecurrenceError> {
@@ -114,5 +142,23 @@ mod tests {
             recurrence.next_after(summer_before).unwrap(),
             summer_occurrence
         );
+    }
+
+    #[test]
+    fn recurrence_fields_are_bounded_before_parsing() {
+        assert!(matches!(
+            Recurrence::new("*".repeat(MAX_RECURRENCE_EXPRESSION_CHARS + 1), "UTC"),
+            Err(RecurrenceError::FieldLimit {
+                field: "recurrence expression",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Recurrence::new("* * * * *", "UTC\0"),
+            Err(RecurrenceError::FieldLimit {
+                field: "recurrence timezone",
+                ..
+            })
+        ));
     }
 }

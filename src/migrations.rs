@@ -60,6 +60,12 @@ pub(crate) const MIGRATIONS: &[MigrationManifestEntry] = &[
         sql: include_str!("../migrations/0007_immutable_migration_manifest.sql"),
         sha256: "df27eb40756ce50294e25a38c0e1ff54bcfbbe41cc448208123685bc52f98841",
     },
+    MigrationManifestEntry {
+        version: 8,
+        name: "0008_typed_failure_dispositions.sql",
+        sql: include_str!("../migrations/0008_typed_failure_dispositions.sql"),
+        sha256: "36637c61b6f731274c0afa2302e93324d66fbeb17343da6a9e155092ac0ba17e",
+    },
 ];
 
 pub(crate) fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
@@ -347,6 +353,83 @@ mod tests {
         assert!(Store::open_compatible(path).is_ok());
     }
 
+    #[test]
+    fn v8_backfills_only_unambiguous_legacy_failure_dispositions() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("v7.sqlite");
+        let connection = legacy_v6(&path);
+        connection.execute_batch(MIGRATIONS[6].sql).unwrap();
+        connection
+            .execute(
+                "INSERT INTO schema_migrations(version, name, sha256) VALUES (7, ?1, ?2)",
+                params![MIGRATIONS[6].name, MIGRATIONS[6].sha256],
+            )
+            .unwrap();
+        for (id, state) in [
+            ("retry", "retry_scheduled"),
+            ("terminal", "attention"),
+            ("expired", "attention"),
+            ("ambiguous", "attention"),
+            ("cancelled", "cancelled"),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO obligations(
+                        id, description, state, occurrence, scheduled_at, next_wake_at,
+                        approval_required, attempts_made, max_attempts, retry_base_seconds,
+                        retry_max_seconds, lease_generation, created_at, updated_at
+                     ) VALUES (?1, 'legacy', ?2, 1, 10,
+                        CASE WHEN ?2 = 'retry_scheduled' THEN 20 ELSE NULL END,
+                        0, 1, 3, 10, 60, 1, 10, 10)",
+                    params![id, state],
+                )
+                .unwrap();
+        }
+        for (id, outcome, retryable) in [
+            ("retry", "failed", Some(true)),
+            ("terminal", "failed", Some(false)),
+            ("expired", "lease_expired", Some(true)),
+            ("ambiguous", "failed", None),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO attempts(
+                        obligation_id, occurrence, attempt_number, lease_generation,
+                        lease_token, claimed_at, completed_at, outcome, retryable
+                     ) VALUES (?1, 1, 1, 1, ?1 || '-lease', 10, 11, ?2, ?3)",
+                    params![id, outcome, retryable],
+                )
+                .unwrap();
+        }
+        drop(connection);
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.get("retry").unwrap().unwrap().failure_disposition,
+            Some(crate::FailureDisposition::RetrySafe)
+        );
+        assert_eq!(
+            store.get("terminal").unwrap().unwrap().failure_disposition,
+            Some(crate::FailureDisposition::Terminal)
+        );
+        assert_eq!(
+            store.get("expired").unwrap().unwrap().failure_disposition,
+            Some(crate::FailureDisposition::RetrySafe)
+        );
+        assert_eq!(
+            store.get("ambiguous").unwrap().unwrap().failure_disposition,
+            None
+        );
+        assert_eq!(
+            store.get("cancelled").unwrap().unwrap().failure_disposition,
+            Some(crate::FailureDisposition::Cancelled)
+        );
+        assert_eq!(
+            store.attempts("ambiguous").unwrap()[0].failure_disposition,
+            None
+        );
+    }
+
     fn remove_manifest_guards(connection: &Connection) {
         connection
             .execute_batch(
@@ -390,8 +473,8 @@ mod tests {
                     connection
                         .execute(
                             "INSERT INTO schema_migrations(version, name, sha256)
-                             VALUES (8, '0008_future.sql', ?1)",
-                            ["8".repeat(64)],
+                             VALUES (9, '0009_future.sql', ?1)",
+                            ["9".repeat(64)],
                         )
                         .unwrap();
                 }

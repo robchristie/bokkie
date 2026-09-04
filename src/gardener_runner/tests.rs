@@ -566,7 +566,7 @@ fn blocking_verdict_preserves_draft_pr_and_enters_attention() {
     assert!(matches!(
         result.completion,
         Completion::Failed {
-            retryable: false,
+            disposition: FailureDisposition::HumanDecision,
             ..
         }
     ));
@@ -589,6 +589,29 @@ fn blocking_verdict_preserves_draft_pr_and_enters_attention() {
 }
 
 #[test]
+fn cleanup_disposition_is_typed_and_never_inferred_from_display_text() {
+    let misleading = GardenerRunnerError::Cleanup {
+        context: "external state is ambiguous only as quoted diagnostic text".to_owned(),
+        cleanup: "ordinary cleanup failure".to_owned(),
+        disposition: FailureDisposition::Terminal,
+    };
+    assert_eq!(
+        misleading.failure_disposition(GardenerObligationKind::Implementation),
+        FailureDisposition::Terminal
+    );
+
+    let preserved = GardenerRunnerError::Cleanup {
+        context: "ordinary implementation failure".to_owned(),
+        cleanup: "ordinary cleanup text".to_owned(),
+        disposition: FailureDisposition::NeedsReconciliation,
+    };
+    assert_eq!(
+        preserved.failure_disposition(GardenerObligationKind::Implementation),
+        FailureDisposition::NeedsReconciliation
+    );
+}
+
+#[test]
 fn failed_candidate_check_is_durable_and_prevents_publication() {
     let fixture = Fixture::new("pass", false, false);
     let mut store = fixture.store();
@@ -603,7 +626,7 @@ fn failed_candidate_check_is_durable_and_prevents_publication() {
     assert!(matches!(
         result.completion,
         Completion::Failed {
-            retryable: false,
+            disposition: FailureDisposition::Terminal,
             ..
         }
     ));
@@ -637,7 +660,7 @@ fn mismatched_reported_head_is_non_retryable_and_never_records_a_verdict() {
     assert!(matches!(
         result.completion,
         Completion::Failed {
-            retryable: false,
+            disposition: FailureDisposition::Terminal,
             ..
         }
     ));
@@ -670,7 +693,7 @@ fn changed_pr_head_on_final_observation_enters_attention_without_a_verdict() {
     assert!(matches!(
         result.completion,
         Completion::Failed {
-            retryable: false,
+            disposition: FailureDisposition::Terminal,
             ..
         }
     ));
@@ -763,7 +786,7 @@ fn inspection_rejects_a_noncanonical_effective_origin_before_remote_or_codex_wor
     assert!(matches!(
         result.completion,
         Completion::Failed {
-            retryable: true,
+            disposition: FailureDisposition::RetrySafe,
             ref error,
             ..
         } if error.contains("noncanonical effective origin")
