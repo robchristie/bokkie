@@ -69,7 +69,7 @@ Only the next unblocked package is refined after each landing.
 | P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Landed as [PR #9](https://github.com/robchristie/bokkie/pull/9) at `9920006635c01cd266e6f2cd3a3546fe21747867`; reviewed and landed tree `c844e629c88d363497eed5918e4f2553d941ac38` |
 | P4a | Startup-only migration, immutable manifest verification, bounded HTTP database execution, consistent read snapshots and read-only doctor | P3 schema | Landed as [PR #10](https://github.com/robchristie/bokkie/pull/10) at `87c8d42f1757c9656fbb010723b9e4bb1477dd69`; final reviewed and landed tree `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba` |
 | P4b | Reviewed API mutation secret, local Host/Origin validation and runtime/API/schema build identity | P4a storage contract | Human-authorised [PR #11](https://github.com/robchristie/bokkie/pull/11) landed as `4ecc30338c60bf66507558a68b96c65c34014c86`; reviewed and landed tree `952a77d63477412722f0c2cf908a6ca4ae390c10` |
-| P5a | Fair failure-isolated execution lanes, typed lifecycle outcomes, bounded lifecycle fields and model-based temporal tests | P4 storage and P1 process contracts | Terminal candidate owner revision `861713c6fc2c0e2a0acbb6bbb6fe2a011b15cb42`, repaired through `f7c15c156949ee9f855de272fc03974b15162599` on [PR #12](https://github.com/robchristie/bokkie/pull/12); repaired exact-head review and landing pending |
+| P5a | Fair failure-isolated execution lanes, typed lifecycle outcomes, bounded lifecycle fields and model-based temporal tests | P4 storage and P1 process contracts | Terminal candidate owner revision `861713c6fc2c0e2a0acbb6bbb6fe2a011b15cb42`, repaired through `f5cebeafbe6b15fee53204d74951c789531c00db` on [PR #12](https://github.com/robchristie/bokkie/pull/12); repaired exact-head review and landing pending |
 | P5b | Cursor-paginated incremental projections and global event envelope | P5a schema v8 and typed outcome projection | Refined candidate; must not conflate process session, lane state or failure disposition with durable event identity |
 | P6 | Exact-head aggregate qualification, plan reconciliation/linter, toolchain and repository-policy closeout | P1–P5b | Candidate; live branch protection/licence decision may need human review |
 
@@ -112,10 +112,14 @@ two-store property model plus repeated scheduler fixtures prove fencing,
 liveness, lease horizons, typed ambiguity and cross-lane progress. The first
 exact-head review blocked unbounded class fairness and incomplete timeout
 evidence. The repair alternates waiting lane classes at the Store admission
-boundary and retains both the initiating failure and every timed-out worker.
-Locked canonical checks and repeated repaired fixtures pass. The next action is
-re-review, exact-head CI and landing of [PR #12](https://github.com/robchristie/bokkie/pull/12).
-P5b remains deliberately excluded from this candidate.
+boundary and retains both the initiating failure and every timed-out worker. A
+second review found that admission closure still drained an active Store call
+without a deadline. Closure now publishes cancellation and returns immediately;
+the supervisor alone owns bounded quiescence, including an active claim's typed
+timeout identity. Locked canonical checks and repeated repaired fixtures pass.
+The next action is re-review, exact-head CI and landing of
+[PR #12](https://github.com/robchristie/bokkie/pull/12). P5b remains deliberately
+excluded from this candidate.
 
 ## Durable evidence
 
@@ -146,7 +150,9 @@ P5b remains deliberately excluded from this candidate.
 | P4b reviewed landing | `4cbe4a8fc6aa11e9d2f0c9720ccccc0bf157259f` | `4ecc30338c60bf66507558a68b96c65c34014c86` | Human merge authority granted; candidate and post-merge CI passed; reviewed and landed trees both `952a77d63477412722f0c2cf908a6ca4ae390c10`; R10 and P4b portions of R9/R11 satisfied | [PR #11 terminal evidence](https://github.com/robchristie/bokkie/pull/11#issuecomment-5539710601) |
 | P5a execution-contract candidate | `4ecc30338c60bf66507558a68b96c65c34014c86` | `861713c6fc2c0e2a0acbb6bbb6fe2a011b15cb42` | 156 library, 2 CLI, 13 adapter and 27 attention-UI tests pass; locked Clippy/rustfmt/diff pass; scheduler suite passes 20 consecutive runs; schema v8 backfill, fixed-seed two-store model, atomic claim closure, bounded capacity, lane failure, shutdown cancellation and completion/cancellation race fixtures pass | [PR #12](https://github.com/robchristie/bokkie/pull/12), `src/execution_lane.rs`, `src/service.rs`, migration 0008 and domain/Store tests |
 | P5a first exact-head review | `81af56ee060241d3c8e24411776be247ec3ad1f7` | same | BLOCK: one global mutex did not guarantee waiting lane-class fairness; a primary lane failure masked other workers that missed the join deadline | [Durable review verdict](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540084840) |
-| P5a fairness and shutdown-evidence repair | `f7c15c156949ee9f855de272fc03974b15162599` | terminal plan head | 158 library, 2 CLI, 13 adapter and 27 attention-UI tests pass; locked Clippy/rustfmt/diff pass; both saturated real-Store lane orders pass 20 consecutive runs; typed supervisor fixture retains the primary gardener failure, both timed-out ordinary worker identities and their visible leased claims | PR #12 repair diff, `src/service.rs` and `tests/adapters.rs` |
+| P5a fairness and shutdown-evidence repair | `f7c15c156949ee9f855de272fc03974b15162599` | `6d5c4fffc00d168ba91c0bb8778a5ac1202635dc` | 158 library, 2 CLI, 13 adapter and 27 attention-UI tests pass; locked Clippy/rustfmt/diff pass; both saturated real-Store lane orders pass 20 consecutive runs; typed supervisor fixture retains the primary gardener failure and every timed-out worker identity | PR #12 repair diff, `src/service.rs` and `tests/adapters.rs` |
+| P5a second exact-head review | `6d5c4fffc00d168ba91c0bb8778a5ac1202635dc` | same | BLOCK: admission closure waited without a deadline for an active Store claim, delaying HTTP shutdown and potentially masking the initiating lane failure | [Durable review verdict](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540254429) |
+| P5a active-claim shutdown repair | `f5cebeafbe6b15fee53204d74951c789531c00db` | terminal plan head | 159 library, 2 CLI, 13 adapter and 27 attention-UI tests pass; locked Clippy/rustfmt/diff pass; service suite passes 20 consecutive runs; held-in-admission Store fixture proves prompt closure, bounded supervision, retained primary failure, complete timeout identities and visible leased recovery evidence | PR #12 repair diff and `src/service.rs` |
 
 ## Residual questions
 
