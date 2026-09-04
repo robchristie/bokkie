@@ -50,6 +50,42 @@ systemd's `TimeoutStopSec` with enough margin for SQLite reconciliation. An
 abrupt kill leaves the claim running only until its lease expires; a restarted
 scheduler records the expired attempt and applies the persisted retry policy.
 
+## Read-only diagnostics
+
+Run the doctor against an existing database while the service is running or
+stopped:
+
+```sh
+bokkie --database ./bokkie.sqlite doctor
+```
+
+The command prints one JSON report. It opens SQLite read-only with
+`query_only`, captures quick-check, foreign-key, migration, obligation,
+attempt, audit and gardener evidence in one deferred snapshot, then releases
+that snapshot before observing configured Git and public GitHub state. External
+observations use credential-free, bounded, explicitly read-only Git and HTTPS
+commands. Missing, stale or ambiguous worktrees, local branches,
+remote-tracking references, live remote branches and pull requests remain
+diagnostic findings; cached references never prove remote state.
+
+`repair_performed` is always `false`. Doctor does not create a missing
+database, migrate a legacy database, fetch or prune Git state, alter branches or
+worktrees, mutate a pull request, append audit evidence, or adopt an external
+fact into SQLite. Repair or adoption is a separate operation for which this
+command has no authority. Override the absolute diagnostic executables with
+`--git-executable` and `--github-public-observer-executable`; bound each
+external observation with `--observation-timeout-ms`.
+
+Service startup applies migrations once before starting its scheduler and HTTP
+database owners. Each applied migration has an immutable version, file name and
+SHA-256 content digest. Migrations already applied to any database must never
+be edited or reordered; add a new numbered migration. Upgrading an exact
+contiguous v1–v6 database records the canonical historical digests as a
+one-time compatibility adoption. That bootstrap preserves append-only domain
+evidence, but cannot retroactively prove which SQL bytes originally created a
+pre-digest database. Gaps, renamed or digest-mismatched migrations, and schemas
+newer than the executable fail closed without repair.
+
 ## Attention UI
 
 The optional attention workspace is a local view over Bokkie's HTTP

@@ -56,6 +56,9 @@ operator decision.
 
 The `bokkie` executable provides JSON-producing `create`, `list`, `show`,
 `approve`, `reject`, `retry`, `cancel`, `events`, and `attempts` commands. The
+nondestructive `doctor` command opens an existing database read-only and emits
+integrity, lifecycle, migration-manifest and observable gardener-reconciliation
+diagnostics; it never migrates, adopts or repairs state. The
 nested `gardener` commands register the one supported `robchristie/bokkie`
 checkout, show inspections, immutable proposals, observations, implementation
 runs and run events, and record approval or rejection of an exact source-bound
@@ -68,6 +71,12 @@ non-loopback binding. It remains fake-only unless the operator supplies
 `--enable-coding-gardener` and an existing absolute
 `--gardener-worktree-root`. Enabling the runtime does not register a checkout,
 approve work, merge a pull request, deploy, or restart Bokkie.
+
+Service startup is the sole migration owner. Applied migration names and
+SHA-256 content digests form an immutable ordered manifest: never edit an
+applied migration; append a new migration instead. HTTP handlers send owned
+commands through one bounded database thread, so SQLite never blocks a Tokio
+worker, while operator projections are read from one SQLite snapshot.
 
 See the [operator guide](docs/operator-guide.md) for command examples, HTTP
 routes, crash and graceful-shutdown behaviour, the trust boundary, and the

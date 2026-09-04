@@ -34,6 +34,10 @@ struct ApprovalEvidence {
 
 impl Store {
     pub fn operator_snapshot(&self, captured_at: i64) -> Result<OperatorSnapshot, StoreError> {
+        self.with_deferred_operator_read(|store| store.operator_snapshot_inner(captured_at))
+    }
+
+    fn operator_snapshot_inner(&self, captured_at: i64) -> Result<OperatorSnapshot, StoreError> {
         let mut proposal_instances = BTreeMap::new();
         for proposal in self.gardener_proposals()? {
             for instance in self.gardener_proposal_instances(&proposal.fingerprint)? {
@@ -60,6 +64,16 @@ impl Store {
     }
 
     pub fn operator_topic(
+        &self,
+        obligation_id: &str,
+        captured_at: i64,
+    ) -> Result<ObligationTopic, StoreError> {
+        self.with_deferred_operator_read(|store| {
+            store.operator_topic_inner(obligation_id, captured_at)
+        })
+    }
+
+    fn operator_topic_inner(
         &self,
         obligation_id: &str,
         captured_at: i64,
@@ -279,6 +293,20 @@ impl Store {
             obligation_id: obligation_id.to_owned(),
             items,
         })
+    }
+
+    fn with_deferred_operator_read<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let transaction = self.connection.unchecked_transaction()?;
+        match operation(self) {
+            Ok(value) => {
+                transaction.commit()?;
+                Ok(value)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn project_operator_obligation(
@@ -683,6 +711,7 @@ mod tests {
         Completion, GardenerCandidateQualification, InspectionResult, NewGardenerImplementationRun,
         NewGardenerInspection, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
     };
+    use tempfile::TempDir;
 
     fn new(id: &str, approval_required: bool) -> NewObligation {
         NewObligation {
@@ -1515,5 +1544,24 @@ mod tests {
             store.get("cycled-approval").unwrap().unwrap().state,
             ObligationState::AwaitingApproval
         );
+    }
+
+    #[test]
+    fn deferred_operator_read_keeps_one_snapshot_across_owner_queries() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("operator-snapshot.sqlite");
+        let reader = Store::open(&path).unwrap();
+        let mut writer = Store::open_compatible(&path).unwrap();
+
+        let (before, during) = reader
+            .with_deferred_operator_read(|owner| {
+                let before = owner.list()?.len();
+                writer.create(new("committed-during-read", false), 100)?;
+                let during = owner.list()?.len();
+                Ok((before, during))
+            })
+            .unwrap();
+        assert_eq!((before, during), (0, 0));
+        assert_eq!(reader.list().unwrap().len(), 1);
     }
 }

@@ -65,8 +65,8 @@ impl Scheduler {
         config: SchedulerConfig,
         gardener: Option<GardenerRuntimeConfig>,
     ) -> Result<Self, SchedulerError> {
-        // Fail before advertising readiness if the database cannot be opened or migrated.
-        Store::open(&config.database)?;
+        // Startup owns migration. The scheduler is only a compatible-schema consumer.
+        Store::open_compatible(&config.database)?;
         if let Some(runtime) = &gardener {
             runtime.validate(config.lease_seconds)?;
         }
@@ -120,7 +120,7 @@ fn scheduler_loop(
     gardener: Option<GardenerRuntimeConfig>,
     stop: &AtomicBool,
 ) -> Result<(), SchedulerError> {
-    let mut store = Store::open(&config.database)?;
+    let mut store = Store::open_compatible(&config.database)?;
     let clock = SystemClock;
 
     while !stop.load(Ordering::SeqCst) {
