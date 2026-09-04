@@ -1799,6 +1799,13 @@ fn exception_label(reason: &ExceptionReason) -> String {
                 fingerprint
             ),
         },
+        ExceptionReason::ExpiredLease {
+            generation,
+            expires_at,
+            ..
+        } => {
+            format!("Lease generation {generation} expired at Unix {expires_at}; awaiting recovery")
+        }
         ExceptionReason::Attention { cause, error, .. } => {
             let cause = match cause {
                 AttentionCause::Rejected { actor, note } => note.as_ref().map_or_else(

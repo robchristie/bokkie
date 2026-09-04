@@ -19,12 +19,14 @@ use crate::{
     Claim, Completion, GardenerObligationKind, GardenerVerificationResult,
     GardenerVerificationVerdict, InspectionResult, NewGardenerImplementationRun,
     NewGardenerInspection, RunResult, Store, StoreError, UnixClock,
-    app_server::{AppServerClient, AppServerObserver, TurnKind, TurnRequest},
+    app_server::{AppServerClient, AppServerError, AppServerObserver, TurnKind, TurnRequest},
     gardener::CANONICAL_REPOSITORY,
     git_workspace::{CommitId, GitWorkspace, GitWorkspaceError, RegisteredWorktree},
+    process::{CancellationToken, ProcessHeartbeat, ProcessLimits},
 };
 
 const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// Executable and isolation configuration required to enable gardener claims.
 #[derive(Clone, Debug)]
@@ -34,6 +36,9 @@ pub struct GardenerRuntimeConfig {
     git_executable: PathBuf,
     gh_executable: PathBuf,
     heartbeat_interval: Duration,
+    process_timeout: Duration,
+    process_limits: ProcessLimits,
+    cancellation: CancellationToken,
 }
 
 impl GardenerRuntimeConfig {
@@ -49,11 +54,29 @@ impl GardenerRuntimeConfig {
             git_executable: git_executable.into(),
             gh_executable: gh_executable.into(),
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
+            process_timeout: DEFAULT_PROCESS_TIMEOUT,
+            process_limits: ProcessLimits::default(),
+            cancellation: CancellationToken::new(),
         }
     }
 
     pub fn with_heartbeat_interval(mut self, interval: Duration) -> Self {
         self.heartbeat_interval = interval;
+        self
+    }
+
+    pub fn with_process_timeout(mut self, timeout: Duration) -> Self {
+        self.process_timeout = timeout;
+        self
+    }
+
+    pub fn with_process_limits(mut self, limits: ProcessLimits) -> Self {
+        self.process_limits = limits;
+        self
+    }
+
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
         self
     }
 
@@ -65,6 +88,11 @@ impl GardenerRuntimeConfig {
         if lease_seconds < 3 {
             return Err(GardenerRunnerError::Configuration(
                 "gardener lease duration must be at least three seconds".to_owned(),
+            ));
+        }
+        if self.process_timeout.is_zero() {
+            return Err(GardenerRunnerError::Configuration(
+                "gardener process timeout must be positive".to_owned(),
             ));
         }
         if self.heartbeat_interval.is_zero()
@@ -90,6 +118,15 @@ impl GardenerRuntimeConfig {
             ))
         })
     }
+
+    fn git_workspace(&self, checkout: &Path) -> Result<GitWorkspace, GitWorkspaceError> {
+        GitWorkspace::new(checkout, &self.git_executable, &self.gh_executable)?.with_supervision(
+            self.heartbeat_interval,
+            self.process_timeout,
+            self.process_limits,
+            self.cancellation.clone(),
+        )
+    }
 }
 
 #[derive(Debug, Error)]
@@ -101,11 +138,24 @@ pub enum GardenerRunnerError {
     #[error(transparent)]
     Git(#[from] GitWorkspaceError),
     #[error("Codex app-server failed: {0}")]
-    AppServer(String),
+    AppServer(#[source] Box<AppServerError>),
     #[error("invalid structured Codex result: {0}")]
     InvalidResult(String),
     #[error("worktree cleanup failed after {context}: {cleanup}")]
     Cleanup { context: String, cleanup: String },
+}
+
+impl GardenerRunnerError {
+    fn is_ambiguous_external_state(&self) -> bool {
+        match self {
+            Self::Git(error) => error.is_ambiguous_external_state(),
+            Self::Cleanup { context, cleanup } => {
+                context.contains("external state is ambiguous")
+                    || cleanup.contains("external state is ambiguous")
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Executes already-claimed gardener work while retaining the caller's clock
@@ -158,7 +208,7 @@ impl<'a> GardenerRunner<'a> {
                     evidence: Some(evidence),
                 },
                 Err(error) => Completion::Failed {
-                    retryable,
+                    retryable: retryable && !error.is_ambiguous_external_state(),
                     error: error.to_string(),
                     evidence: Some(format!(
                         "coding gardener failed for obligation {:?}, occurrence {}, attempt {}, lease generation {}: {error}",
@@ -183,14 +233,13 @@ impl<'a> GardenerRunner<'a> {
                 "gardener runtime is enabled without a repository registration".to_owned(),
             )
         })?;
-        let git = GitWorkspace::new(
-            &repository.checkout_path,
-            &self.config.git_executable,
-            &self.config.gh_executable,
-        )?;
+        let git = self
+            .config
+            .git_workspace(Path::new(&repository.checkout_path))?;
 
         self.heartbeat(store, claim)?;
-        let source = git.resolve_origin_main()?;
+        let source =
+            self.observe_process(store, claim, |observer| git.resolve_origin_main(observer))?;
         self.heartbeat(store, claim)?;
 
         let unique = Uuid::new_v4().simple().to_string();
@@ -210,7 +259,9 @@ impl<'a> GardenerRunner<'a> {
         )?;
 
         self.heartbeat(store, claim)?;
-        let worktree = git.create_detached_worktree(&worktree_path, &source)?;
+        let worktree = self.observe_process(store, claim, |observer| {
+            git.create_detached_worktree(&worktree_path, &source, observer)
+        })?;
         self.heartbeat(store, claim)?;
         let operation = (|| {
             let result = {
@@ -223,6 +274,9 @@ impl<'a> GardenerRunner<'a> {
                 );
                 AppServerClient::new(&self.config.codex_executable)
                     .with_heartbeat_interval(self.config.heartbeat_interval)
+                    .with_execution_timeout(self.config.process_timeout)
+                    .with_process_limits(self.config.process_limits)
+                    .with_cancellation(self.config.cancellation.clone())
                     .run(
                         &TurnRequest {
                             kind: TurnKind::Inspection,
@@ -232,7 +286,7 @@ impl<'a> GardenerRunner<'a> {
                         },
                         &mut observer,
                     )
-                    .map_err(|error| GardenerRunnerError::AppServer(error.to_string()))?
+                    .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
             };
             let parsed: InspectionResult = serde_json::from_str(&result.final_message)
                 .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))?;
@@ -242,7 +296,9 @@ impl<'a> GardenerRunner<'a> {
                 ));
             }
             self.heartbeat(store, claim)?;
-            git.verify_head(&worktree, &source)?;
+            self.observe_process(store, claim, |observer| {
+                git.verify_head(&worktree, &source, observer)
+            })?;
             store.finish_gardener_inspection(claim, &inspection_id, &parsed, self.clock.now())?;
             Ok::<_, GardenerRunnerError>(parsed.proposed_goal_prompts.len())
         })();
@@ -275,11 +331,9 @@ impl<'a> GardenerRunner<'a> {
                 "gardener runtime is enabled without a repository registration".to_owned(),
             )
         })?;
-        let git = GitWorkspace::new(
-            &repository.checkout_path,
-            &self.config.git_executable,
-            &self.config.gh_executable,
-        )?;
+        let git = self
+            .config
+            .git_workspace(Path::new(&repository.checkout_path))?;
         let unique = Uuid::new_v4().simple().to_string();
         let run_id = format!("run-{unique}");
         let branch = format!("codex/gardener-{unique}");
@@ -299,7 +353,9 @@ impl<'a> GardenerRunner<'a> {
         let source = CommitId::parse(run.source_commit.clone())?;
 
         self.heartbeat(store, claim)?;
-        let implementation = git.create_branch_worktree(&implementation_path, &branch, &source)?;
+        let implementation = self.observe_process(store, claim, |observer| {
+            git.create_branch_worktree(&implementation_path, &branch, &source, observer)
+        })?;
         self.heartbeat(store, claim)?;
         let mut verification: Option<RegisteredWorktree> = None;
         let operation = (|| {
@@ -314,6 +370,9 @@ impl<'a> GardenerRunner<'a> {
                 );
                 AppServerClient::new(&self.config.codex_executable)
                     .with_heartbeat_interval(self.config.heartbeat_interval)
+                    .with_execution_timeout(self.config.process_timeout)
+                    .with_process_limits(self.config.process_limits)
+                    .with_cancellation(self.config.cancellation.clone())
                     .run(
                         &TurnRequest {
                             kind: TurnKind::Implementation,
@@ -323,7 +382,7 @@ impl<'a> GardenerRunner<'a> {
                         },
                         &mut observer,
                     )
-                    .map_err(|error| GardenerRunnerError::AppServer(error.to_string()))?
+                    .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
             };
             let final_value: Value = serde_json::from_str(&result.final_message)
                 .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))?;
@@ -340,15 +399,23 @@ impl<'a> GardenerRunner<'a> {
             )?;
 
             self.heartbeat(store, claim)?;
-            git.verify_head(&implementation, &source)?;
-            let commit = git.commit_all(&implementation, &commit_message(&proposal.prompt))?;
+            self.observe_process(store, claim, |observer| {
+                git.verify_head(&implementation, &source, observer)
+            })?;
+            let commit = self.observe_process(store, claim, |observer| {
+                git.commit_all(&implementation, &commit_message(&proposal.prompt), observer)
+            })?;
             self.heartbeat(store, claim)?;
             store.record_gardener_git_commit(claim, &run_id, commit.as_str(), self.clock.now())?;
 
             self.heartbeat(store, claim)?;
-            git.push_branch(&implementation, &commit)?;
+            self.observe_process(store, claim, |observer| {
+                git.push_branch(&implementation, &commit, observer)
+            })?;
             self.heartbeat(store, claim)?;
-            let pushed = git.observe_remote_branch(&branch, &commit)?;
+            let pushed = self.observe_process(store, claim, |observer| {
+                git.observe_remote_branch(&branch, &commit, observer)
+            })?;
             self.heartbeat(store, claim)?;
             store.record_gardener_push_observation(
                 claim,
@@ -358,12 +425,15 @@ impl<'a> GardenerRunner<'a> {
             )?;
 
             self.heartbeat(store, claim)?;
-            let pull_request = git.create_ready_pull_request(
-                &branch,
-                &commit,
-                &commit_message(&proposal.prompt),
-                &pull_request_body(&source, &proposal.prompt),
-            )?;
+            let pull_request = self.observe_process(store, claim, |observer| {
+                git.create_ready_pull_request(
+                    &branch,
+                    &commit,
+                    &commit_message(&proposal.prompt),
+                    &pull_request_body(&source, &proposal.prompt),
+                    observer,
+                )
+            })?;
             self.heartbeat(store, claim)?;
             store.record_gardener_ready_pull_request(
                 claim,
@@ -383,11 +453,14 @@ impl<'a> GardenerRunner<'a> {
                 self.clock.now(),
             )?;
             self.heartbeat(store, claim)?;
-            verification =
-                Some(git.create_detached_worktree(&verification_path, &pull_request.head)?);
+            verification = Some(self.observe_process(store, claim, |observer| {
+                git.create_detached_worktree(&verification_path, &pull_request.head, observer)
+            })?);
             self.heartbeat(store, claim)?;
             let verification_worktree = verification.as_ref().expect("worktree was created");
-            git.verify_head(verification_worktree, &pull_request.head)?;
+            self.observe_process(store, claim, |observer| {
+                git.verify_head(verification_worktree, &pull_request.head, observer)
+            })?;
             let verification_prompt = verification_prompt(&pull_request.head, &proposal.prompt);
             let result = {
                 let mut observer = StoreObserver::verification(
@@ -399,6 +472,9 @@ impl<'a> GardenerRunner<'a> {
                 );
                 AppServerClient::new(&self.config.codex_executable)
                     .with_heartbeat_interval(self.config.heartbeat_interval)
+                    .with_execution_timeout(self.config.process_timeout)
+                    .with_process_limits(self.config.process_limits)
+                    .with_cancellation(self.config.cancellation.clone())
                     .run(
                         &TurnRequest {
                             kind: TurnKind::Verification,
@@ -408,7 +484,7 @@ impl<'a> GardenerRunner<'a> {
                         },
                         &mut observer,
                     )
-                    .map_err(|error| GardenerRunnerError::AppServer(error.to_string()))?
+                    .map_err(|error| GardenerRunnerError::AppServer(Box::new(error)))?
             };
             let verdict: GardenerVerificationResult =
                 serde_json::from_str(&result.final_message)
@@ -421,9 +497,13 @@ impl<'a> GardenerRunner<'a> {
                 )));
             }
             self.heartbeat(store, claim)?;
-            git.verify_head(verification_worktree, &pull_request.head)?;
+            self.observe_process(store, claim, |observer| {
+                git.verify_head(verification_worktree, &pull_request.head, observer)
+            })?;
             self.heartbeat(store, claim)?;
-            git.observe_pull_request(&branch, &pull_request.head)?;
+            self.observe_process(store, claim, |observer| {
+                git.observe_pull_request(&branch, &pull_request.head, observer)
+            })?;
             store.finish_gardener_verification(
                 claim,
                 &run_id,
@@ -481,6 +561,16 @@ impl<'a> GardenerRunner<'a> {
         Ok(())
     }
 
+    fn observe_process<T>(
+        &self,
+        store: &mut Store,
+        claim: &Claim,
+        operation: impl FnOnce(&mut dyn ProcessHeartbeat) -> Result<T, GitWorkspaceError>,
+    ) -> Result<T, GardenerRunnerError> {
+        let mut observer = StoreObserver::process(store, claim, self.clock, self.lease_seconds);
+        operation(&mut observer).map_err(Into::into)
+    }
+
     fn cleanup(
         &self,
         store: &mut Store,
@@ -489,7 +579,9 @@ impl<'a> GardenerRunner<'a> {
         worktree: &RegisteredWorktree,
     ) -> Result<(), GardenerRunnerError> {
         self.heartbeat(store, claim)?;
-        git.remove_clean_worktree(worktree)?;
+        self.observe_process(store, claim, |observer| {
+            git.remove_clean_worktree(worktree, observer)
+        })?;
         self.heartbeat(store, claim)
     }
 }
@@ -501,6 +593,7 @@ enum Success {
 }
 
 enum ObserverTarget<'a> {
+    Process,
     Inspection(&'a str),
     Implementation(&'a str),
     Verification(&'a str),
@@ -515,6 +608,21 @@ struct StoreObserver<'a> {
 }
 
 impl<'a> StoreObserver<'a> {
+    fn process(
+        store: &'a mut Store,
+        claim: &'a Claim,
+        clock: &'a dyn UnixClock,
+        lease_seconds: i64,
+    ) -> Self {
+        Self {
+            store,
+            claim,
+            target: ObserverTarget::Process,
+            clock,
+            lease_seconds,
+        }
+    }
+
     fn inspection(
         store: &'a mut Store,
         claim: &'a Claim,
@@ -572,6 +680,7 @@ impl AppServerObserver for StoreObserver<'_> {
     fn record_thread(&mut self, thread_id: &str) -> Result<(), String> {
         let now = self.clock.now();
         let result = match self.target {
+            ObserverTarget::Process => Ok(()),
             ObserverTarget::Inspection(id) => self
                 .store
                 .record_inspection_codex_thread(self.claim, id, thread_id, now),
@@ -588,6 +697,7 @@ impl AppServerObserver for StoreObserver<'_> {
     fn record_turn(&mut self, turn_id: &str) -> Result<(), String> {
         let now = self.clock.now();
         let result = match self.target {
+            ObserverTarget::Process => Ok(()),
             ObserverTarget::Inspection(id) => self
                 .store
                 .record_inspection_codex_turn(self.claim, id, turn_id, now),
@@ -601,6 +711,12 @@ impl AppServerObserver for StoreObserver<'_> {
         self.result(result)
     }
 
+    fn heartbeat(&mut self) -> Result<(), String> {
+        ProcessHeartbeat::heartbeat(self)
+    }
+}
+
+impl ProcessHeartbeat for StoreObserver<'_> {
     fn heartbeat(&mut self) -> Result<(), String> {
         let result = self
             .store

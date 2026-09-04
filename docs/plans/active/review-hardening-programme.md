@@ -38,17 +38,17 @@ is not silently interpreted as permission to grant rights.
 
 | Row | Required observable outcome | Baseline disposition | Package |
 |---|---|---|---|
-| R1 | Renewal targets at most one lease duration after the latest heartbeat; same-time renewal is a no-op; expired running work is not projected as active | Open: renewal currently compounds from `max(expiry, now)` | P1 |
-| R2 | Codex, Git, GitHub and future child processes share heartbeat, deadline, cancellation, process-tree termination, bounded output and typed outcomes; shutdown is bounded | Open: app-server only reaps its direct child; Git/`gh` block without supervision | P1 |
+| R1 | Renewal targets at most one lease duration after the latest heartbeat; same-time renewal is a no-op; expired running work is not projected as active | Satisfied by P1 candidate `666eef8f66fc1738e55d0994cef63828ecf44cd4`; terminal landing pending | P1 |
+| R2 | Codex, Git, GitHub and future child processes share heartbeat, deadline, cancellation, process-tree termination, bounded output and typed outcomes; shutdown is bounded | Satisfied by P1 candidate `666eef8f66fc1738e55d0994cef63828ecf44cd4`; terminal landing pending | P1 |
 | R3 | Child environments, executables, Git configuration, hooks and credentials are explicit and least-authority; exact Git metadata is revalidated before credential-bearing work | Open in part: canonical effective origins and exact remote heads are already rechecked | P2 |
 | R4 | Candidate checks and evidence precede draft-to-ready promotion; exact PR heads remain authoritative; CI protects candidate code without secrets or privilege | Open in part: exact-head verification exists, but PRs are created ready and no CI exists | P2 |
 | R5 | Approval selects an exact proposal generation and source observation; later source commits stale or supersede earlier instances; terminal goals may recur in later generations | Open: content fingerprint is reused forever and dispatch selects the latest observation | P3 |
 | R6 | Migrations run at startup, have immutable recorded digests and reject gaps/newer schemas; blocking DB work is isolated from async handlers; `doctor` reports integrity and reconciliation without repair | Open: every `Store::open` enters the migration loop and no doctor exists | P4 |
 | R7 | Snapshots are transactionally consistent and cursor-paginated with bounded queries, a global ordering envelope and an incremental change watermark | Open: histories are unbounded and topic projection globally loads then filters | P5 |
 | R8 | Ordinary, gardener and future outbox work use fair, bounded lanes without starvation while preserving existing claim/lease fencing | Open: one gardener-first synchronous scheduler thread | P5 |
-| R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | Open; existing exact IDs and deterministic example tests are useful foundations | P1–P5 |
+| R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | P1 satisfies typed process outcomes, bounded output evidence and lease/process temporal tests; persisted manifests, identities, field limits and later lifecycle properties remain for P2–P5 | P1–P5 |
 | R10 | Mutation routes identify runtime/API/schema build, validate local request origin and use a per-process mutation secret without widening loopback exposure | Open; stale-state preconditions and same-origin topology already exist | P4; human review |
-| R11 | Large modules are split along established semantic ownership after contracts settle | Open; split only when each owning contract is stable | P1–P5 |
+| R11 | Large modules are split along established semantic ownership after contracts settle | P1 establishes `process` as the stable supervision owner; later package-owned splits remain conditional on settled contracts | P1–P5 |
 | R12 | Toolchain and locked checks are pinned in CI; completed-plan claims are linted and reconciled; conditional licensing and live branch protection have explicit terminal decisions | Open; Git dependencies are pinned, but workflow/toolchain/linter/protection are absent | P2/P6 |
 
 Already-satisfied evidence that must be retained includes atomic Store-owned
@@ -63,8 +63,8 @@ Only the next unblocked package is refined after each landing.
 
 | Package | Outcome | Dependencies | State and terminal evidence |
 |---|---|---|---|
-| P0 | Land this re-baselined programme checkpoint | `main` baseline above | In progress |
-| P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Candidate next |
+| P0 | Land this re-baselined programme checkpoint | `main` baseline above | Landed as [PR #5](https://github.com/robchristie/bokkie/pull/5) at `e8d3218433f97c8dfc542c80d0ac813d283d86b5` |
+| P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Repaired terminal candidate at `666eef8f66fc1738e55d0994cef63828ecf44cd4`; re-review and landing pending |
 | P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Candidate |
 | P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Candidate |
 | P4 | Startup-only migration, manifest verification, DB executor/transactions, read-only doctor and reviewed local mutation protection | P3 schema | Candidate; security portion needs human review |
@@ -90,16 +90,20 @@ remote-tracking references and live remote heads.
 
 ## Current phase
 
-P0 is the only active write package. Read-only mapping at the baseline confirmed
-that R1–R12 are finite and that no post-review product change has superseded
-them. Next: independently review and land P0, then refine and dispatch P1 from
-the landed checkpoint.
+P1 is implemented as one terminal candidate. Focused fake-process journeys and
+the canonical repository check pass at its owner revision; exact-head review,
+applicable GitHub checks, squash merge and cleanup remain. After P1 lands, shape
+P2 around explicit child environment, executable, Git configuration and
+credential boundaries plus draft/check/ready publication and pinned CI. P2
+must consume the P1 supervisor rather than introduce another process boundary.
 
 ## Durable evidence
 
 | Checkpoint | Owner revision | Consumer revision | Result | Evidence |
 |---|---|---|---|---|
 | Review re-baseline | `12f5c65901d07248d152ebf80548116cf0c7b040` | same | Open rows and preserved guarantees mapped; working tree initially clean | This plan and source paths in the review objective |
+| Initial P1 candidate | `0c91f9a0482df8c40bb6ae444193366ac5c7dde1` | `b46788020a6b3953ac6f3dc20fef2e529d0d9d02` | Exact-head review blocked: app-server stdin writes could stall supervision; programme dispositions were stale | [PR #6 review trajectory](https://github.com/robchristie/bokkie/pull/6#issuecomment-5534515269) |
+| P1 supervised-input repair | `666eef8f66fc1738e55d0994cef63828ecf44cd4` | `42183e75c5a8a69724f918bd9bc4c32ae8fb4922` | 84 library, 1 CLI, 10 adapter and 21 attention-UI tests passed; Clippy and rustfmt passed; deterministic fixtures also prove bounded stopped-reader input deadline, heartbeat and shutdown | `src/process.rs`, app-server fake-process tests, Store/operator tests, and [PR #6](https://github.com/robchristie/bokkie/pull/6) |
 
 ## Residual questions
 

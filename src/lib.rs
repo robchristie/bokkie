@@ -12,6 +12,7 @@ pub mod gardener_runner;
 pub mod git_workspace;
 pub mod http;
 pub mod operator;
+pub mod process;
 pub mod recurrence;
 pub mod runner;
 pub mod service;
