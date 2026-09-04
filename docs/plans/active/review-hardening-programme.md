@@ -70,7 +70,7 @@ Only the next unblocked package is refined after each landing.
 | P4a | Startup-only migration, immutable manifest verification, bounded HTTP database execution, consistent read snapshots and read-only doctor | P3 schema | Landed as [PR #10](https://github.com/robchristie/bokkie/pull/10) at `87c8d42f1757c9656fbb010723b9e4bb1477dd69`; final reviewed and landed tree `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba` |
 | P4b | Reviewed API mutation secret, local Host/Origin validation and runtime/API/schema build identity | P4a storage contract | Human-authorised [PR #11](https://github.com/robchristie/bokkie/pull/11) landed as `4ecc30338c60bf66507558a68b96c65c34014c86`; reviewed and landed tree `952a77d63477412722f0c2cf908a6ca4ae390c10` |
 | P5a | Fair failure-isolated execution lanes, typed lifecycle outcomes, bounded lifecycle fields and model-based temporal tests | P4 storage and P1 process contracts | Landed as [PR #12](https://github.com/robchristie/bokkie/pull/12) at `b8bda7877e63d73780f04dafe097fb7425cccc7a`; reviewed tree `365b4c870e5d50ff48c1117092679a4719ff3b83` |
-| P5b | Cursor-paginated incremental projections and global event envelope | P5a schema v8 and typed outcome projection | Integrated candidate on [PR #13](https://github.com/robchristie/bokkie/pull/13); compatibility remains additive under API v1 and exact-head review/CI/landing remain |
+| P5b | Cursor-paginated incremental projections and global event envelope | P5a schema v8 and typed outcome projection | Repaired implementation reviewed at `3e12d6a59a1a4915c020fba0e6eca1eef676e801` on [PR #13](https://github.com/robchristie/bokkie/pull/13); exact-head CI rerun passed and final plan-head review/landing remain |
 | P6 | Exact-head aggregate qualification, plan reconciliation/linter, toolchain and repository-policy closeout | P1–P5b | Candidate; live branch protection/licence decision may need human review |
 
 ## Acceptance and integration proof
@@ -111,8 +111,10 @@ exact-head review found incomplete gardener-decision invalidations, a production
 topic compatibility regression, an HTTP limit mismatch and a non-executable UI
 toolchain claim. The repair restores all ten API-v1 topic categories under
 bounded scoped SQL, derives exact decision identities, accepts the documented
-change limit and pins the separate UI compiler. Re-review, CI and landing are
-next; P6 then owns merged-main aggregate
+change limit and pins the separate UI compiler. Independent re-review passed at
+`3e12d6a59a1a4915c020fba0e6eca1eef676e801`; exact-head CI run `33884226007`
+passed on its second attempt after an unchanged process fixture transient. The
+final plan-head review and landing are next; P6 then owns merged-main aggregate
 qualification, plan linting and the human-held repository-policy decisions.
 
 ## Durable evidence
@@ -154,6 +156,7 @@ qualification, plan linting and the human-held repository-policy decisions.
 | P5b initial candidate | `14db6a5bcab9065f8b1c8579540439d088c01e8d` | `8b1a51659b357ff2973c260fee1b168795b9b26f` | Schema v9/API v1; locked canonical and UI qualification passed | [PR #13](https://github.com/robchristie/bokkie/pull/13) |
 | P5b first exact-head review | `8b1a51659b357ff2973c260fee1b168795b9b26f` | same | BLOCK: gardener decisions lacked exact invalidation IDs; production topic broke source identity and omitted v1 categories; HTTP limit and UI toolchain claims mismatched | [Durable review verdict](https://github.com/robchristie/bokkie/pull/13#issuecomment-5541733088) |
 | P5b compatibility repair | `4744b85f794a5d6df135afbc7c35c0d552cbe2f2` | terminal plan head | 177 library tests pass with one explicit-only probe ignored, plus 2 CLI, 14 adapter and 38 UI tests; locked Clippy/rustfmt/diff, native/Wasm builds and browser/native qualification pass | PR #13 repair diff, `src/events.rs`, `src/operator.rs`, `src/http.rs` and [`docs/ui-qualification-evidence`](../../ui-qualification-evidence/README.md) |
+| P5b repaired exact-head review | `3e12d6a59a1a4915c020fba0e6eca1eef676e801` | same | Independent PASS with no findings; reviewed tree `c63d016e52415c24e7721d5c28d0f1a493e7da87`; exact-head CI run `33884226007` passed on rerun after an unchanged P1 process-fixture transient | [PASS evidence](https://github.com/robchristie/bokkie/pull/13#issuecomment-5542035444) |
 
 ## Residual questions
 
