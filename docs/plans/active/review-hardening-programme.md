@@ -65,7 +65,7 @@ Only the next unblocked package is refined after each landing.
 |---|---|---|---|
 | P0 | Land this re-baselined programme checkpoint | `main` baseline above | Landed as [PR #5](https://github.com/robchristie/bokkie/pull/5) at `e8d3218433f97c8dfc542c80d0ac813d283d86b5` |
 | P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Landed as [PR #6](https://github.com/robchristie/bokkie/pull/6) at `8154ca4a5bc4c3aa0356cc74e3874544b4231296`; terminal fixture repair on [PR #7](https://github.com/robchristie/bokkie/pull/7) |
-| P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Human-held candidate on [PR #8](https://github.com/robchristie/bokkie/pull/8); implementation checkpoint `a6d12e76835cf406e584534ae3ba6b5c11c13272`, first-review repair `1fd723745152aeece226769b24c902bc423eca83`, runner portability repair `029d163c6133c9cea061334ed30e57a45b99f162`, worker-profile repair `1207beaea6ace76b75a3fd6f2b33c3428fc5dc29`, credential-channel repair `5ff18a8ba0aeb5189919cab340e6a4d329480fb3` |
+| P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Human-held candidate on [PR #8](https://github.com/robchristie/bokkie/pull/8); implementation checkpoint `a6d12e76835cf406e584534ae3ba6b5c11c13272`, first-review repair `1fd723745152aeece226769b24c902bc423eca83`, runner portability repair `029d163c6133c9cea061334ed30e57a45b99f162`, worker-profile repair `1207beaea6ace76b75a3fd6f2b33c3428fc5dc29`, credential-channel repair `5ff18a8ba0aeb5189919cab340e6a4d329480fb3`, descendant-isolation repair `f43213055767eebdc8bbc58846114ba7e25fbd9e` |
 | P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Candidate |
 | P4 | Startup-only migration, manifest verification, DB executor/transactions, read-only doctor and reviewed local mutation protection | P3 schema | Candidate; security portion needs human review |
 | P5 | Fair execution lanes, paginated/incremental projections and global event envelope, with bounded fields and model-based lifecycle tests | P4 storage contract | Candidate |
@@ -108,9 +108,16 @@ pass the final exact head. A third review found the systemd credential mount was
 still descendant-readable; the CLI now accepts only a bounded one-shot standard
 input token, closes that descriptor and protects the credential-holding process
 before any child, while the example's backing object is root-only and
-worker-inaccessible. The PR may be marked ready only after re-review and CI,
-then escalated for explicit human merge authority. No real gardener,
-credential, deployment or repository-policy mutation is part of this package.
+worker-inaccessible. A fourth review found that a Codex child could daemonise,
+escape its process group and read a later same-UID mutation environment. Every
+Codex turn now runs through the identified Bubblewrap executable in a private
+PID namespace with private procfs; namespace teardown kills all descendants
+before publication can continue. The shared supervisor also kills silent
+same-group descendants after normal completion. A hostile control reproduces
+the credential read while the real boundary prevents it. The PR may be marked
+ready only after re-review and CI, then escalated for explicit human merge
+authority. No real gardener, credential, deployment or repository-policy
+mutation is part of this package.
 
 ## Durable evidence
 
@@ -128,11 +135,10 @@ credential, deployment or repository-policy mutation is part of this package.
 | P2 repaired-head CI probe | `043fd7972a14a86a32fe835634632d938c0df686` | `029d163c6133c9cea061334ed30e57a45b99f162` | Credential-removal check passed; Rust tests failed because the GitHub-hosted image lacks Bubblewrap. Production keeps the startup fail-closed dependency; fake runner fixtures now prove orchestration portably and the real hostile-sentinel probe runs when Bubblewrap exists | [CI run 33832322106](https://github.com/robchristie/bokkie/actions/runs/33832322106) |
 | P2 worker-profile review | `5f74e90de2904e1bfd95e50a8ae6978b493e5848` | `1207beaea6ace76b75a3fd6f2b33c3428fc5dc29` | Code and CI passed, but review BLOCKED the example worker: Bubblewrap needed `AF_NETLINK` and Git needed a writable common directory. The repair adds the address family and a documented worker-owned checkout with separate writable Git metadata; the exact systemd policy probe succeeds | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5535203787) and [CI run 33832528257](https://github.com/robchristie/bokkie/actions/runs/33832528257) |
 | P2 credential-channel review | `6ccf807e4c6cb9403786b2fcf6870b61986aba92` | `5ff18a8ba0aeb5189919cab340e6a4d329480fb3` | Code, CI and worker probes passed, but review BLOCKED the descendant-readable systemd credential mount. The repair replaces the path input with a bounded one-shot standard-input descriptor, closes it before child startup, marks the daemon non-dumpable, requires a root-only worker-inaccessible backing object, and adds a hostile descendant test | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5535284201) and [CI run 33833186151](https://github.com/robchristie/bokkie/actions/runs/33833186151) |
+| P2 descendant-isolation review | `9eff533da3d6f7a34378d3bb2c5b027726600800` | `f43213055767eebdc8bbc58846114ba7e25fbd9e` | Code and CI passed, but review BLOCKED a daemonised Codex descendant that could inspect a later same-UID mutation environment. The repair gives every Codex turn a private PID namespace and procfs with kernel-owned descendant teardown, retains parent-loss teardown, and makes the shared supervisor kill silent same-group descendants on normal completion | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5535325775) and [CI run 33833789310](https://github.com/robchristie/bokkie/actions/runs/33833789310) |
 
 ## Residual questions
 
-- Which narrowly scoped GitHub credential delivery mechanism can be documented
-  without storing or exercising a real credential during repository tests?
 - Does the operator want to grant public reuse rights and select a licence?
 - Will the operator authorise live `main` branch-protection mutation after the
   CI workflow has landed and its required check identity is observable?
