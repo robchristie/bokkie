@@ -24,7 +24,7 @@ use crate::{
     app_server::{AppServerClient, AppServerError, AppServerObserver, TurnKind, TurnRequest},
     gardener::{
         CANONICAL_REPOSITORY, MAX_GARDENER_MODEL_ITEM_CHARS, MAX_GARDENER_MODEL_ITEMS,
-        MAX_GARDENER_MODEL_TEXT_CHARS, MAX_GARDENER_PROMPTS,
+        MAX_GARDENER_MODEL_TEXT_CHARS, MAX_GARDENER_PROMPT_CHARS, MAX_GARDENER_PROMPTS,
     },
     git_workspace::{
         CandidateCheckCommand, CandidateCheckStatus, CommitId, GitWorkspace, GitWorkspaceError,
@@ -1229,7 +1229,7 @@ fn inspection_schema() -> Value {
             "proposed_goal_prompts": {
                 "type": "array",
                 "maxItems": MAX_GARDENER_PROMPTS,
-                "items": {"type": "string", "minLength": 1, "maxLength": MAX_GARDENER_MODEL_TEXT_CHARS}
+                "items": {"type": "string", "minLength": 1, "maxLength": MAX_GARDENER_PROMPT_CHARS}
             }
         }
     })

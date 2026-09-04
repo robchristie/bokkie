@@ -8,8 +8,13 @@ pub const CANONICAL_REPOSITORY: &str = "robchristie/bokkie";
 pub const CANONICAL_DEFAULT_BRANCH: &str = "main";
 pub const MAX_GARDENER_PROMPTS: usize = 3;
 pub const MAX_GARDENER_MODEL_TEXT_CHARS: usize = 16_384;
-pub const MAX_GARDENER_MODEL_ITEMS: usize = 256;
-pub const MAX_GARDENER_MODEL_ITEM_CHARS: usize = 4_096;
+pub const MAX_GARDENER_PROMPT_CHARS: usize = 6_000;
+/// The compact JSON encoding of every schema-bounded gardener model result
+/// remains below this independent transport and Store envelope, including
+/// worst-case six-byte JSON escapes for every permitted character.
+pub const MAX_GARDENER_MODEL_MESSAGE_BYTES: usize = 256 * 1_024;
+pub const MAX_GARDENER_MODEL_ITEMS: usize = 16;
+pub const MAX_GARDENER_MODEL_ITEM_CHARS: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewRepositoryRegistration {

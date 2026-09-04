@@ -131,7 +131,9 @@ Each normalised repository/prompt pair has one stable goal fingerprint. Its
 instances are immutable and monotonically generated from exact source
 observations. Repeated observations at the same source deduplicate; a new source
 creates a fresh awaiting-decision instance and supersedes the earlier actionable
-instance without inheriting approval. Approval is occurrence- and
+instance without inheriting approval. Supersession also fences further
+persisted run progress and lease renewal for already-claimed older work.
+Approval is occurrence- and
 instance-bound and must exist before implementation can be claimed. Rejection
 moves that instance's implementation obligation to visible attention. To
 reconsider it, read its `implementation_obligation_id`, run `bokkie retry

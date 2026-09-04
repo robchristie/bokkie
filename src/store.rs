@@ -22,10 +22,11 @@ use crate::{
         GardenerEvent, GardenerImplementationRun, GardenerInspection, GardenerPublicationState,
         GardenerReproducibilityManifest, GardenerRunEvent, GardenerRunPhase,
         GardenerVerificationVerdict, InspectionResult, MAX_GARDENER_MODEL_ITEM_CHARS,
-        MAX_GARDENER_MODEL_ITEMS, MAX_GARDENER_MODEL_TEXT_CHARS, MAX_GARDENER_PROMPTS,
-        NewGardenerImplementationRun, NewGardenerInspection, NewRepositoryRegistration, Proposal,
-        ProposalInstance, ProposalObservation, RepositoryRegistration, normalise_goal_prompt,
-        proposal_fingerprint, proposal_instance_id,
+        MAX_GARDENER_MODEL_ITEMS, MAX_GARDENER_MODEL_MESSAGE_BYTES, MAX_GARDENER_MODEL_TEXT_CHARS,
+        MAX_GARDENER_PROMPT_CHARS, MAX_GARDENER_PROMPTS, NewGardenerImplementationRun,
+        NewGardenerInspection, NewRepositoryRegistration, Proposal, ProposalInstance,
+        ProposalObservation, RepositoryRegistration, normalise_goal_prompt, proposal_fingerprint,
+        proposal_instance_id,
     },
     recurrence::RecurrenceError,
 };
@@ -2104,6 +2105,20 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let superseded_gardener_instance: bool = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM gardener_proposal_instances pi
+                JOIN gardener_proposal_instance_supersessions s
+                  ON s.superseded_instance_id = pi.id
+                WHERE pi.implementation_obligation_id = ?1
+             )",
+            [&claim.obligation_id],
+            |row| row.get(0),
+        )?;
+        if superseded_gardener_instance {
+            return Err(StoreError::Fenced);
+        }
         let result = apply_transition(
             &transaction,
             Transition::Renew {
@@ -2545,10 +2560,10 @@ fn validate_inspection_result(result: &InspectionResult) -> Result<(), StoreErro
         ));
     }
     if result.proposed_goal_prompts.iter().any(|prompt| {
-        prompt.trim().is_empty() || prompt.chars().count() > MAX_GARDENER_MODEL_TEXT_CHARS
+        prompt.trim().is_empty() || prompt.chars().count() > MAX_GARDENER_PROMPT_CHARS
     }) {
         return Err(StoreError::Invalid(
-            "inspection goal prompts must be non-empty and at most 16384 characters".to_owned(),
+            "inspection goal prompts must be non-empty and at most 6000 characters".to_owned(),
         ));
     }
     Ok(())
@@ -2651,7 +2666,7 @@ fn validate_nonempty(name: &str, value: &str) -> Result<(), StoreError> {
 }
 
 fn validate_structured_message(message: &str) -> Result<(), StoreError> {
-    if message.len() > 256 * 1024 {
+    if message.len() > MAX_GARDENER_MODEL_MESSAGE_BYTES {
         return Err(StoreError::Invalid(
             "implementation final message must be at most 262144 bytes".to_owned(),
         ));
@@ -2920,6 +2935,17 @@ fn require_current_gardener_run(
         || run.lease_generation != claim.lease_generation
         || run.lease_token != claim.lease_token
     {
+        return Err(StoreError::Fenced);
+    }
+    let superseded: bool = transaction.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM gardener_proposal_instance_supersessions
+            WHERE superseded_instance_id = ?1
+         )",
+        [&run.proposal_instance_id],
+        |row| row.get(0),
+    )?;
+    if superseded {
         return Err(StoreError::Fenced);
     }
     let has_exact_authority: bool = transaction.query_row(
@@ -5101,6 +5127,10 @@ mod tests {
             ),
             Err(StoreError::Fenced)
         ));
+        assert!(matches!(
+            store.renew_lease(&stale_claim, 1_100, 1_000),
+            Err(StoreError::Fenced)
+        ));
     }
 
     #[test]
@@ -5176,7 +5206,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_run_created_before_supersession_continues_at_its_stored_source() {
+    fn exact_run_created_before_supersession_is_fenced_at_its_stored_source() {
         let mut store = Store::open_in_memory().unwrap();
         let registration = store
             .register_gardener_repository(gardener_registration(1_000), 900)
@@ -5222,13 +5252,18 @@ mod tests {
             'b',
             prompt,
         );
-        store
-            .record_gardener_reproducibility_manifest(
+        assert!(matches!(
+            store.record_gardener_reproducibility_manifest(
                 &claim,
                 &reproducibility_manifest("continuing-run", &run.source_commit),
                 1_100,
-            )
-            .unwrap();
+            ),
+            Err(StoreError::Fenced)
+        ));
+        assert!(matches!(
+            store.renew_lease(&claim, 1_100, 1_000),
+            Err(StoreError::Fenced)
+        ));
         let retained = store
             .gardener_implementation_run("continuing-run")
             .unwrap()
@@ -5236,6 +5271,12 @@ mod tests {
         assert_eq!(retained.source_commit, "a".repeat(40));
         assert_eq!(retained.proposal_instance_id, first_instance.id);
         assert_eq!(retained.proposal_generation, 1);
+        assert!(
+            store
+                .gardener_reproducibility_manifest("continuing-run")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -5562,6 +5603,20 @@ mod tests {
 
     #[test]
     fn inspection_field_limits_count_unicode_characters() {
+        assert!(
+            validate_inspection_result(&InspectionResult {
+                summary: "bounded".to_owned(),
+                proposed_goal_prompts: vec!["🦘".repeat(MAX_GARDENER_PROMPT_CHARS)],
+            })
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_inspection_result(&InspectionResult {
+                summary: "bounded".to_owned(),
+                proposed_goal_prompts: vec!["🦘".repeat(MAX_GARDENER_PROMPT_CHARS + 1)],
+            }),
+            Err(StoreError::Invalid(_))
+        ));
         let mut store = Store::open_in_memory().unwrap();
         let registration = store
             .register_gardener_repository(gardener_registration(1_000), 900)

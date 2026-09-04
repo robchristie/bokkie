@@ -96,9 +96,11 @@ P2 is terminal through PR #8: independent review passed exact head
 the terminal candidate on PR #9. It keeps the stable repository/prompt goal
 fingerprint while binding each actionable proposal, decision, observation,
 supersession and implementation run to an immutable source instance and
-generation. Migration preserves legacy append-only evidence and transfers only
-unambiguous one-source authority. Deterministic Store, adapter and UI tests pass;
-independent exact-head review, CI, merge and cleanup remain.
+generation. Supersession fences both new dispatch and further persisted
+progress or lease renewal for older active work. Migration preserves legacy
+append-only evidence and transfers only unambiguous one-source authority.
+Deterministic Store, adapter and UI tests pass; repair re-review, CI, merge and
+cleanup remain.
 
 ## Durable evidence
 
