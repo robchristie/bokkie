@@ -1277,7 +1277,7 @@ fn commit_message(prompt: &str) -> String {
 
 fn pull_request_body(source: &CommitId, prompt: &str) -> String {
     format!(
-        "Automated coding-gardener implementation from exact base `{source}`. This pull request is ready for review and is not merged automatically.\n\nApproved goal:\n\n{prompt}"
+        "Automated coding-gardener implementation from exact base `{source}`. This pull request is a draft pending independent exact-head qualification and is not merged automatically.\n\nApproved goal:\n\n{prompt}"
     )
 }
 

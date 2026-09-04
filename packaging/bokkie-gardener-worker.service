@@ -18,7 +18,10 @@ RestartSec=2s
 TimeoutStopSec=30s
 KillSignal=SIGTERM
 
-DynamicUser=yes
+# Provision this dedicated system account and its state/checkout as described in
+# docs/operator-guide.md before installing the example.
+User=bokkie-gardener
+Group=bokkie-gardener
 StateDirectory=bokkie-gardener
 StateDirectoryMode=0700
 UMask=0077
@@ -47,7 +50,8 @@ ProtectProc=invisible
 ProtectSystem=strict
 ProcSubset=pid
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
+# MemoryDenyWriteExecute is deliberately omitted: the commonly packaged Codex
+# launcher uses Node/V8 and fails under that restriction.
 RemoveIPC=yes
 # Bubblewrap needs these namespace and mount operations to create the fixed,
 # network-off candidate-check boundary. Bokkie supplies its arguments; candidate
@@ -55,10 +59,12 @@ RemoveIPC=yes
 RestrictNamespaces=user mnt pid net ipc uts cgroup
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service @mount
-ReadOnlyPaths=/srv/src/bokkie
+# The checkout uses a .git indirection file to the writable repository.git
+# sibling. Candidate checks receive neither path.
+ReadOnlyPaths=/var/lib/bokkie-gardener/checkout
 ReadWritePaths=/var/lib/bokkie-gardener
 
 [Install]

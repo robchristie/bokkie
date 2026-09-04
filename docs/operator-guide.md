@@ -301,10 +301,30 @@ is a separate example profile only. It is not installed by this repository and
 must not replace or relax [`packaging/bokkie.service`](../packaging/bokkie.service).
 Unlike the kernel service, a gardener worker needs external GitHub access for
 the explicitly bounded publication step, so it uses a distinct state directory,
-loopback listener, process identity and hardened systemd boundary. Install it
-only after an operator has registered the intended checkout and reviewed the
-threat model, local paths, systemd support, credential-delivery mechanism and
-network policy. The example consumes a systemd-managed `github_token`
+loopback listener, dedicated static `bokkie-gardener` system account and
+hardened systemd boundary.
+
+Before installation, configuration management must create that non-login
+account and a private `/var/lib/bokkie-gardener`. As that account, create the
+worker checkout with Git's separate-directory form so its working tree is
+`/var/lib/bokkie-gardener/checkout`, its `.git` indirection points to the
+writable `/var/lib/bokkie-gardener/repository.git`, and no common Git directory
+is outside the worker state. Register that checkout against the worker's
+`bokkie.sqlite` while the service is stopped. The unit mounts the checkout tree
+read-only but permits the sibling common Git directory and disposable worktree
+root to change. Bokkie's startup topology identity and immediate pre-mutation
+checks must observe exactly those paths; a normal clone with `.git` inside the
+read-only checkout will fail closed.
+
+Review the threat model, local paths, systemd namespace/address-family support,
+credential-delivery mechanism and network policy before installation. The
+example permits `AF_NETLINK` only because Bubblewrap needs `NETLINK_ROUTE` to
+initialise the isolated network namespace. It deliberately omits
+`MemoryDenyWriteExecute` because the common Codex launcher uses Node/V8; an
+operator using a verified native Codex binary may add that restriction after a
+representative service-manager probe.
+
+The example consumes a systemd-managed `github_token`
 credential through `$CREDENTIALS_DIRECTORY`; the operator must provision that
 credential separately. Do not put a token in the unit, repository, command
 line, broad service environment, or kernel service. No real credential is

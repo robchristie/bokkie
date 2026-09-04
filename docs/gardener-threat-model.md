@@ -87,8 +87,11 @@ external result requires visible human reconciliation.
 An attacker may replace a worktree directory, `.git` indirection, branch ref,
 remote, or files between an observation and a child invocation. A candidate
 may also contain hostile build scripts, tests, hooks, or instructions intended
-to influence a model or CI. Create disposable, runner-owned detached worktrees
-under an operator-owned root; validate their canonical paths and Git metadata;
+to influence a model or CI. The worker profile requires a dedicated checkout
+whose read-only tree uses a `.git` indirection to a worker-owned common Git
+directory inside its writable private state. Create disposable, runner-owned
+detached worktrees under that root; validate their canonical paths and Git
+metadata;
 and record the source commit, branch, worktree and child identities. Treat
 candidate code as untrusted: inspection and verification use read-only,
 network-off model sandboxes, while implementation is isolated to its own
