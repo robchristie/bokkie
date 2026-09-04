@@ -161,6 +161,36 @@ fn gardener_cli_registers_and_exposes_persisted_state_and_decisions() {
         )["observation_count"],
         2
     );
+    let instances = cli_json(&database, &["gardener", "proposal-instances", "list"]);
+    assert_eq!(instances.as_array().unwrap().len(), 4);
+    let latest = cli_json(
+        &database,
+        &[
+            "gardener",
+            "proposal-instances",
+            "show",
+            &seeded.approved_latest_instance_id,
+        ],
+    );
+    assert_eq!(latest["generation"], 2);
+    assert_eq!(latest["source_commit"], "b".repeat(40));
+    assert_eq!(latest["source_observation_id"], 4);
+    assert_eq!(latest["source_inspection_id"], "inspection-two");
+    assert_eq!(
+        cli_json(
+            &database,
+            &[
+                "gardener",
+                "proposal-instances",
+                "observations",
+                &seeded.approved_latest_instance_id,
+            ],
+        )
+        .as_array()
+        .unwrap()
+        .len(),
+        1
+    );
     assert_eq!(
         cli_json(
             &database,
@@ -184,7 +214,7 @@ fn gardener_cli_registers_and_exposes_persisted_state_and_decisions() {
     assert!(before_approval.iter().all(|claim| {
         claim.obligation_id != format!("gardener:implement:{}", seeded.approved_fingerprint)
     }));
-    let approved = cli_json(
+    let ambiguous = run_cli(
         &database,
         &[
             "gardener",
@@ -197,15 +227,33 @@ fn gardener_cli_registers_and_exposes_persisted_state_and_decisions() {
             "bounded and useful",
         ],
     );
+    assert_eq!(ambiguous.status.code(), Some(4));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&ambiguous.stderr).unwrap()["error"]["code"],
+        "transition_conflict"
+    );
+    let approved = cli_json(
+        &database,
+        &[
+            "gardener",
+            "proposal-instances",
+            "approve",
+            &seeded.approved_latest_instance_id,
+            "--actor",
+            "operator",
+            "--note",
+            "bounded and useful",
+        ],
+    );
     assert_eq!(approved["approval_decision"], "approved");
     assert_eq!(approved["obligation_state"], "pending");
     let rejected = cli_json(
         &database,
         &[
             "gardener",
-            "proposals",
+            "proposal-instances",
             "reject",
-            &seeded.rejected_fingerprint,
+            &seeded.rejected_instance_id,
             "--actor",
             "operator",
         ],
@@ -339,6 +387,44 @@ fn gardener_http_exposes_registration_evidence_and_decisions() {
             .len(),
         3
     );
+    let (_, instances) = http_json(address, "GET", "/gardener/proposal-instances", None).unwrap();
+    assert_eq!(instances.as_array().unwrap().len(), 4);
+    let latest_instance_path = format!(
+        "/gardener/proposal-instances/{}",
+        seeded.approved_latest_instance_id
+    );
+    let (_, latest_instance) = http_json(address, "GET", &latest_instance_path, None).unwrap();
+    assert_eq!(latest_instance["generation"], 2);
+    assert_eq!(latest_instance["source_commit"], "b".repeat(40));
+    assert_eq!(latest_instance["source_inspection_id"], "inspection-two");
+    let generic_generation_two_path = format!(
+        "/obligations/{}/approve",
+        latest_instance["implementation_obligation_id"]
+            .as_str()
+            .unwrap()
+    );
+    let (generic_status, generic_error) = http_json(
+        address,
+        "POST",
+        &generic_generation_two_path,
+        Some(json!({"actor": "http-operator"})),
+    )
+    .unwrap();
+    assert_eq!(generic_status, 409);
+    assert_eq!(generic_error["error"]["code"], "transition_conflict");
+    let exact_observations_path = format!(
+        "/gardener/proposal-instances/{}/observations",
+        seeded.approved_latest_instance_id
+    );
+    assert_eq!(
+        http_json(address, "GET", &exact_observations_path, None)
+            .unwrap()
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     let observations_path = format!(
         "/gardener/proposals/{}/observations",
         seeded.approved_fingerprint
@@ -356,16 +442,32 @@ fn gardener_http_exposes_registration_evidence_and_decisions() {
         "/gardener/proposals/{}/approve",
         seeded.approved_fingerprint
     );
-    let (_, approved) = http_json(
+    let (ambiguous_status, ambiguous) = http_json(
         address,
         "POST",
         &approve_path,
         Some(json!({"actor": "http-operator", "note": "approved exactly"})),
     )
     .unwrap();
+    assert_eq!(ambiguous_status, 409);
+    assert_eq!(ambiguous["error"]["code"], "transition_conflict");
+    let exact_approve_path = format!(
+        "/gardener/proposal-instances/{}/approve",
+        seeded.approved_latest_instance_id
+    );
+    let (_, approved) = http_json(
+        address,
+        "POST",
+        &exact_approve_path,
+        Some(json!({"actor": "http-operator", "note": "approved exactly"})),
+    )
+    .unwrap();
     assert_eq!(approved["obligation_state"], "pending");
     assert_eq!(approved["approval_decision"], "approved");
-    let reject_path = format!("/gardener/proposals/{}/reject", seeded.rejected_fingerprint);
+    let reject_path = format!(
+        "/gardener/proposal-instances/{}/reject",
+        seeded.rejected_instance_id
+    );
     let (_, rejected) = http_json(
         address,
         "POST",
@@ -375,22 +477,42 @@ fn gardener_http_exposes_registration_evidence_and_decisions() {
     .unwrap();
     assert_eq!(rejected["obligation_state"], "attention");
     let conditional_path = format!(
-        "/operator/gardener/proposals/{}/approve",
-        seeded.conditional_fingerprint
+        "/operator/gardener/proposal-instances/{}/approve",
+        seeded.conditional_instance_id
     );
-    let (_, conditionally_approved) = http_json(
+    let conditional_instance = http_json(
+        address,
+        "GET",
+        &format!(
+            "/gardener/proposal-instances/{}",
+            seeded.conditional_instance_id
+        ),
+        None,
+    )
+    .unwrap()
+    .1;
+    let conditional_body = operator_action_body(
+        address,
+        conditional_instance["implementation_obligation_id"]
+            .as_str()
+            .unwrap(),
+        "approve_gardener_proposal",
+        Some("http-operator"),
+        Some("reviewed with a state precondition"),
+    );
+    let mut stale_generation_body = conditional_body.clone();
+    stale_generation_body["precondition"]["gardener_generation"] = json!(2);
+    let (stale_status, stale_error) = http_json(
         address,
         "POST",
         &conditional_path,
-        Some(operator_action_body(
-            address,
-            &format!("gardener:implement:{}", seeded.conditional_fingerprint),
-            "approve_gardener_proposal",
-            Some("http-operator"),
-            Some("reviewed with a state precondition"),
-        )),
+        Some(stale_generation_body),
     )
     .unwrap();
+    assert_eq!(stale_status, 409);
+    assert_eq!(stale_error["error"]["code"], "transition_conflict");
+    let (_, conditionally_approved) =
+        http_json(address, "POST", &conditional_path, Some(conditional_body)).unwrap();
     assert_eq!(conditionally_approved["obligation_state"], "pending");
     assert_eq!(conditionally_approved["approval_decision"], "approved");
     stop_child(&mut daemon);
@@ -899,8 +1021,9 @@ fn scheduler_failure_stops_http_and_exits_non_zero() {
 
 struct SeededGardener {
     approved_fingerprint: String,
-    rejected_fingerprint: String,
-    conditional_fingerprint: String,
+    approved_latest_instance_id: String,
+    rejected_instance_id: String,
+    conditional_instance_id: String,
 }
 
 fn seed_gardener_state(database: &Path, checkout: &str) -> SeededGardener {
@@ -998,16 +1121,38 @@ fn seed_gardener_state(database: &Path, checkout: &str) -> SeededGardener {
         )
         .unwrap();
 
+    let approved_fingerprint = proposal_fingerprint("robchristie/bokkie", APPROVED_PROMPT);
+    let rejected_fingerprint = proposal_fingerprint("robchristie/bokkie", REJECTED_PROMPT);
+    let conditional_fingerprint = proposal_fingerprint("robchristie/bokkie", HTTP_PROMPT);
+    let approved_instances = store
+        .gardener_proposal_instances(&approved_fingerprint)
+        .unwrap();
+    let rejected_instance_id = store
+        .gardener_proposal_instances(&rejected_fingerprint)
+        .unwrap()[0]
+        .id
+        .clone();
+    let conditional_instance_id = store
+        .gardener_proposal_instances(&conditional_fingerprint)
+        .unwrap()[0]
+        .id
+        .clone();
     SeededGardener {
-        approved_fingerprint: proposal_fingerprint("robchristie/bokkie", APPROVED_PROMPT),
-        rejected_fingerprint: proposal_fingerprint("robchristie/bokkie", REJECTED_PROMPT),
-        conditional_fingerprint: proposal_fingerprint("robchristie/bokkie", HTTP_PROMPT),
+        approved_fingerprint,
+        approved_latest_instance_id: approved_instances[1].id.clone(),
+        rejected_instance_id,
+        conditional_instance_id,
     }
 }
 
 fn create_seeded_run(database: &Path, approved_fingerprint: &str) {
     let mut store = Store::open(database).unwrap();
-    let obligation_id = format!("gardener:implement:{approved_fingerprint}");
+    let obligation_id = store
+        .gardener_proposal_instances(approved_fingerprint)
+        .unwrap()
+        .pop()
+        .unwrap()
+        .implementation_obligation_id;
     let claim = store
         .claim_due_gardener(3_000, 600, 10)
         .unwrap()

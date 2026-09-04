@@ -6,6 +6,15 @@ use crate::{ApprovalDecision, ObligationState, Recurrence};
 
 pub const CANONICAL_REPOSITORY: &str = "robchristie/bokkie";
 pub const CANONICAL_DEFAULT_BRANCH: &str = "main";
+pub const MAX_GARDENER_PROMPTS: usize = 3;
+pub const MAX_GARDENER_MODEL_TEXT_CHARS: usize = 16_384;
+pub const MAX_GARDENER_PROMPT_CHARS: usize = 6_000;
+/// The compact JSON encoding of every schema-bounded gardener model result
+/// remains below this independent transport and Store envelope, including
+/// worst-case six-byte JSON escapes for every permitted character.
+pub const MAX_GARDENER_MODEL_MESSAGE_BYTES: usize = 256 * 1_024;
+pub const MAX_GARDENER_MODEL_ITEMS: usize = 16;
+pub const MAX_GARDENER_MODEL_ITEM_CHARS: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewRepositoryRegistration {
@@ -87,6 +96,27 @@ pub struct ProposalObservation {
     pub inspection_id: String,
     pub source_commit: String,
     pub observed_at: i64,
+}
+
+/// One immutable occurrence of a stable gardener goal at an exact observed
+/// source revision. A later source creates a new monotonically numbered
+/// instance rather than inheriting this instance's decision.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProposalInstance {
+    pub id: String,
+    pub proposal_fingerprint: String,
+    pub repository: String,
+    pub prompt: String,
+    pub source_commit: String,
+    pub source_observation_id: i64,
+    pub source_inspection_id: String,
+    pub generation: u32,
+    pub implementation_obligation_id: String,
+    pub obligation_state: ObligationState,
+    pub approval_decision: Option<ApprovalDecision>,
+    pub superseded_by: Option<String>,
+    pub observation_count: u64,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -284,6 +314,10 @@ pub struct GardenerImplementationRun {
     pub id: String,
     pub repository: String,
     pub proposal_fingerprint: String,
+    pub proposal_instance_id: String,
+    pub proposal_generation: u32,
+    pub source_observation_id: i64,
+    pub source_inspection_id: String,
     pub obligation_id: String,
     pub occurrence: u32,
     pub attempt_number: u32,
@@ -361,6 +395,18 @@ pub fn proposal_fingerprint(repository: &str, normalised_prompt: &str) -> String
     format!("{:x}", digest.finalize())
 }
 
+/// Deterministic, SQL-constructible identity for one source-bound occurrence.
+pub fn proposal_instance_id(
+    proposal_fingerprint: &str,
+    source_commit: &str,
+    generation: u32,
+) -> String {
+    format!(
+        "pi:{proposal_fingerprint}:{}:{generation}",
+        source_commit.to_ascii_lowercase()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,6 +418,16 @@ mod tests {
         assert_eq!(
             proposal_fingerprint(CANONICAL_REPOSITORY, &normalise_goal_prompt(prompt)),
             proposal_fingerprint(CANONICAL_REPOSITORY, "  First line\n\tsecond line")
+        );
+    }
+
+    #[test]
+    fn proposal_instance_identity_is_deterministic_and_canonicalises_source_case() {
+        let fingerprint = "f".repeat(64);
+        let source = "A".repeat(40);
+        assert_eq!(
+            proposal_instance_id(&fingerprint, &source, 2),
+            format!("pi:{fingerprint}:{}:2", "a".repeat(40))
         );
     }
 }

@@ -58,7 +58,10 @@ The `bokkie` executable provides JSON-producing `create`, `list`, `show`,
 `approve`, `reject`, `retry`, `cancel`, `events`, and `attempts` commands. The
 nested `gardener` commands register the one supported `robchristie/bokkie`
 checkout, show inspections, immutable proposals, observations, implementation
-runs and run events, and record proposal approval or rejection.
+runs and run events, and record approval or rejection of an exact source-bound
+proposal generation. The stable goal fingerprint remains a catalogue identity;
+decisions and dispatch use the proposal instance, source observation, commit and
+generation.
 
 `serve` runs the scheduler and unauthenticated HTTP API together and refuses
 non-loopback binding. It remains fake-only unless the operator supplies
@@ -86,8 +89,9 @@ paths and must be served by this same loopback Bokkie origin at `/ui/`; there is
 no CORS exception, proxy, authentication layer or remote-access mode.
 
 Every lifecycle action requires a separate confirmation. Gardener decisions
-also display and submit the exact immutable proposal fingerprint, prompt,
-repository and occurrence, with an operator actor and optional note. The actor
+also display and submit the stable goal fingerprint, exact immutable proposal
+instance, source observation, source commit, generation, prompt, repository and
+occurrence, with an operator actor and optional note. The actor
 is audit evidence, not authentication. Every action also submits the
 backend-issued obligation identity, occurrence and append-only state revision
 that the operator reviewed; Store validates it atomically before mutation.

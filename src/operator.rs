@@ -12,7 +12,8 @@ use serde::Serialize;
 
 use crate::{
     ApprovalDecision, GardenerImplementationRun, GardenerVerificationVerdict, Obligation,
-    ObligationState, Proposal, Store, StoreError,
+    ObligationState, Store, StoreError,
+    gardener::ProposalInstance,
     store::{
         approval_transition_is_legal, cancel_transition_is_legal,
         gardener_proposal_transition_is_legal, generic_approval_transition_is_legal,
@@ -33,18 +34,19 @@ struct ApprovalEvidence {
 
 impl Store {
     pub fn operator_snapshot(&self, captured_at: i64) -> Result<OperatorSnapshot, StoreError> {
-        let proposals = self
-            .gardener_proposals()?
-            .into_iter()
-            .map(|proposal| (proposal.implementation_obligation_id.clone(), proposal))
-            .collect::<BTreeMap<_, _>>();
+        let mut proposal_instances = BTreeMap::new();
+        for proposal in self.gardener_proposals()? {
+            for instance in self.gardener_proposal_instances(&proposal.fingerprint)? {
+                proposal_instances.insert(instance.implementation_obligation_id.clone(), instance);
+            }
+        }
         let mut obligations = self
             .list_with_state_revisions()?
             .into_iter()
             .map(|(obligation, state_revision)| {
                 self.project_operator_obligation(
                     &obligation,
-                    proposals.get(&obligation.id),
+                    proposal_instances.get(&obligation.id),
                     state_revision,
                     captured_at,
                 )
@@ -66,14 +68,21 @@ impl Store {
             .get(obligation_id)?
             .ok_or_else(|| StoreError::NotFound(obligation_id.to_owned()))?;
         let all_proposals = self.gardener_proposals()?;
+        let mut all_instances = Vec::new();
+        for proposal in &all_proposals {
+            all_instances.extend(self.gardener_proposal_instances(&proposal.fingerprint)?);
+        }
         let mut all_observations = Vec::new();
         for proposal in &all_proposals {
             all_observations.extend(self.proposal_observations(&proposal.fingerprint)?);
         }
-        let direct_fingerprints = all_proposals
+        let direct_instances = all_instances
             .iter()
             .filter(|item| item.implementation_obligation_id == obligation_id)
-            .map(|item| item.fingerprint.clone())
+            .collect::<Vec<_>>();
+        let direct_fingerprints = direct_instances
+            .iter()
+            .map(|item| item.proposal_fingerprint.clone())
             .collect::<BTreeSet<_>>();
         let mut inspection_ids = self
             .gardener_inspections()?
@@ -81,6 +90,11 @@ impl Store {
             .filter(|item| item.obligation_id == obligation_id)
             .map(|item| item.id)
             .collect::<BTreeSet<_>>();
+        inspection_ids.extend(
+            direct_instances
+                .iter()
+                .map(|item| item.source_inspection_id.clone()),
+        );
         inspection_ids.extend(
             all_observations
                 .iter()
@@ -99,6 +113,10 @@ impl Store {
         let proposals = all_proposals
             .into_iter()
             .filter(|item| proposal_fingerprints.contains(&item.fingerprint))
+            .collect::<Vec<_>>();
+        let proposal_instances = all_instances
+            .into_iter()
+            .filter(|item| proposal_fingerprints.contains(&item.proposal_fingerprint))
             .collect::<Vec<_>>();
         let observations = all_observations
             .drain(..)
@@ -171,6 +189,19 @@ impl Store {
                     .or(Some(obligation.occurrence)),
                 "gardener_proposal".to_owned(),
                 &proposal,
+            )?);
+        }
+        for instance in proposal_instances {
+            items.push(topic_item(
+                instance.created_at,
+                TopicSource::GardenerProposalInstance,
+                format!("{}:{}", instance.generation, instance.id),
+                format!("gardener-proposal-instance:{}", instance.id),
+                self.get(&instance.implementation_obligation_id)?
+                    .map(|item| item.occurrence)
+                    .or(Some(obligation.occurrence)),
+                "gardener_proposal_instance".to_owned(),
+                &instance,
             )?);
         }
         for observation in observations {
@@ -253,7 +284,7 @@ impl Store {
     fn project_operator_obligation(
         &self,
         obligation: &Obligation,
-        proposal: Option<&Proposal>,
+        proposal: Option<&ProposalInstance>,
         state_revision: i64,
         captured_at: i64,
     ) -> Result<OperatorObligation, StoreError> {
@@ -339,7 +370,7 @@ impl Store {
     fn exception_reason(
         &self,
         obligation: &Obligation,
-        proposal: Option<&Proposal>,
+        proposal: Option<&ProposalInstance>,
         captured_at: i64,
     ) -> Result<Option<ExceptionReason>, StoreError> {
         if obligation.state == ObligationState::Running {
@@ -366,7 +397,12 @@ impl Store {
             let subject = proposal.map_or(ApprovalSubject::Generic, |proposal| {
                 ApprovalSubject::GardenerProposal {
                     repository: proposal.repository.clone(),
-                    fingerprint: proposal.fingerprint.clone(),
+                    fingerprint: proposal.proposal_fingerprint.clone(),
+                    instance_id: proposal.id.clone(),
+                    generation: proposal.generation,
+                    source_commit: proposal.source_commit.clone(),
+                    source_observation_id: proposal.source_observation_id,
+                    source_inspection_id: proposal.source_inspection_id.clone(),
                     prompt: proposal.prompt.clone(),
                     obligation_id: obligation.id.clone(),
                     occurrence: obligation.occurrence,
@@ -480,13 +516,15 @@ fn failure_cause(
 
 fn capabilities(
     obligation: &Obligation,
-    proposal: Option<&Proposal>,
+    proposal: Option<&ProposalInstance>,
     state_revision: i64,
 ) -> OperatorCapabilities {
     let is_proposal = proposal.is_some();
+    let is_current_proposal = proposal.is_some_and(|proposal| proposal.superseded_by.is_none());
     let approval_legal = approval_transition_is_legal(obligation);
     let generic_approval_legal = generic_approval_transition_is_legal(obligation, is_proposal);
-    let proposal_approval_legal = gardener_proposal_transition_is_legal(obligation, is_proposal);
+    let proposal_approval_legal =
+        gardener_proposal_transition_is_legal(obligation, is_current_proposal);
     let approve_reason = if is_proposal && approval_legal {
         Some(DisabledReason::GardenerProposalRequiresExactDecision)
     } else if generic_approval_legal {
@@ -501,8 +539,9 @@ fn capabilities(
     } else {
         Some(state_disabled_reason(obligation))
     };
-    let retry_reason =
-        (!retry_transition_is_legal(obligation)).then(|| state_disabled_reason(obligation));
+    let retry_reason = (!retry_transition_is_legal(obligation)
+        || (is_proposal && !is_current_proposal))
+        .then(|| state_disabled_reason(obligation));
     let cancel_reason =
         (!cancel_transition_is_legal(obligation)).then(|| state_disabled_reason(obligation));
     let ordinary_precondition = ActionPrecondition {
@@ -510,9 +549,19 @@ fn capabilities(
         occurrence: obligation.occurrence,
         state_revision,
         gardener_fingerprint: None,
+        gardener_proposal_instance_id: None,
+        gardener_source_commit: None,
+        gardener_source_observation_id: None,
+        gardener_source_inspection_id: None,
+        gardener_generation: None,
     };
     let gardener_precondition = proposal.map(|proposal| ActionPrecondition {
-        gardener_fingerprint: Some(proposal.fingerprint.clone()),
+        gardener_fingerprint: Some(proposal.proposal_fingerprint.clone()),
+        gardener_proposal_instance_id: Some(proposal.id.clone()),
+        gardener_source_commit: Some(proposal.source_commit.clone()),
+        gardener_source_observation_id: Some(proposal.source_observation_id),
+        gardener_source_inspection_id: Some(proposal.source_inspection_id.clone()),
+        gardener_generation: Some(proposal.generation),
         ..ordinary_precondition.clone()
     });
     OperatorCapabilities {
@@ -760,7 +809,7 @@ mod tests {
             .finish_gardener_implementation(
                 claim,
                 run_id,
-                r#"{"summary":"implemented"}"#,
+                r#"{"summary":"implemented","changed_paths":[],"checks":[]}"#,
                 start + 3,
             )
             .unwrap();
@@ -1044,19 +1093,55 @@ mod tests {
             exact_precondition.gardener_fingerprint.as_deref(),
             Some(proposal.fingerprint.as_str())
         );
+        let instance = store
+            .gardener_proposal_instances(&proposal.fingerprint)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(
+            exact_precondition.gardener_proposal_instance_id.as_deref(),
+            Some(instance.id.as_str())
+        );
+        assert_eq!(
+            exact_precondition.gardener_source_commit.as_deref(),
+            Some(instance.source_commit.as_str())
+        );
+        assert_eq!(
+            exact_precondition.gardener_source_observation_id,
+            Some(instance.source_observation_id)
+        );
+        assert_eq!(
+            exact_precondition.gardener_source_inspection_id.as_deref(),
+            Some(instance.source_inspection_id.as_str())
+        );
+        assert_eq!(
+            exact_precondition.gardener_generation,
+            Some(instance.generation)
+        );
         assert!(matches!(
             projected.exception,
             Some(ExceptionReason::AwaitingApproval {
                 subject: ApprovalSubject::GardenerProposal {
                     ref fingerprint,
+                    ref instance_id,
+                    generation,
+                    ref source_commit,
+                    source_observation_id,
+                    ref source_inspection_id,
                     ref prompt,
                     occurrence: 1,
                     ..
                 }
-            }) if fingerprint == &proposal.fingerprint && prompt == "Implement the exact safe change"
+            }) if fingerprint == &proposal.fingerprint
+                && instance_id == &instance.id
+                && generation == instance.generation
+                && source_commit == &instance.source_commit
+                && source_observation_id == instance.source_observation_id
+                && source_inspection_id == &instance.source_inspection_id
+                && prompt == "Implement the exact safe change"
         ));
 
-        let mut wrong_fingerprint = exact_precondition;
+        let mut wrong_fingerprint = exact_precondition.clone();
         wrong_fingerprint.gardener_fingerprint = Some("different".to_owned());
         let error = store
             .decide_gardener_proposal_if_current(
@@ -1069,6 +1154,19 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(error, StoreError::Conflict(message) if message.contains("fingerprint")));
+        let mut wrong_generation = exact_precondition;
+        wrong_generation.gardener_generation = Some(instance.generation + 1);
+        let error = store
+            .decide_gardener_proposal_instance_if_current(
+                &instance.id,
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                &wrong_generation,
+                101,
+            )
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Conflict(message) if message.contains("source-bound")));
 
         let topic = store
             .operator_topic(&proposal.implementation_obligation_id, 101)
@@ -1091,6 +1189,14 @@ mod tests {
             item.source == TopicSource::GardenerProposal
                 && item.evidence["fingerprint"] == proposal.fingerprint
                 && item.evidence["prompt"] == "Implement the exact safe change"
+        }));
+        assert!(topic.items.iter().any(|item| {
+            item.source == TopicSource::GardenerProposalInstance
+                && item.evidence["id"] == instance.id
+                && item.evidence["generation"] == instance.generation
+                && item.evidence["source_commit"] == instance.source_commit
+                && item.evidence["source_observation_id"] == instance.source_observation_id
+                && item.evidence["source_inspection_id"] == instance.source_inspection_id
         }));
         assert!(topic.items.iter().any(|item| {
             item.source == TopicSource::GardenerInspection
@@ -1152,7 +1258,12 @@ mod tests {
             .record_implementation_codex_turn(&claim, "run-1", "implementation-turn", 104)
             .unwrap();
         store
-            .finish_gardener_implementation(&claim, "run-1", r#"{"summary":"implemented"}"#, 105)
+            .finish_gardener_implementation(
+                &claim,
+                "run-1",
+                r#"{"summary":"implemented","changed_paths":[],"checks":[]}"#,
+                105,
+            )
             .unwrap();
         let head = "c".repeat(40);
         store

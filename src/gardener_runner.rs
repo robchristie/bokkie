@@ -22,7 +22,10 @@ use crate::{
     GardenerVerificationVerdict, InspectionResult, NewGardenerImplementationRun,
     NewGardenerInspection, RunResult, Store, StoreError, UnixClock,
     app_server::{AppServerClient, AppServerError, AppServerObserver, TurnKind, TurnRequest},
-    gardener::CANONICAL_REPOSITORY,
+    gardener::{
+        CANONICAL_REPOSITORY, MAX_GARDENER_MODEL_ITEM_CHARS, MAX_GARDENER_MODEL_ITEMS,
+        MAX_GARDENER_MODEL_TEXT_CHARS, MAX_GARDENER_PROMPT_CHARS, MAX_GARDENER_PROMPTS,
+    },
     git_workspace::{
         CandidateCheckCommand, CandidateCheckStatus, CommitId, GitWorkspace, GitWorkspaceError,
         RegisteredWorktree,
@@ -558,8 +561,8 @@ impl<'a> GardenerRunner<'a> {
             self.clock.now(),
         )?;
         let proposal = store
-            .gardener_proposal(&run.proposal_fingerprint)?
-            .ok_or_else(|| StoreError::NotFound(run.proposal_fingerprint.clone()))?;
+            .gardener_proposal_instance(&run.proposal_instance_id)?
+            .ok_or_else(|| StoreError::NotFound(run.proposal_instance_id.clone()))?;
         let source = CommitId::parse(run.source_commit.clone())?;
         let prompt = implementation_prompt(&source, &proposal.prompt);
         let manifest =
@@ -1158,21 +1161,20 @@ fn bokkie_build_identity() -> Result<String, GardenerRunnerError> {
     .map_err(|error| GardenerRunnerError::InvalidResult(error.to_string()))
 }
 
-const MAX_MODEL_TEXT_BYTES: usize = 16 * 1024;
-const MAX_MODEL_ITEMS: usize = 256;
-
 fn validate_implementation_result(
     result: &GardenerImplementationResult,
 ) -> Result<(), GardenerRunnerError> {
     if result.summary.trim().is_empty()
-        || result.summary.len() > MAX_MODEL_TEXT_BYTES
-        || result.changed_paths.len() > MAX_MODEL_ITEMS
-        || result.checks.len() > MAX_MODEL_ITEMS
+        || result.summary.chars().count() > MAX_GARDENER_MODEL_TEXT_CHARS
+        || result.changed_paths.len() > MAX_GARDENER_MODEL_ITEMS
+        || result.checks.len() > MAX_GARDENER_MODEL_ITEMS
         || result
             .changed_paths
             .iter()
             .chain(&result.checks)
-            .any(|value| value.trim().is_empty() || value.len() > 4096)
+            .any(|value| {
+                value.trim().is_empty() || value.chars().count() > MAX_GARDENER_MODEL_ITEM_CHARS
+            })
     {
         return Err(GardenerRunnerError::InvalidResult(
             "implementation result exceeds the typed field bounds".to_owned(),
@@ -1185,14 +1187,16 @@ fn validate_verification_result(
     result: &GardenerVerificationResult,
 ) -> Result<(), GardenerRunnerError> {
     let invalid_fields = result.summary.trim().is_empty()
-        || result.summary.len() > MAX_MODEL_TEXT_BYTES
-        || result.blocking_findings.len() > MAX_MODEL_ITEMS
-        || result.validation.len() > MAX_MODEL_ITEMS
+        || result.summary.chars().count() > MAX_GARDENER_MODEL_TEXT_CHARS
+        || result.blocking_findings.len() > MAX_GARDENER_MODEL_ITEMS
+        || result.validation.len() > MAX_GARDENER_MODEL_ITEMS
         || result
             .blocking_findings
             .iter()
             .chain(&result.validation)
-            .any(|value| value.trim().is_empty() || value.len() > 4096);
+            .any(|value| {
+                value.trim().is_empty() || value.chars().count() > MAX_GARDENER_MODEL_ITEM_CHARS
+            });
     let contradictory_pass =
         result.verdict == GardenerVerificationVerdict::Pass && !result.blocking_findings.is_empty();
     if invalid_fields || contradictory_pass {
@@ -1221,11 +1225,11 @@ fn inspection_schema() -> Value {
         "additionalProperties": false,
         "required": ["summary", "proposed_goal_prompts"],
         "properties": {
-            "summary": {"type": "string", "minLength": 1, "maxLength": 16384},
+            "summary": {"type": "string", "minLength": 1, "maxLength": MAX_GARDENER_MODEL_TEXT_CHARS},
             "proposed_goal_prompts": {
                 "type": "array",
-                "maxItems": 3,
-                "items": {"type": "string", "minLength": 1, "maxLength": 16384}
+                "maxItems": MAX_GARDENER_PROMPTS,
+                "items": {"type": "string", "minLength": 1, "maxLength": MAX_GARDENER_PROMPT_CHARS}
             }
         }
     })
@@ -1237,14 +1241,14 @@ fn implementation_schema() -> Value {
         "additionalProperties": false,
         "required": ["summary", "changed_paths", "checks"],
         "properties": {
-            "summary": {"type": "string", "minLength": 1, "maxLength": 16384},
+            "summary": {"type": "string", "minLength": 1, "maxLength": MAX_GARDENER_MODEL_TEXT_CHARS},
             "changed_paths": {
-                "type": "array", "maxItems": 256,
-                "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+                "type": "array", "maxItems": MAX_GARDENER_MODEL_ITEMS,
+                "items": {"type": "string", "minLength": 1, "maxLength": MAX_GARDENER_MODEL_ITEM_CHARS}
             },
             "checks": {
-                "type": "array", "maxItems": 256,
-                "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+                "type": "array", "maxItems": MAX_GARDENER_MODEL_ITEMS,
+                "items": {"type": "string", "minLength": 1, "maxLength": MAX_GARDENER_MODEL_ITEM_CHARS}
             }
         }
     })
@@ -1258,14 +1262,14 @@ fn verification_schema() -> Value {
         "properties": {
             "verdict": {"type": "string", "enum": ["pass", "blocking", "inconclusive"]},
             "head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-            "summary": {"type": "string", "minLength": 1, "maxLength": 16384},
+            "summary": {"type": "string", "minLength": 1, "maxLength": MAX_GARDENER_MODEL_TEXT_CHARS},
             "blocking_findings": {
-                "type": "array", "maxItems": 256,
-                "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+                "type": "array", "maxItems": MAX_GARDENER_MODEL_ITEMS,
+                "items": {"type": "string", "minLength": 1, "maxLength": MAX_GARDENER_MODEL_ITEM_CHARS}
             },
             "validation": {
-                "type": "array", "maxItems": 256,
-                "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+                "type": "array", "maxItems": MAX_GARDENER_MODEL_ITEMS,
+                "items": {"type": "string", "minLength": 1, "maxLength": MAX_GARDENER_MODEL_ITEM_CHARS}
             }
         }
     })

@@ -27,9 +27,9 @@ use serde_json::Value;
 use crate::{
     APPLICATION_NAME,
     model::{
-        AppModel, Confirmation, ConnectionState, INBOX_PANE_ID, LifecycleAction,
-        OBLIGATIONS_PANE_ID, OperatorStateLabel, StateFilter, TIMELINE_PANE_ID, consequence_label,
-        operator_workspace,
+        AppModel, Confirmation, ConnectionState, GardenerConfirmation, INBOX_PANE_ID,
+        LifecycleAction, OBLIGATIONS_PANE_ID, OperatorStateLabel, StateFilter, TIMELINE_PANE_ID,
+        consequence_label, operator_workspace,
     },
     transport::{ActionRequest, ApiFailure, ApiMessage, ApiPayload, ApiRequest, Transport},
     ui_observation::{
@@ -452,25 +452,30 @@ impl AttentionApp {
                     .to_owned();
             return;
         }
-        let current_fingerprint = exact_gardener_subject(current).map(|subject| subject.1);
-        let confirmed_fingerprint = confirmation
+        let current_instance_id =
+            exact_gardener_subject(current).map(|subject| subject.instance_id);
+        let confirmed_instance_id = confirmation
             .gardener
             .as_ref()
-            .map(|gardener| gardener.fingerprint.as_str());
-        if confirmation.action.is_gardener() && current_fingerprint != confirmed_fingerprint {
+            .map(|gardener| gardener.instance_id.as_str());
+        if confirmation.action.is_gardener() && current_instance_id != confirmed_instance_id {
             self.model.status =
                 "The immutable proposal identity changed; dismiss and review again".to_owned();
             return;
         }
         self.dispatch(
-            ApiRequest::Act(ActionRequest {
+            ApiRequest::Act(Box::new(ActionRequest {
                 action: confirmation.action,
                 obligation_id: confirmation.obligation_id,
-                fingerprint: confirmation.gardener.map(|gardener| gardener.fingerprint),
+                fingerprint: confirmation
+                    .gardener
+                    .as_ref()
+                    .map(|gardener| gardener.fingerprint.clone()),
+                proposal_instance_id: confirmation.gardener.map(|gardener| gardener.instance_id),
                 precondition: confirmation.precondition,
                 actor: confirmation.actor,
                 note: confirmation.note,
-            }),
+            })),
             context,
         );
     }
@@ -494,11 +499,11 @@ impl AttentionApp {
             return Some(reason);
         }
         if confirmation.action.is_gardener()
-            && exact_gardener_subject(current).map(|subject| subject.1)
+            && exact_gardener_subject(current).map(|subject| subject.instance_id)
                 != confirmation
                     .gardener
                     .as_ref()
-                    .map(|gardener| gardener.fingerprint.as_str())
+                    .map(|gardener| gardener.instance_id.as_str())
         {
             return Some("The immutable proposal identity no longer matches".to_owned());
         }
@@ -1223,12 +1228,12 @@ fn show_timeline(
                 font_scale,
                 text,
             );
-            if let Some((repository, fingerprint, prompt)) = exact_gardener_subject(obligation) {
+            if let Some(subject) = exact_gardener_subject(obligation) {
                 property_row(
                     ui,
                     3_012,
                     "Repository",
-                    repository,
+                    subject.repository,
                     tokens,
                     font_scale,
                     text,
@@ -1236,8 +1241,8 @@ fn show_timeline(
                 property_row(
                     ui,
                     3_013,
-                    "Fingerprint",
-                    fingerprint,
+                    "Goal fingerprint",
+                    subject.fingerprint,
                     tokens,
                     font_scale,
                     text,
@@ -1245,11 +1250,56 @@ fn show_timeline(
                 measured_content_label(
                     ui,
                     3_014,
-                    prompt,
+                    subject.prompt,
                     TextRole::Body,
                     TextOverflow::Wrap,
                     3,
                     TextInteraction::Selectable,
+                    tokens,
+                    font_scale,
+                    text,
+                );
+                property_row(
+                    ui,
+                    3_015,
+                    "Proposal instance",
+                    subject.instance_id,
+                    tokens,
+                    font_scale,
+                    text,
+                );
+                property_row(
+                    ui,
+                    3_016,
+                    "Generation",
+                    &subject.generation.to_string(),
+                    tokens,
+                    font_scale,
+                    text,
+                );
+                property_row(
+                    ui,
+                    3_017,
+                    "Source commit",
+                    subject.source_commit,
+                    tokens,
+                    font_scale,
+                    text,
+                );
+                property_row(
+                    ui,
+                    3_018,
+                    "Source observation",
+                    &subject.source_observation_id.to_string(),
+                    tokens,
+                    font_scale,
+                    text,
+                );
+                property_row(
+                    ui,
+                    3_019,
+                    "Source inspection",
+                    subject.source_inspection_id,
                     tokens,
                     font_scale,
                     text,
@@ -1485,8 +1535,9 @@ fn show_confirmation(
             ui.label(format!("Consequence: {}", confirmation.consequence));
             if let Some(gardener) = &confirmation.gardener {
                 ui.separator();
-                ui.label(format!("Repository: {}", gardener.repository));
-                ui.label(format!("Fingerprint: {}", gardener.fingerprint));
+                for line in gardener_confirmation_provenance(gardener) {
+                    ui.label(line);
+                }
                 ui.label("Exact immutable prompt:");
                 egui::ScrollArea::vertical()
                     .id_salt("confirmation-prompt")
@@ -1596,6 +1647,18 @@ fn show_confirmation(
         node.name = "Confirm lifecycle action".to_owned();
         semantic_nodes.push(node);
     }
+}
+
+fn gardener_confirmation_provenance(gardener: &GardenerConfirmation) -> [String; 7] {
+    [
+        format!("Repository: {}", gardener.repository),
+        format!("Goal fingerprint: {}", gardener.fingerprint),
+        format!("Proposal instance: {}", gardener.instance_id),
+        format!("Generation: {}", gardener.generation),
+        format!("Source commit: {}", gardener.source_commit),
+        format!("Source observation: {}", gardener.source_observation_id),
+        format!("Source inspection: {}", gardener.source_inspection_id),
+    ]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1794,9 +1857,13 @@ fn exception_label(reason: &ExceptionReason) -> String {
     match reason {
         ExceptionReason::AwaitingApproval { subject } => match subject {
             ApprovalSubject::Generic => "Awaiting a generic operator decision".to_owned(),
-            ApprovalSubject::GardenerProposal { fingerprint, .. } => format!(
-                "Awaiting an exact gardener proposal decision · {}",
-                fingerprint
+            ApprovalSubject::GardenerProposal {
+                fingerprint,
+                instance_id,
+                generation,
+                ..
+            } => format!(
+                "Awaiting exact gardener proposal instance {instance_id} · generation {generation} · goal {fingerprint}"
             ),
         },
         ExceptionReason::ExpiredLease {
@@ -1895,17 +1962,42 @@ fn available_consequences(obligation: &OperatorObligation) -> String {
     }
 }
 
-fn exact_gardener_subject(obligation: &OperatorObligation) -> Option<(&str, &str, &str)> {
+struct ExactGardenerSubject<'a> {
+    repository: &'a str,
+    fingerprint: &'a str,
+    instance_id: &'a str,
+    generation: u32,
+    source_commit: &'a str,
+    source_observation_id: i64,
+    source_inspection_id: &'a str,
+    prompt: &'a str,
+}
+
+fn exact_gardener_subject(obligation: &OperatorObligation) -> Option<ExactGardenerSubject<'_>> {
     match obligation.exception.as_ref()? {
         ExceptionReason::AwaitingApproval {
             subject:
                 ApprovalSubject::GardenerProposal {
                     repository,
                     fingerprint,
+                    instance_id,
+                    generation,
+                    source_commit,
+                    source_observation_id,
+                    source_inspection_id,
                     prompt,
                     ..
                 },
-        } => Some((repository, fingerprint, prompt)),
+        } => Some(ExactGardenerSubject {
+            repository,
+            fingerprint,
+            instance_id,
+            generation: *generation,
+            source_commit,
+            source_observation_id: *source_observation_id,
+            source_inspection_id,
+            prompt,
+        }),
         _ => None,
     }
 }
@@ -1917,6 +2009,7 @@ fn source_label(source: TopicSource) -> &'static str {
         TopicSource::Attempt => "Execution attempt",
         TopicSource::GardenerInspection => "Gardener inspection",
         TopicSource::GardenerProposal => "Gardener proposal",
+        TopicSource::GardenerProposalInstance => "Gardener proposal instance",
         TopicSource::GardenerObservation => "Gardener observation",
         TopicSource::GardenerEvent => "Gardener event",
         TopicSource::GardenerImplementationRun => "Implementation run",
@@ -1952,7 +2045,7 @@ fn event_label(event: &str) -> String {
 }
 
 fn common_evidence(evidence: &Value) -> Vec<(&'static str, String)> {
-    const FIELDS: [(&str, &str); 51] = [
+    const FIELDS: [(&str, &str); 55] = [
         ("id", "Evidence ID"),
         ("obligation_id", "Obligation ID"),
         (
@@ -1964,8 +2057,12 @@ fn common_evidence(evidence: &Value) -> Vec<(&'static str, String)> {
         ("attempt_number", "Attempt number"),
         ("lease_generation", "Lease generation"),
         ("lease_token", "Lease token"),
-        ("fingerprint", "Proposal fingerprint"),
-        ("proposal_fingerprint", "Proposal fingerprint"),
+        ("fingerprint", "Goal fingerprint"),
+        ("proposal_fingerprint", "Goal fingerprint"),
+        ("proposal_instance_id", "Proposal instance"),
+        ("generation", "Proposal generation"),
+        ("source_observation_id", "Source observation"),
+        ("source_inspection_id", "Source inspection"),
         ("inspection_id", "Inspection ID"),
         ("implementation_run_id", "Implementation run ID"),
         ("run_id", "Run ID"),
@@ -2020,10 +2117,10 @@ fn common_evidence(evidence: &Value) -> Vec<(&'static str, String)> {
                 .map(|value| (label, value_text(value)))
         })
         .collect::<Vec<_>>();
-    if let Some(Value::String(details)) = object.get("details_json") {
-        if let Ok(parsed) = serde_json::from_str::<Value>(details) {
-            output.extend(common_evidence(&parsed));
-        }
+    if let Some(Value::String(details)) = object.get("details_json")
+        && let Ok(parsed) = serde_json::from_str::<Value>(details)
+    {
+        output.extend(common_evidence(&parsed));
     }
     output
 }
@@ -2066,6 +2163,11 @@ mod tests {
                 occurrence: 2,
                 state_revision: 1,
                 gardener_fingerprint: None,
+                gardener_proposal_instance_id: None,
+                gardener_source_commit: None,
+                gardener_source_observation_id: None,
+                gardener_source_inspection_id: None,
+                gardener_generation: None,
             }),
         }
     }
@@ -2273,5 +2375,32 @@ mod tests {
                 ConfirmationAction::Dismiss.stable_id()
             );
         }
+    }
+
+    #[test]
+    fn gardener_confirmation_renders_exact_source_bound_provenance() {
+        let gardener = GardenerConfirmation {
+            repository: "robchristie/bokkie".to_owned(),
+            fingerprint: "goal-fingerprint".to_owned(),
+            instance_id: "proposal-instance-3".to_owned(),
+            generation: 3,
+            source_commit: "c".repeat(40),
+            source_observation_id: 17,
+            source_inspection_id: "inspection-3".to_owned(),
+            prompt: "Implement the exact reviewed goal".to_owned(),
+        };
+        assert_eq!(
+            gardener_confirmation_provenance(&gardener),
+            [
+                "Repository: robchristie/bokkie".to_owned(),
+                "Goal fingerprint: goal-fingerprint".to_owned(),
+                "Proposal instance: proposal-instance-3".to_owned(),
+                "Generation: 3".to_owned(),
+                format!("Source commit: {}", "c".repeat(40)),
+                "Source observation: 17".to_owned(),
+                "Source inspection: inspection-3".to_owned(),
+            ]
+        );
+        assert_eq!(gardener.prompt, "Implement the exact reviewed goal");
     }
 }

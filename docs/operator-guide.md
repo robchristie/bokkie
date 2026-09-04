@@ -106,8 +106,8 @@ Registration creates the recurring inspection obligation. Repeating the exact
 command is idempotent; changing its immutable path, schedule, canonical
 repository, or `main` branch is a conflict or invalid request.
 
-Inspect persisted evidence and decide an immutable proposal by its content
-fingerprint:
+Inspect persisted evidence by stable goal fingerprint, then decide one exact
+source-bound proposal instance:
 
 ```sh
 bokkie --database ./bokkie.sqlite gardener inspections list
@@ -115,20 +115,33 @@ bokkie --database ./bokkie.sqlite gardener inspections show INSPECTION_ID
 bokkie --database ./bokkie.sqlite gardener proposals list
 bokkie --database ./bokkie.sqlite gardener proposals show FINGERPRINT
 bokkie --database ./bokkie.sqlite gardener proposals observations FINGERPRINT
-bokkie --database ./bokkie.sqlite gardener proposals approve FINGERPRINT \
+bokkie --database ./bokkie.sqlite gardener proposal-instances list
+bokkie --database ./bokkie.sqlite gardener proposal-instances show INSTANCE_ID
+bokkie --database ./bokkie.sqlite gardener proposal-instances observations INSTANCE_ID
+bokkie --database ./bokkie.sqlite gardener proposal-instances approve INSTANCE_ID \
   --actor operator --note "bounded and appropriate"
-bokkie --database ./bokkie.sqlite gardener proposals reject FINGERPRINT \
+bokkie --database ./bokkie.sqlite gardener proposal-instances reject INSTANCE_ID \
   --actor operator --note "not appropriate"
 bokkie --database ./bokkie.sqlite gardener runs list
 bokkie --database ./bokkie.sqlite gardener runs show RUN_ID
 bokkie --database ./bokkie.sqlite gardener runs events RUN_ID
 ```
 
-Approval is occurrence-bound and must exist before an implementation can be
-claimed. Rejection moves its implementation obligation to visible attention.
-To reconsider a rejected proposal, read its `implementation_obligation_id`,
-run `bokkie retry IMPLEMENTATION_OBLIGATION_ID`, then approve the unchanged
-fingerprint. Do not blindly retry an ambiguous implementation: inspect the run
+Each normalised repository/prompt pair has one stable goal fingerprint. Its
+instances are immutable and monotonically generated from exact source
+observations. Repeated observations at the same source deduplicate; a new source
+creates a fresh awaiting-decision instance and supersedes the earlier actionable
+instance without inheriting approval. Supersession also fences further
+persisted run progress and lease renewal for already-claimed older work.
+If stale work reconciles into attention, retry remains unavailable because a
+superseded source instance can never become actionable again; the newer
+generation is the only decision surface.
+Approval is occurrence- and
+instance-bound and must exist before implementation can be claimed. Rejection
+moves that instance's implementation obligation to visible attention. To
+reconsider it, read its `implementation_obligation_id`, run `bokkie retry
+IMPLEMENTATION_OBLIGATION_ID`, then approve the same exact instance. Do not
+blindly retry an ambiguous implementation: inspect the run
 and its append-only events to reconcile its persisted Codex, Git, and GitHub
 identities first.
 
@@ -215,7 +228,8 @@ ambiguous local check must prevent publication or leave the pull request draft
 for reconciliation; ready status never authorises a merge.
 
 SQLite retains inspection source commits and Codex thread/turn identities;
-proposal fingerprints, prompts, observations and source commits; and each
+stable goal fingerprints, prompts, immutable source-bound proposal instances,
+observations, generations, decisions and supersession links; and each
 implementation run's obligation/lease, worktree, branch, Codex thread/turn,
 Git commit, pushed head, pull-request number/URL/head, verification head and
 verdict. Each run also retains its prompt/schema, executable/version,
@@ -253,10 +267,17 @@ conflicts (409), and internal storage errors (500).
 | `GET` | `/gardener/proposals` | List immutable proposals |
 | `GET` | `/gardener/proposals/{fingerprint}` | Show a proposal and approval state |
 | `GET` | `/gardener/proposals/{fingerprint}/observations` | List deduplicated observations |
-| `POST` | `/gardener/proposals/{fingerprint}/approve` | Approve the exact proposal content |
-| `POST` | `/gardener/proposals/{fingerprint}/reject` | Reject it into visible attention |
-| `POST` | `/operator/gardener/proposals/{fingerprint}/approve` | Conditionally approve the reviewed exact proposal |
-| `POST` | `/operator/gardener/proposals/{fingerprint}/reject` | Conditionally reject the reviewed exact proposal |
+| `POST` | `/gardener/proposals/{fingerprint}/approve` | Legacy decision alias when exactly one instance exists |
+| `POST` | `/gardener/proposals/{fingerprint}/reject` | Legacy rejection alias when exactly one instance exists |
+| `POST` | `/operator/gardener/proposals/{fingerprint}/approve` | Legacy conditional alias when exactly one instance exists |
+| `POST` | `/operator/gardener/proposals/{fingerprint}/reject` | Legacy conditional alias when exactly one instance exists |
+| `GET` | `/gardener/proposal-instances` | List exact source-bound proposal instances |
+| `GET` | `/gardener/proposal-instances/{instance_id}` | Show one instance and its decision state |
+| `GET` | `/gardener/proposal-instances/{instance_id}/observations` | List observations mapped to one instance |
+| `POST` | `/gardener/proposal-instances/{instance_id}/approve` | Approve one exact source-bound instance |
+| `POST` | `/gardener/proposal-instances/{instance_id}/reject` | Reject one exact source-bound instance |
+| `POST` | `/operator/gardener/proposal-instances/{instance_id}/approve` | Conditionally approve the reviewed exact instance |
+| `POST` | `/operator/gardener/proposal-instances/{instance_id}/reject` | Conditionally reject the reviewed exact instance |
 | `GET` | `/gardener/runs` | List implementation runs |
 | `GET` | `/gardener/runs/{id}` | Show one run and persisted identities |
 | `GET` | `/gardener/runs/{id}/events` | Read append-only run events |
@@ -272,7 +293,8 @@ The conditional `/operator` mutation routes require every body to copy the
 `precondition` from that action's available capability in the latest
 `GET /operator/snapshot` response. It binds the obligation identity, occurrence
 and append-only state revision; exact gardener decisions additionally bind the
-proposal fingerprint. Store validates it in the same transaction as the
+stable goal fingerprint, proposal instance, generation, source commit, source
+observation and source inspection. Store validates them in the same transaction as the
 transition and returns HTTP 409 if the reviewed state has changed. Conditional
 approval and rejection also require an `actor` and accept an optional `note`;
 conditional retry and cancellation may omit those decision fields.

@@ -14,10 +14,107 @@ use super::*;
 use crate::{
     ApprovalDecision, CANONICAL_DEFAULT_BRANCH, GardenerPublicationState, ManualClock,
     NewObligation, NewRepositoryRegistration, ObligationState, Recurrence, RetryPolicy,
+    gardener::MAX_GARDENER_MODEL_MESSAGE_BYTES,
 };
 
 const GOAL: &str = "Add a durable gardener marker file and test it.";
 const CANONICAL_HTTPS_URL: &str = "https://github.com/robchristie/bokkie.git";
+
+#[test]
+fn model_field_limits_match_json_schemas_and_count_unicode_characters() {
+    let assert_fits_transport = |encoded: Vec<u8>| {
+        assert!(encoded.len() <= MAX_GARDENER_MODEL_MESSAGE_BYTES);
+        let final_message = String::from_utf8(encoded).unwrap();
+        assert!(final_message.len() <= ProcessLimits::default().final_message_bytes);
+        let app_server_line = serde_json::to_vec(&serde_json::json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "completedAtMs": 1,
+                "item": {
+                    "type": "agentMessage",
+                    "id": "item-1",
+                    "text": final_message
+                }
+            }
+        }))
+        .unwrap();
+        assert!(app_server_line.len() <= ProcessLimits::default().jsonl_line_bytes);
+    };
+    let inspection = inspection_schema();
+    assert_eq!(
+        inspection["properties"]["summary"]["maxLength"],
+        MAX_GARDENER_MODEL_TEXT_CHARS
+    );
+    assert_eq!(
+        inspection["properties"]["proposed_goal_prompts"]["maxItems"],
+        MAX_GARDENER_PROMPTS
+    );
+    assert_eq!(
+        inspection["properties"]["proposed_goal_prompts"]["items"]["maxLength"],
+        MAX_GARDENER_PROMPT_CHARS
+    );
+    for schema in [implementation_schema(), verification_schema()] {
+        assert_eq!(
+            schema["properties"]["summary"]["maxLength"],
+            MAX_GARDENER_MODEL_TEXT_CHARS
+        );
+    }
+    let implementation = implementation_schema();
+    for field in ["changed_paths", "checks"] {
+        assert_eq!(
+            implementation["properties"][field]["maxItems"],
+            MAX_GARDENER_MODEL_ITEMS
+        );
+        assert_eq!(
+            implementation["properties"][field]["items"]["maxLength"],
+            MAX_GARDENER_MODEL_ITEM_CHARS
+        );
+    }
+
+    let mut result = GardenerImplementationResult {
+        summary: "🦘".repeat(MAX_GARDENER_MODEL_TEXT_CHARS),
+        changed_paths: vec!["界".repeat(MAX_GARDENER_MODEL_ITEM_CHARS)],
+        checks: Vec::new(),
+    };
+    validate_implementation_result(&result).unwrap();
+    let worst_case_escape = "\u{0001}".repeat(MAX_GARDENER_MODEL_ITEM_CHARS);
+    let largest_schema_result = GardenerImplementationResult {
+        summary: "\u{0001}".repeat(MAX_GARDENER_MODEL_TEXT_CHARS),
+        changed_paths: vec![worst_case_escape.clone(); MAX_GARDENER_MODEL_ITEMS],
+        checks: vec![worst_case_escape; MAX_GARDENER_MODEL_ITEMS],
+    };
+    validate_implementation_result(&largest_schema_result).unwrap();
+    assert_fits_transport(serde_json::to_vec(&largest_schema_result).unwrap());
+    let largest_inspection_result = InspectionResult {
+        summary: "\u{0001}".repeat(MAX_GARDENER_MODEL_TEXT_CHARS),
+        proposed_goal_prompts: vec![
+            "\u{0001}".repeat(MAX_GARDENER_PROMPT_CHARS);
+            MAX_GARDENER_PROMPTS
+        ],
+    };
+    assert_fits_transport(serde_json::to_vec(&largest_inspection_result).unwrap());
+    let largest_verification_result = GardenerVerificationResult {
+        verdict: GardenerVerificationVerdict::Blocking,
+        head: "a".repeat(40),
+        summary: "\u{0001}".repeat(MAX_GARDENER_MODEL_TEXT_CHARS),
+        blocking_findings: vec![
+            "\u{0001}".repeat(MAX_GARDENER_MODEL_ITEM_CHARS);
+            MAX_GARDENER_MODEL_ITEMS
+        ],
+        validation: vec![
+            "\u{0001}".repeat(MAX_GARDENER_MODEL_ITEM_CHARS);
+            MAX_GARDENER_MODEL_ITEMS
+        ],
+    };
+    assert_fits_transport(serde_json::to_vec(&largest_verification_result).unwrap());
+    result.summary.push('🦘');
+    assert!(validate_implementation_result(&result).is_err());
+    result.summary.pop();
+    result.changed_paths[0].push('界');
+    assert!(validate_implementation_result(&result).is_err());
+}
 
 struct Fixture {
     root: TempDir,

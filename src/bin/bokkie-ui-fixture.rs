@@ -13,9 +13,9 @@ use std::{
 };
 
 use bokkie::{
-    ApprovalDecision, Completion, GardenerVerificationVerdict, InspectionResult,
-    NewGardenerImplementationRun, NewGardenerInspection, NewObligation, NewRepositoryRegistration,
-    Recurrence, RetryPolicy, Store, http::router_with_ui,
+    ApprovalDecision, Completion, GardenerCandidateQualification, GardenerVerificationVerdict,
+    InspectionResult, NewGardenerImplementationRun, NewGardenerInspection, NewObligation,
+    NewRepositoryRegistration, Recurrence, RetryPolicy, Store, http::router_with_ui,
 };
 use uuid::Uuid;
 
@@ -339,10 +339,23 @@ fn seed_verification(
     store.finish_gardener_implementation(
         claim,
         &run_id,
-        r#"{"type":"final","text":"fixture-only; no process executed"}"#,
+        r#"{"summary":"fixture-only; no process executed","changed_paths":[],"checks":[]}"#,
         NOW + 23,
     )?;
     store.record_gardener_git_commit(claim, &run_id, &head, NOW + 24)?;
+    store.record_gardener_candidate_qualification(
+        claim,
+        &GardenerCandidateQualification {
+            run_id: run_id.clone(),
+            head: head.clone(),
+            diff_manifest_json: "[]".to_owned(),
+            tree_manifest_json: "[]".to_owned(),
+            checks_json: r#"[{"executable":{},"arguments":[],"duration_millis":0,"status":{"kind":"passed"},"evidence":{}}]"#.to_owned(),
+            duration_ms: 0,
+            qualified_at: NOW + 24,
+        },
+        NOW + 24,
+    )?;
     store.record_gardener_push_observation(claim, &run_id, &head, NOW + 25)?;
     let number = 900 + index as u64;
     store.record_gardener_ready_pull_request(

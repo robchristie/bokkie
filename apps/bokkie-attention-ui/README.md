@@ -55,9 +55,10 @@ backend-issued obligation identity, occurrence and append-only state revision
 as an immutable precondition that is submitted for every action and
 checked atomically with the store transition through the conditional
 `/operator` routes. Decisions require a non-empty operator actor and accept an
-optional note. For gardener approval or rejection, the
-confirmation shows the exact immutable repository, fingerprint and prompt;
-the fingerprint is also part of the backend precondition. Submission is blocked
+optional note. For gardener approval or rejection, the confirmation shows the
+repository, stable goal fingerprint, exact proposal instance, generation,
+source commit, source observation, source inspection and immutable prompt.
+Those identities are also part of the backend precondition. Submission is blocked
 if the reviewed state no longer matches the current snapshot, and the backend
 returns HTTP 409 if it changes before mutation. The actor is persisted audit
 evidence but is not authentication: this remains an unauthenticated loopback

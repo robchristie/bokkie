@@ -10,7 +10,9 @@ use crate::model::LifecycleAction;
 pub struct ActionRequest {
     pub action: LifecycleAction,
     pub obligation_id: String,
+    /// Retained for compatibility with the legacy goal-level route shape.
     pub fingerprint: Option<String>,
+    pub proposal_instance_id: Option<String>,
     pub precondition: ActionPrecondition,
     pub actor: String,
     pub note: String,
@@ -23,7 +25,7 @@ pub enum ApiRequest {
         obligation_id: String,
         generation: u64,
     },
-    Act(ActionRequest),
+    Act(Box<ActionRequest>),
 }
 
 #[derive(Debug)]
@@ -160,12 +162,12 @@ fn action_endpoint(request: &ActionRequest) -> String {
             encode_path_segment(&request.obligation_id)
         ),
         LifecycleAction::ApproveGardenerProposal => format!(
-            "/operator/gardener/proposals/{}/approve",
-            encode_path_segment(request.fingerprint.as_deref().unwrap_or_default())
+            "/operator/gardener/proposal-instances/{}/approve",
+            encode_path_segment(request.proposal_instance_id.as_deref().unwrap_or_default())
         ),
         LifecycleAction::RejectGardenerProposal => format!(
-            "/operator/gardener/proposals/{}/reject",
-            encode_path_segment(request.fingerprint.as_deref().unwrap_or_default())
+            "/operator/gardener/proposal-instances/{}/reject",
+            encode_path_segment(request.proposal_instance_id.as_deref().unwrap_or_default())
         ),
     }
 }
@@ -225,19 +227,29 @@ mod tests {
     use super::*;
 
     fn action(action: LifecycleAction) -> ApiRequest {
-        ApiRequest::Act(ActionRequest {
+        ApiRequest::Act(Box::new(ActionRequest {
             action,
             obligation_id: "obligation/1".to_owned(),
             fingerprint: Some("abc def".to_owned()),
+            proposal_instance_id: Some("instance/2".to_owned()),
             precondition: ActionPrecondition {
                 obligation_id: "obligation/1".to_owned(),
                 occurrence: 1,
                 state_revision: 7,
                 gardener_fingerprint: action.is_gardener().then(|| "abc def".to_owned()),
+                gardener_proposal_instance_id: action
+                    .is_gardener()
+                    .then(|| "instance/2".to_owned()),
+                gardener_source_commit: action.is_gardener().then(|| "c".repeat(40)),
+                gardener_source_observation_id: action.is_gardener().then_some(9),
+                gardener_source_inspection_id: action
+                    .is_gardener()
+                    .then(|| "inspection/2".to_owned()),
+                gardener_generation: action.is_gardener().then_some(2),
             },
             actor: "operator".to_owned(),
             note: String::new(),
-        })
+        }))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -270,8 +282,8 @@ mod tests {
             "/operator/obligations/obligation%2F1/reject",
             "/operator/obligations/obligation%2F1/retry",
             "/operator/obligations/obligation%2F1/cancel",
-            "/operator/gardener/proposals/abc%20def/approve",
-            "/operator/gardener/proposals/abc%20def/reject",
+            "/operator/gardener/proposal-instances/instance%2F2/approve",
+            "/operator/gardener/proposal-instances/instance%2F2/reject",
         ];
         for (lifecycle_action, expected_path) in
             LifecycleAction::ALL.into_iter().zip(expected_paths)

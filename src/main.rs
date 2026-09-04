@@ -191,6 +191,11 @@ enum GardenerCommand {
         #[command(subcommand)]
         command: GardenerProposalCommand,
     },
+    /// List, show, or decide exact source-bound proposal instances.
+    ProposalInstances {
+        #[command(subcommand)]
+        command: GardenerProposalInstanceCommand,
+    },
     /// List or show implementation runs and their events.
     Runs {
         #[command(subcommand)]
@@ -222,6 +227,31 @@ enum GardenerProposalCommand {
     },
     Reject {
         fingerprint: String,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum GardenerProposalInstanceCommand {
+    List,
+    Show {
+        instance_id: String,
+    },
+    Observations {
+        instance_id: String,
+    },
+    Approve {
+        instance_id: String,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    Reject {
+        instance_id: String,
         #[arg(long, default_value = "cli")]
         actor: String,
         #[arg(long)]
@@ -542,6 +572,40 @@ fn run_gardener_command(
                 now,
             )?),
         },
+        GardenerCommand::ProposalInstances { command } => match command {
+            GardenerProposalInstanceCommand::List => {
+                print_json(&all_gardener_proposal_instances(store)?)
+            }
+            GardenerProposalInstanceCommand::Show { instance_id } => {
+                print_json(&require_gardener_proposal_instance(store, &instance_id)?)
+            }
+            GardenerProposalInstanceCommand::Observations { instance_id } => {
+                require_gardener_proposal_instance(store, &instance_id)?;
+                print_json(&store.proposal_instance_observations(&instance_id)?);
+            }
+            GardenerProposalInstanceCommand::Approve {
+                instance_id,
+                actor,
+                note,
+            } => print_json(&store.decide_gardener_proposal_instance(
+                &instance_id,
+                ApprovalDecision::Approved,
+                &actor,
+                note.as_deref(),
+                now,
+            )?),
+            GardenerProposalInstanceCommand::Reject {
+                instance_id,
+                actor,
+                note,
+            } => print_json(&store.decide_gardener_proposal_instance(
+                &instance_id,
+                ApprovalDecision::Rejected,
+                &actor,
+                note.as_deref(),
+                now,
+            )?),
+        },
         GardenerCommand::Runs { command } => match command {
             GardenerRunCommand::List => print_json(&store.gardener_implementation_runs()?),
             GardenerRunCommand::Show { id } => print_json(&require_gardener_run(store, &id)?),
@@ -578,6 +642,25 @@ fn require_gardener_proposal(
     store
         .gardener_proposal(fingerprint)?
         .ok_or_else(|| StoreError::NotFound(fingerprint.to_owned()))
+}
+
+fn require_gardener_proposal_instance(
+    store: &Store,
+    instance_id: &str,
+) -> Result<bokkie::gardener::ProposalInstance, StoreError> {
+    store
+        .gardener_proposal_instance(instance_id)?
+        .ok_or_else(|| StoreError::NotFound(instance_id.to_owned()))
+}
+
+fn all_gardener_proposal_instances(
+    store: &Store,
+) -> Result<Vec<bokkie::gardener::ProposalInstance>, StoreError> {
+    let mut instances = Vec::new();
+    for proposal in store.gardener_proposals()? {
+        instances.extend(store.gardener_proposal_instances(&proposal.fingerprint)?);
+    }
+    Ok(instances)
 }
 
 fn require_gardener_run(
