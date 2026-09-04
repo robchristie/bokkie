@@ -170,12 +170,88 @@ pub enum GardenerVerificationVerdict {
     Inconclusive,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GardenerPublicationState {
+    NotCreated,
+    Draft,
+    ReadyPending,
+    Ready,
+}
+
+impl fmt::Display for GardenerPublicationState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NotCreated => "not_created",
+            Self::Draft => "draft",
+            Self::ReadyPending => "ready_pending",
+            Self::Ready => "ready",
+        })
+    }
+}
+
+impl FromStr for GardenerPublicationState {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "not_created" => Ok(Self::NotCreated),
+            "draft" => Ok(Self::Draft),
+            "ready_pending" => Ok(Self::ReadyPending),
+            "ready" => Ok(Self::Ready),
+            other => Err(format!("unknown gardener publication state {other:?}")),
+        }
+    }
+}
+
+/// Immutable identities and policies needed to reproduce one gardener run.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GardenerReproducibilityManifest {
+    pub run_id: String,
+    pub bokkie_build: String,
+    pub source_commit: String,
+    pub prompt_digest: String,
+    pub implementation_schema_digest: String,
+    pub verification_schema_digest: String,
+    pub codex_profile: Option<String>,
+    pub codex_model: Option<String>,
+    pub executable_manifest_json: String,
+    pub sandbox_policy_digest: String,
+    pub environment_policy_digest: String,
+    pub check_commands_json: String,
+    pub recorded_at: i64,
+}
+
+/// Bokkie-owned, credential-free proof collected before any publication.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GardenerCandidateQualification {
+    pub run_id: String,
+    pub head: String,
+    pub diff_manifest_json: String,
+    pub tree_manifest_json: String,
+    pub checks_json: String,
+    pub duration_ms: u64,
+    pub qualified_at: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GardenerVerificationResult {
     pub verdict: GardenerVerificationVerdict,
     pub head: String,
     pub summary: String,
+    #[serde(default)]
+    pub blocking_findings: Vec<String>,
+    #[serde(default)]
+    pub validation: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GardenerImplementationResult {
+    pub summary: String,
+    pub changed_paths: Vec<String>,
+    pub checks: Vec<String>,
 }
 
 impl fmt::Display for GardenerVerificationVerdict {
@@ -225,6 +301,8 @@ pub struct GardenerImplementationRun {
     pub pull_request_number: Option<u64>,
     pub pull_request_url: Option<String>,
     pub pull_request_head: Option<String>,
+    pub publication_state: GardenerPublicationState,
+    pub pull_request_ready_at: Option<i64>,
     pub verification_worktree_path: Option<String>,
     pub verification_head: Option<String>,
     pub verification_thread_id: Option<String>,

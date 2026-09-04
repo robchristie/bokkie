@@ -631,8 +631,8 @@ impl From<ObligationState> for OperatorObligationState {
 mod tests {
     use super::*;
     use crate::{
-        Completion, InspectionResult, NewGardenerImplementationRun, NewGardenerInspection,
-        NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
+        Completion, GardenerCandidateQualification, InspectionResult, NewGardenerImplementationRun,
+        NewGardenerInspection, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
     };
 
     fn new(id: &str, approval_required: bool) -> NewObligation {
@@ -766,6 +766,21 @@ mod tests {
             .unwrap();
         store
             .record_gardener_git_commit(claim, run_id, &head, start + 4)
+            .unwrap();
+        store
+            .record_gardener_candidate_qualification(
+                claim,
+                &GardenerCandidateQualification {
+                    run_id: run_id.to_owned(),
+                    head: head.clone(),
+                    diff_manifest_json: "[]".to_owned(),
+                    tree_manifest_json: "[]".to_owned(),
+                    checks_json: r#"[{"executable":{"role":"candidate_check"},"arguments":["test"],"duration_millis":1,"status":{"kind":"passed"},"evidence":{}}]"#.to_owned(),
+                    duration_ms: 1,
+                    qualified_at: start + 4,
+                },
+                start + 4,
+            )
             .unwrap();
         store
             .record_gardener_push_observation(claim, run_id, &head, start + 5)
@@ -1142,6 +1157,21 @@ mod tests {
         let head = "c".repeat(40);
         store
             .record_gardener_git_commit(&claim, "run-1", &head, 106)
+            .unwrap();
+        store
+            .record_gardener_candidate_qualification(
+                &claim,
+                &GardenerCandidateQualification {
+                    run_id: "run-1".to_owned(),
+                    head: head.clone(),
+                    diff_manifest_json: "[]".to_owned(),
+                    tree_manifest_json: "[]".to_owned(),
+                    checks_json: r#"[{"executable":{"role":"candidate_check"},"arguments":["test"],"duration_millis":1,"status":{"kind":"passed"},"evidence":{}}]"#.to_owned(),
+                    duration_ms: 1,
+                    qualified_at: 106,
+                },
+                106,
+            )
             .unwrap();
         store
             .record_gardener_push_observation(&claim, "run-1", &head, 107)

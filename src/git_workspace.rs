@@ -4,6 +4,7 @@
 //! intent before invoking each external operation and persist the exact
 //! identities returned here before moving to the next operation.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
@@ -13,14 +14,19 @@ use std::process::{Command, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[cfg(test)]
 use crate::process::NoopHeartbeat;
 use crate::process::{
-    CancellationToken, EffectRisk, ProcessError, ProcessEvidence, ProcessHeartbeat, ProcessLimits,
-    ProcessOutcome, ProcessSupervisor,
+    CancellationToken, EffectRisk, Interruption, ProcessError, ProcessEvidence, ProcessHeartbeat,
+    ProcessLimits, ProcessOutcome, ProcessSupervisor,
+};
+use crate::runtime_trust::{
+    ChildEnvironment, ExecutableIdentity, ExecutableRole, GitHubCredential, ProcessPolicy,
+    RuntimeTrustError,
 };
 
 pub const CANONICAL_REPOSITORY: &str = "robchristie/bokkie";
@@ -31,9 +37,10 @@ const EXECUTABLE_FILE_BUSY_ATTEMPTS: usize = 4;
 const EXECUTABLE_FILE_BUSY_BACKOFF: Duration = Duration::from_millis(5);
 const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+const EMPTY_TREE_ID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /// An exact SHA-1 Git commit identity.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 pub struct CommitId(String);
 
 impl CommitId {
@@ -109,6 +116,102 @@ pub struct PullRequestIdentity {
     pub head: CommitId,
 }
 
+/// One immutable entry in the candidate commit's tracked tree.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CandidateTreeEntry {
+    pub path: String,
+    pub mode: String,
+    pub object_type: String,
+    pub object_id: String,
+    pub byte_size: Option<u64>,
+    pub binary: bool,
+    pub symlink_target: Option<String>,
+}
+
+/// One path changed between the approved source and candidate commits.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CandidateDiffEntry {
+    pub path: String,
+    pub status: String,
+    pub old_mode: String,
+    pub new_mode: String,
+    pub old_object_id: String,
+    pub new_object_id: String,
+    pub byte_size: Option<u64>,
+    pub binary: bool,
+    pub symlink_target: Option<String>,
+}
+
+/// Deterministic exact-commit tree and source-to-candidate diff evidence.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CandidateManifest {
+    pub source: CommitId,
+    pub candidate: CommitId,
+    pub tree: Vec<CandidateTreeEntry>,
+    pub diff: Vec<CandidateDiffEntry>,
+    pub sha256: String,
+}
+
+/// A fixed no-shell candidate check resolved and versioned at startup.
+#[derive(Clone, Debug)]
+pub struct CandidateCheckCommand {
+    executable: ExecutableIdentity,
+    arguments: Vec<OsString>,
+}
+
+impl CandidateCheckCommand {
+    pub fn new<I, S>(
+        executable: ExecutableIdentity,
+        arguments: I,
+    ) -> Result<Self, GitWorkspaceError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        if executable.role() != ExecutableRole::CandidateCheck {
+            return Err(GitWorkspaceError::InvalidCandidateManifest(
+                "candidate check executable has the wrong role".to_owned(),
+            ));
+        }
+        Ok(Self {
+            executable,
+            arguments: arguments.into_iter().map(Into::into).collect(),
+        })
+    }
+
+    pub fn executable(&self) -> &ExecutableIdentity {
+        &self.executable
+    }
+
+    pub fn arguments(&self) -> &[OsString] {
+        &self.arguments
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CandidateCheckStatus {
+    Passed,
+    Failed { exit_code: Option<i32> },
+    Interrupted { detail: String },
+}
+
+/// Bounded evidence from one credential-free candidate check.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CandidateCheckResult {
+    pub executable: ExecutableIdentity,
+    pub arguments: Vec<String>,
+    pub duration_millis: u64,
+    pub status: CandidateCheckStatus,
+    pub evidence: ProcessEvidence,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CandidateQualification {
+    pub manifest: CandidateManifest,
+    pub checks: Vec<CandidateCheckResult>,
+}
+
 #[derive(Debug)]
 pub struct ProcessFailure {
     pub program: PathBuf,
@@ -126,6 +229,12 @@ struct ExecutedOutput {
     stderr: String,
     evidence: ProcessEvidence,
     arguments: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GitTopology {
+    git_dir: PathBuf,
+    common_dir: PathBuf,
 }
 
 impl fmt::Display for ProcessFailure {
@@ -239,6 +348,22 @@ pub enum GitWorkspaceError {
         operation: &'static str,
         urls: Vec<String>,
     },
+    #[error("runtime trust validation failed: {0}")]
+    RuntimeTrust(#[from] RuntimeTrustError),
+    #[error("{operation} requires an explicitly supplied GitHub credential")]
+    MissingGitHubCredential { operation: &'static str },
+    #[error(
+        "Git topology changed for {path}: expected git dir {expected_git_dir} and common dir {expected_common_dir}, observed git dir {actual_git_dir} and common dir {actual_common_dir}"
+    )]
+    GitTopologyChanged {
+        path: PathBuf,
+        expected_git_dir: PathBuf,
+        expected_common_dir: PathBuf,
+        actual_git_dir: PathBuf,
+        actual_common_dir: PathBuf,
+    },
+    #[error("invalid candidate manifest: {0}")]
+    InvalidCandidateManifest(String),
 }
 
 impl std::error::Error for ProcessFailure {}
@@ -261,6 +386,12 @@ pub struct GitWorkspace {
     checkout: PathBuf,
     git_executable: PathBuf,
     gh_executable: PathBuf,
+    git_identity: Option<ExecutableIdentity>,
+    gh_identity: Option<ExecutableIdentity>,
+    environment: ChildEnvironment,
+    github_credential: Option<GitHubCredential>,
+    expected_checkout_topology: Option<GitTopology>,
+    require_github_credential: bool,
     heartbeat_interval: Duration,
     execution_timeout: Duration,
     process_limits: ProcessLimits,
@@ -286,11 +417,63 @@ impl GitWorkspace {
             checkout,
             git_executable: git_executable.into(),
             gh_executable: gh_executable.into(),
+            git_identity: None,
+            gh_identity: None,
+            environment: ChildEnvironment::captured_current()?,
+            github_credential: None,
+            expected_checkout_topology: None,
+            require_github_credential: false,
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
             execution_timeout: DEFAULT_EXECUTION_TIMEOUT,
             process_limits: ProcessLimits::default(),
             cancellation: CancellationToken::new(),
         })
+    }
+
+    /// Constructs the production adapter from startup-resolved identities.
+    /// The canonical checkout topology is captured here for later mutation
+    /// revalidation; no credential is exercised by construction.
+    pub fn from_trust(
+        checkout: impl AsRef<Path>,
+        git_identity: ExecutableIdentity,
+        gh_identity: ExecutableIdentity,
+        environment: ChildEnvironment,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<Self, GitWorkspaceError> {
+        if git_identity.role() != ExecutableRole::Git
+            || gh_identity.role() != ExecutableRole::GitHub
+        {
+            return Err(GitWorkspaceError::InvalidSupervision(
+                "GitWorkspace requires Git and GitHub executable identities".to_owned(),
+            ));
+        }
+        git_identity.verify_unchanged()?;
+        gh_identity.verify_unchanged()?;
+        let mut workspace = Self::new(
+            checkout,
+            git_identity.path().to_owned(),
+            gh_identity.path().to_owned(),
+        )?;
+        workspace.git_identity = Some(git_identity);
+        workspace.gh_identity = Some(gh_identity);
+        workspace.environment = environment;
+        workspace.require_github_credential = true;
+        workspace.expected_checkout_topology =
+            Some(workspace.observe_topology(&workspace.checkout.clone(), heartbeat)?);
+        Ok(workspace)
+    }
+
+    pub fn with_github_credential(mut self, credential: GitHubCredential) -> Self {
+        self.github_credential = Some(credential);
+        self
+    }
+
+    pub fn git_identity(&self) -> Option<&ExecutableIdentity> {
+        self.git_identity.as_ref()
+    }
+
+    pub fn gh_identity(&self) -> Option<&ExecutableIdentity> {
+        self.gh_identity.as_ref()
     }
 
     pub fn with_supervision(
@@ -324,10 +507,11 @@ impl GitWorkspace {
         heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<CommitId, GitWorkspaceError> {
         self.ensure_canonical_origin(&self.checkout, RemoteOperation::Fetch, heartbeat)?;
-        self.git_success(
+        self.git_success_policy(
             &self.checkout,
             ["fetch", "--quiet", "origin", CANONICAL_DEFAULT_BRANCH],
             EffectRisk::None,
+            ProcessPolicy::GitRemoteRead,
             heartbeat,
         )?;
         self.resolve_revision(
@@ -428,6 +612,124 @@ impl GitWorkspace {
         self.status_path(&worktree.path, heartbeat)
     }
 
+    /// Builds deterministic exact-tree/diff evidence, then runs each fixed
+    /// check without a shell, network credentials, or ambient environment.
+    /// Exact HEAD and worktree registration are checked around every command.
+    pub fn qualify_candidate(
+        &self,
+        worktree: &RegisteredWorktree,
+        source: &CommitId,
+        candidate: &CommitId,
+        checks: &[CandidateCheckCommand],
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<CandidateQualification, GitWorkspaceError> {
+        self.ensure_owned(worktree)?;
+        self.revalidate_checkout_topology(heartbeat)?;
+        self.revalidate_worktree_registration(worktree, candidate, heartbeat)?;
+        let status = self.status_path(&worktree.path, heartbeat)?;
+        if !status.is_empty() {
+            return Err(GitWorkspaceError::DirtyWorktree {
+                path: worktree.path.clone(),
+                status,
+            });
+        }
+        let manifest = self.candidate_manifest(&worktree.path, source, candidate, heartbeat)?;
+        let mut results = Vec::with_capacity(checks.len());
+        for check in checks {
+            self.revalidate_worktree_registration(worktree, candidate, heartbeat)?;
+            check.executable.verify_unchanged()?;
+            let arguments = check
+                .arguments
+                .iter()
+                .map(|argument| {
+                    argument.to_str().map(str::to_owned).ok_or_else(|| {
+                        GitWorkspaceError::InvalidCandidateManifest(
+                            "candidate check argument is not valid UTF-8".to_owned(),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let supervisor = ProcessSupervisor::new(
+                self.heartbeat_interval,
+                self.process_limits,
+                self.cancellation.clone(),
+            )
+            .map_err(GitWorkspaceError::InvalidSupervision)?;
+            let deadline = Instant::now()
+                .checked_add(self.execution_timeout)
+                .ok_or_else(|| {
+                    GitWorkspaceError::InvalidSupervision(
+                        "candidate check deadline is out of range".to_owned(),
+                    )
+                })?;
+            let mut command = Command::new(check.executable.path());
+            command.args(&check.arguments).current_dir(&worktree.path);
+            self.environment
+                .apply(&mut command, ProcessPolicy::CandidateCheck, None)?;
+            let started = Instant::now();
+            let mut child = supervisor
+                .spawn(&mut command, deadline, EffectRisk::None)
+                .map_err(|source| GitWorkspaceError::Spawn {
+                    program: check.executable.path().to_owned(),
+                    arguments: arguments.clone(),
+                    cwd: worktree.path.clone(),
+                    source: match source {
+                        ProcessError::Spawn(source) | ProcessError::Io(source) => source,
+                        ProcessError::IoWorkerPanicked => io::Error::other("I/O worker panicked"),
+                    },
+                })?;
+            child.close_stdin();
+            let outcome = child
+                .wait(heartbeat)
+                .map_err(|source| GitWorkspaceError::Wait {
+                    program: check.executable.path().to_owned(),
+                    arguments: arguments.clone(),
+                    cwd: worktree.path.clone(),
+                    source: match source {
+                        ProcessError::Spawn(source) | ProcessError::Io(source) => source,
+                        ProcessError::IoWorkerPanicked => io::Error::other("I/O worker panicked"),
+                    },
+                })?;
+            let elapsed = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+            let (status, evidence) = match outcome {
+                ProcessOutcome::Completed { status, evidence } if status.success() => {
+                    (CandidateCheckStatus::Passed, evidence)
+                }
+                ProcessOutcome::Completed { status, evidence } => (
+                    CandidateCheckStatus::Failed {
+                        exit_code: status.code(),
+                    },
+                    evidence,
+                ),
+                outcome => (
+                    CandidateCheckStatus::Interrupted {
+                        detail: outcome.to_string(),
+                    },
+                    outcome.evidence().clone(),
+                ),
+            };
+            results.push(CandidateCheckResult {
+                executable: check.executable.clone(),
+                arguments,
+                duration_millis: elapsed,
+                status,
+                evidence,
+            });
+        }
+        self.revalidate_worktree_registration(worktree, candidate, heartbeat)?;
+        let final_status = self.status_path(&worktree.path, heartbeat)?;
+        if !final_status.is_empty() {
+            return Err(GitWorkspaceError::DirtyWorktree {
+                path: worktree.path.clone(),
+                status: final_status,
+            });
+        }
+        Ok(CandidateQualification {
+            manifest,
+            checks: results,
+        })
+    }
+
     /// Commits all currently observed non-ignored changes in a branch worktree.
     pub fn commit_all(
         &self,
@@ -479,18 +781,22 @@ impl GitWorkspace {
         heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<(), GitWorkspaceError> {
         self.ensure_owned(worktree)?;
+        self.ensure_mutation_credential("push")?;
         let branch = worktree
             .branch()
             .ok_or_else(|| GitWorkspaceError::InvalidBranch("detached worktree".to_owned()))?;
         validate_branch(branch)?;
         self.verify_branch_path(&worktree.path, branch, heartbeat)?;
         self.verify_head_path(&worktree.path, expected_head, heartbeat)?;
+        self.revalidate_checkout_topology(heartbeat)?;
+        self.revalidate_worktree_registration(worktree, expected_head, heartbeat)?;
         let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
         self.ensure_canonical_origin(&worktree.path, RemoteOperation::Push, heartbeat)?;
-        self.git_success(
+        self.git_success_policy(
             &worktree.path,
             ["push", "origin", refspec.as_str()],
             EffectRisk::AmbiguousOnInterruption,
+            ProcessPolicy::GitHubMutationGit,
             heartbeat,
         )?;
         Ok(())
@@ -509,10 +815,11 @@ impl GitWorkspace {
         validate_branch(branch)?;
         let reference = format!("refs/heads/{branch}");
         self.ensure_canonical_origin(&self.checkout, RemoteOperation::Fetch, heartbeat)?;
-        let output = self.git_success(
+        let output = self.git_success_policy(
             &self.checkout,
             ["ls-remote", "--refs", "origin", reference.as_str()],
             EffectRisk::None,
+            ProcessPolicy::GitRemoteRead,
             heartbeat,
         )?;
         let mut lines = output.lines();
@@ -548,6 +855,8 @@ impl GitWorkspace {
     }
 
     /// Creates a ready PR, then independently observes its structured identity.
+    /// Retained for compatibility fixtures; trusted production adapters must
+    /// use the draft/check/ready sequence.
     pub fn create_ready_pull_request(
         &self,
         branch: &str,
@@ -556,42 +865,100 @@ impl GitWorkspace {
         body: &str,
         heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<PullRequestIdentity, GitWorkspaceError> {
+        if self.require_github_credential {
+            return Err(GitWorkspaceError::InvalidPullRequest(
+                "trusted publication must create a draft and promote it only after qualification"
+                    .to_owned(),
+            ));
+        }
+        self.create_pull_request(branch, expected_head, title, body, false, heartbeat)
+    }
+
+    /// Creates a draft pull request after revalidating the exact local and
+    /// remote branch identity immediately before the credential-bearing call.
+    pub fn create_draft_pull_request(
+        &self,
+        branch: &str,
+        expected_head: &CommitId,
+        title: &str,
+        body: &str,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<PullRequestIdentity, GitWorkspaceError> {
+        self.create_pull_request(branch, expected_head, title, body, true, heartbeat)
+    }
+
+    fn create_pull_request(
+        &self,
+        branch: &str,
+        expected_head: &CommitId,
+        title: &str,
+        body: &str,
+        draft: bool,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<PullRequestIdentity, GitWorkspaceError> {
         validate_branch(branch)?;
         if title.trim().is_empty() {
             return Err(GitWorkspaceError::InvalidPullRequest(
                 "title must not be empty".to_owned(),
             ));
         }
-        self.gh_success(
-            [
-                "pr",
-                "create",
-                "--repo",
-                CANONICAL_REPOSITORY,
-                "--base",
-                CANONICAL_DEFAULT_BRANCH,
-                "--head",
-                branch,
-                "--title",
-                title,
-                "--body",
-                body,
-            ],
+        if self.require_github_credential {
+            self.revalidate_publication_branch(branch, expected_head, heartbeat)?;
+        }
+        let mut arguments = vec![
+            "pr",
+            "create",
+            "--repo",
+            CANONICAL_REPOSITORY,
+            "--base",
+            CANONICAL_DEFAULT_BRANCH,
+            "--head",
+            branch,
+            "--title",
+            title,
+            "--body",
+            body,
+        ];
+        if draft {
+            arguments.push("--draft");
+        }
+        self.gh_success_policy(
+            arguments,
             EffectRisk::AmbiguousOnInterruption,
+            ProcessPolicy::GitHubMutationCli,
             heartbeat,
         )?;
-        self.observe_pull_request(branch, expected_head, heartbeat)
+        self.observe_pull_request_state(branch, expected_head, draft, heartbeat)
     }
 
-    /// Observes a PR exclusively through structured `gh` JSON output.
+    /// Observes a ready PR exclusively through structured `gh` JSON output.
     pub fn observe_pull_request(
         &self,
         branch: &str,
         expected_head: &CommitId,
         heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<PullRequestIdentity, GitWorkspaceError> {
+        self.observe_pull_request_state(branch, expected_head, false, heartbeat)
+    }
+
+    pub fn observe_draft_pull_request(
+        &self,
+        branch: &str,
+        expected_head: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<PullRequestIdentity, GitWorkspaceError> {
+        self.observe_pull_request_state(branch, expected_head, true, heartbeat)
+    }
+
+    fn observe_pull_request_state(
+        &self,
+        branch: &str,
+        expected_head: &CommitId,
+        expected_draft: bool,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<PullRequestIdentity, GitWorkspaceError> {
         validate_branch(branch)?;
-        let output = self.gh_success(
+        let output = self.gh_success_policy(
             [
                 "pr",
                 "view",
@@ -602,10 +969,30 @@ impl GitWorkspace {
                 "number,url,headRefOid,state,isDraft",
             ],
             EffectRisk::None,
+            ProcessPolicy::GitHubRead,
             heartbeat,
         )?;
         let observation: PullRequestObservation = serde_json::from_str(&output)?;
-        validate_pull_request_observation(branch, expected_head, observation)
+        validate_pull_request_observation(branch, expected_head, expected_draft, observation)
+    }
+
+    /// Promotes an already-observed exact-head draft after caller-owned checks
+    /// have passed. The branch is revalidated immediately before `gh pr ready`.
+    pub fn mark_pull_request_ready(
+        &self,
+        branch: &str,
+        expected_head: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<PullRequestIdentity, GitWorkspaceError> {
+        self.observe_draft_pull_request(branch, expected_head, heartbeat)?;
+        self.revalidate_publication_branch(branch, expected_head, heartbeat)?;
+        self.gh_success_policy(
+            ["pr", "ready", branch, "--repo", CANONICAL_REPOSITORY],
+            EffectRisk::AmbiguousOnInterruption,
+            ProcessPolicy::GitHubMutationCli,
+            heartbeat,
+        )?;
+        self.observe_pull_request(branch, expected_head, heartbeat)
     }
 
     /// Removes a registered clean worktree without force and verifies removal.
@@ -659,6 +1046,281 @@ impl GitWorkspace {
             });
         }
         Ok(())
+    }
+
+    fn candidate_manifest(
+        &self,
+        cwd: &Path,
+        source: &CommitId,
+        candidate: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<CandidateManifest, GitWorkspaceError> {
+        self.verify_head_path(cwd, candidate, heartbeat)?;
+        let tree_binary = self.binary_paths(EMPTY_TREE_ID, candidate.as_str(), cwd, heartbeat)?;
+        let tree_output = self.git_success(
+            cwd,
+            [
+                "ls-tree",
+                "-r",
+                "-z",
+                "-l",
+                "--full-tree",
+                candidate.as_str(),
+            ],
+            EffectRisk::None,
+            heartbeat,
+        )?;
+        let mut tree = Vec::new();
+        for record in tree_output.split('\0').filter(|record| !record.is_empty()) {
+            let (metadata, path) = record.split_once('\t').ok_or_else(|| {
+                GitWorkspaceError::InvalidCandidateManifest(
+                    "git ls-tree record is missing its path separator".to_owned(),
+                )
+            })?;
+            let fields = metadata.split_whitespace().collect::<Vec<_>>();
+            if fields.len() != 4 {
+                return Err(GitWorkspaceError::InvalidCandidateManifest(format!(
+                    "git ls-tree record has {} metadata fields",
+                    fields.len()
+                )));
+            }
+            let byte_size = if fields[3] == "-" {
+                None
+            } else {
+                Some(fields[3].parse::<u64>().map_err(|_| {
+                    GitWorkspaceError::InvalidCandidateManifest(
+                        "git ls-tree byte size is invalid".to_owned(),
+                    )
+                })?)
+            };
+            let symlink_target = if fields[0] == "120000" {
+                Some(
+                    self.git_success(
+                        cwd,
+                        ["cat-file", "blob", fields[2]],
+                        EffectRisk::None,
+                        heartbeat,
+                    )?
+                    .trim_end_matches(['\r', '\n'])
+                    .to_owned(),
+                )
+            } else {
+                None
+            };
+            tree.push(CandidateTreeEntry {
+                path: path.to_owned(),
+                mode: fields[0].to_owned(),
+                object_type: fields[1].to_owned(),
+                object_id: fields[2].to_owned(),
+                byte_size,
+                binary: tree_binary.get(path).copied().unwrap_or(false),
+                symlink_target,
+            });
+        }
+        tree.sort_by(|left, right| left.path.cmp(&right.path));
+
+        let diff_binary = self.binary_paths(source.as_str(), candidate.as_str(), cwd, heartbeat)?;
+        let diff_output = self.git_success(
+            cwd,
+            [
+                "diff",
+                "--raw",
+                "--no-abbrev",
+                "--no-renames",
+                "-z",
+                source.as_str(),
+                candidate.as_str(),
+            ],
+            EffectRisk::None,
+            heartbeat,
+        )?;
+        let mut records = diff_output.split('\0').filter(|record| !record.is_empty());
+        let mut diff = Vec::new();
+        while let Some(header) = records.next() {
+            let path = records.next().ok_or_else(|| {
+                GitWorkspaceError::InvalidCandidateManifest(
+                    "git diff raw record is missing its path".to_owned(),
+                )
+            })?;
+            let fields = header
+                .strip_prefix(':')
+                .ok_or_else(|| {
+                    GitWorkspaceError::InvalidCandidateManifest(
+                        "git diff raw record is missing its prefix".to_owned(),
+                    )
+                })?
+                .split_whitespace()
+                .collect::<Vec<_>>();
+            if fields.len() != 5 {
+                return Err(GitWorkspaceError::InvalidCandidateManifest(format!(
+                    "git diff raw record has {} metadata fields",
+                    fields.len()
+                )));
+            }
+            let current = tree.iter().find(|entry| entry.path == path);
+            diff.push(CandidateDiffEntry {
+                path: path.to_owned(),
+                status: fields[4].to_owned(),
+                old_mode: fields[0].to_owned(),
+                new_mode: fields[1].to_owned(),
+                old_object_id: fields[2].to_owned(),
+                new_object_id: fields[3].to_owned(),
+                byte_size: current.and_then(|entry| entry.byte_size),
+                binary: diff_binary.get(path).copied().unwrap_or(false),
+                symlink_target: current.and_then(|entry| entry.symlink_target.clone()),
+            });
+        }
+        diff.sort_by(|left, right| left.path.cmp(&right.path));
+        let canonical =
+            serde_json::to_vec(&(source, candidate, &tree, &diff)).map_err(|error| {
+                GitWorkspaceError::InvalidCandidateManifest(format!(
+                    "cannot serialise candidate manifest: {error}"
+                ))
+            })?;
+        let sha256 = format!("{:x}", Sha256::digest(canonical));
+        Ok(CandidateManifest {
+            source: source.clone(),
+            candidate: candidate.clone(),
+            tree,
+            diff,
+            sha256,
+        })
+    }
+
+    fn binary_paths(
+        &self,
+        old: &str,
+        new: &str,
+        cwd: &Path,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<HashMap<String, bool>, GitWorkspaceError> {
+        let output = self.git_success(
+            cwd,
+            ["diff", "--numstat", "--no-renames", "-z", old, new],
+            EffectRisk::None,
+            heartbeat,
+        )?;
+        let mut result = HashMap::new();
+        for record in output.split('\0').filter(|record| !record.is_empty()) {
+            let mut fields = record.splitn(3, '\t');
+            let additions = fields.next().unwrap_or_default();
+            let deletions = fields.next().unwrap_or_default();
+            let path = fields.next().ok_or_else(|| {
+                GitWorkspaceError::InvalidCandidateManifest(
+                    "git diff numstat record is missing its path".to_owned(),
+                )
+            })?;
+            result.insert(path.to_owned(), additions == "-" || deletions == "-");
+        }
+        Ok(result)
+    }
+
+    fn ensure_mutation_credential(&self, operation: &'static str) -> Result<(), GitWorkspaceError> {
+        if self.require_github_credential && self.github_credential.is_none() {
+            return Err(GitWorkspaceError::MissingGitHubCredential { operation });
+        }
+        Ok(())
+    }
+
+    fn revalidate_publication_branch(
+        &self,
+        branch: &str,
+        expected_head: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<(), GitWorkspaceError> {
+        self.ensure_mutation_credential("pull-request mutation")?;
+        self.revalidate_checkout_topology(heartbeat)?;
+        self.ensure_canonical_origin(&self.checkout, RemoteOperation::Fetch, heartbeat)?;
+        let local_head = self.resolve_revision(
+            &self.checkout,
+            &format!("refs/heads/{branch}^{{commit}}"),
+            heartbeat,
+        )?;
+        if &local_head != expected_head {
+            return Err(GitWorkspaceError::HeadMismatch {
+                path: self.checkout.clone(),
+                expected: expected_head.clone(),
+                actual: local_head,
+            });
+        }
+        self.observe_remote_branch(branch, expected_head, heartbeat)?;
+        Ok(())
+    }
+
+    fn revalidate_checkout_topology(
+        &self,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<(), GitWorkspaceError> {
+        let Some(expected) = &self.expected_checkout_topology else {
+            return Ok(());
+        };
+        let actual = self.observe_topology(&self.checkout, heartbeat)?;
+        if actual != *expected {
+            return Err(GitWorkspaceError::GitTopologyChanged {
+                path: self.checkout.clone(),
+                expected_git_dir: expected.git_dir.clone(),
+                expected_common_dir: expected.common_dir.clone(),
+                actual_git_dir: actual.git_dir,
+                actual_common_dir: actual.common_dir,
+            });
+        }
+        Ok(())
+    }
+
+    fn revalidate_worktree_registration(
+        &self,
+        worktree: &RegisteredWorktree,
+        expected_head: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<(), GitWorkspaceError> {
+        let registered = self.registered_worktree_paths(heartbeat)?;
+        if !registered.iter().any(|path| path == &worktree.path) {
+            return Err(GitWorkspaceError::WorktreeNotRegistered(
+                worktree.path.clone(),
+            ));
+        }
+        let topology = self.observe_topology(&worktree.path, heartbeat)?;
+        if let Some(checkout) = &self.expected_checkout_topology {
+            if topology.common_dir != checkout.common_dir {
+                return Err(GitWorkspaceError::GitTopologyChanged {
+                    path: worktree.path.clone(),
+                    expected_git_dir: topology.git_dir.clone(),
+                    expected_common_dir: checkout.common_dir.clone(),
+                    actual_git_dir: topology.git_dir,
+                    actual_common_dir: topology.common_dir,
+                });
+            }
+        }
+        self.verify_head_path(&worktree.path, expected_head, heartbeat)?;
+        match &worktree.kind {
+            WorktreeKind::Detached => self.verify_detached(&worktree.path, heartbeat),
+            WorktreeKind::Branch { branch } => {
+                self.verify_branch_path(&worktree.path, branch, heartbeat)
+            }
+        }
+    }
+
+    fn observe_topology(
+        &self,
+        cwd: &Path,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<GitTopology, GitWorkspaceError> {
+        let git_dir = self.git_success(
+            cwd,
+            ["rev-parse", "--path-format=absolute", "--git-dir"],
+            EffectRisk::None,
+            heartbeat,
+        )?;
+        let common_dir = self.git_success(
+            cwd,
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            EffectRisk::None,
+            heartbeat,
+        )?;
+        Ok(GitTopology {
+            git_dir: canonical_output_path(cwd, git_dir.trim())?,
+            common_dir: canonical_output_path(cwd, common_dir.trim())?,
+        })
     }
 
     fn ensure_canonical_origin(
@@ -864,7 +1526,22 @@ impl GitWorkspace {
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        let output = self.git_output(cwd, arguments, risk, heartbeat)?;
+        self.git_success_policy(cwd, arguments, risk, ProcessPolicy::GitLocal, heartbeat)
+    }
+
+    fn git_success_policy<I, S>(
+        &self,
+        cwd: &Path,
+        arguments: I,
+        risk: EffectRisk,
+        policy: ProcessPolicy,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<String, GitWorkspaceError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        let output = self.git_output_policy(cwd, arguments, risk, policy, heartbeat)?;
         if !output.status.success() {
             return Err(self
                 .process_failure(&self.git_executable, cwd, &output)
@@ -884,13 +1561,36 @@ impl GitWorkspace {
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        self.run(&self.git_executable, cwd, arguments, risk, heartbeat)
+        self.git_output_policy(cwd, arguments, risk, ProcessPolicy::GitLocal, heartbeat)
     }
 
-    fn gh_success<I, S>(
+    fn git_output_policy<I, S>(
+        &self,
+        cwd: &Path,
+        arguments: I,
+        risk: EffectRisk,
+        policy: ProcessPolicy,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<ExecutedOutput, GitWorkspaceError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        self.run(
+            &self.git_executable,
+            cwd,
+            arguments,
+            risk,
+            policy,
+            heartbeat,
+        )
+    }
+
+    fn gh_success_policy<I, S>(
         &self,
         arguments: I,
         risk: EffectRisk,
+        policy: ProcessPolicy,
         heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<String, GitWorkspaceError>
     where
@@ -902,6 +1602,7 @@ impl GitWorkspace {
             &self.checkout,
             arguments,
             risk,
+            policy,
             heartbeat,
         )?;
         if !output.status.success() {
@@ -912,12 +1613,27 @@ impl GitWorkspace {
         stdout(&self.gh_executable, output.stdout)
     }
 
+    #[cfg(test)]
+    fn gh_success<I, S>(
+        &self,
+        arguments: I,
+        risk: EffectRisk,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<String, GitWorkspaceError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        self.gh_success_policy(arguments, risk, ProcessPolicy::GitHubRead, heartbeat)
+    }
+
     fn run<I, S>(
         &self,
         program: &Path,
         cwd: &Path,
         arguments: I,
         risk: EffectRisk,
+        policy: ProcessPolicy,
         heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<ExecutedOutput, GitWorkspaceError>
     where
@@ -926,30 +1642,16 @@ impl GitWorkspace {
     {
         let arguments = arguments.into_iter().map(Into::into).collect::<Vec<_>>();
         let displayed_arguments = display_arguments(&arguments);
-        self.run_observed(
-            program,
-            cwd,
-            arguments,
-            displayed_arguments,
-            risk,
-            heartbeat,
-        )
-    }
-
-    fn run_observed<I, S>(
-        &self,
-        program: &Path,
-        cwd: &Path,
-        arguments: I,
-        displayed_arguments: Vec<String>,
-        risk: EffectRisk,
-        heartbeat: &mut dyn ProcessHeartbeat,
-    ) -> Result<ExecutedOutput, GitWorkspaceError>
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<OsString>,
-    {
-        let arguments = arguments.into_iter().map(Into::into).collect::<Vec<_>>();
+        let identity = if program == self.git_executable {
+            self.git_identity.as_ref()
+        } else if program == self.gh_executable {
+            self.gh_identity.as_ref()
+        } else {
+            None
+        };
+        if let Some(identity) = identity {
+            identity.verify_unchanged()?;
+        }
         let supervisor = ProcessSupervisor::new(
             self.heartbeat_interval,
             self.process_limits,
@@ -959,6 +1661,17 @@ impl GitWorkspace {
         let mut child = retry_executable_file_busy(|| {
             let mut command = Command::new(program);
             command.args(&arguments).current_dir(cwd);
+            let credential = if matches!(
+                policy,
+                ProcessPolicy::GitHubMutationGit | ProcessPolicy::GitHubMutationCli
+            ) {
+                self.github_credential.as_ref()
+            } else {
+                None
+            };
+            self.environment
+                .apply(&mut command, policy, credential)
+                .map_err(|error| io::Error::other(error.to_string()))?;
             let deadline = Instant::now()
                 .checked_add(self.execution_timeout)
                 .ok_or_else(|| {
@@ -992,6 +1705,18 @@ impl GitWorkspace {
                     ProcessError::IoWorkerPanicked => io::Error::other("I/O worker panicked"),
                 },
             })?;
+        let outcome = if matches!(
+            policy,
+            ProcessPolicy::GitHubMutationGit | ProcessPolicy::GitHubMutationCli
+        ) {
+            if let Some(credential) = &self.github_credential {
+                redact_outcome(outcome, credential)
+            } else {
+                outcome
+            }
+        } else {
+            outcome
+        };
         match outcome {
             ProcessOutcome::Completed { status, evidence } => Ok(ExecutedOutput {
                 status,
@@ -1042,6 +1767,63 @@ fn retry_executable_file_busy<T>(mut operation: impl FnMut() -> io::Result<T>) -
     unreachable!("the final executable-file-busy attempt returns")
 }
 
+fn redact_outcome(outcome: ProcessOutcome, credential: &GitHubCredential) -> ProcessOutcome {
+    match outcome {
+        ProcessOutcome::Completed { status, evidence } => ProcessOutcome::Completed {
+            status,
+            evidence: redact_evidence(evidence, credential),
+        },
+        ProcessOutcome::TimedOut(evidence) => {
+            ProcessOutcome::TimedOut(redact_evidence(evidence, credential))
+        }
+        ProcessOutcome::Cancelled(evidence) => {
+            ProcessOutcome::Cancelled(redact_evidence(evidence, credential))
+        }
+        ProcessOutcome::OutputLimit {
+            stream,
+            limit,
+            evidence,
+        } => ProcessOutcome::OutputLimit {
+            stream,
+            limit,
+            evidence: redact_evidence(evidence, credential),
+        },
+        ProcessOutcome::HeartbeatFailure { message, evidence } => {
+            ProcessOutcome::HeartbeatFailure {
+                message: credential.redact_text(&message),
+                evidence: redact_evidence(evidence, credential),
+            }
+        }
+        ProcessOutcome::AmbiguousExternalState { cause, evidence } => {
+            ProcessOutcome::AmbiguousExternalState {
+                cause: redact_interruption(cause, credential),
+                evidence: redact_evidence(evidence, credential),
+            }
+        }
+    }
+}
+
+fn redact_interruption(interruption: Interruption, credential: &GitHubCredential) -> Interruption {
+    match interruption {
+        Interruption::HeartbeatFailure { message } => Interruption::HeartbeatFailure {
+            message: credential.redact_text(&message),
+        },
+        other => other,
+    }
+}
+
+fn redact_evidence(
+    mut evidence: ProcessEvidence,
+    credential: &GitHubCredential,
+) -> ProcessEvidence {
+    for output in [&mut evidence.stdout, &mut evidence.stderr] {
+        output.tail = credential.redact_text(&output.tail);
+        output.tail_bytes = credential.redact_bytes(&output.tail_bytes);
+        output.retained_bytes = output.tail_bytes.len();
+    }
+    evidence
+}
+
 #[derive(Clone, Copy)]
 enum RemoteOperation {
     Fetch,
@@ -1062,13 +1844,18 @@ impl RemoteOperation {
 fn is_canonical_repository_url(url: &str) -> bool {
     matches!(
         url,
-        "https://github.com/robchristie/bokkie"
-            | CANONICAL_HTTPS_URL
-            | "git@github.com:robchristie/bokkie"
-            | "git@github.com:robchristie/bokkie.git"
-            | "ssh://git@github.com/robchristie/bokkie"
-            | "ssh://git@github.com/robchristie/bokkie.git"
+        "https://github.com/robchristie/bokkie" | CANONICAL_HTTPS_URL
     )
+}
+
+fn canonical_output_path(cwd: &Path, output: &str) -> Result<PathBuf, GitWorkspaceError> {
+    let path = PathBuf::from(output);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    };
+    fs::canonicalize(&path).map_err(|source| GitWorkspaceError::Filesystem { path, source })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1084,6 +1871,7 @@ struct PullRequestObservation {
 fn validate_pull_request_observation(
     branch: &str,
     expected_head: &CommitId,
+    expected_draft: bool,
     observation: PullRequestObservation,
 ) -> Result<PullRequestIdentity, GitWorkspaceError> {
     if observation.number == 0 {
@@ -1113,10 +1901,12 @@ fn validate_pull_request_observation(
             observation.state
         )));
     }
-    if observation.is_draft {
-        return Err(GitWorkspaceError::InvalidPullRequest(
-            "pull request is a draft".to_owned(),
-        ));
+    if observation.is_draft != expected_draft {
+        return Err(GitWorkspaceError::InvalidPullRequest(if expected_draft {
+            "pull request is not a draft".to_owned()
+        } else {
+            "pull request is a draft".to_owned()
+        }));
     }
     Ok(PullRequestIdentity {
         repository: CANONICAL_REPOSITORY.to_owned(),
@@ -1217,6 +2007,7 @@ mod tests {
     use std::fs;
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1416,6 +2207,204 @@ mod tests {
         adapter
             .remove_clean_worktree(&worktree, &mut NoopHeartbeat)
             .unwrap();
+    }
+
+    #[test]
+    fn candidate_qualification_is_exact_deterministic_and_credential_free() {
+        let fixture = RepositoryFixture::new();
+        let adapter = fixture.adapter("unused-gh");
+        let branch = "codex/gardener-qualified";
+        let worktree = adapter
+            .create_branch_worktree(
+                fixture.path("qualified"),
+                branch,
+                &fixture.source,
+                &mut NoopHeartbeat,
+            )
+            .unwrap();
+        fs::write(worktree.path().join("README.md"), "qualified\n").unwrap();
+        fs::write(worktree.path().join("binary.dat"), b"before\0after").unwrap();
+        symlink("README.md", worktree.path().join("readme-link")).unwrap();
+        let candidate = adapter
+            .commit_all(&worktree, "Qualified candidate", &mut NoopHeartbeat)
+            .unwrap();
+
+        let check_log = fixture.path("candidate-environment.log");
+        let check = fixture.path("candidate-check");
+        write_executable(
+            &check,
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'candidate-check 1'; exit 0; fi\nenv | sort > '{}'\nprintf 'checked\\n'\n",
+                shell_single_quote(&check_log)
+            ),
+        );
+        let environment = ChildEnvironment::new(
+            fixture.path("home"),
+            fixture.path("config"),
+            fixture.path("cache"),
+            vec![PathBuf::from("/usr/bin"), PathBuf::from("/bin")],
+        )
+        .unwrap();
+        let supervisor = ProcessSupervisor::new(
+            Duration::from_millis(10),
+            ProcessLimits::default(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let identity = ExecutableIdentity::resolve(
+            ExecutableRole::CandidateCheck,
+            &check,
+            &["--version"],
+            &environment,
+            &supervisor,
+            Duration::from_secs(1),
+            &mut NoopHeartbeat,
+        )
+        .unwrap();
+        let command = CandidateCheckCommand::new(identity, ["check"]).unwrap();
+
+        let qualification = adapter
+            .qualify_candidate(
+                &worktree,
+                &fixture.source,
+                &candidate,
+                &[command],
+                &mut NoopHeartbeat,
+            )
+            .unwrap();
+
+        assert_eq!(qualification.manifest.source, fixture.source);
+        assert_eq!(qualification.manifest.candidate, candidate);
+        assert_eq!(qualification.manifest.sha256.len(), 64);
+        let binary = qualification
+            .manifest
+            .tree
+            .iter()
+            .find(|entry| entry.path == "binary.dat")
+            .unwrap();
+        assert!(binary.binary);
+        assert_eq!(binary.byte_size, Some(12));
+        let link = qualification
+            .manifest
+            .tree
+            .iter()
+            .find(|entry| entry.path == "readme-link")
+            .unwrap();
+        assert_eq!(link.mode, "120000");
+        assert_eq!(link.symlink_target.as_deref(), Some("README.md"));
+        assert_eq!(qualification.checks.len(), 1);
+        assert_eq!(qualification.checks[0].status, CandidateCheckStatus::Passed);
+        assert_eq!(qualification.checks[0].evidence.stdout.tail, "checked\n");
+        let environment_log = fs::read_to_string(check_log).unwrap();
+        assert!(environment_log.contains("CARGO_NET_OFFLINE=true"));
+        assert!(environment_log.contains("GIT_CONFIG_GLOBAL=/dev/null"));
+        assert!(!environment_log.contains("GH_TOKEN="));
+        assert!(!environment_log.contains("AWS_"));
+    }
+
+    #[test]
+    fn trusted_publication_creates_draft_then_promotes_with_narrow_credentials() {
+        let fixture = RepositoryFixture::new();
+        let state = fixture.path("gh-state");
+        let log = fixture.path("gh-trust.log");
+        let gh = fixture.path("trusted-gh");
+        write_executable(
+            &gh,
+            &format!(
+                r#"#!/bin/sh
+if [ "$1" = --version ]; then echo 'gh version 1'; exit 0; fi
+if [ -n "${{GH_TOKEN-}}" ]; then auth=credential; else auth=none; fi
+printf '%s|%s\n' "$auth" "$*" >> '{}'
+case "$1 $2" in
+  'pr create') printf draft > '{}' ;;
+  'pr ready') printf ready > '{}' ;;
+  'pr view')
+    if [ "$(cat '{}')" = draft ]; then draft=true; else draft=false; fi
+    printf '{{"number":42,"url":"https://github.com/robchristie/bokkie/pull/42","headRefOid":"{}","state":"OPEN","isDraft":%s}}\n' "$draft"
+    ;;
+esac
+"#,
+                shell_single_quote(&log),
+                shell_single_quote(&state),
+                shell_single_quote(&state),
+                shell_single_quote(&state),
+                fixture.source,
+            ),
+        );
+        let environment = ChildEnvironment::new(
+            fixture.path("home"),
+            fixture.path("config"),
+            fixture.path("cache"),
+            vec![PathBuf::from("/usr/bin"), PathBuf::from("/bin")],
+        )
+        .unwrap();
+        let supervisor = ProcessSupervisor::new(
+            Duration::from_millis(10),
+            ProcessLimits::default(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let git_identity = ExecutableIdentity::resolve(
+            ExecutableRole::Git,
+            &fixture.git_executable,
+            &["--version"],
+            &environment,
+            &supervisor,
+            Duration::from_secs(1),
+            &mut NoopHeartbeat,
+        )
+        .unwrap();
+        let gh_identity = ExecutableIdentity::resolve(
+            ExecutableRole::GitHub,
+            &gh,
+            &["--version"],
+            &environment,
+            &supervisor,
+            Duration::from_secs(1),
+            &mut NoopHeartbeat,
+        )
+        .unwrap();
+        let adapter = GitWorkspace::from_trust(
+            &fixture.checkout,
+            git_identity,
+            gh_identity,
+            environment,
+            &mut NoopHeartbeat,
+        )
+        .unwrap()
+        .with_github_credential(GitHubCredential::new("fake-token").unwrap());
+        let branch = "codex/gardener-draft-ready";
+        let worktree = adapter
+            .create_branch_worktree(
+                fixture.path("draft-ready"),
+                branch,
+                &fixture.source,
+                &mut NoopHeartbeat,
+            )
+            .unwrap();
+        adapter
+            .push_branch(&worktree, &fixture.source, &mut NoopHeartbeat)
+            .unwrap();
+
+        adapter
+            .create_draft_pull_request(
+                branch,
+                &fixture.source,
+                "Draft candidate",
+                "Body",
+                &mut NoopHeartbeat,
+            )
+            .unwrap();
+        adapter
+            .mark_pull_request_ready(branch, &fixture.source, &mut NoopHeartbeat)
+            .unwrap();
+
+        let log = fs::read_to_string(log).unwrap();
+        assert!(log.contains("credential|pr create"));
+        assert!(log.contains("--draft"));
+        assert!(log.contains("credential|pr ready"));
+        assert!(log.contains("none|pr view"));
+        assert!(!log.contains("fake-token"));
     }
 
     #[test]

@@ -34,7 +34,10 @@ for the complete first-slice acceptance criteria and evidence.
 
 ## Development
 
-The project requires the stable Rust toolchain and SQLite development support.
+The project pins Rust 1.85.0 in [`rust-toolchain.toml`](rust-toolchain.toml)
+and requires SQLite development support. GitHub CI uses that same pinned
+toolchain on an unprivileged, read-only runner and performs the locked checks
+below without secrets.
 Once the initial implementation is present, run the canonical check with:
 
 ```sh
@@ -64,6 +67,11 @@ approve work, merge a pull request, deploy, or restart Bokkie.
 See the [operator guide](docs/operator-guide.md) for command examples, HTTP
 routes, crash and graceful-shutdown behaviour, the trust boundary, and the
 hardened example systemd service.
+
+The gardener-specific [threat model](docs/gardener-threat-model.md) describes
+the environment, executable, Git, credential, worktree, candidate-code and
+draft/check/ready publication boundaries. Its worker service profile is a
+separate, non-installed example and does not replace the kernel service.
 
 ## Attention UI
 

@@ -16,6 +16,9 @@ use crate::process::{
     CancellationToken, EffectRisk, JsonlReceive, ProcessError, ProcessHeartbeat, ProcessLimits,
     ProcessOutcome, ProcessSupervisor, SupervisedChild,
 };
+use crate::runtime_trust::{
+    ChildEnvironment, ExecutableIdentity, ExecutableRole, ProcessPolicy, RuntimeTrustError,
+};
 
 const INITIALIZE_REQUEST_ID: i64 = 1;
 const THREAD_START_REQUEST_ID: i64 = 2;
@@ -127,12 +130,16 @@ pub enum AppServerError {
         status: Option<String>,
         evidence: Box<crate::process::ProcessEvidence>,
     },
+    #[error("app-server runtime trust validation failed: {0}")]
+    RuntimeTrust(#[from] RuntimeTrustError),
 }
 
 /// Production client that starts one `app-server` child for each request.
 #[derive(Clone, Debug)]
 pub struct AppServerClient {
     executable: PathBuf,
+    executable_identity: Option<ExecutableIdentity>,
+    environment: ChildEnvironment,
     heartbeat_interval: Duration,
     execution_timeout: Duration,
     limits: ProcessLimits,
@@ -143,11 +150,41 @@ impl AppServerClient {
     pub fn new(executable: impl Into<PathBuf>) -> Self {
         Self {
             executable: executable.into(),
+            executable_identity: None,
+            environment: ChildEnvironment::captured_current()
+                .expect("the compatibility child environment is valid"),
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
             execution_timeout: DEFAULT_EXECUTION_TIMEOUT,
             limits: ProcessLimits::default(),
             cancellation: CancellationToken::new(),
         }
+    }
+
+    /// Constructs a client from a startup-resolved Codex identity and an
+    /// explicit worker environment. This is the production gardener path.
+    pub fn from_trust(
+        executable: ExecutableIdentity,
+        environment: ChildEnvironment,
+    ) -> Result<Self, AppServerError> {
+        if executable.role() != ExecutableRole::Codex {
+            return Err(AppServerError::InvalidRequest(
+                "app-server executable identity must have the Codex role".to_owned(),
+            ));
+        }
+        executable.verify_unchanged()?;
+        Ok(Self {
+            executable: executable.path().to_owned(),
+            executable_identity: Some(executable),
+            environment,
+            heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
+            execution_timeout: DEFAULT_EXECUTION_TIMEOUT,
+            limits: ProcessLimits::default(),
+            cancellation: CancellationToken::new(),
+        })
+    }
+
+    pub fn executable_identity(&self) -> Option<&ExecutableIdentity> {
+        self.executable_identity.as_ref()
     }
 
     pub fn with_heartbeat_interval(mut self, interval: Duration) -> Self {
@@ -176,6 +213,9 @@ impl AppServerClient {
         request: &TurnRequest<'_>,
         observer: &mut dyn AppServerObserver,
     ) -> Result<TurnResult, AppServerError> {
+        if let Some(identity) = &self.executable_identity {
+            identity.verify_unchanged()?;
+        }
         if self.heartbeat_interval.is_zero() || self.execution_timeout.is_zero() {
             return Err(AppServerError::InvalidRequest(
                 "heartbeat interval and execution timeout must be positive".to_owned(),
@@ -201,8 +241,13 @@ impl AppServerClient {
             .ok_or_else(|| {
                 AppServerError::InvalidRequest("execution deadline is out of range".to_owned())
             })?;
-        let mut transport =
-            ChildTransport::spawn(&supervisor, &self.executable, request.cwd, deadline)?;
+        let mut transport = ChildTransport::spawn(
+            &supervisor,
+            &self.executable,
+            &self.environment,
+            request.cwd,
+            deadline,
+        )?;
         let result = run_protocol(
             &mut transport,
             request,
@@ -259,11 +304,13 @@ impl ChildTransport {
     fn spawn(
         supervisor: &ProcessSupervisor,
         executable: &Path,
+        environment: &ChildEnvironment,
         cwd: &Path,
         deadline: Instant,
     ) -> Result<Self, AppServerError> {
         let mut command = Command::new(executable);
         command.arg("app-server").current_dir(cwd);
+        environment.apply(&mut command, ProcessPolicy::Codex, None)?;
         let child = supervisor
             .spawn(&mut command, deadline, EffectRisk::None)
             .map_err(|source| AppServerError::Spawn {

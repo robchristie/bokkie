@@ -1,5 +1,7 @@
 use std::{
+    fs,
     net::SocketAddr,
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     process::ExitCode,
     sync::{
@@ -14,6 +16,7 @@ use bokkie::{
     GardenerRuntimeConfig, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
     Store, StoreError, SystemClock, UnixClock,
     http::{error_json, router, router_with_ui, validate_loopback},
+    runtime_trust::{ChildEnvironment, GitHubCredential},
     service::{Scheduler, SchedulerConfig, SchedulerError, ServiceFakeOutcome},
 };
 #[cfg(test)]
@@ -118,12 +121,27 @@ enum Command {
         /// Existing absolute parent directory for isolated gardener worktrees.
         #[arg(long, requires = "enable_coding_gardener")]
         gardener_worktree_root: Option<PathBuf>,
-        #[arg(long, default_value = "codex")]
+        #[arg(long, default_value = "/usr/bin/codex")]
         gardener_codex_executable: PathBuf,
-        #[arg(long, default_value = "git")]
+        #[arg(long, default_value = "/usr/bin/git")]
         gardener_git_executable: PathBuf,
-        #[arg(long, default_value = "gh")]
+        #[arg(long, default_value = "/usr/bin/gh")]
         gardener_gh_executable: PathBuf,
+        /// Absolute cargo executable used for fixed, credential-free candidate checks.
+        #[arg(long, default_value = "/usr/bin/cargo")]
+        gardener_cargo_executable: PathBuf,
+        /// Controlled HOME for Codex, Git, gh and candidate-check children.
+        #[arg(long, requires = "enable_coding_gardener")]
+        gardener_home: Option<PathBuf>,
+        /// Optional mode-0600 file containing the GitHub token used only for mutation children.
+        #[arg(long, requires = "enable_coding_gardener")]
+        gardener_github_token_file: Option<PathBuf>,
+        /// Narrative Codex profile identity retained in the run manifest when supplied.
+        #[arg(long)]
+        gardener_codex_profile: Option<String>,
+        /// Narrative Codex model identity retained in the run manifest when supplied.
+        #[arg(long)]
+        gardener_codex_model: Option<String>,
         #[arg(long, default_value_t = 10_000)]
         gardener_heartbeat_ms: u64,
         /// Absolute wall-clock limit for each gardener child process.
@@ -228,6 +246,11 @@ struct ServeOptions {
     gardener_codex_executable: PathBuf,
     gardener_git_executable: PathBuf,
     gardener_gh_executable: PathBuf,
+    gardener_cargo_executable: PathBuf,
+    gardener_home: Option<PathBuf>,
+    gardener_github_token_file: Option<PathBuf>,
+    gardener_codex_profile: Option<String>,
+    gardener_codex_model: Option<String>,
     gardener_heartbeat_ms: u64,
     gardener_process_timeout_ms: u64,
     ui_dir: Option<PathBuf>,
@@ -323,6 +346,11 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             gardener_codex_executable,
             gardener_git_executable,
             gardener_gh_executable,
+            gardener_cargo_executable,
+            gardener_home,
+            gardener_github_token_file,
+            gardener_codex_profile,
+            gardener_codex_model,
             gardener_heartbeat_ms,
             gardener_process_timeout_ms,
             ui_dir,
@@ -340,6 +368,11 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                     gardener_codex_executable,
                     gardener_git_executable,
                     gardener_gh_executable,
+                    gardener_cargo_executable,
+                    gardener_home,
+                    gardener_github_token_file,
+                    gardener_codex_profile,
+                    gardener_codex_model,
                     gardener_heartbeat_ms,
                     gardener_process_timeout_ms,
                     ui_dir,
@@ -573,13 +606,13 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
             "lease-seconds must be at least 2 for second-resolution lease renewal".to_owned(),
         ));
     }
-    if let Some(ui_dir) = &options.ui_dir
-        && !ui_dir.is_dir()
-    {
-        return Err(AppError::Configuration(format!(
-            "ui-dir must be an existing directory: {}",
-            ui_dir.display()
-        )));
+    if let Some(ui_dir) = &options.ui_dir {
+        if !ui_dir.is_dir() {
+            return Err(AppError::Configuration(format!(
+                "ui-dir must be an existing directory: {}",
+                ui_dir.display()
+            )));
+        }
     }
 
     // Bind before starting the scheduler so a port conflict cannot execute work in a
@@ -599,14 +632,65 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
                 "gardener-worktree-root is required when coding gardener is enabled".to_owned(),
             )
         })?;
-        let gardener = GardenerRuntimeConfig::new(
+        let gardener_home = options.gardener_home.unwrap_or_else(|| {
+            worktree_root
+                .parent()
+                .unwrap_or(&worktree_root)
+                .to_path_buf()
+        });
+        if !gardener_home.is_absolute() || !gardener_home.is_dir() {
+            return Err(AppError::Configuration(format!(
+                "gardener-home must be an existing absolute directory: {}",
+                gardener_home.display()
+            )));
+        }
+        let child_path = controlled_executable_path(&[
+            &options.gardener_codex_executable,
+            &options.gardener_git_executable,
+            &options.gardener_gh_executable,
+            &options.gardener_cargo_executable,
+        ])?;
+        let environment = ChildEnvironment::new(
+            &gardener_home,
+            gardener_home.join(".config/bokkie-gardener"),
+            gardener_home.join(".cache/bokkie-gardener"),
+            child_path,
+        )
+        .map_err(|error| AppError::Configuration(error.to_string()))?;
+        let credential = options
+            .gardener_github_token_file
+            .as_deref()
+            .map(read_github_credential)
+            .transpose()?;
+        let mut gardener = GardenerRuntimeConfig::new(
             worktree_root,
             options.gardener_codex_executable,
             options.gardener_git_executable,
             options.gardener_gh_executable,
         )
+        .with_child_environment(environment)
+        .with_candidate_checks(
+            options.gardener_cargo_executable,
+            [
+                vec!["test", "--all-targets", "--locked"],
+                vec![
+                    "clippy",
+                    "--all-targets",
+                    "--all-features",
+                    "--locked",
+                    "--",
+                    "-D",
+                    "warnings",
+                ],
+                vec!["fmt", "--all", "--", "--check"],
+            ],
+        )
+        .with_codex_identity(options.gardener_codex_profile, options.gardener_codex_model)
         .with_heartbeat_interval(Duration::from_millis(options.gardener_heartbeat_ms))
         .with_process_timeout(Duration::from_millis(options.gardener_process_timeout_ms));
+        if let Some(credential) = credential {
+            gardener = gardener.with_github_credential(credential);
+        }
         Scheduler::start_configured(scheduler_config, Some(gardener))?
     } else {
         Scheduler::start(scheduler_config)?
@@ -630,6 +714,58 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
     scheduler_result?;
     eprintln!("{}", json!({"event": "stopped"}));
     Ok(())
+}
+
+fn controlled_executable_path(paths: &[&PathBuf]) -> Result<Vec<PathBuf>, AppError> {
+    let mut directories = Vec::new();
+    for path in paths {
+        if !path.is_absolute() {
+            return Err(AppError::Configuration(format!(
+                "gardener executable paths must be absolute: {}",
+                path.display()
+            )));
+        }
+        let parent = path.parent().ok_or_else(|| {
+            AppError::Configuration(format!(
+                "gardener executable has no parent: {}",
+                path.display()
+            ))
+        })?;
+        if !directories.iter().any(|existing| existing == parent) {
+            directories.push(parent.to_path_buf());
+        }
+    }
+    Ok(directories)
+}
+
+fn read_github_credential(path: &std::path::Path) -> Result<GitHubCredential, AppError> {
+    if !path.is_absolute() {
+        return Err(AppError::Configuration(
+            "gardener-github-token-file must be absolute".to_owned(),
+        ));
+    }
+    let metadata = fs::metadata(path).map_err(|error| {
+        AppError::Configuration(format!(
+            "cannot inspect gardener GitHub token file {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file()
+        || metadata.permissions().mode() & 0o077 != 0
+        || metadata.len() > 16 * 1024
+    {
+        return Err(AppError::Configuration(format!(
+            "gardener GitHub token file must be a regular, private file no larger than 16384 bytes: {}",
+            path.display()
+        )));
+    }
+    let token = fs::read_to_string(path).map_err(|error| {
+        AppError::Configuration(format!(
+            "cannot read gardener GitHub token file {}: {error}",
+            path.display()
+        ))
+    })?;
+    GitHubCredential::new(token.trim()).map_err(|error| AppError::Configuration(error.to_string()))
 }
 
 async fn shutdown_signal(

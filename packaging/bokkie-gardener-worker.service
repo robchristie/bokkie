@@ -1,0 +1,62 @@
+# Example only: this is deliberately a separate, privileged-by-necessity
+# gardener worker profile. Do not install it with, or as a replacement for,
+# packaging/bokkie.service.
+[Unit]
+Description=Bokkie coding gardener worker (example only)
+After=local-fs.target network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Registration is a separate operator action. This unit only runs an already
+# registered gardener against its own explicitly selected database.
+ExecStart=/usr/bin/bokkie --database /var/lib/bokkie-gardener/bokkie.sqlite serve --bind 127.0.0.1:7745 --lease-seconds 30 --enable-coding-gardener --gardener-worktree-root /var/lib/bokkie-gardener/worktrees --gardener-home /var/lib/bokkie-gardener --gardener-codex-executable /usr/bin/codex --gardener-git-executable /usr/bin/git --gardener-gh-executable /usr/bin/gh --gardener-cargo-executable /usr/bin/cargo --gardener-github-token-file ${CREDENTIALS_DIRECTORY}/github_token --gardener-heartbeat-ms 10000 --gardener-process-timeout-ms 1800000
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+
+DynamicUser=yes
+StateDirectory=bokkie-gardener
+StateDirectoryMode=0700
+UMask=0077
+Environment=HOME=/var/lib/bokkie-gardener
+Environment=GH_CONFIG_DIR=/var/lib/bokkie-gardener/gh
+Environment=GIT_CONFIG_GLOBAL=/dev/null
+Environment=GIT_CONFIG_NOSYSTEM=1
+Environment=PATH=/usr/bin:/bin
+# The operator must supply the same-named encrypted/system credential. No token
+# is stored in this unit or repository.
+LoadCredential=github_token
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+ReadOnlyPaths=/srv/src/bokkie
+ReadWritePaths=/var/lib/bokkie-gardener
+
+[Install]
+WantedBy=multi-user.target

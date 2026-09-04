@@ -12,8 +12,8 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::{
-    ApprovalDecision, CANONICAL_DEFAULT_BRANCH, ManualClock, NewObligation,
-    NewRepositoryRegistration, ObligationState, Recurrence, RetryPolicy,
+    ApprovalDecision, CANONICAL_DEFAULT_BRANCH, GardenerPublicationState, ManualClock,
+    NewObligation, NewRepositoryRegistration, ObligationState, Recurrence, RetryPolicy,
 };
 
 const GOAL: &str = "Add a durable gardener marker file and test it.";
@@ -31,6 +31,7 @@ struct Fixture {
     git_log: PathBuf,
     gh: PathBuf,
     gh_log: PathBuf,
+    candidate_check: PathBuf,
     clock: ManualClock,
 }
 
@@ -92,6 +93,9 @@ import pathlib
 import subprocess
 import sys
 
+if sys.argv[1:] == ["--version"]:
+    print("fake-codex 1.0")
+    raise SystemExit(0)
 if sys.argv[1:] != ["app-server"]:
     raise SystemExit("expected exactly the app-server subcommand")
 
@@ -121,10 +125,10 @@ for raw in sys.stdin:
         sandbox = request["params"]["sandboxPolicy"]["type"]
         if sandbox == "workspaceWrite":
             pathlib.Path.cwd().joinpath("gardened.txt").write_text("implemented by fake Codex\n")
-            message = {{"summary": "implemented and checked"}}
+            message = {{"summary": "implemented and checked", "changed_paths": ["gardened.txt"], "checks": ["fake check passed"]}}
         elif "independent, read-only verifier" in prompt:
             head = mismatch or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-            message = {{"verdict": verdict, "head": head, "summary": "fake exact-head verification"}}
+            message = {{"verdict": verdict, "head": head, "summary": "fake exact-head verification", "blocking_findings": [], "validation": ["fake exact-head check"]}}
         else:
             message = {{"summary": "found one bounded improvement", "proposed_goal_prompts": [{goal}]}}
         text = json.dumps(message)
@@ -150,10 +154,18 @@ import subprocess
 import sys
 
 args = sys.argv[1:]
+if args == ["--version"]:
+    print("fake-gh 1.0")
+    raise SystemExit(0)
 log = pathlib.Path({log})
 count_path = pathlib.Path({count})
+draft_path = pathlib.Path({draft})
 with log.open("a") as output:
     output.write(json.dumps(args) + "\n")
+if args[:2] == ["pr", "create"]:
+    draft_path.write_text("draft")
+elif args[:2] == ["pr", "ready"]:
+    draft_path.unlink(missing_ok=True)
 if args[:2] == ["pr", "view"]:
     count = int(count_path.read_text()) + 1 if count_path.exists() else 1
     count_path.write_text(str(count))
@@ -161,13 +173,20 @@ if args[:2] == ["pr", "view"]:
     head = subprocess.check_output(["git", "rev-parse", branch], text=True).strip()
     if {changed_pr_head} and count >= 2:
         head = "b" * 40
-    print(json.dumps({{"number": 42, "url": "https://github.com/robchristie/bokkie/pull/42", "headRefOid": head, "state": "OPEN", "isDraft": False}}))
+    print(json.dumps({{"number": 42, "url": "https://github.com/robchristie/bokkie/pull/42", "headRefOid": head, "state": "OPEN", "isDraft": draft_path.exists()}}))
 "#,
             log = serde_json::to_string(gh_log.to_str().unwrap()).unwrap(),
             count = serde_json::to_string(gh_count.to_str().unwrap()).unwrap(),
+            draft = serde_json::to_string(root.path().join("gh.draft").to_str().unwrap()).unwrap(),
             changed_pr_head = if changed_pr_head { "True" } else { "False" },
         );
         write_executable(&gh, &gh_script);
+
+        let candidate_check = root.path().join("fake-check.sh");
+        write_executable(
+            &candidate_check,
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'fake-check 1.0'; exit 0; fi\nexit 0\n",
+        );
 
         Self {
             database: root.path().join("bokkie.sqlite"),
@@ -181,6 +200,7 @@ if args[:2] == ["pr", "view"]:
             git_log,
             gh,
             gh_log,
+            candidate_check,
             clock: ManualClock::new(1_000),
         }
     }
@@ -205,6 +225,8 @@ if args[:2] == ["pr", "view"]:
     fn config(&self) -> GardenerRuntimeConfig {
         GardenerRuntimeConfig::new(&self.worktrees, &self.codex, &self.git_executable, &self.gh)
             .with_heartbeat_interval(Duration::from_millis(5))
+            .with_github_credential(GitHubCredential::new("fake-test-token").unwrap())
+            .with_candidate_checks(&self.candidate_check, [["check"]])
     }
 
     fn inspect_and_approve(&self, store: &mut Store) -> Claim {
@@ -277,6 +299,31 @@ fn complete_process_flow_persists_exact_identities_and_passes_verification() {
     assert_ne!(run.implementation_thread_id, run.verification_thread_id);
     assert_ne!(run.implementation_turn_id, run.verification_turn_id);
     assert_eq!(run.pull_request_number, Some(42));
+    assert_eq!(run.publication_state, GardenerPublicationState::Ready);
+    assert!(run.pull_request_ready_at.is_some());
+    let manifest = store
+        .gardener_reproducibility_manifest(&run.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(manifest.source_commit, run.source_commit);
+    assert!(manifest.bokkie_build.contains("\"sha256\""));
+    assert!(manifest.executable_manifest_json.contains("fake-codex 1.0"));
+    let qualification = store
+        .gardener_candidate_qualification(&run.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(qualification.head, run.git_commit.as_deref().unwrap());
+    assert!(qualification.checks_json.contains("\"kind\":\"passed\""));
+    let events = store.gardener_run_events(&run.id).unwrap();
+    let sequence = |event_type: &str| {
+        events
+            .iter()
+            .position(|event| event.event_type == event_type)
+            .unwrap()
+    };
+    assert!(sequence("candidate_qualified") < sequence("push_observed"));
+    assert!(sequence("pull_request_draft_recorded") < sequence("verification_started"));
+    assert!(sequence("pull_request_ready_requested") < sequence("pull_request_ready_recorded"));
     assert!(!Path::new(&run.implementation_worktree_path).exists());
     assert!(!Path::new(run.verification_worktree_path.as_ref().unwrap()).exists());
     assert_eq!(
@@ -308,6 +355,8 @@ fn complete_process_flow_persists_exact_identities_and_passes_verification() {
     assert!(transcript.contains("exact pull-request head"));
     let gh_log = fs::read_to_string(&fixture.gh_log).unwrap();
     assert!(gh_log.contains("\"create\""));
+    assert!(gh_log.contains("\"--draft\""));
+    assert!(gh_log.contains("\"ready\""));
     assert!(gh_log.contains("\"view\""));
     assert!(gh_log.lines().all(|line| {
         let arguments: Vec<String> = serde_json::from_str(line).unwrap();
@@ -316,7 +365,7 @@ fn complete_process_flow_persists_exact_identities_and_passes_verification() {
 }
 
 #[test]
-fn blocking_verdict_preserves_ready_pr_and_enters_attention() {
+fn blocking_verdict_preserves_draft_pr_and_enters_attention() {
     let fixture = Fixture::new("blocking", false, false);
     let mut store = fixture.store();
     let claim = fixture.inspect_and_approve(&mut store);
@@ -340,10 +389,50 @@ fn blocking_verdict_preserves_ready_pr_and_enters_attention() {
         Some(GardenerVerificationVerdict::Blocking)
     );
     assert_eq!(run.pull_request_number, Some(42));
+    assert_eq!(run.publication_state, GardenerPublicationState::Draft);
+    assert!(run.pull_request_ready_at.is_none());
     assert_eq!(
         store.get(&claim.obligation_id).unwrap().unwrap().state,
         ObligationState::Attention
     );
+}
+
+#[test]
+fn failed_candidate_check_is_durable_and_prevents_publication() {
+    let fixture = Fixture::new("pass", false, false);
+    let mut store = fixture.store();
+    let claim = fixture.inspect_and_approve(&mut store);
+    write_executable(
+        &fixture.candidate_check,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'fake-check 2.0'; exit 0; fi\necho 'bounded failure' >&2\nexit 7\n",
+    );
+    let config = fixture.config();
+    let runner = GardenerRunner::new(&config, 30, &fixture.clock).unwrap();
+    let result = runner.execute(&mut store, &claim);
+    assert!(matches!(
+        result.completion,
+        Completion::Failed {
+            retryable: false,
+            ..
+        }
+    ));
+    let run = store.gardener_implementation_runs().unwrap().remove(0);
+    assert!(run.git_commit.is_some());
+    assert!(run.pushed_head.is_none());
+    assert!(run.pull_request_number.is_none());
+    assert_eq!(run.publication_state, GardenerPublicationState::NotCreated);
+    let qualification = store
+        .gardener_candidate_qualification(&run.id)
+        .unwrap()
+        .unwrap();
+    assert!(qualification.checks_json.contains("\"kind\":\"failed\""));
+    assert!(
+        !fs::read_to_string(&fixture.git_log)
+            .unwrap()
+            .lines()
+            .any(|line| line.starts_with("push "))
+    );
+    assert!(!fixture.gh_log.exists());
 }
 
 #[test]
