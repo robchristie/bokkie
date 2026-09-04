@@ -6,8 +6,8 @@
 - Baseline: `12f5c65901d07248d152ebf80548116cf0c7b040`
 - Target repository: `robchristie/bokkie`
 - Reorientation budget: 200
-- Landed pull requests: #5, #6, #7, #8, #9, #10, #11, #12, #13
-- Next action: obtain the P6b human licence and live branch-protection decisions, then run P6c exact merged-main qualification
+- Landed pull requests: #5, #6, #7, #8, #9, #10, #11, #12, #13, #14
+- Next action: obtain explicit human approval to squash-merge the exact reviewed P6b Apache-2.0 candidate, then run P6c exact merged-main qualification
 - Last updated: 2026-09-05
 
 ## Outcome and terminal rule
@@ -31,8 +31,8 @@ human authority. Absence of either mutation is not approval to perform it.
 ## Current R1–R12 capability assessment
 
 This assessment is against merged `main`
-`d73f8417bbdce989c289ee3905da7ac28357964e` (tree
-`75374dc8a2799b1774fa894ad8d2e14427a6dc4e`, schema v9/API v1).
+`bfb2104c55eaec6b01913c7ba5e97fba058bc77a` (tree
+`87d469076bf1e3a4a996958625c2434a96411a98`, schema v9/API v1).
 
 | Row | Current disposition | Evidence owner |
 |---|---|---|
@@ -47,7 +47,7 @@ This assessment is against merged `main`
 | R9 | Satisfied across P1–P5b: typed persisted process, trust, proposal, schema, failure, lane and projection identities have executable temporal/scale tests | PRs #6–#13 |
 | R10 | Satisfied with human authority: runtime/API/schema identity, exact local-origin checks and per-process mutation secret | P4b/PR #11 |
 | R11 | Satisfied: process, trust, execution-lane, events and pagination owners are split while Store retains lifecycle transitions and bounded domain reads | PRs #6–#13 |
-| R12 | Partially satisfied: locked backend CI/toolchain landed in P2; P6a owns executable plan truth, dual-toolchain contracts and CI reconciliation; P6b retains licence and live-protection decisions | P2/P6 |
+| R12 | Partially satisfied: P6a landed executable plan truth, dual-toolchain contracts and CI reconciliation; P6b has applied the authorised live protection and holds the Apache-2.0 rights change for explicit human review | P2/P6 |
 
 Already-satisfied guarantees retained by these dispositions include atomic
 Store-owned lifecycle transitions, append-only audit events, generation/token
@@ -67,8 +67,8 @@ conditional operator-state preconditions.
 | P4b | Local mutation access boundary and service identity | Human-authorised [PR #11](https://github.com/robchristie/bokkie/pull/11) landed as `4ecc30338c60bf66507558a68b96c65c34014c86` |
 | P5a | Fair execution lanes and typed outcomes | [PR #12](https://github.com/robchristie/bokkie/pull/12) landed as `b8bda7877e63d73780f04dafe097fb7425cccc7a` |
 | P5b | Incremental bounded projections and global event envelope | [PR #13](https://github.com/robchristie/bokkie/pull/13) landed as `d73f8417bbdce989c289ee3905da7ac28357964e` |
-| P6a | Executable plan truth, repository reconciliation, dual toolchain contracts and CI governance | Current terminal governance package; its pull request owns exact-head review, CI, merge and cleanup evidence |
-| P6b | Explicit licence and live `main` protection decisions | Human decision required; no licence, rights grant, rule or setting change is authorised by P6a |
+| P6a | Executable plan truth, repository reconciliation, dual toolchain contracts and CI governance | [PR #14](https://github.com/robchristie/bokkie/pull/14) landed as `bfb2104c55eaec6b01913c7ba5e97fba058bc77a` |
+| P6b | Apache-2.0 licence and live `main` protection | Ruleset `22305031` version `48733815` is active with no bypass; the coherent licence candidate is human-held before merge |
 | P6c | Aggregate exact-head qualification and programme closeout | Run only after P6b has an explicit apply-or-defer disposition; no deployment or release |
 
 ## Acceptance and integration proof
@@ -81,18 +81,18 @@ requests, worktrees, local branches, remote-tracking references and live heads.
 
 ## Current phase
 
-P6a reconciles executable repository truth. It adds a network-independent plan
-linter with fixtures to enforce completed-plan landing metadata, terminal item
-dispositions, historical worktree labelling and active-plan phase/budget/landed
-PR invariants. It also makes dependency-resolving canonical commands locked,
-records the Rust 1.85 backend MSRV with exact 1.85.0 toolchain and the UI Rust
-1.97 MSRV with app-scoped exact 1.97.1 toolchain, and runs both contract surfaces
-in least-authority CI. Historical review details remain with their owning pull
-requests; the compact checkpoints below are the programme routing record.
+P6b has applied the specifically authorised repository branch ruleset and
+verified its exact live and effective state. Ruleset `22305031` version
+`48733815` targets only `refs/heads/main`, is active, has no bypass actor and
+reports `current_user_can_bypass: never`. It requires pull requests with zero
+GitHub approvals and resolved review threads; strict current-base success from
+`Plan governance`, `Locked backend checks` and `Locked attention UI checks`;
+linear history; and prohibits deletion and non-fast-forward updates.
 
-Once this plan revision lands, P6b is the only decision phase. P6c follows the
-operator's explicit P6b apply-or-defer dispositions and qualifies their resulting
-exact merged `main`; P6a does not take either exceptional action.
+The Apache-2.0 candidate remains a rights-changing human-review checkpoint. It
+adds the official licence text, exact Cargo SPDX metadata and README licence
+statement without a NOTICE file. P6c follows only after the owner inspects and
+explicitly authorises the exact reviewed candidate's squash merge.
 
 ## Compact terminal checkpoints
 
@@ -105,30 +105,30 @@ exact merged `main`; P6a does not take either exceptional action.
 | P4b | `4cbe4a8fc6aa11e9d2f0c9720ccccc0bf157259f` | `4ecc30338c60bf66507558a68b96c65c34014c86` | `952a77d63477412722f0c2cf908a6ca4ae390c10` | Human-authorised PASS |
 | P5a | `94024ae2a9bb266bbfb9102105728fbde99671f8` | `b8bda7877e63d73780f04dafe097fb7425cccc7a` | `365b4c870e5d50ff48c1117092679a4719ff3b83` | Exact CI `33872971463`; post-merge CI `33873290907`; landed 2026-09-04 |
 | P5b | `30675a92bbf4091a5d09da4a60a62d9e774eaf92` | `d73f8417bbdce989c289ee3905da7ac28357964e` | `75374dc8a2799b1774fa894ad8d2e14427a6dc4e` | Exact CI `33885142461`; post-merge CI `33885489486`; landed 2026-09-05 |
+| P6a | `ad2425e82cac1c8d125471090e0f3b51b6221246` | `bfb2104c55eaec6b01913c7ba5e97fba058bc77a` | `87d469076bf1e3a4a996958625c2434a96411a98` | Exact CI `33888079218`; post-merge CI `33888698360`; landed 2026-09-05 |
 
 P5b's earlier repaired implementation review at
 `3e12d6a59a1a4915c020fba0e6eca1eef676e801` (tree
 `c63d016e52415c24e7721d5c28d0f1a493e7da87`, CI `33884226007`) remains
 historical calibration evidence on PR #13, not the terminal reviewed head.
 
-## P6b human decision capsule
+## P6b authority and evidence capsule
 
-- Licence: default to no licence grant and no new licence file until the owner
-  explicitly chooses public reuse. If reuse is intended, obtain legal/ownership
-  confirmation and choose MIT (simple permissive terms), Apache-2.0 (permissive
-  terms with an express patent grant), or dual MIT/Apache-2.0. P6a selects none.
-- Live `main` protection: current observed disposition is unprotected. Proposed
-  rules are pull-request-only changes, no force pushes or deletions, conversation
-  resolution, and the exact CI checks `Plan governance`, `Locked backend checks`
-  and `Locked attention UI checks`; do not require an approval count until the
-  owner decides how the independent Codex review becomes host-verifiable. P6a
-  does not create or mutate the rule.
+- Live `main` protection: explicitly authorised and applied on 2026-09-05 as
+  active repository ruleset [22305031](https://github.com/robchristie/bokkie/rules/22305031),
+  initial version `48733815`; authenticated ruleset GET and effective-branch
+  GET returned the exact target, five rules and empty bypass list recorded in
+  the current phase.
+- Licence: Apache-2.0 was selected for a coherent candidate, but adding its
+  rights grant remains human-held. Exact-head review and all checks do not
+  authorise merge; the owner must inspect the candidate pull request and
+  explicitly authorise its squash merge.
 
 ## Bounded residuals
 
-- P6b needs two explicit human apply-or-defer decisions; no rights or settings
-  mutation is implied by this plan.
-- P6c must observe the final protected/unprotected and licensed/unlicensed state
-  and qualify the exact resulting merged head.
+- P6b licence merge remains the sole explicit human decision; live protection
+  is active and verified without a bypass actor.
+- P6c must observe the final licensed state and re-read the live ruleset before
+  qualifying the exact resulting merged head.
 - UI qualification remains fixture-only, not screen-reader certification,
   physical-GPU performance, production credentials, deployment or release.

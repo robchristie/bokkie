@@ -151,3 +151,8 @@ The [local HTTP threat model](docs/http-api-threat-model.md) defines the exact
 Host, Origin, mutation-token and restart boundaries. In particular, the token
 does not protect against a malicious process already running as the same local
 user.
+
+## Licence
+
+Bokkie is licensed under the Apache License, Version 2.0. See
+[LICENSE](LICENSE) for the complete terms.
