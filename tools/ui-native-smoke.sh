@@ -7,6 +7,10 @@ EVIDENCE="${BOKKIE_UI_EVIDENCE_DIR:-$ROOT/docs/ui-qualification-evidence}"
 RUNTIME="$ROOT/.ui-qualification-runtime"
 SYSROOT="${BOKKIE_UI_SYSROOT:-/nvme/development/polyorama/.tools/sysroot}"
 mkdir -p "$EVIDENCE" "$RUNTIME/.X11-unix"
+# Evidence has one stable in-sandbox path even when its host path is below
+# /tmp, which the private runtime mount replaces.
+EVIDENCE="$(cd "$EVIDENCE" && pwd)"
+SANDBOX_EVIDENCE=/tmp/bokkie-ui-evidence
 find "$RUNTIME" -mindepth 1 -maxdepth 1 ! -name '.X11-unix' -delete
 find "$RUNTIME/.X11-unix" -mindepth 1 -delete
 chmod 1777 "$RUNTIME" "$RUNTIME/.X11-unix"
@@ -20,12 +24,12 @@ XDO="$SYSROOT/usr/bin/xdotool"
 XVFB="$SYSROOT/usr/bin/Xvfb"
 IMPORT="$(command -v import)"
 
-ui_sandbox() {
-  bwrap --ro-bind / / --bind "$RUNTIME" /tmp \
+ui_sandbox() (
+  exec bwrap --die-with-parent --unshare-pid --ro-bind / / --bind "$RUNTIME" /tmp \
     --ro-bind /usr/bin /opt --ro-bind "$SYSROOT/usr/bin" /usr/bin \
-    --bind "$RUNTIME" "$RUNTIME" --bind "$EVIDENCE" "$EVIDENCE" \
+    --bind "$RUNTIME" "$RUNTIME" --bind "$EVIDENCE" "$SANDBOX_EVIDENCE" \
     --dev-bind /dev /dev --proc /proc "$@"
-}
+)
 
 FIXTURE_PID=""
 XVFB_PID=""
@@ -60,7 +64,10 @@ for _ in $(seq 1 200); do
   [[ -s "$SNAPSHOT" ]] && jq -e '.interaction.connection == "current"' "$SNAPSHOT" >/dev/null 2>&1 && break
   sleep 0.05
 done
-kill -0 "$APP_PID"
+if ! kill -0 "$APP_PID" 2>/dev/null; then
+  cat "$APP_LOG" "$XVFB_LOG" >&2
+  exit 1
+fi
 WINDOW="$(xdo search --onlyvisible --name 'Bokkie Operator' | head -n 1)"
 xdo windowfocus --sync "$WINDOW"
 WIDTH="$(xdo getwindowgeometry --shell "$WINDOW" | sed -n 's/^WIDTH=//p')"
@@ -134,7 +141,7 @@ jq -n \
 jq -e '.state == "cancelled" and .last_audit_event == "cancelled"' "$EVIDENCE/native-durable-result.json" >/dev/null
 
 DISPLAY="$DISPLAY_NUMBER" LD_LIBRARY_PATH="$SYSROOT/usr/lib" \
-  ui_sandbox "$IMPORT" -window root "$EVIDENCE/native-1440x900.png"
+  ui_sandbox "$IMPORT" -window root "$SANDBOX_EVIDENCE/native-1440x900.png"
 jq '{
   classification: "direct native X11 pointer selection and confirmation inspection plus keyboard focus under Xvfb; the durable action is a direct conditional harness POST, while browser evidence proves UI submission; Mesa llvmpipe, not physical-GPU performance",
   environment: {display: "Xvfb 1440x900x24", renderer_request: "wgpu GL software"},

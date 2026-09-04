@@ -252,6 +252,36 @@ pub struct GardenerReproducibilityManifest {
     pub recorded_at: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GardenerTurnKind {
+    Inspection,
+    Implementation,
+    Verification,
+}
+
+/// Immutable pre-execution evidence for one Codex turn. The owner is an
+/// inspection ID for inspection, otherwise an implementation run ID.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GardenerTurnManifest {
+    pub owner_id: String,
+    pub kind: GardenerTurnKind,
+    pub bokkie_build: String,
+    pub source_commit: String,
+    pub head: String,
+    pub prompt_digest: String,
+    pub output_schema_digest: String,
+    pub declared_codex_profile: Option<String>,
+    pub declared_codex_model: Option<String>,
+    pub codex_profile_override: Option<String>,
+    pub codex_model_override: Option<String>,
+    pub executable_manifest_json: String,
+    pub sandbox_policy_digest: String,
+    pub environment_policy_digest: String,
+    pub check_commands_json: String,
+    pub recorded_at: i64,
+}
+
 /// Bokkie-owned, credential-free proof collected before any publication.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GardenerCandidateQualification {

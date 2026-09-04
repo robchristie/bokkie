@@ -47,10 +47,10 @@ pub use gardener::{
     CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerCandidateQualification, GardenerEvent,
     GardenerImplementationResult, GardenerImplementationRun, GardenerInspection,
     GardenerObligationKind, GardenerPublicationState, GardenerReproducibilityManifest,
-    GardenerRunEvent, GardenerRunPhase, GardenerVerificationResult, GardenerVerificationVerdict,
-    InspectionResult, NewGardenerImplementationRun, NewGardenerInspection,
-    NewRepositoryRegistration, Proposal, ProposalObservation, RepositoryRegistration,
-    normalise_goal_prompt, proposal_fingerprint,
+    GardenerRunEvent, GardenerRunPhase, GardenerTurnKind, GardenerTurnManifest,
+    GardenerVerificationResult, GardenerVerificationVerdict, InspectionResult,
+    NewGardenerImplementationRun, NewGardenerInspection, NewRepositoryRegistration, Proposal,
+    ProposalObservation, RepositoryRegistration, normalise_goal_prompt, proposal_fingerprint,
 };
 pub use gardener_runner::{GardenerRunner, GardenerRunnerError, GardenerRuntimeConfig};
 pub use migrations::{MigrationManifestEntry, migration_manifest};

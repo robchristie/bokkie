@@ -35,14 +35,14 @@ pub enum TurnKind {
 }
 
 impl TurnKind {
-    fn thread_sandbox(self) -> &'static str {
+    pub(crate) fn thread_sandbox(self) -> &'static str {
         match self {
             Self::Inspection | Self::Verification => "read-only",
             Self::Implementation => "workspace-write",
         }
     }
 
-    fn turn_sandbox(self, cwd: &str) -> Value {
+    pub(crate) fn turn_sandbox(self, cwd: &str) -> Value {
         match self {
             Self::Inspection | Self::Verification => json!({
                 "type": "readOnly",

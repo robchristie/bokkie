@@ -19,9 +19,10 @@ use uuid::Uuid;
 use crate::{
     Claim, Completion, FailureDisposition, GardenerCandidateQualification,
     GardenerImplementationResult, GardenerObligationKind, GardenerReproducibilityManifest,
-    GardenerVerificationResult, GardenerVerificationVerdict, InspectionResult,
-    MAX_COMPLETION_ERROR_CHARS, MAX_COMPLETION_EVIDENCE_CHARS, NewGardenerImplementationRun,
-    NewGardenerInspection, RunResult, Store, StoreError, UnixClock,
+    GardenerTurnKind, GardenerTurnManifest, GardenerVerificationResult,
+    GardenerVerificationVerdict, InspectionResult, MAX_COMPLETION_ERROR_CHARS,
+    MAX_COMPLETION_EVIDENCE_CHARS, NewGardenerImplementationRun, NewGardenerInspection, RunResult,
+    Store, StoreError, UnixClock,
     app_server::{AppServerClient, AppServerError, AppServerObserver, TurnKind, TurnRequest},
     gardener::{
         CANONICAL_REPOSITORY, MAX_GARDENER_MODEL_ITEM_CHARS, MAX_GARDENER_MODEL_ITEMS,
@@ -528,6 +529,23 @@ impl<'a> GardenerRunner<'a> {
         })?;
         self.heartbeat(store, claim)?;
         let operation = (|| {
+            let manifest = reproducibility_manifest(
+                &self.runtime,
+                &inspection_id,
+                &source,
+                &prompt,
+                self.clock.now(),
+            )?;
+            store.record_gardener_turn_manifest(
+                claim,
+                &turn_manifest(
+                    manifest,
+                    GardenerTurnKind::Inspection,
+                    &source,
+                    &path_string(worktree.path())?,
+                ),
+                self.clock.now(),
+            )?;
             let result = {
                 let mut observer = StoreObserver::inspection(
                     store,
@@ -638,6 +656,16 @@ impl<'a> GardenerRunner<'a> {
         let manifest =
             reproducibility_manifest(&self.runtime, &run_id, &source, &prompt, self.clock.now())?;
         store.record_gardener_reproducibility_manifest(claim, &manifest, self.clock.now())?;
+        store.record_gardener_turn_manifest(
+            claim,
+            &turn_manifest(
+                manifest,
+                GardenerTurnKind::Implementation,
+                &source,
+                &path_string(&implementation_path)?,
+            ),
+            self.clock.now(),
+        )?;
 
         self.heartbeat(store, claim)?;
         let implementation = self.observe_process(store, claim, |observer| {
@@ -799,6 +827,23 @@ impl<'a> GardenerRunner<'a> {
                 git.verify_head(verification_worktree, &pull_request.head, observer)
             })?;
             let verification_prompt = verification_prompt(&pull_request.head, &proposal.prompt);
+            let manifest = reproducibility_manifest(
+                &self.runtime,
+                &run_id,
+                &source,
+                &verification_prompt,
+                self.clock.now(),
+            )?;
+            store.record_gardener_turn_manifest(
+                claim,
+                &turn_manifest(
+                    manifest,
+                    GardenerTurnKind::Verification,
+                    &pull_request.head,
+                    &path_string(verification_worktree.path())?,
+                ),
+                self.clock.now(),
+            )?;
             let result = {
                 let mut observer = StoreObserver::verification(
                     store,
@@ -1107,6 +1152,43 @@ fn inspection_prompt(source: &CommitId) -> String {
     format!(
         "You are performing a bounded, read-only coding-gardener inspection of only {CANONICAL_REPOSITORY} at exact commit {source}. Read AGENTS.md, README.md, and relevant files under docs/plans/ before inspecting the repository. Do not modify files, run network commands, start implementation, commit, push, open a pull request, or request permissions. Return one JSON object matching the supplied schema. Propose at most three independently useful, concrete goal prompts for maintainability, correctness, tests, or documentation. Each goal prompt must be self-contained, constrained to {CANONICAL_REPOSITORY}, and suitable for separate human approval. If no worthwhile work is supported by repository evidence, return an empty proposed_goal_prompts array."
     )
+}
+
+fn turn_manifest(
+    manifest: GardenerReproducibilityManifest,
+    kind: GardenerTurnKind,
+    head: &CommitId,
+    cwd: &str,
+) -> GardenerTurnManifest {
+    let (schema, turn_kind) = match kind {
+        GardenerTurnKind::Inspection => (inspection_schema(), TurnKind::Inspection),
+        GardenerTurnKind::Implementation => (implementation_schema(), TurnKind::Implementation),
+        GardenerTurnKind::Verification => (verification_schema(), TurnKind::Verification),
+    };
+    let sandbox_policy = json!({
+        "runtime_policy_digest": manifest.sandbox_policy_digest,
+        "thread_sandbox": turn_kind.thread_sandbox(),
+        "turn_sandbox": turn_kind.turn_sandbox(cwd),
+        "approval_policy": "never",
+    });
+    GardenerTurnManifest {
+        owner_id: manifest.run_id,
+        kind,
+        bokkie_build: manifest.bokkie_build,
+        source_commit: manifest.source_commit,
+        head: head.to_string(),
+        prompt_digest: manifest.prompt_digest,
+        output_schema_digest: digest(&schema.to_string()),
+        declared_codex_profile: manifest.codex_profile,
+        declared_codex_model: manifest.codex_model,
+        codex_profile_override: None,
+        codex_model_override: None,
+        executable_manifest_json: manifest.executable_manifest_json,
+        sandbox_policy_digest: digest(&sandbox_policy.to_string()),
+        environment_policy_digest: manifest.environment_policy_digest,
+        check_commands_json: manifest.check_commands_json,
+        recorded_at: manifest.recorded_at,
+    }
 }
 
 fn reproducibility_manifest(
