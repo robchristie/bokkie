@@ -2,6 +2,9 @@
 
 - Status: complete
 - Delivery state: landed
+- Review state: passed
+- CI state: not-applicable: GitHub status checks were not configured
+- Merge state: landed
 - Owner: `bokkie`
 - Pull request: [Bokkie #4](https://github.com/robchristie/bokkie/pull/4)
 - Bokkie baseline: `78558bf915eb9ed0ffb3a676676bf18dc0a5c908`

@@ -7,4 +7,4 @@
 
 ## Current phase
 
-P2 is current; PR #1 supplies landed evidence.
+P2 is current; terminal evidence is recorded outside this section.

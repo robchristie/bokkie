@@ -2,6 +2,9 @@
 
 - Status: complete
 - Delivery state: landed
+- Review state: passed
+- CI state: not-applicable: GitHub status checks were not configured
+- Merge state: landed
 - Owner: `bokkie`
 - Related issue or pull request: [#1](https://github.com/robchristie/bokkie/pull/1)
 - Terminal coordination pull request: #1
@@ -76,8 +79,8 @@ Pull request #1 passed independent review at
 `438310d986f3b8695a25a27fd6ca4bb3aeb36733` and squash-merged as
 `093194ae69bef837dada4e7dcfb9443438f77699`. The reviewed and landed trees are
 both `cd0753282ab588dcb66e8ffc109adcbca321d922`. Post-merge local tests, strict
-Clippy, rustfmt and the diff check passed; GitHub status checks were not yet
-configured. The task branch was deleted and local references were cleaned.
+Clippy, rustfmt and the diff check passed; GitHub status checks were absent at
+landing. The task branch was deleted and local references were cleaned.
 
 ## Decisions made
 

@@ -7,4 +7,4 @@
 
 ## Current phase
 
-P3 is the only active package. PR #2 is recorded as landed evidence.
+P3 is the only active package. Landed evidence is recorded outside this section.

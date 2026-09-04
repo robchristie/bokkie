@@ -16,6 +16,9 @@ A completed plan must declare these structured fields:
 ```text
 - Status: complete
 - Delivery state: landed
+- Review state: passed
+- CI state: passed | not-applicable: <reason>
+- Merge state: landed
 - Landed commit: `<full lowercase 40-character commit>`
 - Landed date: YYYY-MM-DD
 ```

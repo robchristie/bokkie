@@ -2,6 +2,9 @@
 
 - Status: complete
 - Delivery state: landed
+- Review state: passed
+- CI state: not-applicable: GitHub status checks were not configured
+- Merge state: landed
 - Owner: `bokkie`
 - Source revision: `093194ae69bef837dada4e7dcfb9443438f77699`
 - Target repository: `robchristie/bokkie`

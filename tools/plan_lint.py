@@ -13,11 +13,12 @@ from pathlib import Path
 
 FIELD_RE = re.compile(r"^- ([A-Za-z][A-Za-z -]+):\s*(.+?)\s*$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-CHECKBOX_RE = re.compile(r"^\s*- \[([^]])\]\s*(.*)$")
+CHECKBOX_RE = re.compile(r"^\s*[-*+]\s+\[([^]])\]\s*(.*)$")
 WORKTREE_PATH_RE = re.compile(r"/(?:[^\s`|]*/)*[^\s`|]*worktrees?/[^\s`|]+")
 PR_RE = re.compile(r"(?:PR\s*)?#(\d+)", re.IGNORECASE)
 PENDING_RE = re.compile(
-    r"\b(?:pending|next|await(?:s|ing)?|"
+    r"\b(?:pending|next|await(?:s|ing)?|outstanding|not\s+yet|"
+    r"still\s+needs?|needs?\s+to|"
     r"remaining\s+(?:delivery|review|ci|checks?|merge|landing)|"
     r"(?:review|ci|checks?|merge|landing)\s+remains?)\b",
     re.IGNORECASE,
@@ -35,12 +36,12 @@ class Problem:
         return f"{self.path}:{self.line}: {self.message}"
 
 
-def fields(lines: list[str]) -> dict[str, tuple[str, int]]:
-    result: dict[str, tuple[str, int]] = {}
+def fields(lines: list[str]) -> dict[str, list[tuple[str, int]]]:
+    result: dict[str, list[tuple[str, int]]] = {}
     for number, line in enumerate(lines, 1):
         match = FIELD_RE.match(line)
         if match:
-            result[match.group(1).lower()] = (match.group(2), number)
+            result.setdefault(match.group(1).lower(), []).append((match.group(2), number))
     return result
 
 
@@ -63,18 +64,34 @@ def lint_plan(path: Path, kind: str) -> list[Problem]:
     problems: list[Problem] = []
 
     def require_field(name: str) -> tuple[str, int] | None:
-        value = metadata.get(name)
-        if value is None:
+        values = metadata.get(name, [])
+        if not values:
             problems.append(Problem(path, 1, f"missing '- {name.title()}: …' metadata"))
-        return value
+            return None
+        if len(values) > 1:
+            problems.append(Problem(path, values[1][1], f"duplicate lifecycle field {name!r}"))
+        return values[0]
 
     status = require_field("status")
     expected_status = "active" if kind == "active" else "complete"
     if status and status[0].lower() != expected_status:
         problems.append(Problem(path, status[1], f"status must be {expected_status!r} in {kind}/"))
 
+    worktree_problem_lines: set[int] = set()
+    for name, values in metadata.items():
+        if "worktree" not in name:
+            continue
+        for value, number in values:
+            if "historical" not in name and "historical" not in value.lower():
+                problems.append(
+                    Problem(path, number, "worktree metadata must be explicitly labelled historical")
+                )
+                worktree_problem_lines.add(number)
+
     for number, line in enumerate(lines, 1):
         if WORKTREE_PATH_RE.search(line) and "historical" not in line.lower():
+            if number in worktree_problem_lines:
+                continue
             problems.append(
                 Problem(path, number, "retained worktree paths must be explicitly labelled historical")
             )
@@ -109,6 +126,24 @@ def lint_plan(path: Path, kind: str) -> list[Problem]:
                 date.fromisoformat(landed_date[0])
             except ValueError:
                 problems.append(Problem(path, landed_date[1], "landed date must be YYYY-MM-DD"))
+
+        review_state = require_field("review state")
+        if review_state and review_state[0].lower() != "passed":
+            problems.append(Problem(path, review_state[1], "completed-plan review state must be 'passed'"))
+        merge_state = require_field("merge state")
+        if merge_state and merge_state[0].lower() != "landed":
+            problems.append(Problem(path, merge_state[1], "completed-plan merge state must be 'landed'"))
+        ci_state = require_field("ci state")
+        if ci_state:
+            normalised_ci = ci_state[0].lower()
+            if normalised_ci != "passed" and not re.fullmatch(r"not-applicable:\s*\S.*", normalised_ci):
+                problems.append(
+                    Problem(
+                        path,
+                        ci_state[1],
+                        "completed-plan CI state must be 'passed' or 'not-applicable: <reason>'",
+                    )
+                )
 
         for number, line in enumerate(lines, 1):
             if line in {"## Current phase", "## Next action"}:
@@ -149,17 +184,15 @@ def lint_plan(path: Path, kind: str) -> list[Problem]:
             if current:
                 surfaces.append(current)
             for surface, line_number in surfaces:
-                for paragraph in re.split(r"\n\s*\n", surface):
-                    mentioned = {int(match) for match in PR_RE.findall(paragraph)}
-                    if mentioned & landed_prs and PENDING_RE.search(paragraph):
-                        problems.append(
-                            Problem(
-                                path,
-                                line_number,
-                                "current phase/next action treats a recorded landed pull request as pending",
-                            )
+                mentioned = {int(match) for match in PR_RE.findall(surface)}
+                if mentioned & landed_prs:
+                    problems.append(
+                        Problem(
+                            path,
+                            line_number,
+                            "current phase/next action references a recorded landed pull request",
                         )
-                        break
+                    )
 
     return problems
 
