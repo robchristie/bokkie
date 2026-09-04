@@ -76,6 +76,21 @@ approval workflow is part of this programme's acceptance.
 
 ## Canonical and representative qualification
 
+Retained [probe artefacts](review-hardening-evidence/) were generated on exact
+committed source `66ea84b6007040976d3e5b98ecdb8fb0554842b2`, tree
+`5a3c726687779ae41c646172c514bbf15fe6f48d`. The following evidence-only commit
+does not change executable source. On that source both canonical commands and
+`tools/qualify-ui.sh` passed: 11 governance tests, 179 backend library tests
+(one explicit live probe ignored), 2 CLI and 14 adapter tests, 38 UI tests,
+strict Clippy/formatting and native/Wasm builds. The retained CLI database hash
+before and after doctor was
+`a60eaa431df9f543afa355f8b388984be7c93e381c3cb46124a1d7247ac324b2`.
+`browser-interactions.json` retains the exact source identity, actual journeys,
+5,000-row result and empty unexpected-error list; native evidence preserves its
+qualified interaction classification. Lantern flow/ready/layout JSON and the
+rendered screenshot belong to a fresh disposable browser session using the
+same compiled fixture and source. `SHA256SUMS` identifies the retained files.
+
 `tools/check.sh` runs Python governance fixtures, all plan lint, exact toolchain
 contracts, locked all-target backend tests, locked all-feature strict Clippy
 and formatting. The backend/shared contract use exact Rust 1.85.0 and MSRV

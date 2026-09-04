@@ -1,0 +1,1 @@
+{"schema_version":1,"command":"wait","ok":true,"page":{"target_id":"2E5486AF175F0B86901D73CEB8173EBA","title":"Bokkie Attention","url_shape":"http://127.0.0.1:40765/ui"},"wait":{"condition":"selector","matched":true,"timed_out":false,"elapsed_ms":0,"timeout_ms":1000,"observed":{"selector":"#bokkie-attention-canvas[data-bokkie-ready=\"true\"]","present":true}}}
