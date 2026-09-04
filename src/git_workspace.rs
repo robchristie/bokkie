@@ -2853,6 +2853,14 @@ mod tests {
 
     #[test]
     fn candidate_qualification_is_exact_deterministic_and_credential_free() {
+        let Some(sandbox_path) = [
+            Path::new("/usr/bin/bwrap"),
+            Path::new("/usr/local/bin/bwrap"),
+        ]
+        .into_iter()
+        .find(|path| path.is_file()) else {
+            return;
+        };
         let fixture = RepositoryFixture::new();
         let adapter = fixture.adapter("unused-gh");
         let branch = "codex/gardener-qualified";
@@ -2908,7 +2916,7 @@ mod tests {
         .unwrap();
         let sandbox = ExecutableIdentity::resolve(
             ExecutableRole::CandidateSandbox,
-            "/usr/bin/bwrap",
+            sandbox_path,
             &["--version"],
             &environment,
             &supervisor,

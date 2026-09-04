@@ -33,6 +33,7 @@ struct Fixture {
     gh_log: PathBuf,
     github_public_observer: PathBuf,
     github_public_observer_log: PathBuf,
+    candidate_sandbox: PathBuf,
     candidate_check: PathBuf,
     clock: ManualClock,
 }
@@ -216,6 +217,47 @@ print(json.dumps([{{
         );
         write_executable(&github_public_observer, &observer_script);
 
+        let candidate_sandbox = root.path().join("fake-bwrap.py");
+        write_executable(
+            &candidate_sandbox,
+            r#"#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("fake-bwrap 1.0")
+    raise SystemExit(0)
+mounts = {}
+child_env = {}
+child_cwd = None
+index = 0
+while index < len(args):
+    argument = args[index]
+    if argument in ("--die-with-parent", "--new-session", "--unshare-all", "--clearenv"):
+        index += 1
+    elif argument in ("--proc", "--dev", "--tmpfs", "--dir"):
+        index += 2
+    elif argument in ("--bind", "--ro-bind"):
+        mounts[args[index + 2]] = args[index + 1]
+        index += 3
+    elif argument == "--symlink":
+        index += 3
+    elif argument == "--setenv":
+        child_env[args[index + 1]] = args[index + 2]
+        index += 3
+    elif argument == "--chdir":
+        child_cwd = args[index + 1]
+        index += 2
+    else:
+        break
+command = mounts.get(args[index], args[index])
+cwd = mounts.get(child_cwd, child_cwd)
+raise SystemExit(subprocess.run([command, *args[index + 1:]], cwd=cwd, env=child_env).returncode)
+"#,
+        );
+
         let candidate_check = root.path().join("fake-check.sh");
         write_executable(
             &candidate_check,
@@ -236,6 +278,7 @@ print(json.dumps([{{
             gh_log,
             github_public_observer,
             github_public_observer_log,
+            candidate_sandbox,
             candidate_check,
             clock: ManualClock::new(1_000),
         }
@@ -262,6 +305,7 @@ print(json.dumps([{{
         GardenerRuntimeConfig::new(&self.worktrees, &self.codex, &self.git_executable, &self.gh)
             .with_heartbeat_interval(Duration::from_millis(5))
             .with_github_public_observer(&self.github_public_observer)
+            .with_candidate_sandbox(&self.candidate_sandbox)
             .with_github_credential(GitHubCredential::new("fake-test-token").unwrap())
             .with_candidate_checks(&self.candidate_check, [["check"]])
     }
