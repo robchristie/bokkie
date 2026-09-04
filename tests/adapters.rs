@@ -74,6 +74,44 @@ fn cli_lifecycle_operations_return_structured_json_and_exit_statuses() {
 }
 
 #[test]
+fn doctor_cli_reports_clean_state_without_mutating_or_creating_a_database() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("doctor.sqlite");
+    drop(Store::open(&database).unwrap());
+    let before = std::fs::read(&database).unwrap();
+
+    let report = cli_json(
+        &database,
+        &[
+            "doctor",
+            "--git-executable",
+            "/bin/false",
+            "--github-public-observer-executable",
+            "/bin/false",
+        ],
+    );
+    assert_eq!(report["format_version"], 1);
+    assert_eq!(report["repair_performed"], false);
+    assert_eq!(report["summary"]["healthy"], true);
+    assert!(
+        report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["code"] == "schema.migration_manifest" && check["status"] == "pass")
+    );
+    assert_eq!(std::fs::read(&database).unwrap(), before);
+
+    let missing = temporary.path().join("missing.sqlite");
+    let output = run_cli(&missing, &["doctor"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        !missing.exists(),
+        "doctor must not create a missing database"
+    );
+}
+
+#[test]
 fn gardener_cli_registers_and_exposes_persisted_state_and_decisions() {
     let temporary = TempDir::new().unwrap();
     let database = temporary.path().join("gardener-cli.sqlite");
@@ -598,6 +636,24 @@ fn gardener_service_requires_explicit_valid_runtime_configuration() {
             .as_str()
             .unwrap()
             .contains("one third")
+    );
+}
+
+#[test]
+fn occupied_listener_prevents_startup_migration() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("must-not-be-created.sqlite");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+
+    let output = run_cli(
+        &database,
+        &["serve", "--bind", &address.to_string(), "--poll-ms", "20"],
+    );
+    assert!(!output.status.success());
+    assert!(
+        !database.exists(),
+        "a failed listener bind must not create or migrate the database"
     );
 }
 

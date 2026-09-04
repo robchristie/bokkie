@@ -11,10 +11,12 @@ use std::{
 };
 
 use bokkie::{
-    ApprovalDecision, CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerRunnerError,
+    ApprovalDecision, CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, CommandExternalObserver,
+    DbExecutor, DbExecutorError, DoctorError, DoctorOptions, GardenerRunnerError,
     GardenerRuntimeConfig, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
     Store, StoreError, SystemClock, UnixClock,
-    http::{error_json, router, router_with_ui, validate_loopback},
+    http::{error_json, router_with_executor, router_with_ui_executor, validate_loopback},
+    migration_manifest, run_doctor,
     runtime_trust::{ChildEnvironment, GitHubCredential},
     service::{Scheduler, SchedulerConfig, SchedulerError, ServiceFakeOutcome},
 };
@@ -100,6 +102,18 @@ enum Command {
     Events { id: String },
     /// List execution attempts for an obligation.
     Attempts { id: String },
+    /// Diagnose database integrity and reconcile observable gardener resources without repair.
+    Doctor {
+        /// Absolute Git executable used only for read-only local and remote observations.
+        #[arg(long, default_value = "/usr/bin/git")]
+        git_executable: PathBuf,
+        /// Absolute curl executable used only for credential-free public PR observation.
+        #[arg(long, default_value = "/usr/bin/curl")]
+        github_public_observer_executable: PathBuf,
+        /// Bound each external observation command.
+        #[arg(long, default_value_t = 5_000)]
+        observation_timeout_ms: u64,
+    },
     /// Register, inspect, and decide coding-gardener state.
     Gardener {
         #[command(subcommand)]
@@ -311,6 +325,10 @@ enum AppError {
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
+    DatabaseExecutor(#[from] DbExecutorError),
+    #[error(transparent)]
+    Doctor(#[from] DoctorError),
+    #[error(transparent)]
     Scheduler(#[from] SchedulerError),
     #[error("invalid configuration: {0}")]
     Configuration(String),
@@ -327,6 +345,8 @@ impl AppError {
             | Self::Configuration(_) => "invalid_request",
             Self::Store(StoreError::Conflict(_) | StoreError::Fenced) => "transition_conflict",
             Self::Store(StoreError::Sql(_)) => "storage_error",
+            Self::DatabaseExecutor(_) => "storage_executor_error",
+            Self::Doctor(_) => "diagnostic_error",
             Self::Scheduler(_) => "scheduler_error",
             Self::Io(_) => "service_error",
         }
@@ -424,6 +444,31 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             )
             .await
         }
+        Command::Doctor {
+            git_executable,
+            github_public_observer_executable,
+            observation_timeout_ms,
+        } => {
+            if observation_timeout_ms == 0 {
+                return Err(AppError::Configuration(
+                    "observation-timeout-ms must be positive".to_owned(),
+                ));
+            }
+            let observer = CommandExternalObserver::new(
+                git_executable,
+                github_public_observer_executable,
+                Duration::from_millis(observation_timeout_ms),
+            )
+            .map_err(|error| AppError::Configuration(error.to_string()))?;
+            let report = run_doctor(
+                cli.database,
+                migration_manifest(),
+                &observer,
+                DoctorOptions::at(SystemClock.now()),
+            )?;
+            print_json(&report);
+            Ok(())
+        }
         command => run_store_command(cli.database, command),
     }
 }
@@ -505,6 +550,7 @@ fn run_store_command(database: PathBuf, command: Command) -> Result<(), AppError
             print_json(&store.attempts(&id)?);
         }
         Command::Gardener { command } => run_gardener_command(&mut store, command, now)?,
+        Command::Doctor { .. } => unreachable!("doctor was handled through its read-only path"),
         Command::Serve { .. } => unreachable!("serve was handled asynchronously"),
     }
     Ok(())
@@ -713,9 +759,14 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
     }
 
     // Bind before starting the scheduler so a port conflict cannot execute work in a
-    // process that immediately fails service start-up.
+    // process that immediately fails service start-up or mutate its database.
     let listener = tokio::net::TcpListener::bind(options.bind).await?;
     let local_address = listener.local_addr()?;
+
+    // This is the service's sole migration step. Long-lived consumers below
+    // only accept an already current immutable manifest.
+    drop(Store::open(&database)?);
+    let database_executor = DbExecutor::start(database.clone())?;
     let scheduler_config = SchedulerConfig {
         database: database.clone(),
         poll_interval: Duration::from_millis(options.poll_ms),
@@ -806,15 +857,17 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
     );
 
     let application = match options.ui_dir {
-        Some(ui_dir) => router_with_ui(database, ui_dir),
-        None => router(database),
+        Some(ui_dir) => router_with_ui_executor(database_executor.clone(), ui_dir),
+        None => router_with_executor(database_executor.clone()),
     };
     let server_result = axum::serve(listener, application)
         .with_graceful_shutdown(shutdown_signal(stop, scheduler_exit))
         .await;
     let scheduler_result = scheduler.shutdown();
+    let database_result = database_executor.shutdown();
     server_result?;
     scheduler_result?;
+    database_result?;
     eprintln!("{}", json!({"event": "stopped"}));
     Ok(())
 }

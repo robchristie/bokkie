@@ -16,16 +16,16 @@ use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 use crate::{
-    ApprovalDecision, CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerImplementationRun,
-    GardenerInspection, NewObligation, NewRepositoryRegistration, Obligation, Proposal, Recurrence,
-    RepositoryRegistration, RetryPolicy, Store, StoreError, SystemClock, UnixClock,
-    gardener::ProposalInstance,
+    ApprovalDecision, CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, DbExecutor, DbExecutorError,
+    GardenerImplementationRun, GardenerInspection, NewObligation, NewRepositoryRegistration,
+    Obligation, Proposal, Recurrence, RepositoryRegistration, RetryPolicy, Store, StoreError,
+    SystemClock, UnixClock, gardener::ProposalInstance,
 };
 use bokkie_operator_api::ActionPrecondition;
 
 #[derive(Debug, Clone)]
 pub struct ApiState {
-    pub database: PathBuf,
+    pub executor: DbExecutor,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -134,7 +134,38 @@ impl From<StoreError> for ApiError {
     }
 }
 
+impl From<DbExecutorError> for ApiError {
+    fn from(error: DbExecutorError) -> Self {
+        match error {
+            DbExecutorError::Store(error) | DbExecutorError::Open(error) => error.into(),
+            DbExecutorError::QueueFull => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "storage_queue_full",
+                message: error.to_string(),
+            },
+            DbExecutorError::Shutdown
+            | DbExecutorError::Panicked
+            | DbExecutorError::Thread(_)
+            | DbExecutorError::ShutdownTimedOut => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "storage_executor_unavailable",
+                message: error.to_string(),
+            },
+        }
+    }
+}
+
 pub fn router(database: PathBuf) -> Router {
+    drop(
+        Store::open(&database)
+            .expect("HTTP database must be migratable before router construction"),
+    );
+    let executor = DbExecutor::start(database)
+        .expect("HTTP database must be migrated and compatible before router construction");
+    router_with_executor(executor)
+}
+
+pub fn router_with_executor(executor: DbExecutor) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/operator/snapshot", get(operator_snapshot))
@@ -215,7 +246,7 @@ pub fn router(database: PathBuf) -> Router {
         .route("/gardener/runs/{id}/events", get(gardener_run_events))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found_route)
-        .with_state(ApiState { database })
+        .with_state(ApiState { executor })
 }
 
 /// Add an explicit static UI directory to the same loopback service as the API.
@@ -224,7 +255,17 @@ pub fn router(database: PathBuf) -> Router {
 /// browser application from this router keeps its requests same-origin and does
 /// not add CORS or another network listener.
 pub fn router_with_ui(database: PathBuf, ui_dir: PathBuf) -> Router {
-    router(database).nest_service(
+    drop(
+        Store::open(&database)
+            .expect("HTTP database must be migratable before router construction"),
+    );
+    let executor = DbExecutor::start(database)
+        .expect("HTTP database must be migrated and compatible before router construction");
+    router_with_ui_executor(executor, ui_dir)
+}
+
+pub fn router_with_ui_executor(executor: DbExecutor, ui_dir: PathBuf) -> Router {
+    router_with_executor(executor).nest_service(
         "/ui",
         ServeDir::new(ui_dir).append_index_html_on_directories(true),
     )
@@ -241,10 +282,11 @@ pub fn validate_loopback(address: SocketAddr) -> Result<(), String> {
 }
 
 async fn health(State(state): State<ApiState>) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| {
+    with_store(&state, move |store, _| {
         store.list()?;
         Ok(HealthResponse { status: "ok" })
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -253,20 +295,23 @@ async fn create(
     request: Result<Json<CreateRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let Json(request) = request.map_err(invalid_json)?;
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         let obligation = new_obligation(request, now)?;
         store.create(obligation, now)
     })
+    .await
     .map(|body| (StatusCode::CREATED, Json(body)).into_response())
 }
 
 async fn list(State(state): State<ApiState>) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| store.list())
+    with_store(&state, move |store, _| store.list())
+        .await
         .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
 async fn operator_snapshot(State(state): State<ApiState>) -> Result<Response, ApiError> {
-    with_store(&state, |store, now| store.operator_snapshot(now))
+    with_store(&state, move |store, now| store.operator_snapshot(now))
+        .await
         .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -274,7 +319,8 @@ async fn operator_topic(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, now| store.operator_topic(&id, now))
+    with_store(&state, move |store, now| store.operator_topic(&id, now))
+        .await
         .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -282,7 +328,8 @@ async fn show(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| require_obligation(store, &id))
+    with_store(&state, move |store, _| require_obligation(store, &id))
+        .await
         .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -310,10 +357,11 @@ async fn decide(
     request: DecisionRequest,
     decision: ApprovalDecision,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         store.decide_approval(&id, decision, &request.actor, request.note.as_deref(), now)?;
         require_obligation(store, &id)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -321,10 +369,11 @@ async fn retry(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         store.retry_attention(&id, now)?;
         require_obligation(store, &id)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -332,10 +381,11 @@ async fn cancel(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         store.cancel(&id, now)?;
         require_obligation(store, &id)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -363,7 +413,7 @@ async fn operator_decide(
     request: OperatorActionRequest,
     decision: ApprovalDecision,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         store.decide_approval_if_current(
             &id,
             decision,
@@ -374,6 +424,7 @@ async fn operator_decide(
         )?;
         require_obligation(store, &id)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -383,10 +434,11 @@ async fn operator_retry(
     request: Result<Json<OperatorActionRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let Json(request) = request.map_err(invalid_json)?;
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         store.retry_attention_if_current(&id, &request.precondition, now)?;
         require_obligation(store, &id)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -396,10 +448,11 @@ async fn operator_cancel(
     request: Result<Json<OperatorActionRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let Json(request) = request.map_err(invalid_json)?;
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         store.cancel_if_current(&id, &request.precondition, now)?;
         require_obligation(store, &id)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -407,10 +460,11 @@ async fn events(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| {
+    with_store(&state, move |store, _| {
         require_obligation(store, &id)?;
         store.events(&id)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -418,10 +472,11 @@ async fn attempts(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| {
+    with_store(&state, move |store, _| {
         require_obligation(store, &id)?;
         store.attempts(&id)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -430,7 +485,7 @@ async fn register_gardener_repository(
     request: Result<Json<GardenerRegistrationRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let Json(request) = request.map_err(invalid_json)?;
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         let recurrence = Recurrence::new(request.recurrence_cron, request.recurrence_timezone)?;
         store.register_gardener_repository(
             NewRepositoryRegistration {
@@ -443,16 +498,19 @@ async fn register_gardener_repository(
             now,
         )
     })
+    .await
     .map(|body| (StatusCode::CREATED, Json(body)).into_response())
 }
 
 async fn show_gardener_repository(State(state): State<ApiState>) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| require_gardener_repository(store))
+    with_store(&state, move |store, _| require_gardener_repository(store))
+        .await
         .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
 async fn list_gardener_inspections(State(state): State<ApiState>) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| store.gardener_inspections())
+    with_store(&state, move |store, _| store.gardener_inspections())
+        .await
         .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -460,12 +518,16 @@ async fn show_gardener_inspection(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| require_gardener_inspection(store, &id))
-        .map(|body| (StatusCode::OK, Json(body)).into_response())
+    with_store(&state, move |store, _| {
+        require_gardener_inspection(store, &id)
+    })
+    .await
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
 async fn list_gardener_proposals(State(state): State<ApiState>) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| store.gardener_proposals())
+    with_store(&state, move |store, _| store.gardener_proposals())
+        .await
         .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -473,9 +535,10 @@ async fn show_gardener_proposal(
     State(state): State<ApiState>,
     AxumPath(fingerprint): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| {
+    with_store(&state, move |store, _| {
         require_gardener_proposal(store, &fingerprint)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -483,27 +546,32 @@ async fn gardener_proposal_observations(
     State(state): State<ApiState>,
     AxumPath(fingerprint): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| {
+    with_store(&state, move |store, _| {
         require_gardener_proposal(store, &fingerprint)?;
         store.proposal_observations(&fingerprint)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
 async fn list_gardener_proposal_instances(
     State(state): State<ApiState>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| all_gardener_proposal_instances(store))
-        .map(|body| (StatusCode::OK, Json(body)).into_response())
+    with_store(&state, move |store, _| {
+        store.gardener_proposal_instances_all()
+    })
+    .await
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
 async fn show_gardener_proposal_instance(
     State(state): State<ApiState>,
     AxumPath(instance_id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| {
+    with_store(&state, move |store, _| {
         require_gardener_proposal_instance(store, &instance_id)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -511,10 +579,11 @@ async fn gardener_proposal_instance_observations(
     State(state): State<ApiState>,
     AxumPath(instance_id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| {
+    with_store(&state, move |store, _| {
         require_gardener_proposal_instance(store, &instance_id)?;
         store.proposal_instance_observations(&instance_id)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -542,7 +611,7 @@ async fn decide_gardener_proposal(
     request: DecisionRequest,
     decision: ApprovalDecision,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         store.decide_gardener_proposal(
             &fingerprint,
             decision,
@@ -551,6 +620,7 @@ async fn decide_gardener_proposal(
             now,
         )
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -578,7 +648,7 @@ async fn operator_decide_gardener_proposal(
     request: OperatorActionRequest,
     decision: ApprovalDecision,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         store.decide_gardener_proposal_if_current(
             &fingerprint,
             decision,
@@ -588,6 +658,7 @@ async fn operator_decide_gardener_proposal(
             now,
         )
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -615,7 +686,7 @@ async fn decide_gardener_proposal_instance(
     request: DecisionRequest,
     decision: ApprovalDecision,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         store.decide_gardener_proposal_instance(
             &instance_id,
             decision,
@@ -624,6 +695,7 @@ async fn decide_gardener_proposal_instance(
             now,
         )
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -663,7 +735,7 @@ async fn operator_decide_gardener_proposal_instance(
     request: OperatorActionRequest,
     decision: ApprovalDecision,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, now| {
+    with_store(&state, move |store, now| {
         store.decide_gardener_proposal_instance_if_current(
             &instance_id,
             decision,
@@ -673,11 +745,13 @@ async fn operator_decide_gardener_proposal_instance(
             now,
         )
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
 async fn list_gardener_runs(State(state): State<ApiState>) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| store.gardener_implementation_runs())
+    with_store(&state, move |store, _| store.gardener_implementation_runs())
+        .await
         .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -685,7 +759,8 @@ async fn show_gardener_run(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| require_gardener_run(store, &id))
+    with_store(&state, move |store, _| require_gardener_run(store, &id))
+        .await
         .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
@@ -693,19 +768,26 @@ async fn gardener_run_events(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, |store, _| {
+    with_store(&state, move |store, _| {
         require_gardener_run(store, &id)?;
         store.gardener_run_events(&id)
     })
+    .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
-fn with_store<T>(
+async fn with_store<T>(
     state: &ApiState,
-    operation: impl FnOnce(&mut Store, i64) -> Result<T, StoreError>,
-) -> Result<T, ApiError> {
-    let mut store = Store::open(&state.database)?;
-    operation(&mut store, SystemClock.now()).map_err(ApiError::from)
+    operation: impl FnOnce(&mut Store, i64) -> Result<T, StoreError> + Send + 'static,
+) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+{
+    state
+        .executor
+        .execute(move |store| operation(store, SystemClock.now()))
+        .await
+        .map_err(ApiError::from)
 }
 
 fn require_obligation(store: &Store, id: &str) -> Result<Obligation, StoreError> {
@@ -739,14 +821,6 @@ fn require_gardener_proposal_instance(
     store
         .gardener_proposal_instance(instance_id)?
         .ok_or_else(|| StoreError::NotFound(instance_id.to_owned()))
-}
-
-fn all_gardener_proposal_instances(store: &Store) -> Result<Vec<ProposalInstance>, StoreError> {
-    let mut instances = Vec::new();
-    for proposal in store.gardener_proposals()? {
-        instances.extend(store.gardener_proposal_instances(&proposal.fingerprint)?);
-    }
-    Ok(instances)
 }
 
 fn require_gardener_run(store: &Store, id: &str) -> Result<GardenerImplementationRun, StoreError> {
@@ -1058,5 +1132,86 @@ mod tests {
                 .unwrap()
                 .contains("occurrence")
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_http_commands_share_one_database_owner() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("concurrent-http.sqlite");
+        drop(Store::open(&database).unwrap());
+        let executor = DbExecutor::start(database).unwrap();
+        let application = router_with_executor(executor.clone());
+        let mut tasks = tokio::task::JoinSet::new();
+        for index in 0..24 {
+            let application = application.clone();
+            tasks.spawn(async move {
+                application
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/obligations")
+                            .header("content-type", "application/json")
+                            .body(Body::from(
+                                serde_json::to_vec(&CreateRequest {
+                                    id: Some(format!("concurrent-{index:02}")),
+                                    description: format!("concurrent command {index}"),
+                                    scheduled_at: Some(2_000_000_000),
+                                    recurrence_cron: None,
+                                    recurrence_timezone: None,
+                                    approval_required: false,
+                                    max_attempts: None,
+                                    retry_base_seconds: None,
+                                    retry_max_seconds: None,
+                                })
+                                .unwrap(),
+                            ))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+                    .status()
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            assert_eq!(result.unwrap(), StatusCode::CREATED);
+        }
+        let response = application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/obligations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let obligations: Vec<Obligation> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(obligations.len(), 24);
+        drop(application);
+        executor.shutdown().unwrap();
+    }
+
+    #[tokio::test]
+    async fn stopped_database_owner_returns_a_typed_service_error() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("stopped-http.sqlite");
+        drop(Store::open(&database).unwrap());
+        let executor = DbExecutor::start(database).unwrap();
+        executor.shutdown().unwrap();
+        let response = router_with_executor(executor)
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let error: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error["error"]["code"], "storage_executor_unavailable");
     }
 }

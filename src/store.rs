@@ -7,7 +7,8 @@ use std::{
 
 use bokkie_operator_api::ActionPrecondition;
 use rusqlite::{
-    Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params, types::Type,
+    Connection, OpenFlags, OptionalExtension, Row, Transaction, TransactionBehavior, params,
+    types::Type,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -30,39 +31,6 @@ use crate::{
     },
     recurrence::RecurrenceError,
 };
-
-const MIGRATIONS: &[(i64, &str, &str)] = &[
-    (
-        1,
-        "0001_obligation_kernel.sql",
-        include_str!("../migrations/0001_obligation_kernel.sql"),
-    ),
-    (
-        2,
-        "0002_append_only_guards.sql",
-        include_str!("../migrations/0002_append_only_guards.sql"),
-    ),
-    (
-        3,
-        "0003_coding_gardener_state.sql",
-        include_str!("../migrations/0003_coding_gardener_state.sql"),
-    ),
-    (
-        4,
-        "0004_coding_gardener_runs.sql",
-        include_str!("../migrations/0004_coding_gardener_runs.sql"),
-    ),
-    (
-        5,
-        "0005_gardener_trust_publication.sql",
-        include_str!("../migrations/0005_gardener_trust_publication.sql"),
-    ),
-    (
-        6,
-        "0006_source_bound_proposal_generations.sql",
-        include_str!("../migrations/0006_source_bound_proposal_generations.sql"),
-    ),
-];
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -128,67 +96,70 @@ pub struct Store {
 }
 
 impl Store {
+    /// Open a database and bring its schema to the current immutable manifest.
+    /// Service startup should call this exactly once before starting consumers.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let connection = Connection::open(path)?;
-        Self::initialise(connection)
+        let mut connection = Connection::open(path)?;
+        Self::configure_before_migration(&connection)?;
+        crate::migrations::migrate(&mut connection)?;
+        Self::initialise_migrated(connection)
+    }
+
+    /// Open an already migrated database without performing schema writes.
+    pub fn open_compatible(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        crate::migrations::validate_current(&connection)?;
+        Self::initialise_compatible(connection)
     }
 
     pub fn open_in_memory() -> Result<Self, StoreError> {
-        Self::initialise(Connection::open_in_memory()?)
+        let mut connection = Connection::open_in_memory()?;
+        Self::configure_before_migration(&connection)?;
+        crate::migrations::migrate(&mut connection)?;
+        Self::initialise_migrated(connection)
     }
 
-    fn initialise(connection: Connection) -> Result<Self, StoreError> {
+    fn configure_before_migration(connection: &Connection) -> Result<(), StoreError> {
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        Ok(())
+    }
+
+    fn initialise_migrated(connection: Connection) -> Result<Self, StoreError> {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
 
-        let mut store = Self { connection };
-        store.migrate()?;
-        Ok(store)
+        Ok(Self { connection })
     }
 
-    fn migrate(&mut self) -> Result<(), StoreError> {
-        self.connection.execute_batch(
-            "CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                applied_at INTEGER NOT NULL DEFAULT (unixepoch())
-            );",
-        )?;
-
-        for &(version, name, sql) in MIGRATIONS {
-            let transaction = self
-                .connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let existing: Option<String> = transaction
-                .query_row(
-                    "SELECT name FROM schema_migrations WHERE version = ?1",
-                    [version],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            match existing {
-                Some(existing) if existing == name => {
-                    transaction.commit()?;
-                    continue;
-                }
-                Some(existing) => {
-                    return Err(StoreError::Invalid(format!(
-                        "migration {version} is recorded as {existing:?}, expected {name:?}"
-                    )));
-                }
-                None => {}
-            }
-
-            transaction.execute_batch(sql)?;
-            transaction.execute(
-                "INSERT INTO schema_migrations(version, name) VALUES (?1, ?2)",
-                params![version, name],
-            )?;
-            transaction.commit()?;
+    fn initialise_compatible(connection: Connection) -> Result<Self, StoreError> {
+        let journal_mode: String =
+            connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+        if !journal_mode.eq_ignore_ascii_case("wal") {
+            return Err(StoreError::Invalid(format!(
+                "database journal mode is {journal_mode:?}, expected \"wal\"; startup initialisation is required"
+            )));
         }
-        Ok(())
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        connection.pragma_update(None, "synchronous", "FULL")?;
+        Ok(Self { connection })
+    }
+
+    pub(crate) fn with_deferred_read<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let transaction = self.connection.unchecked_transaction()?;
+        match operation(self) {
+            Ok(value) => {
+                transaction.commit()?;
+                Ok(value)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn create(&mut self, new: NewObligation, now: i64) -> Result<Obligation, StoreError> {
@@ -911,6 +882,28 @@ impl Store {
         let rows = statement.query_map([fingerprint], proposal_instance_from_row)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StoreError::from)
+    }
+
+    /// Read every proposal instance from one SQLite snapshot. The HTTP list
+    /// projection must not combine a proposal catalogue from one database
+    /// state with per-proposal generations from another.
+    pub fn gardener_proposal_instances_all(&self) -> Result<Vec<ProposalInstance>, StoreError> {
+        self.gardener_proposal_instances_all_with_hook(|| Ok(()))
+    }
+
+    fn gardener_proposal_instances_all_with_hook(
+        &self,
+        between_catalogue_and_instances: impl FnOnce() -> Result<(), StoreError>,
+    ) -> Result<Vec<ProposalInstance>, StoreError> {
+        self.with_deferred_read(|store| {
+            let proposals = store.gardener_proposals()?;
+            between_catalogue_and_instances()?;
+            let mut instances = Vec::new();
+            for proposal in proposals {
+                instances.extend(store.gardener_proposal_instances(&proposal.fingerprint)?);
+            }
+            Ok(instances)
+        })
     }
 
     pub fn decide_gardener_proposal(
@@ -4251,9 +4244,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use tempfile::TempDir;
 
     use super::*;
+    use crate::migrations::MIGRATIONS;
     use crate::{FakeOutcome, FakeRunner, RetryPolicy, run_one};
 
     fn one_off(id: &str, scheduled_at: i64) -> NewObligation {
@@ -4299,7 +4295,8 @@ mod tests {
                 (3, "0003_coding_gardener_state.sql".to_owned()),
                 (4, "0004_coding_gardener_runs.sql".to_owned()),
                 (5, "0005_gardener_trust_publication.sql".to_owned()),
-                (6, "0006_source_bound_proposal_generations.sql".to_owned())
+                (6, "0006_source_bound_proposal_generations.sql".to_owned()),
+                (7, "0007_immutable_migration_manifest.sql".to_owned())
             ]
         );
         drop(store);
@@ -4860,6 +4857,91 @@ mod tests {
                 .unwrap(),
             Some(crate::GardenerObligationKind::Inspection)
         );
+    }
+
+    #[test]
+    fn all_proposal_instances_are_from_one_snapshot_during_atomic_multi_proposal_write() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("proposal-instance-snapshot.sqlite");
+        let mut writer = Store::open(&path).unwrap();
+        let registration = writer
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let first_claim = writer.claim_due_gardener(1_000, 60, 1).unwrap().remove(0);
+        writer
+            .start_gardener_inspection(&first_claim, new_inspection("multi-source-a", 'a'), 1_001)
+            .unwrap();
+        let result = InspectionResult {
+            summary: "Two bounded improvements were found".to_owned(),
+            proposed_goal_prompts: vec![
+                "Implement atomic candidate alpha.".to_owned(),
+                "Implement atomic candidate beta.".to_owned(),
+            ],
+        };
+        let proposals = writer
+            .finish_gardener_inspection(&first_claim, "multi-source-a", &result, 1_002)
+            .unwrap();
+        assert_eq!(proposals.len(), 2);
+        writer
+            .complete(
+                &first_claim,
+                Completion::Succeeded { evidence: None },
+                1_003,
+            )
+            .unwrap();
+
+        let next_at = writer
+            .get(&registration.inspection_obligation_id)
+            .unwrap()
+            .unwrap()
+            .next_wake_at
+            .unwrap();
+        let second_claim = writer.claim_due_gardener(next_at, 60, 1).unwrap().remove(0);
+        writer
+            .start_gardener_inspection(
+                &second_claim,
+                new_inspection("multi-source-b", 'b'),
+                next_at + 1,
+            )
+            .unwrap();
+
+        let reader = Store::open_compatible(&path).unwrap();
+        let during = reader
+            .gardener_proposal_instances_all_with_hook(|| {
+                writer
+                    .finish_gardener_inspection(
+                        &second_claim,
+                        "multi-source-b",
+                        &result,
+                        next_at + 2,
+                    )
+                    .map(|_| ())
+            })
+            .unwrap();
+        let expected_fingerprints = proposals
+            .iter()
+            .map(|proposal| proposal.fingerprint.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(during.len(), 2);
+        assert!(during.iter().all(|instance| instance.generation == 1));
+        assert_eq!(
+            during
+                .iter()
+                .map(|instance| instance.proposal_fingerprint.clone())
+                .collect::<BTreeSet<_>>(),
+            expected_fingerprints
+        );
+
+        let after = reader.gardener_proposal_instances_all().unwrap();
+        assert_eq!(after.len(), 4);
+        for proposal in proposals {
+            let generations = after
+                .iter()
+                .filter(|instance| instance.proposal_fingerprint == proposal.fingerprint)
+                .map(|instance| instance.generation)
+                .collect::<Vec<_>>();
+            assert_eq!(generations, [1, 2]);
+        }
     }
 
     #[test]
@@ -6227,12 +6309,12 @@ mod tests {
                  );",
             )
             .unwrap();
-        for &(version, name, sql) in &MIGRATIONS[..5] {
-            connection.execute_batch(sql).unwrap();
+        for migration in &MIGRATIONS[..5] {
+            connection.execute_batch(migration.sql).unwrap();
             connection
                 .execute(
                     "INSERT INTO schema_migrations(version, name) VALUES (?1, ?2)",
-                    params![version, name],
+                    params![migration.version, migration.name],
                 )
                 .unwrap();
         }

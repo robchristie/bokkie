@@ -13,9 +13,10 @@ use std::{
 };
 
 use bokkie::{
-    ApprovalDecision, Completion, GardenerCandidateQualification, GardenerVerificationVerdict,
-    InspectionResult, NewGardenerImplementationRun, NewGardenerInspection, NewObligation,
-    NewRepositoryRegistration, Recurrence, RetryPolicy, Store, http::router_with_ui,
+    ApprovalDecision, Completion, DbExecutor, GardenerCandidateQualification,
+    GardenerVerificationVerdict, InspectionResult, NewGardenerImplementationRun,
+    NewGardenerInspection, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
+    Store, http::router_with_ui_executor,
 };
 use uuid::Uuid;
 
@@ -66,6 +67,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         _ => unreachable!(),
     }
     drop(store);
+    let database_executor = DbExecutor::start(database)?;
 
     let listener =
         tokio::net::TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
@@ -82,11 +84,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         })
     );
     io::stdout().flush()?;
-    axum::serve(listener, router_with_ui(database, ui_dir))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+    axum::serve(
+        listener,
+        router_with_ui_executor(database_executor.clone(), ui_dir),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await?;
+    database_executor.shutdown()?;
     Ok(())
 }
 
