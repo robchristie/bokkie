@@ -46,9 +46,9 @@ is not silently interpreted as permission to grant rights.
 | R6 | Migrations run at startup, have immutable recorded digests and reject gaps/newer schemas; blocking DB work is isolated from async handlers; `doctor` reports integrity and reconciliation without repair | Open: every `Store::open` enters the migration loop and no doctor exists | P4 |
 | R7 | Snapshots are transactionally consistent and cursor-paginated with bounded queries, a global ordering envelope and an incremental change watermark | Open: histories are unbounded and topic projection globally loads then filters | P5 |
 | R8 | Ordinary, gardener and future outbox work use fair, bounded lanes without starvation while preserving existing claim/lease fencing | Open: one gardener-first synchronous scheduler thread | P5 |
-| R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | Open; existing exact IDs and deterministic example tests are useful foundations | P1–P5 |
+| R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | P1 satisfies typed process outcomes, bounded output evidence and lease/process temporal tests; persisted manifests, identities, field limits and later lifecycle properties remain for P2–P5 | P1–P5 |
 | R10 | Mutation routes identify runtime/API/schema build, validate local request origin and use a per-process mutation secret without widening loopback exposure | Open; stale-state preconditions and same-origin topology already exist | P4; human review |
-| R11 | Large modules are split along established semantic ownership after contracts settle | Open; split only when each owning contract is stable | P1–P5 |
+| R11 | Large modules are split along established semantic ownership after contracts settle | P1 establishes `process` as the stable supervision owner; later package-owned splits remain conditional on settled contracts | P1–P5 |
 | R12 | Toolchain and locked checks are pinned in CI; completed-plan claims are linted and reconciled; conditional licensing and live branch protection have explicit terminal decisions | Open; Git dependencies are pinned, but workflow/toolchain/linter/protection are absent | P2/P6 |
 
 Already-satisfied evidence that must be retained includes atomic Store-owned
@@ -63,7 +63,7 @@ Only the next unblocked package is refined after each landing.
 
 | Package | Outcome | Dependencies | State and terminal evidence |
 |---|---|---|---|
-| P0 | Land this re-baselined programme checkpoint | `main` baseline above | In progress |
+| P0 | Land this re-baselined programme checkpoint | `main` baseline above | Landed as [PR #5](https://github.com/robchristie/bokkie/pull/5) at `e8d3218433f97c8dfc542c80d0ac813d283d86b5` |
 | P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Terminal candidate at `0c91f9a0482df8c40bb6ae444193366ac5c7dde1`; review and landing pending |
 | P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Candidate |
 | P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Candidate |
