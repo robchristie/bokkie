@@ -65,7 +65,7 @@ Only the next unblocked package is refined after each landing.
 |---|---|---|---|
 | P0 | Land this re-baselined programme checkpoint | `main` baseline above | Landed as [PR #5](https://github.com/robchristie/bokkie/pull/5) at `e8d3218433f97c8dfc542c80d0ac813d283d86b5` |
 | P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Landed as [PR #6](https://github.com/robchristie/bokkie/pull/6) at `8154ca4a5bc4c3aa0356cc74e3874544b4231296`; terminal fixture repair on [PR #7](https://github.com/robchristie/bokkie/pull/7) |
-| P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Human-held candidate on [PR #8](https://github.com/robchristie/bokkie/pull/8); implementation checkpoint `a6d12e76835cf406e584534ae3ba6b5c11c13272`, first-review repair `1fd723745152aeece226769b24c902bc423eca83`, runner portability repair `029d163c6133c9cea061334ed30e57a45b99f162` |
+| P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Human-held candidate on [PR #8](https://github.com/robchristie/bokkie/pull/8); implementation checkpoint `a6d12e76835cf406e584534ae3ba6b5c11c13272`, first-review repair `1fd723745152aeece226769b24c902bc423eca83`, runner portability repair `029d163c6133c9cea061334ed30e57a45b99f162`, worker-profile repair `1207beaea6ace76b75a3fd6f2b33c3428fc5dc29` |
 | P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Candidate |
 | P4 | Startup-only migration, manifest verification, DB executor/transactions, read-only doctor and reviewed local mutation protection | P3 schema | Candidate; security portion needs human review |
 | P5 | Fair execution lanes, paginated/incremental projections and global event envelope, with bounded fields and model-based lifecycle tests | P4 storage contract | Candidate |
@@ -97,13 +97,16 @@ observation, unisolated candidate code, executable local Git configuration and
 retained CI checkout credentials. The repair uses credential-free public API
 observation, a manifest-derived Bubblewrap boundary, fail-closed Git-config
 auditing and token-cleared CI. Local checks and representative real `curl` and
-Bubblewrap probes pass. The same reviewer must now re-review the final exact
-head. The first repaired-head CI exposed that the GitHub image does not install
-Bubblewrap; orchestration fixtures now use a fake boundary while the hostile
-real-Bubblewrap probe remains conditional and passed locally. New CI must pass
-before the PR may be marked ready and escalated for explicit human merge
-authority. No real gardener, credential, deployment or repository-policy
-mutation is part of this package.
+Bubblewrap probes pass. The first repaired-head CI exposed that the GitHub image
+does not install Bubblewrap; orchestration fixtures now use a fake boundary
+while the hostile real-Bubblewrap probe remains conditional and passed locally.
+A second review blocked the example worker's missing `AF_NETLINK` and read-only
+common Git directory. The worker now uses a dedicated account, read-only
+checkout tree and writable separate common Git directory in private state; its
+exact systemd Bubblewrap policy probe passes. The same reviewer and new CI must
+pass the final exact head before the PR may be marked ready and escalated for
+explicit human merge authority. No real gardener, credential, deployment or
+repository-policy mutation is part of this package.
 
 ## Durable evidence
 
@@ -119,6 +122,7 @@ mutation is part of this package.
 | P2 first exact-head review | `c73c3976077351918934abaf36f1be53230901a6` | same | BLOCK: real `gh` could not observe a public PR unauthenticated; candidate checks lacked an OS boundary; local proxy/TLS Git config survived; checkout credentials persisted in CI | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5534926481) |
 | P2 trust-boundary repair | `1fd723745152aeece226769b24c902bc423eca83` | PR #8 terminal plan head | 93 library, 1 CLI and 10 adapter tests passed; locked Clippy, rustfmt, diff and actionlint checks passed; real env-cleared public `curl` observation and Bubblewrap hostile-sentinel probes passed; worker-unit parsing reports only the expected absent local `/usr/bin/bokkie` | PR #8 repair diff and the first-review verdict above |
 | P2 repaired-head CI probe | `043fd7972a14a86a32fe835634632d938c0df686` | `029d163c6133c9cea061334ed30e57a45b99f162` | Credential-removal check passed; Rust tests failed because the GitHub-hosted image lacks Bubblewrap. Production keeps the startup fail-closed dependency; fake runner fixtures now prove orchestration portably and the real hostile-sentinel probe runs when Bubblewrap exists | [CI run 33832322106](https://github.com/robchristie/bokkie/actions/runs/33832322106) |
+| P2 worker-profile review | `5f74e90de2904e1bfd95e50a8ae6978b493e5848` | `1207beaea6ace76b75a3fd6f2b33c3428fc5dc29` | Code and CI passed, but review BLOCKED the example worker: Bubblewrap needed `AF_NETLINK` and Git needed a writable common directory. The repair adds the address family and a documented worker-owned checkout with separate writable Git metadata; the exact systemd policy probe succeeds | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5535203787) and [CI run 33832528257](https://github.com/robchristie/bokkie/actions/runs/33832528257) |
 
 ## Residual questions
 
