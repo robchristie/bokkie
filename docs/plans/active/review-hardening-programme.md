@@ -69,7 +69,7 @@ Only the next unblocked package is refined after each landing.
 | P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Landed as [PR #9](https://github.com/robchristie/bokkie/pull/9) at `9920006635c01cd266e6f2cd3a3546fe21747867`; reviewed and landed tree `c844e629c88d363497eed5918e4f2553d941ac38` |
 | P4a | Startup-only migration, immutable manifest verification, bounded HTTP database execution, consistent read snapshots and read-only doctor | P3 schema | Landed as [PR #10](https://github.com/robchristie/bokkie/pull/10) at `87c8d42f1757c9656fbb010723b9e4bb1477dd69`; final reviewed and landed tree `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba` |
 | P4b | Reviewed API mutation secret, local Host/Origin validation and runtime/API/schema build identity | P4a storage contract | Human-authorised [PR #11](https://github.com/robchristie/bokkie/pull/11) landed as `4ecc30338c60bf66507558a68b96c65c34014c86`; reviewed and landed tree `952a77d63477412722f0c2cf908a6ca4ae390c10` |
-| P5a | Fair failure-isolated execution lanes, typed lifecycle outcomes, bounded lifecycle fields and model-based temporal tests | P4 storage and P1 process contracts | Terminal candidate owner revision `861713c6fc2c0e2a0acbb6bbb6fe2a011b15cb42`; exact-head review and landing pending |
+| P5a | Fair failure-isolated execution lanes, typed lifecycle outcomes, bounded lifecycle fields and model-based temporal tests | P4 storage and P1 process contracts | Terminal candidate owner revision `861713c6fc2c0e2a0acbb6bbb6fe2a011b15cb42` on [PR #12](https://github.com/robchristie/bokkie/pull/12); exact-head review and landing pending |
 | P5b | Cursor-paginated incremental projections and global event envelope | P5a schema v8 and typed outcome projection | Refined candidate; must not conflate process session, lane state or failure disposition with durable event identity |
 | P6 | Exact-head aggregate qualification, plan reconciliation/linter, toolchain and repository-policy closeout | P1–P5b | Candidate; live branch protection/licence decision may need human review |
 
@@ -111,7 +111,8 @@ automatic. Store/Recurrence own bounded lifecycle text, and a fixed-seed
 two-store property model plus repeated scheduler fixtures prove fencing,
 liveness, lease horizons, typed ambiguity and cross-lane progress. Locked
 canonical checks pass. The next action is exact-head review, CI and landing of
-this P5a pull request. P5b remains deliberately excluded from this candidate.
+[PR #12](https://github.com/robchristie/bokkie/pull/12). P5b remains deliberately
+excluded from this candidate.
 
 ## Durable evidence
 
@@ -140,7 +141,7 @@ this P5a pull request. P5b remains deliberately excluded from this candidate.
 | P4b local access-control candidate | `87c8d42f1757c9656fbb010723b9e4bb1477dd69` | `22abe68ac093cb16059cc52c89a9048b27f97c83` | 139 library, 2 CLI, 12 adapter and 27 UI tests pass; locked Clippy/rustfmt/diff and native/Wasm builds pass; real same-origin browser/native fixtures prove restart rotation, rejected stale token, cleared confirmation, conditional mutation and retained audit evidence without retaining the token | [`docs/ui-qualification-evidence`](../../ui-qualification-evidence/README.md) and HTTP/UI focused tests |
 | P4b reviewed implementation | `22abe68ac093cb16059cc52c89a9048b27f97c83` | `6b3417c92beb9d503280a57a408f5463d6e6b22f` | Independent exact-head security review passed without findings; exact-head locked CI run `33854712721` passed; access-control policy remains held for explicit human review and merge authority | [PR #11](https://github.com/robchristie/bokkie/pull/11) |
 | P4b reviewed landing | `4cbe4a8fc6aa11e9d2f0c9720ccccc0bf157259f` | `4ecc30338c60bf66507558a68b96c65c34014c86` | Human merge authority granted; candidate and post-merge CI passed; reviewed and landed trees both `952a77d63477412722f0c2cf908a6ca4ae390c10`; R10 and P4b portions of R9/R11 satisfied | [PR #11 terminal evidence](https://github.com/robchristie/bokkie/pull/11#issuecomment-5539710601) |
-| P5a execution-contract candidate | `4ecc30338c60bf66507558a68b96c65c34014c86` | `861713c6fc2c0e2a0acbb6bbb6fe2a011b15cb42` | 156 library, 2 CLI, 13 adapter and 27 attention-UI tests pass; locked Clippy/rustfmt/diff pass; scheduler suite passes 20 consecutive runs; schema v8 backfill, fixed-seed two-store model, atomic claim closure, bounded capacity, lane failure, shutdown cancellation and completion/cancellation race fixtures pass | `src/execution_lane.rs`, `src/service.rs`, migration 0008, domain/Store tests and this checkpoint |
+| P5a execution-contract candidate | `4ecc30338c60bf66507558a68b96c65c34014c86` | `861713c6fc2c0e2a0acbb6bbb6fe2a011b15cb42` | 156 library, 2 CLI, 13 adapter and 27 attention-UI tests pass; locked Clippy/rustfmt/diff pass; scheduler suite passes 20 consecutive runs; schema v8 backfill, fixed-seed two-store model, atomic claim closure, bounded capacity, lane failure, shutdown cancellation and completion/cancellation race fixtures pass | [PR #12](https://github.com/robchristie/bokkie/pull/12), `src/execution_lane.rs`, `src/service.rs`, migration 0008 and domain/Store tests |
 
 ## Residual questions
 
