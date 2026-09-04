@@ -19,6 +19,7 @@ use crate::{
     ApprovalDecision, CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerImplementationRun,
     GardenerInspection, NewObligation, NewRepositoryRegistration, Obligation, Proposal, Recurrence,
     RepositoryRegistration, RetryPolicy, Store, StoreError, SystemClock, UnixClock,
+    gardener::ProposalInstance,
 };
 use bokkie_operator_api::ActionPrecondition;
 
@@ -150,6 +151,14 @@ pub fn router(database: PathBuf) -> Router {
             "/operator/gardener/proposals/{fingerprint}/reject",
             post(operator_reject_gardener_proposal),
         )
+        .route(
+            "/operator/gardener/proposal-instances/{instance_id}/approve",
+            post(operator_approve_gardener_proposal_instance),
+        )
+        .route(
+            "/operator/gardener/proposal-instances/{instance_id}/reject",
+            post(operator_reject_gardener_proposal_instance),
+        )
         .route("/obligations", post(create).get(list))
         .route("/obligations/{id}", get(show))
         .route("/obligations/{id}/approve", post(approve))
@@ -180,6 +189,26 @@ pub fn router(database: PathBuf) -> Router {
         .route(
             "/gardener/proposals/{fingerprint}/reject",
             post(reject_gardener_proposal),
+        )
+        .route(
+            "/gardener/proposal-instances",
+            get(list_gardener_proposal_instances),
+        )
+        .route(
+            "/gardener/proposal-instances/{instance_id}",
+            get(show_gardener_proposal_instance),
+        )
+        .route(
+            "/gardener/proposal-instances/{instance_id}/observations",
+            get(gardener_proposal_instance_observations),
+        )
+        .route(
+            "/gardener/proposal-instances/{instance_id}/approve",
+            post(approve_gardener_proposal_instance),
+        )
+        .route(
+            "/gardener/proposal-instances/{instance_id}/reject",
+            post(reject_gardener_proposal_instance),
         )
         .route("/gardener/runs", get(list_gardener_runs))
         .route("/gardener/runs/{id}", get(show_gardener_run))
@@ -461,6 +490,34 @@ async fn gardener_proposal_observations(
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
+async fn list_gardener_proposal_instances(
+    State(state): State<ApiState>,
+) -> Result<Response, ApiError> {
+    with_store(&state, |store, _| all_gardener_proposal_instances(store))
+        .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn show_gardener_proposal_instance(
+    State(state): State<ApiState>,
+    AxumPath(instance_id): AxumPath<String>,
+) -> Result<Response, ApiError> {
+    with_store(&state, |store, _| {
+        require_gardener_proposal_instance(store, &instance_id)
+    })
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn gardener_proposal_instance_observations(
+    State(state): State<ApiState>,
+    AxumPath(instance_id): AxumPath<String>,
+) -> Result<Response, ApiError> {
+    with_store(&state, |store, _| {
+        require_gardener_proposal_instance(store, &instance_id)?;
+        store.proposal_instance_observations(&instance_id)
+    })
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
 async fn approve_gardener_proposal(
     State(state): State<ApiState>,
     AxumPath(fingerprint): AxumPath<String>,
@@ -534,6 +591,91 @@ async fn operator_decide_gardener_proposal(
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
+async fn approve_gardener_proposal_instance(
+    State(state): State<ApiState>,
+    AxumPath(instance_id): AxumPath<String>,
+    request: Result<Json<DecisionRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    decide_gardener_proposal_instance(state, instance_id, request, ApprovalDecision::Approved).await
+}
+
+async fn reject_gardener_proposal_instance(
+    State(state): State<ApiState>,
+    AxumPath(instance_id): AxumPath<String>,
+    request: Result<Json<DecisionRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    decide_gardener_proposal_instance(state, instance_id, request, ApprovalDecision::Rejected).await
+}
+
+async fn decide_gardener_proposal_instance(
+    state: ApiState,
+    instance_id: String,
+    request: DecisionRequest,
+    decision: ApprovalDecision,
+) -> Result<Response, ApiError> {
+    with_store(&state, |store, now| {
+        store.decide_gardener_proposal_instance(
+            &instance_id,
+            decision,
+            &request.actor,
+            request.note.as_deref(),
+            now,
+        )
+    })
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn operator_approve_gardener_proposal_instance(
+    State(state): State<ApiState>,
+    AxumPath(instance_id): AxumPath<String>,
+    request: Result<Json<OperatorActionRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    operator_decide_gardener_proposal_instance(
+        state,
+        instance_id,
+        request,
+        ApprovalDecision::Approved,
+    )
+    .await
+}
+
+async fn operator_reject_gardener_proposal_instance(
+    State(state): State<ApiState>,
+    AxumPath(instance_id): AxumPath<String>,
+    request: Result<Json<OperatorActionRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    operator_decide_gardener_proposal_instance(
+        state,
+        instance_id,
+        request,
+        ApprovalDecision::Rejected,
+    )
+    .await
+}
+
+async fn operator_decide_gardener_proposal_instance(
+    state: ApiState,
+    instance_id: String,
+    request: OperatorActionRequest,
+    decision: ApprovalDecision,
+) -> Result<Response, ApiError> {
+    with_store(&state, |store, now| {
+        store.decide_gardener_proposal_instance_if_current(
+            &instance_id,
+            decision,
+            &request.actor,
+            request.note.as_deref(),
+            &request.precondition,
+            now,
+        )
+    })
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
 async fn list_gardener_runs(State(state): State<ApiState>) -> Result<Response, ApiError> {
     with_store(&state, |store, _| store.gardener_implementation_runs())
         .map(|body| (StatusCode::OK, Json(body)).into_response())
@@ -588,6 +730,23 @@ fn require_gardener_proposal(store: &Store, fingerprint: &str) -> Result<Proposa
     store
         .gardener_proposal(fingerprint)?
         .ok_or_else(|| StoreError::NotFound(fingerprint.to_owned()))
+}
+
+fn require_gardener_proposal_instance(
+    store: &Store,
+    instance_id: &str,
+) -> Result<ProposalInstance, StoreError> {
+    store
+        .gardener_proposal_instance(instance_id)?
+        .ok_or_else(|| StoreError::NotFound(instance_id.to_owned()))
+}
+
+fn all_gardener_proposal_instances(store: &Store) -> Result<Vec<ProposalInstance>, StoreError> {
+    let mut instances = Vec::new();
+    for proposal in store.gardener_proposals()? {
+        instances.extend(store.gardener_proposal_instances(&proposal.fingerprint)?);
+    }
+    Ok(instances)
 }
 
 fn require_gardener_run(store: &Store, id: &str) -> Result<GardenerImplementationRun, StoreError> {

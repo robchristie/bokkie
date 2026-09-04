@@ -125,7 +125,13 @@ pub struct Confirmation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GardenerConfirmation {
     pub repository: String,
+    /// Stable goal identity retained across source-bound generations.
     pub fingerprint: String,
+    pub instance_id: String,
+    pub generation: u32,
+    pub source_commit: String,
+    pub source_observation_id: i64,
+    pub source_inspection_id: String,
     pub prompt: String,
 }
 
@@ -284,6 +290,11 @@ impl AppModel {
                         ApprovalSubject::GardenerProposal {
                             repository,
                             fingerprint,
+                            instance_id,
+                            generation,
+                            source_commit,
+                            source_observation_id,
+                            source_inspection_id,
                             prompt,
                             obligation_id,
                             occurrence,
@@ -292,6 +303,11 @@ impl AppModel {
                     Some(GardenerConfirmation {
                         repository: repository.clone(),
                         fingerprint: fingerprint.clone(),
+                        instance_id: instance_id.clone(),
+                        generation: *generation,
+                        source_commit: source_commit.clone(),
+                        source_observation_id: *source_observation_id,
+                        source_inspection_id: source_inspection_id.clone(),
                         prompt: prompt.clone(),
                     })
                 }
@@ -456,6 +472,11 @@ mod tests {
                 occurrence: 3,
                 state_revision: 1,
                 gardener_fingerprint: None,
+                gardener_proposal_instance_id: None,
+                gardener_source_commit: None,
+                gardener_source_observation_id: None,
+                gardener_source_inspection_id: None,
+                gardener_generation: None,
             }),
         }
     }
@@ -554,6 +575,11 @@ mod tests {
             subject: ApprovalSubject::GardenerProposal {
                 repository: "robchristie/bokkie".to_owned(),
                 fingerprint: "f".repeat(64),
+                instance_id: "proposal-instance-2".to_owned(),
+                generation: 2,
+                source_commit: "c".repeat(40),
+                source_observation_id: 42,
+                source_inspection_id: "inspection-2".to_owned(),
                 prompt: "Implement exactly this long prompt without inference".to_owned(),
                 obligation_id: "implementation".to_owned(),
                 occurrence: 3,
@@ -569,6 +595,11 @@ mod tests {
             .unwrap();
         exact_precondition.obligation_id = "implementation".to_owned();
         exact_precondition.gardener_fingerprint = Some("f".repeat(64));
+        exact_precondition.gardener_proposal_instance_id = Some("proposal-instance-2".to_owned());
+        exact_precondition.gardener_source_commit = Some("c".repeat(40));
+        exact_precondition.gardener_source_observation_id = Some(42);
+        exact_precondition.gardener_source_inspection_id = Some("inspection-2".to_owned());
+        exact_precondition.gardener_generation = Some(2);
         let mut model = AppModel::default();
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
@@ -587,9 +618,98 @@ mod tests {
             "Implement exactly this long prompt without inference"
         );
         assert_eq!(confirmation.occurrence, 3);
+        let gardener = confirmation.gardener.as_ref().unwrap();
+        assert_eq!(gardener.instance_id, "proposal-instance-2");
+        assert_eq!(gardener.generation, 2);
+        assert_eq!(gardener.source_commit, "c".repeat(40));
+        assert_eq!(gardener.source_observation_id, 42);
         assert_eq!(
             confirmation.precondition.gardener_fingerprint.as_deref(),
             Some("f".repeat(64).as_str())
+        );
+    }
+
+    #[test]
+    fn later_proposal_generation_stales_an_open_confirmation() {
+        let mut proposal = obligation("implementation", OperatorObligationState::AwaitingApproval);
+        proposal.exception = Some(ExceptionReason::AwaitingApproval {
+            subject: ApprovalSubject::GardenerProposal {
+                repository: "robchristie/bokkie".to_owned(),
+                fingerprint: "f".repeat(64),
+                instance_id: "proposal-instance-1".to_owned(),
+                generation: 1,
+                source_commit: "a".repeat(40),
+                source_observation_id: 7,
+                source_inspection_id: "inspection-1".to_owned(),
+                prompt: "Implement the reviewed goal".to_owned(),
+                obligation_id: "implementation".to_owned(),
+                occurrence: 3,
+            },
+        });
+        proposal.capabilities.approve_gardener_proposal =
+            capability(true, ActionConsequence::ScheduleExactGardenerProposal);
+        let precondition = proposal
+            .capabilities
+            .approve_gardener_proposal
+            .precondition
+            .as_mut()
+            .unwrap();
+        precondition.obligation_id = "implementation".to_owned();
+        precondition.gardener_fingerprint = Some("f".repeat(64));
+        precondition.gardener_proposal_instance_id = Some("proposal-instance-1".to_owned());
+        precondition.gardener_source_commit = Some("a".repeat(40));
+        precondition.gardener_source_observation_id = Some(7);
+        precondition.gardener_source_inspection_id = Some("inspection-1".to_owned());
+        precondition.gardener_generation = Some(1);
+
+        let mut model = AppModel::default();
+        model.apply_snapshot(OperatorSnapshot {
+            captured_at: 120,
+            obligations: vec![proposal.clone()],
+        });
+        model
+            .begin_confirmation(LifecycleAction::ApproveGardenerProposal)
+            .unwrap();
+        let confirmation = model.confirmation.clone().unwrap();
+
+        if let Some(ExceptionReason::AwaitingApproval {
+            subject:
+                ApprovalSubject::GardenerProposal {
+                    instance_id,
+                    generation,
+                    source_commit,
+                    source_observation_id,
+                    source_inspection_id,
+                    ..
+                },
+        }) = proposal.exception.as_mut()
+        {
+            *instance_id = "proposal-instance-2".to_owned();
+            *generation = 2;
+            *source_commit = "b".repeat(40);
+            *source_observation_id = 8;
+            *source_inspection_id = "inspection-2".to_owned();
+        }
+        let current = proposal
+            .capabilities
+            .approve_gardener_proposal
+            .precondition
+            .as_mut()
+            .unwrap();
+        current.gardener_proposal_instance_id = Some("proposal-instance-2".to_owned());
+        current.gardener_source_commit = Some("b".repeat(40));
+        current.gardener_source_observation_id = Some(8);
+        current.gardener_source_inspection_id = Some("inspection-2".to_owned());
+        current.gardener_generation = Some(2);
+        model.apply_snapshot(OperatorSnapshot {
+            captured_at: 121,
+            obligations: vec![proposal],
+        });
+
+        assert!(!model.confirmation_matches_current_state(&confirmation));
+        assert_eq!(
+            confirmation.gardener.unwrap().instance_id,
+            "proposal-instance-1"
         );
     }
 

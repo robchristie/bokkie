@@ -19,6 +19,48 @@ use crate::{
 const GOAL: &str = "Add a durable gardener marker file and test it.";
 const CANONICAL_HTTPS_URL: &str = "https://github.com/robchristie/bokkie.git";
 
+#[test]
+fn model_field_limits_match_json_schemas_and_count_unicode_characters() {
+    let inspection = inspection_schema();
+    assert_eq!(
+        inspection["properties"]["summary"]["maxLength"],
+        MAX_GARDENER_MODEL_TEXT_CHARS
+    );
+    assert_eq!(
+        inspection["properties"]["proposed_goal_prompts"]["maxItems"],
+        MAX_GARDENER_PROMPTS
+    );
+    for schema in [implementation_schema(), verification_schema()] {
+        assert_eq!(
+            schema["properties"]["summary"]["maxLength"],
+            MAX_GARDENER_MODEL_TEXT_CHARS
+        );
+    }
+    let implementation = implementation_schema();
+    for field in ["changed_paths", "checks"] {
+        assert_eq!(
+            implementation["properties"][field]["maxItems"],
+            MAX_GARDENER_MODEL_ITEMS
+        );
+        assert_eq!(
+            implementation["properties"][field]["items"]["maxLength"],
+            MAX_GARDENER_MODEL_ITEM_CHARS
+        );
+    }
+
+    let mut result = GardenerImplementationResult {
+        summary: "🦘".repeat(MAX_GARDENER_MODEL_TEXT_CHARS),
+        changed_paths: vec!["界".repeat(MAX_GARDENER_MODEL_ITEM_CHARS)],
+        checks: Vec::new(),
+    };
+    validate_implementation_result(&result).unwrap();
+    result.summary.push('🦘');
+    assert!(validate_implementation_result(&result).is_err());
+    result.summary.pop();
+    result.changed_paths[0].push('界');
+    assert!(validate_implementation_result(&result).is_err());
+}
+
 struct Fixture {
     root: TempDir,
     checkout: PathBuf,

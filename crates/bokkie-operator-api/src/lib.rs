@@ -21,7 +21,18 @@ pub enum ApprovalSubject {
     Generic,
     GardenerProposal {
         repository: String,
+        /// Stable goal identity retained across source-bound generations.
         fingerprint: String,
+        #[serde(default)]
+        instance_id: String,
+        #[serde(default)]
+        generation: u32,
+        #[serde(default)]
+        source_commit: String,
+        #[serde(default)]
+        source_observation_id: i64,
+        #[serde(default)]
+        source_inspection_id: String,
         prompt: String,
         obligation_id: String,
         occurrence: u32,
@@ -98,14 +109,25 @@ pub enum ActionConsequence {
 /// Immutable backend-issued condition for applying one projected lifecycle action.
 ///
 /// `state_revision` is the latest append-only audit-event sequence for the
-/// obligation. Exact gardener decisions also bind the immutable proposal
-/// fingerprint; ordinary lifecycle actions leave it unset.
+/// obligation. Exact gardener decisions bind the stable goal fingerprint and
+/// every field identifying its immutable source-bound proposal instance;
+/// ordinary lifecycle actions leave all gardener fields unset.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ActionPrecondition {
     pub obligation_id: String,
     pub occurrence: u32,
     pub state_revision: i64,
     pub gardener_fingerprint: Option<String>,
+    #[serde(default)]
+    pub gardener_proposal_instance_id: Option<String>,
+    #[serde(default)]
+    pub gardener_source_commit: Option<String>,
+    #[serde(default)]
+    pub gardener_source_observation_id: Option<i64>,
+    #[serde(default)]
+    pub gardener_source_inspection_id: Option<String>,
+    #[serde(default)]
+    pub gardener_generation: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -165,6 +187,7 @@ pub enum TopicSource {
     Attempt,
     GardenerInspection,
     GardenerProposal,
+    GardenerProposalInstance,
     GardenerObservation,
     GardenerEvent,
     GardenerImplementationRun,
@@ -189,4 +212,48 @@ pub struct ObligationTopic {
     pub captured_at: i64,
     pub obligation_id: String,
     pub items: Vec<TopicItem>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_gardener_wire_shapes_remain_deserialisable() {
+        let subject: ApprovalSubject = serde_json::from_value(serde_json::json!({
+            "kind": "gardener_proposal",
+            "repository": "robchristie/bokkie",
+            "fingerprint": "stable-goal",
+            "prompt": "Implement the reviewed goal",
+            "obligation_id": "implementation",
+            "occurrence": 1
+        }))
+        .unwrap();
+        assert!(matches!(
+            subject,
+            ApprovalSubject::GardenerProposal {
+                instance_id,
+                generation: 0,
+                source_commit,
+                source_observation_id: 0,
+                source_inspection_id,
+                ..
+            } if instance_id.is_empty()
+                && source_commit.is_empty()
+                && source_inspection_id.is_empty()
+        ));
+
+        let precondition: ActionPrecondition = serde_json::from_value(serde_json::json!({
+            "obligation_id": "implementation",
+            "occurrence": 1,
+            "state_revision": 7,
+            "gardener_fingerprint": "stable-goal"
+        }))
+        .unwrap();
+        assert!(precondition.gardener_proposal_instance_id.is_none());
+        assert!(precondition.gardener_source_commit.is_none());
+        assert!(precondition.gardener_source_observation_id.is_none());
+        assert!(precondition.gardener_source_inspection_id.is_none());
+        assert!(precondition.gardener_generation.is_none());
+    }
 }

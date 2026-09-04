@@ -21,9 +21,11 @@ use crate::{
         CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerCandidateQualification,
         GardenerEvent, GardenerImplementationRun, GardenerInspection, GardenerPublicationState,
         GardenerReproducibilityManifest, GardenerRunEvent, GardenerRunPhase,
-        GardenerVerificationVerdict, InspectionResult, NewGardenerImplementationRun,
-        NewGardenerInspection, NewRepositoryRegistration, Proposal, ProposalObservation,
-        RepositoryRegistration, normalise_goal_prompt, proposal_fingerprint,
+        GardenerVerificationVerdict, InspectionResult, MAX_GARDENER_MODEL_ITEM_CHARS,
+        MAX_GARDENER_MODEL_ITEMS, MAX_GARDENER_MODEL_TEXT_CHARS, MAX_GARDENER_PROMPTS,
+        NewGardenerImplementationRun, NewGardenerInspection, NewRepositoryRegistration, Proposal,
+        ProposalInstance, ProposalObservation, RepositoryRegistration, normalise_goal_prompt,
+        proposal_fingerprint, proposal_instance_id,
     },
     recurrence::RecurrenceError,
 };
@@ -53,6 +55,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         5,
         "0005_gardener_trust_publication.sql",
         include_str!("../migrations/0005_gardener_trust_publication.sql"),
+    ),
+    (
+        6,
+        "0006_source_bound_proposal_generations.sql",
+        include_str!("../migrations/0006_source_bound_proposal_generations.sql"),
     ),
 ];
 
@@ -274,11 +281,11 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         if let Some(precondition) = precondition {
-            validate_action_precondition(&transaction, id, precondition, None)?;
+            validate_action_precondition(&transaction, id, precondition, None, None)?;
         }
         let is_gardener_proposal = transaction.query_row(
             "SELECT EXISTS(
-                SELECT 1 FROM gardener_proposals
+                SELECT 1 FROM gardener_proposal_instances
                 WHERE implementation_obligation_id = ?1
              )",
             [id],
@@ -296,6 +303,7 @@ impl Store {
                 decision,
                 actor,
                 note,
+                gardener_instance: None,
                 now,
             },
         )?;
@@ -372,6 +380,13 @@ impl Store {
              WHERE o.state IN ('pending', 'retry_scheduled')
                AND o.next_wake_at <= ?1
                AND {binding_predicate}
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM gardener_proposal_instances pi
+                   JOIN gardener_proposal_instance_supersessions s
+                     ON s.superseded_instance_id = pi.id
+                   WHERE pi.implementation_obligation_id = o.id
+               )
                AND (
                    o.approval_required = 0 OR
                    (SELECT decision FROM approvals a
@@ -714,6 +729,34 @@ impl Store {
                  ON CONFLICT(proposal_fingerprint, inspection_id) DO NOTHING",
                 params![fingerprint, inspection_id, inspection.source_commit, now],
             )?;
+            let observation_id: i64 = transaction.query_row(
+                "SELECT id FROM gardener_proposal_observations
+                 WHERE proposal_fingerprint = ?1 AND inspection_id = ?2",
+                params![fingerprint, inspection_id],
+                |row| row.get(0),
+            )?;
+            let source_commit = inspection.source_commit.to_ascii_lowercase();
+            let instance =
+                proposal_instance_for_source(&transaction, &fingerprint, &source_commit)?;
+            let instance = match instance {
+                Some(instance) => instance,
+                None => create_proposal_instance(
+                    &transaction,
+                    &fingerprint,
+                    &inspection.repository,
+                    &source_commit,
+                    observation_id,
+                    inspection_id,
+                    now,
+                )?,
+            };
+            transaction.execute(
+                "INSERT INTO gardener_proposal_observation_instances(
+                    observation_id, instance_id, mapped_at
+                 ) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(observation_id) DO NOTHING",
+                params![observation_id, instance.id, now],
+            )?;
             if inserted == 1 {
                 append_gardener_event(
                     &transaction,
@@ -722,7 +765,12 @@ impl Store {
                     Some(&fingerprint),
                     "proposal_observed",
                     now,
-                    json!({"source_commit": inspection.source_commit}),
+                    json!({
+                        "source_commit": source_commit,
+                        "proposal_instance_id": instance.id,
+                        "generation": instance.generation,
+                        "source_observation_id": instance.source_observation_id
+                    }),
                 )?;
             }
             let item = proposal(&transaction, &fingerprint)?.expect("proposal exists");
@@ -752,16 +800,20 @@ impl Store {
 
     pub fn gardener_proposals(&self) -> Result<Vec<Proposal>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT p.fingerprint, p.repository, p.prompt, p.implementation_obligation_id,
+            "SELECT p.fingerprint, p.repository, p.prompt, pi.implementation_obligation_id,
                     o.state,
-                    (SELECT decision FROM approvals a
-                     WHERE a.obligation_id = o.id AND a.occurrence = o.occurrence
-                     ORDER BY a.id DESC LIMIT 1),
+                    (SELECT d.decision FROM gardener_proposal_instance_decisions d
+                     WHERE d.instance_id = pi.id ORDER BY d.approval_id DESC LIMIT 1),
                     (SELECT COUNT(*) FROM gardener_proposal_observations po
                      WHERE po.proposal_fingerprint = p.fingerprint),
                     p.created_at
              FROM gardener_proposals p
-             JOIN obligations o ON o.id = p.implementation_obligation_id
+             JOIN gardener_proposal_instances pi
+               ON pi.proposal_fingerprint = p.fingerprint
+              AND pi.generation = (SELECT max(current.generation)
+                                   FROM gardener_proposal_instances current
+                                   WHERE current.proposal_fingerprint = p.fingerprint)
+             JOIN obligations o ON o.id = pi.implementation_obligation_id
              ORDER BY p.created_at, p.fingerprint",
         )?;
         let rows = statement.query_map([], proposal_from_row)?;
@@ -816,6 +868,50 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// Observations durably mapped to one exact source-bound proposal instance.
+    pub fn proposal_instance_observations(
+        &self,
+        instance_id: &str,
+    ) -> Result<Vec<ProposalObservation>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT po.id, po.proposal_fingerprint, po.inspection_id,
+                    po.source_commit, po.observed_at
+             FROM gardener_proposal_observations po
+             JOIN gardener_proposal_observation_instances oi
+               ON oi.observation_id = po.id
+             WHERE oi.instance_id = ?1
+             ORDER BY po.id",
+        )?;
+        let rows = statement.query_map([instance_id], |row| {
+            Ok(ProposalObservation {
+                id: row.get(0)?,
+                proposal_fingerprint: row.get(1)?,
+                inspection_id: row.get(2)?,
+                source_commit: row.get(3)?,
+                observed_at: row.get(4)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn gardener_proposal_instance(
+        &self,
+        instance_id: &str,
+    ) -> Result<Option<ProposalInstance>, StoreError> {
+        proposal_instance(&self.connection, instance_id)
+    }
+
+    pub fn gardener_proposal_instances(
+        &self,
+        fingerprint: &str,
+    ) -> Result<Vec<ProposalInstance>, StoreError> {
+        let mut statement = self.connection.prepare(PROPOSAL_INSTANCE_SELECT)?;
+        let rows = statement.query_map([fingerprint], proposal_instance_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
     pub fn decide_gardener_proposal(
         &mut self,
         fingerprint: &str,
@@ -824,7 +920,25 @@ impl Store {
         note: Option<&str>,
         now: i64,
     ) -> Result<Proposal, StoreError> {
-        self.decide_gardener_proposal_inner(fingerprint, decision, actor, note, None, now)
+        let instances = self.gardener_proposal_instances(fingerprint)?;
+        if instances.len() != 1 {
+            return Err(StoreError::Conflict(
+                "legacy gardener decision is ambiguous; select an exact proposal instance"
+                    .to_owned(),
+            ));
+        }
+        self.decide_gardener_proposal_instance_inner(
+            &instances[0].id,
+            decision,
+            actor,
+            note,
+            None,
+            now,
+        )
+        .and_then(|_| {
+            self.gardener_proposal(fingerprint)?
+                .ok_or_else(|| StoreError::NotFound(fingerprint.to_owned()))
+        })
     }
 
     pub fn decide_gardener_proposal_if_current(
@@ -836,25 +950,64 @@ impl Store {
         precondition: &ActionPrecondition,
         now: i64,
     ) -> Result<Proposal, StoreError> {
-        self.decide_gardener_proposal_inner(
-            fingerprint,
+        let instances = self.gardener_proposal_instances(fingerprint)?;
+        if instances.len() != 1 {
+            return Err(StoreError::Conflict(
+                "legacy gardener decision is ambiguous; select an exact proposal instance"
+                    .to_owned(),
+            ));
+        }
+        self.decide_gardener_proposal_instance_inner(
+            &instances[0].id,
             decision,
             actor,
             note,
-            Some(precondition),
+            Some((precondition, false)),
+            now,
+        )?;
+        self.gardener_proposal(fingerprint)?
+            .ok_or_else(|| StoreError::NotFound(fingerprint.to_owned()))
+    }
+
+    pub fn decide_gardener_proposal_instance(
+        &mut self,
+        instance_id: &str,
+        decision: ApprovalDecision,
+        actor: &str,
+        note: Option<&str>,
+        now: i64,
+    ) -> Result<ProposalInstance, StoreError> {
+        self.decide_gardener_proposal_instance_inner(instance_id, decision, actor, note, None, now)
+    }
+
+    pub fn decide_gardener_proposal_instance_if_current(
+        &mut self,
+        instance_id: &str,
+        decision: ApprovalDecision,
+        actor: &str,
+        note: Option<&str>,
+        precondition: &ActionPrecondition,
+        now: i64,
+    ) -> Result<ProposalInstance, StoreError> {
+        self.decide_gardener_proposal_instance_inner(
+            instance_id,
+            decision,
+            actor,
+            note,
+            Some((precondition, true)),
             now,
         )
     }
 
-    fn decide_gardener_proposal_inner(
+    fn decide_gardener_proposal_instance_inner(
         &mut self,
-        fingerprint: &str,
+        instance_id: &str,
         decision: ApprovalDecision,
         actor: &str,
         note: Option<&str>,
-        precondition: Option<&ActionPrecondition>,
+        precondition: Option<(&ActionPrecondition, bool)>,
         now: i64,
-    ) -> Result<Proposal, StoreError> {
+    ) -> Result<ProposalInstance, StoreError> {
         if actor.trim().is_empty() {
             return Err(StoreError::Invalid(
                 "approval actor must not be empty".to_owned(),
@@ -863,16 +1016,23 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = proposal(&transaction, fingerprint)?
-            .ok_or_else(|| StoreError::NotFound(fingerprint.to_owned()))?;
-        if let Some(precondition) = precondition {
+        let current = proposal_instance(&transaction, instance_id)?
+            .ok_or_else(|| StoreError::NotFound(instance_id.to_owned()))?;
+        if current.superseded_by.is_some() {
+            return Err(StoreError::Conflict(format!(
+                "proposal instance {instance_id:?} has been superseded"
+            )));
+        }
+        if let Some((precondition, require_exact_precondition)) = precondition {
             validate_action_precondition(
                 &transaction,
                 &current.implementation_obligation_id,
                 precondition,
-                Some(fingerprint),
+                Some(&current.proposal_fingerprint),
+                require_exact_precondition.then_some(&current),
             )?;
         }
+        let obligation = require_obligation(&transaction, &current.implementation_obligation_id)?;
         apply_transition(
             &transaction,
             Transition::Approval {
@@ -880,19 +1040,60 @@ impl Store {
                 decision,
                 actor,
                 note,
+                gardener_instance: Some(GardenerDecisionContext {
+                    instance_id: &current.id,
+                    proposal_fingerprint: &current.proposal_fingerprint,
+                    source_commit: &current.source_commit,
+                    source_observation_id: current.source_observation_id,
+                    source_inspection_id: &current.source_inspection_id,
+                    generation: current.generation,
+                }),
                 now,
             },
+        )?;
+        let approval_id: i64 = transaction.query_row(
+            "SELECT id FROM approvals
+             WHERE obligation_id = ?1 AND occurrence = ?2
+             ORDER BY id DESC LIMIT 1",
+            params![current.implementation_obligation_id, obligation.occurrence],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "INSERT INTO gardener_proposal_instance_decisions(
+                approval_id, instance_id, proposal_fingerprint, source_commit,
+                generation, obligation_id, occurrence, decision, recorded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                approval_id,
+                current.id,
+                current.proposal_fingerprint,
+                current.source_commit,
+                current.generation,
+                current.implementation_obligation_id,
+                obligation.occurrence,
+                decision.to_string(),
+                now,
+            ],
         )?;
         append_gardener_event(
             &transaction,
             &current.repository,
             None,
-            Some(fingerprint),
+            Some(&current.proposal_fingerprint),
             &format!("proposal_{decision}"),
             now,
-            json!({"actor": actor, "note": note}),
+            json!({
+                "actor": actor,
+                "note": note,
+                "proposal_instance_id": current.id,
+                "source_commit": current.source_commit,
+                "source_observation_id": current.source_observation_id,
+                "source_inspection_id": current.source_inspection_id,
+                "generation": current.generation
+            }),
         )?;
-        let decided = proposal(&transaction, fingerprint)?.expect("proposal remains present");
+        let decided = proposal_instance(&transaction, instance_id)?
+            .expect("proposal instance remains present");
         transaction.commit()?;
         Ok(decided)
     }
@@ -934,39 +1135,37 @@ impl Store {
         verify_claim(&obligation, claim, now)?;
         require_gardener_kind(&transaction, &claim.obligation_id, "implementation")?;
 
-        let (fingerprint, repository): (String, String) = transaction
-            .query_row(
-                "SELECT p.fingerprint, p.repository
-                 FROM gardener_proposals p
-                 WHERE p.implementation_obligation_id = ?1
-                   AND EXISTS (
-                       SELECT 1 FROM approvals a
-                       WHERE a.obligation_id = p.implementation_obligation_id
-                         AND a.occurrence = ?2 AND a.decision = 'approved'
-                   )",
-                params![claim.obligation_id, claim.occurrence],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?
+        let instance = proposal_instance_for_obligation(&transaction, &claim.obligation_id)?
             .ok_or_else(|| {
                 StoreError::Conflict(format!(
-                    "implementation obligation {:?} lacks a current approved proposal",
+                    "implementation obligation {:?} is not bound to an exact proposal instance",
                     claim.obligation_id
                 ))
             })?;
-        let source_commit: String = transaction
-            .query_row(
-                "SELECT source_commit FROM gardener_proposal_observations
-                 WHERE proposal_fingerprint = ?1 ORDER BY id DESC LIMIT 1",
-                [&fingerprint],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| {
-                StoreError::Conflict(format!(
-                    "proposal {fingerprint:?} has no source observation"
-                ))
-            })?;
+        if instance.superseded_by.is_some() {
+            return Err(StoreError::Fenced);
+        }
+        let approved: bool = transaction.query_row(
+            "SELECT coalesce((
+                SELECT d.decision = 'approved' AND a.decision = 'approved'
+                FROM gardener_proposal_instance_decisions d
+                JOIN approvals a ON a.id = d.approval_id
+                WHERE d.instance_id = ?1 AND d.obligation_id = ?2
+                  AND d.occurrence = ?3
+                ORDER BY d.approval_id DESC LIMIT 1
+             ), 0)",
+            params![instance.id, claim.obligation_id, claim.occurrence],
+            |row| row.get(0),
+        )?;
+        if !approved {
+            return Err(StoreError::Conflict(format!(
+                "proposal instance {:?} lacks an exact approval",
+                instance.id
+            )));
+        }
+        let fingerprint = instance.proposal_fingerprint.clone();
+        let repository = instance.repository.clone();
+        let source_commit = instance.source_commit.clone();
 
         if let Some(existing) = gardener_implementation_run_for_lease(
             &transaction,
@@ -975,6 +1174,9 @@ impl Store {
         )? {
             if existing.id == new.id
                 && existing.proposal_fingerprint == fingerprint
+                && existing.proposal_instance_id == instance.id
+                && existing.proposal_generation == instance.generation
+                && existing.source_observation_id == instance.source_observation_id
                 && existing.occurrence == claim.occurrence
                 && existing.attempt_number == claim.attempt_number
                 && existing.source_commit == source_commit
@@ -1017,6 +1219,19 @@ impl Store {
                 now,
             ],
         )?;
+        transaction.execute(
+            "INSERT INTO gardener_implementation_run_instances(
+                run_id, instance_id, proposal_fingerprint, source_commit, generation, mapped_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                new.id,
+                instance.id,
+                fingerprint,
+                source_commit,
+                instance.generation,
+                now
+            ],
+        )?;
         append_gardener_run_event(
             &transaction,
             &new.id,
@@ -1024,6 +1239,10 @@ impl Store {
             now,
             json!({
                 "proposal_fingerprint": fingerprint,
+                "proposal_instance_id": instance.id,
+                "proposal_generation": instance.generation,
+                "source_observation_id": instance.source_observation_id,
+                "source_inspection_id": instance.source_inspection_id,
                 "source_commit": source_commit,
                 "worktree_path": new.implementation_worktree_path,
                 "branch": new.branch,
@@ -1051,10 +1270,16 @@ impl Store {
         query_gardener_implementation_runs(
             &self.connection,
             "SELECT r.*,
+                    ri.instance_id AS exact_proposal_instance_id,
+                    ri.generation AS exact_proposal_generation,
+                    pi.source_observation_id AS exact_source_observation_id,
+                    pi.source_inspection_id AS exact_source_inspection_id,
                     CASE WHEN ready.run_id IS NULL THEN r.publication_state ELSE 'ready' END
                         AS effective_publication_state,
                     ready.ready_at AS effective_pull_request_ready_at
              FROM gardener_implementation_runs r
+             JOIN gardener_implementation_run_instances ri ON ri.run_id = r.id
+             JOIN gardener_proposal_instances pi ON pi.id = ri.instance_id
              LEFT JOIN gardener_pull_request_ready_observations ready ON ready.run_id = r.id
              ORDER BY r.created_at, r.id",
             [],
@@ -1068,10 +1293,16 @@ impl Store {
         query_gardener_implementation_runs(
             &self.connection,
             "SELECT r.*,
+                    ri.instance_id AS exact_proposal_instance_id,
+                    ri.generation AS exact_proposal_generation,
+                    pi.source_observation_id AS exact_source_observation_id,
+                    pi.source_inspection_id AS exact_source_inspection_id,
                     CASE WHEN ready.run_id IS NULL THEN r.publication_state ELSE 'ready' END
                         AS effective_publication_state,
                     ready.ready_at AS effective_pull_request_ready_at
              FROM gardener_implementation_runs r
+             JOIN gardener_implementation_run_instances ri ON ri.run_id = r.id
+             JOIN gardener_proposal_instances pi ON pi.id = ri.instance_id
              LEFT JOIN gardener_pull_request_ready_observations ready ON ready.run_id = r.id
              WHERE r.obligation_id = ?1 ORDER BY r.lease_generation, r.id",
             [obligation_id],
@@ -1673,9 +1904,9 @@ impl Store {
     ) -> Result<(), StoreError> {
         validate_hex_identity("verification reported head", reported_head, &[40, 64])?;
         validate_nonempty("verification summary", summary)?;
-        if summary.len() > 16 * 1024 {
+        if summary.chars().count() > MAX_GARDENER_MODEL_TEXT_CHARS {
             return Err(StoreError::Invalid(
-                "verification summary must be at most 16384 bytes".to_owned(),
+                "verification summary must be at most 16384 characters".to_owned(),
             ));
         }
         let transaction = self
@@ -1929,7 +2160,7 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         if let Some(precondition) = precondition {
-            validate_action_precondition(&transaction, id, precondition, None)?;
+            validate_action_precondition(&transaction, id, precondition, None, None)?;
         }
         apply_transition(&transaction, Transition::RetryAttention { id, now })?;
         transaction.commit()?;
@@ -1959,7 +2190,7 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         if let Some(precondition) = precondition {
-            validate_action_precondition(&transaction, id, precondition, None)?;
+            validate_action_precondition(&transaction, id, precondition, None, None)?;
         }
         apply_transition(&transaction, Transition::Cancel { id, now })?;
         transaction.commit()?;
@@ -2111,12 +2342,17 @@ fn require_gardener_kind(
 }
 
 fn validate_inspection(inspection: &NewGardenerInspection) -> Result<(), StoreError> {
-    if inspection.id.trim().is_empty() {
+    if inspection.id.trim().is_empty() || inspection.id.chars().count() > 160 {
         return Err(StoreError::Invalid(
-            "inspection id must not be empty".to_owned(),
+            "inspection id must be non-empty and at most 160 characters".to_owned(),
         ));
     }
     validate_hex_identity("source commit", &inspection.source_commit, &[40, 64])?;
+    if inspection.source_commit != inspection.source_commit.to_ascii_lowercase() {
+        return Err(StoreError::Invalid(
+            "source commit must use canonical lowercase hexadecimal".to_owned(),
+        ));
+    }
     validate_hex_identity("inspection prompt digest", &inspection.prompt_digest, &[64])?;
     if inspection.worktree_path.trim().is_empty()
         || !Path::new(&inspection.worktree_path).is_absolute()
@@ -2296,23 +2532,23 @@ fn json_digest(value: &str) -> String {
 }
 
 fn validate_inspection_result(result: &InspectionResult) -> Result<(), StoreError> {
-    if result.summary.trim().is_empty() || result.summary.len() > 16 * 1024 {
+    if result.summary.trim().is_empty()
+        || result.summary.chars().count() > MAX_GARDENER_MODEL_TEXT_CHARS
+    {
         return Err(StoreError::Invalid(
-            "inspection result summary must be non-empty and at most 16384 bytes".to_owned(),
+            "inspection result summary must be non-empty and at most 16384 characters".to_owned(),
         ));
     }
-    if result.proposed_goal_prompts.len() > 3 {
+    if result.proposed_goal_prompts.len() > MAX_GARDENER_PROMPTS {
         return Err(StoreError::Invalid(
             "inspection result may contain at most three proposed goal prompts".to_owned(),
         ));
     }
-    if result
-        .proposed_goal_prompts
-        .iter()
-        .any(|prompt| prompt.trim().is_empty() || prompt.len() > 16 * 1024)
-    {
+    if result.proposed_goal_prompts.iter().any(|prompt| {
+        prompt.trim().is_empty() || prompt.chars().count() > MAX_GARDENER_MODEL_TEXT_CHARS
+    }) {
         return Err(StoreError::Invalid(
-            "inspection goal prompts must be non-empty and at most 16384 bytes".to_owned(),
+            "inspection goal prompts must be non-empty and at most 16384 characters".to_owned(),
         ));
     }
     Ok(())
@@ -2375,6 +2611,11 @@ fn require_current_inspection(
 
 fn validate_new_implementation_run(new: &NewGardenerImplementationRun) -> Result<(), StoreError> {
     validate_nonempty("implementation run id", &new.id)?;
+    if new.id.chars().count() > 160 {
+        return Err(StoreError::Invalid(
+            "implementation run id must be at most 160 characters".to_owned(),
+        ));
+    }
     validate_absolute_path(
         "implementation worktree path",
         &new.implementation_worktree_path,
@@ -2425,6 +2666,30 @@ fn validate_structured_message(message: &str) -> Result<(), StoreError> {
             "implementation final message must be a JSON object".to_owned(),
         ));
     }
+    let object = value.as_object().expect("object was checked");
+    let summary = object.get("summary").and_then(serde_json::Value::as_str);
+    let bounded_list = |name: &str| {
+        object.get(name).is_some_and(|value| {
+            value.as_array().is_some_and(|items| {
+                items.len() <= MAX_GARDENER_MODEL_ITEMS
+                    && items.iter().all(|item| {
+                        item.as_str().is_some_and(|item| {
+                            !item.trim().is_empty()
+                                && item.chars().count() <= MAX_GARDENER_MODEL_ITEM_CHARS
+                        })
+                    })
+            })
+        })
+    };
+    if summary.is_none_or(|summary| {
+        summary.trim().is_empty() || summary.chars().count() > MAX_GARDENER_MODEL_TEXT_CHARS
+    }) || !bounded_list("changed_paths")
+        || !bounded_list("checks")
+    {
+        return Err(StoreError::Invalid(
+            "implementation final message exceeds the typed field bounds".to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -2435,10 +2700,16 @@ fn gardener_implementation_run(
     connection
         .query_row(
             "SELECT r.*,
+                    ri.instance_id AS exact_proposal_instance_id,
+                    ri.generation AS exact_proposal_generation,
+                    pi.source_observation_id AS exact_source_observation_id,
+                    pi.source_inspection_id AS exact_source_inspection_id,
                     CASE WHEN ready.run_id IS NULL THEN r.publication_state ELSE 'ready' END
                         AS effective_publication_state,
                     ready.ready_at AS effective_pull_request_ready_at
              FROM gardener_implementation_runs r
+             JOIN gardener_implementation_run_instances ri ON ri.run_id = r.id
+             JOIN gardener_proposal_instances pi ON pi.id = ri.instance_id
              LEFT JOIN gardener_pull_request_ready_observations ready ON ready.run_id = r.id
              WHERE r.id = ?1",
             [id],
@@ -2456,10 +2727,16 @@ fn gardener_implementation_run_for_lease(
     connection
         .query_row(
             "SELECT r.*,
+                    ri.instance_id AS exact_proposal_instance_id,
+                    ri.generation AS exact_proposal_generation,
+                    pi.source_observation_id AS exact_source_observation_id,
+                    pi.source_inspection_id AS exact_source_inspection_id,
                     CASE WHEN ready.run_id IS NULL THEN r.publication_state ELSE 'ready' END
                         AS effective_publication_state,
                     ready.ready_at AS effective_pull_request_ready_at
              FROM gardener_implementation_runs r
+             JOIN gardener_implementation_run_instances ri ON ri.run_id = r.id
+             JOIN gardener_proposal_instances pi ON pi.id = ri.instance_id
              LEFT JOIN gardener_pull_request_ready_observations ready ON ready.run_id = r.id
              WHERE r.obligation_id = ?1 AND r.lease_generation = ?2",
             params![obligation_id, lease_generation],
@@ -2581,6 +2858,10 @@ fn gardener_implementation_run_from_row(
         id: row.get("id")?,
         repository: row.get("repository")?,
         proposal_fingerprint: row.get("proposal_fingerprint")?,
+        proposal_instance_id: row.get("exact_proposal_instance_id")?,
+        proposal_generation: row.get("exact_proposal_generation")?,
+        source_observation_id: row.get("exact_source_observation_id")?,
+        source_inspection_id: row.get("exact_source_inspection_id")?,
         obligation_id: row.get("obligation_id")?,
         occurrence: row.get("occurrence")?,
         attempt_number: row.get("attempt_number")?,
@@ -2641,6 +2922,21 @@ fn require_current_gardener_run(
     {
         return Err(StoreError::Fenced);
     }
+    let has_exact_authority: bool = transaction.query_row(
+        "SELECT coalesce((
+            SELECT d.decision = 'approved' AND a.decision = 'approved'
+            FROM gardener_proposal_instance_decisions d
+            JOIN approvals a ON a.id = d.approval_id
+            WHERE d.instance_id = ?1 AND d.obligation_id = ?2
+              AND d.occurrence = ?3
+            ORDER BY d.approval_id DESC LIMIT 1
+         ), 0)",
+        params![run.proposal_instance_id, run.obligation_id, run.occurrence],
+        |row| row.get(0),
+    )?;
+    if !has_exact_authority {
+        return Err(StoreError::Fenced);
+    }
     Ok(run)
 }
 
@@ -2675,16 +2971,20 @@ fn idempotent_or_conflict(
 fn proposal(connection: &Connection, fingerprint: &str) -> Result<Option<Proposal>, StoreError> {
     connection
         .query_row(
-            "SELECT p.fingerprint, p.repository, p.prompt, p.implementation_obligation_id,
+            "SELECT p.fingerprint, p.repository, p.prompt, pi.implementation_obligation_id,
                     o.state,
-                    (SELECT decision FROM approvals a
-                     WHERE a.obligation_id = o.id AND a.occurrence = o.occurrence
-                     ORDER BY a.id DESC LIMIT 1),
+                    (SELECT d.decision FROM gardener_proposal_instance_decisions d
+                     WHERE d.instance_id = pi.id ORDER BY d.approval_id DESC LIMIT 1),
                     (SELECT COUNT(*) FROM gardener_proposal_observations po
                      WHERE po.proposal_fingerprint = p.fingerprint),
                     p.created_at
              FROM gardener_proposals p
-             JOIN obligations o ON o.id = p.implementation_obligation_id
+             JOIN gardener_proposal_instances pi
+               ON pi.proposal_fingerprint = p.fingerprint
+              AND pi.generation = (SELECT max(current.generation)
+                                   FROM gardener_proposal_instances current
+                                   WHERE current.proposal_fingerprint = p.fingerprint)
+             JOIN obligations o ON o.id = pi.implementation_obligation_id
              WHERE p.fingerprint = ?1",
             [fingerprint],
             proposal_from_row,
@@ -2705,6 +3005,241 @@ fn proposal_from_row(row: &Row<'_>) -> rusqlite::Result<Proposal> {
         observation_count: row.get(6)?,
         created_at: row.get(7)?,
     })
+}
+
+const PROPOSAL_INSTANCE_SELECT: &str =
+    "SELECT pi.id, pi.proposal_fingerprint, p.repository, p.prompt,
+            pi.source_commit, pi.source_observation_id, pi.source_inspection_id,
+            pi.generation, pi.implementation_obligation_id, o.state,
+            (SELECT d.decision FROM gardener_proposal_instance_decisions d
+             WHERE d.instance_id = pi.id ORDER BY d.approval_id DESC LIMIT 1),
+            s.superseding_instance_id,
+            (SELECT count(*) FROM gardener_proposal_observation_instances oi
+             WHERE oi.instance_id = pi.id),
+            pi.created_at
+     FROM gardener_proposal_instances pi
+     JOIN gardener_proposals p ON p.fingerprint = pi.proposal_fingerprint
+     JOIN obligations o ON o.id = pi.implementation_obligation_id
+     LEFT JOIN gardener_proposal_instance_supersessions s
+       ON s.superseded_instance_id = pi.id
+     WHERE pi.proposal_fingerprint = ?1
+     ORDER BY pi.generation";
+
+fn proposal_instance(
+    connection: &Connection,
+    instance_id: &str,
+) -> Result<Option<ProposalInstance>, StoreError> {
+    connection
+        .query_row(
+            "SELECT pi.id, pi.proposal_fingerprint, p.repository, p.prompt,
+                    pi.source_commit, pi.source_observation_id, pi.source_inspection_id,
+                    pi.generation, pi.implementation_obligation_id, o.state,
+                    (SELECT d.decision FROM gardener_proposal_instance_decisions d
+                     WHERE d.instance_id = pi.id ORDER BY d.approval_id DESC LIMIT 1),
+                    s.superseding_instance_id,
+                    (SELECT count(*) FROM gardener_proposal_observation_instances oi
+                     WHERE oi.instance_id = pi.id),
+                    pi.created_at
+             FROM gardener_proposal_instances pi
+             JOIN gardener_proposals p ON p.fingerprint = pi.proposal_fingerprint
+             JOIN obligations o ON o.id = pi.implementation_obligation_id
+             LEFT JOIN gardener_proposal_instance_supersessions s
+               ON s.superseded_instance_id = pi.id
+             WHERE pi.id = ?1",
+            [instance_id],
+            proposal_instance_from_row,
+        )
+        .optional()
+        .map_err(StoreError::from)
+}
+
+fn proposal_instance_for_source(
+    connection: &Connection,
+    fingerprint: &str,
+    source_commit: &str,
+) -> Result<Option<ProposalInstance>, StoreError> {
+    let instance_id: Option<String> = connection
+        .query_row(
+            "SELECT id FROM gardener_proposal_instances
+             WHERE proposal_fingerprint = ?1 AND source_commit = ?2",
+            params![fingerprint, source_commit],
+            |row| row.get(0),
+        )
+        .optional()?;
+    instance_id
+        .as_deref()
+        .map(|id| proposal_instance(connection, id))
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn proposal_instance_for_obligation(
+    connection: &Connection,
+    obligation_id: &str,
+) -> Result<Option<ProposalInstance>, StoreError> {
+    let instance_id: Option<String> = connection
+        .query_row(
+            "SELECT id FROM gardener_proposal_instances
+             WHERE implementation_obligation_id = ?1",
+            [obligation_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    instance_id
+        .as_deref()
+        .map(|id| proposal_instance(connection, id))
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn proposal_instance_from_row(row: &Row<'_>) -> rusqlite::Result<ProposalInstance> {
+    let decision: Option<String> = row.get(10)?;
+    Ok(ProposalInstance {
+        id: row.get(0)?,
+        proposal_fingerprint: row.get(1)?,
+        repository: row.get(2)?,
+        prompt: row.get(3)?,
+        source_commit: row.get(4)?,
+        source_observation_id: row.get(5)?,
+        source_inspection_id: row.get(6)?,
+        generation: row.get(7)?,
+        implementation_obligation_id: row.get(8)?,
+        obligation_state: parse_index(row, 9)?,
+        approval_decision: decision.map(|value| parse_value(value, 10)).transpose()?,
+        superseded_by: row.get(11)?,
+        observation_count: row.get(12)?,
+        created_at: row.get(13)?,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_proposal_instance(
+    transaction: &Transaction<'_>,
+    fingerprint: &str,
+    repository: &str,
+    source_commit: &str,
+    source_observation_id: i64,
+    source_inspection_id: &str,
+    now: i64,
+) -> Result<ProposalInstance, StoreError> {
+    let generation: u32 = transaction.query_row(
+        "SELECT coalesce(max(generation), 0) + 1
+         FROM gardener_proposal_instances WHERE proposal_fingerprint = ?1",
+        [fingerprint],
+        |row| row.get(0),
+    )?;
+    let obligation_id = if generation == 1 {
+        transaction.query_row(
+            "SELECT implementation_obligation_id FROM gardener_proposals
+             WHERE fingerprint = ?1",
+            [fingerprint],
+            |row| row.get(0),
+        )?
+    } else {
+        let id = format!("gardener:implement:{fingerprint}:g{generation}");
+        apply_transition(
+            transaction,
+            Transition::Create {
+                new: NewObligation {
+                    id: id.clone(),
+                    description: format!(
+                        "Implement approved gardener proposal {fingerprint} generation {generation}"
+                    ),
+                    scheduled_at: now,
+                    recurrence: None,
+                    approval_required: true,
+                    retry: crate::RetryPolicy {
+                        max_attempts: 1,
+                        ..crate::RetryPolicy::default()
+                    },
+                },
+                now,
+            },
+        )?;
+        transaction.execute(
+            "INSERT INTO gardener_obligation_bindings(obligation_id, kind, created_at)
+             VALUES (?1, 'implementation', ?2)",
+            params![id, now],
+        )?;
+        id
+    };
+    let instance_id = proposal_instance_id(fingerprint, source_commit, generation);
+    transaction.execute(
+        "INSERT INTO gardener_proposal_instances(
+            id, proposal_fingerprint, source_commit, source_observation_id,
+            source_inspection_id, generation, implementation_obligation_id, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            instance_id,
+            fingerprint,
+            source_commit,
+            source_observation_id,
+            source_inspection_id,
+            generation,
+            obligation_id,
+            now,
+        ],
+    )?;
+
+    if generation > 1 {
+        let previous = transaction.query_row(
+            "SELECT id, implementation_obligation_id
+             FROM gardener_proposal_instances
+             WHERE proposal_fingerprint = ?1 AND generation = ?2",
+            params![fingerprint, generation - 1],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?;
+        transaction.execute(
+            "INSERT INTO gardener_proposal_instance_supersessions(
+                superseded_instance_id, superseding_instance_id, occurred_at
+             ) VALUES (?1, ?2, ?3)",
+            params![previous.0, instance_id, now],
+        )?;
+        let previous_obligation = require_obligation(transaction, &previous.1)?;
+        if cancel_transition_is_legal(&previous_obligation)
+            && !previous_obligation.state.is_terminal()
+        {
+            apply_transition(
+                transaction,
+                Transition::Cancel {
+                    id: &previous.1,
+                    now,
+                },
+            )?;
+        }
+        append_gardener_event(
+            transaction,
+            repository,
+            Some(source_inspection_id),
+            Some(fingerprint),
+            "proposal_instance_superseded",
+            now,
+            json!({
+                "proposal_instance_id": previous.0,
+                "superseding_instance_id": instance_id,
+                "source_commit": source_commit,
+                "generation": generation
+            }),
+        )?;
+    }
+    append_gardener_event(
+        transaction,
+        repository,
+        Some(source_inspection_id),
+        Some(fingerprint),
+        "proposal_instance_created",
+        now,
+        json!({
+            "proposal_instance_id": instance_id,
+            "source_commit": source_commit,
+            "source_observation_id": source_observation_id,
+            "source_inspection_id": source_inspection_id,
+            "generation": generation,
+            "implementation_obligation_id": obligation_id
+        }),
+    )?;
+    proposal_instance(transaction, &instance_id)?
+        .ok_or_else(|| StoreError::Conflict("new proposal instance was not readable".to_owned()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2748,6 +3283,15 @@ fn append_gardener_run_event(
     Ok(())
 }
 
+struct GardenerDecisionContext<'a> {
+    instance_id: &'a str,
+    proposal_fingerprint: &'a str,
+    source_commit: &'a str,
+    source_observation_id: i64,
+    source_inspection_id: &'a str,
+    generation: u32,
+}
+
 enum Transition<'a> {
     Create {
         new: NewObligation,
@@ -2758,6 +3302,7 @@ enum Transition<'a> {
         decision: ApprovalDecision,
         actor: &'a str,
         note: Option<&'a str>,
+        gardener_instance: Option<GardenerDecisionContext<'a>>,
         now: i64,
     },
     Claim {
@@ -2877,6 +3422,7 @@ fn apply_transition(
             decision,
             actor,
             note,
+            gardener_instance,
             now,
         } => {
             let obligation = require_obligation(transaction, id)?;
@@ -2902,6 +3448,21 @@ fn apply_transition(
                  WHERE id = ?1",
                 params![id, next_state.to_string(), next_wake, now],
             )?;
+            let details = gardener_instance.map_or_else(
+                || json!({"actor": actor, "note": note}),
+                |instance| {
+                    json!({
+                        "actor": actor,
+                        "note": note,
+                        "proposal_instance_id": instance.instance_id,
+                        "proposal_fingerprint": instance.proposal_fingerprint,
+                        "source_commit": instance.source_commit,
+                        "source_observation_id": instance.source_observation_id,
+                        "source_inspection_id": instance.source_inspection_id,
+                        "generation": instance.generation
+                    })
+                },
+            );
             append_event(
                 transaction,
                 id,
@@ -2910,7 +3471,7 @@ fn apply_transition(
                 now,
                 Some(obligation.state),
                 next_state,
-                json!({"actor": actor, "note": note}),
+                details,
             )?;
         }
         Transition::Claim {
@@ -3429,6 +3990,7 @@ fn validate_action_precondition(
     obligation_id: &str,
     precondition: &ActionPrecondition,
     gardener_fingerprint: Option<&str>,
+    exact_gardener_instance: Option<&ProposalInstance>,
 ) -> Result<(), StoreError> {
     if precondition.obligation_id != obligation_id {
         return Err(StoreError::Conflict(format!(
@@ -3440,6 +4002,22 @@ fn validate_action_precondition(
         return Err(StoreError::Conflict(
             "action does not match the reviewed gardener proposal fingerprint".to_owned(),
         ));
+    }
+    if let Some(instance) = exact_gardener_instance {
+        let exact_matches = precondition.gardener_proposal_instance_id.as_deref()
+            == Some(instance.id.as_str())
+            && precondition.gardener_source_commit.as_deref()
+                == Some(instance.source_commit.as_str())
+            && precondition.gardener_source_observation_id == Some(instance.source_observation_id)
+            && precondition.gardener_source_inspection_id.as_deref()
+                == Some(instance.source_inspection_id.as_str())
+            && precondition.gardener_generation == Some(instance.generation);
+        if !exact_matches {
+            return Err(StoreError::Conflict(
+                "action does not match the reviewed source-bound gardener proposal instance"
+                    .to_owned(),
+            ));
+        }
     }
     let obligation = require_obligation(transaction, obligation_id)?;
     let state_revision: i64 = transaction.query_row(
@@ -3687,7 +4265,8 @@ mod tests {
                 (2, "0002_append_only_guards.sql".to_owned()),
                 (3, "0003_coding_gardener_state.sql".to_owned()),
                 (4, "0004_coding_gardener_runs.sql".to_owned()),
-                (5, "0005_gardener_trust_publication.sql".to_owned())
+                (5, "0005_gardener_trust_publication.sql".to_owned()),
+                (6, "0006_source_bound_proposal_generations.sql".to_owned())
             ]
         );
         drop(store);
@@ -4040,6 +4619,44 @@ mod tests {
         }
     }
 
+    fn observe_scheduled_generation(
+        store: &mut Store,
+        inspection_obligation_id: &str,
+        inspection_id: &str,
+        source_commit: char,
+        prompt: &str,
+    ) -> Proposal {
+        let due = store
+            .get(inspection_obligation_id)
+            .unwrap()
+            .unwrap()
+            .next_wake_at
+            .unwrap();
+        let claim = store
+            .claim_due_gardener(due, 60, 10)
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.obligation_id == inspection_obligation_id)
+            .unwrap();
+        store
+            .start_gardener_inspection(&claim, new_inspection(inspection_id, source_commit), due)
+            .unwrap();
+        let proposal = store
+            .finish_gardener_inspection(&claim, inspection_id, &inspection_result(prompt), due + 1)
+            .unwrap()
+            .remove(0);
+        store
+            .complete(
+                &claim,
+                Completion::Succeeded {
+                    evidence: Some(inspection_id.to_owned()),
+                },
+                due + 2,
+            )
+            .unwrap();
+        proposal
+    }
+
     fn approved_implementation_claim(store: &mut Store, lease_seconds: i64) -> (Claim, Proposal) {
         store
             .register_gardener_repository(gardener_registration(1_000), 900)
@@ -4132,7 +4749,7 @@ mod tests {
             .finish_gardener_implementation(
                 claim,
                 run_id,
-                r#"{"summary":"implementation completed"}"#,
+                r#"{"summary":"implementation completed","changed_paths":[],"checks":[]}"#,
                 1_007,
             )
             .unwrap();
@@ -4266,7 +4883,7 @@ mod tests {
     }
 
     #[test]
-    fn equivalent_prompts_reuse_immutable_proposal_across_commits() {
+    fn equivalent_prompts_create_source_bound_generations_across_commits() {
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("state.sqlite3");
         let mut store = Store::open(&path).unwrap();
@@ -4328,7 +4945,7 @@ mod tests {
             .unwrap()
             .remove(0);
         assert_eq!(second.fingerprint, first.fingerprint);
-        assert_eq!(
+        assert_ne!(
             second.implementation_obligation_id,
             first.implementation_obligation_id
         );
@@ -4346,7 +4963,24 @@ mod tests {
                 .into_iter()
                 .filter(|item| item.id.starts_with("gardener:implement:"))
                 .count(),
-            1
+            2
+        );
+        let instances = store
+            .gardener_proposal_instances(&first.fingerprint)
+            .unwrap();
+        assert_eq!(instances.len(), 2);
+        assert_eq!(instances[0].generation, 1);
+        assert_eq!(instances[0].source_commit, "a".repeat(40));
+        assert_eq!(
+            instances[0].superseded_by.as_deref(),
+            Some(instances[1].id.as_str())
+        );
+        assert_eq!(instances[0].obligation_state, ObligationState::Cancelled);
+        assert_eq!(instances[1].generation, 2);
+        assert_eq!(instances[1].source_commit, "b".repeat(40));
+        assert_eq!(
+            instances[1].obligation_state,
+            ObligationState::AwaitingApproval
         );
         let fingerprint = first.fingerprint;
         drop(store);
@@ -4357,6 +4991,397 @@ mod tests {
             reopened.proposal_observations(&fingerprint).unwrap().len(),
             2
         );
+        assert_eq!(
+            reopened
+                .gardener_proposal_instances(&fingerprint)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn repeated_same_source_observations_dedupe_to_one_instance() {
+        let mut store = Store::open_in_memory().unwrap();
+        let registration = store
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let prompt = "Keep one source-bound generation.";
+        let first = observe_scheduled_generation(
+            &mut store,
+            &registration.inspection_obligation_id,
+            "same-source-1",
+            'a',
+            prompt,
+        );
+        let second = observe_scheduled_generation(
+            &mut store,
+            &registration.inspection_obligation_id,
+            "same-source-2",
+            'a',
+            prompt,
+        );
+        assert_eq!(first.fingerprint, second.fingerprint);
+        assert_eq!(
+            first.implementation_obligation_id,
+            second.implementation_obligation_id
+        );
+        let instances = store
+            .gardener_proposal_instances(&first.fingerprint)
+            .unwrap();
+        assert_eq!(instances.len(), 1);
+        assert_eq!(instances[0].generation, 1);
+        assert_eq!(instances[0].observation_count, 2);
+        assert_eq!(instances[0].source_inspection_id, "same-source-1");
+    }
+
+    #[test]
+    fn supersession_rejects_stale_decisions_and_pre_run_claims() {
+        let mut store = Store::open_in_memory().unwrap();
+        let registration = store
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let prompt = "Fence stale source authority.";
+        let first = observe_scheduled_generation(
+            &mut store,
+            &registration.inspection_obligation_id,
+            "race-source-a",
+            'a',
+            prompt,
+        );
+        let first_instance = store
+            .gardener_proposal_instances(&first.fingerprint)
+            .unwrap()
+            .remove(0);
+        store
+            .decide_gardener_proposal_instance(
+                &first_instance.id,
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                1_003,
+            )
+            .unwrap();
+        let stale_claim = store
+            .claim_due_gardener(1_003, 1_000, 10)
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.obligation_id == first_instance.implementation_obligation_id)
+            .unwrap();
+        observe_scheduled_generation(
+            &mut store,
+            &registration.inspection_obligation_id,
+            "race-source-b",
+            'b',
+            prompt,
+        );
+        let instances = store
+            .gardener_proposal_instances(&first.fingerprint)
+            .unwrap();
+        assert_eq!(instances.len(), 2);
+        assert_eq!(
+            instances[1].obligation_state,
+            ObligationState::AwaitingApproval
+        );
+        assert!(matches!(
+            store.decide_gardener_proposal_instance(
+                &first_instance.id,
+                ApprovalDecision::Rejected,
+                "late-operator",
+                None,
+                1_100,
+            ),
+            Err(StoreError::Conflict(_))
+        ));
+        assert!(matches!(
+            store.create_gardener_implementation_run(
+                &stale_claim,
+                new_implementation_run("stale-pre-run"),
+                1_100,
+            ),
+            Err(StoreError::Fenced)
+        ));
+    }
+
+    #[test]
+    fn approval_recorded_before_a_new_source_is_not_inherited() {
+        let mut store = Store::open_in_memory().unwrap();
+        let registration = store
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let prompt = "Do not inherit source authority.";
+        let first = observe_scheduled_generation(
+            &mut store,
+            &registration.inspection_obligation_id,
+            "approval-race-a",
+            'a',
+            prompt,
+        );
+        let first_instance = store
+            .gardener_proposal_instances(&first.fingerprint)
+            .unwrap()
+            .remove(0);
+        let inspection_due = store
+            .get(&registration.inspection_obligation_id)
+            .unwrap()
+            .unwrap()
+            .next_wake_at
+            .unwrap();
+        let inspection_claim = store
+            .claim_due_gardener(inspection_due, 60, 1)
+            .unwrap()
+            .remove(0);
+        store
+            .start_gardener_inspection(
+                &inspection_claim,
+                new_inspection("approval-race-b", 'b'),
+                inspection_due,
+            )
+            .unwrap();
+        store
+            .decide_gardener_proposal_instance(
+                &first_instance.id,
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                inspection_due,
+            )
+            .unwrap();
+        store
+            .finish_gardener_inspection(
+                &inspection_claim,
+                "approval-race-b",
+                &inspection_result(prompt),
+                inspection_due + 1,
+            )
+            .unwrap();
+        let instances = store
+            .gardener_proposal_instances(&first.fingerprint)
+            .unwrap();
+        assert_eq!(
+            instances[0].approval_decision,
+            Some(ApprovalDecision::Approved)
+        );
+        assert_eq!(instances[0].obligation_state, ObligationState::Cancelled);
+        assert_eq!(instances[1].approval_decision, None);
+        assert_eq!(
+            instances[1].obligation_state,
+            ObligationState::AwaitingApproval
+        );
+        let claims = store.claim_due_gardener(2_000, 60, 10).unwrap();
+        assert!(claims.iter().all(|claim| {
+            claim.obligation_id != first_instance.implementation_obligation_id
+                && claim.obligation_id != instances[1].implementation_obligation_id
+        }));
+    }
+
+    #[test]
+    fn exact_run_created_before_supersession_continues_at_its_stored_source() {
+        let mut store = Store::open_in_memory().unwrap();
+        let registration = store
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let prompt = "Preserve already-durable exact work.";
+        let first = observe_scheduled_generation(
+            &mut store,
+            &registration.inspection_obligation_id,
+            "continuing-source-a",
+            'a',
+            prompt,
+        );
+        let first_instance = store
+            .gardener_proposal_instances(&first.fingerprint)
+            .unwrap()
+            .remove(0);
+        store
+            .decide_gardener_proposal_instance(
+                &first_instance.id,
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                1_003,
+            )
+            .unwrap();
+        let claim = store
+            .claim_due_gardener(1_003, 1_000, 10)
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.obligation_id == first_instance.implementation_obligation_id)
+            .unwrap();
+        let run = store
+            .create_gardener_implementation_run(
+                &claim,
+                new_implementation_run("continuing-run"),
+                1_004,
+            )
+            .unwrap();
+        observe_scheduled_generation(
+            &mut store,
+            &registration.inspection_obligation_id,
+            "continuing-source-b",
+            'b',
+            prompt,
+        );
+        store
+            .record_gardener_reproducibility_manifest(
+                &claim,
+                &reproducibility_manifest("continuing-run", &run.source_commit),
+                1_100,
+            )
+            .unwrap();
+        let retained = store
+            .gardener_implementation_run("continuing-run")
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.source_commit, "a".repeat(40));
+        assert_eq!(retained.proposal_instance_id, first_instance.id);
+        assert_eq!(retained.proposal_generation, 1);
+    }
+
+    #[test]
+    fn source_generation_evidence_tables_reject_updates_and_deletes() {
+        let mut store = Store::open_in_memory().unwrap();
+        let registration = store
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let prompt = "Keep source generation evidence immutable.";
+        let first = observe_scheduled_generation(
+            &mut store,
+            &registration.inspection_obligation_id,
+            "immutable-source-a",
+            'a',
+            prompt,
+        );
+        observe_scheduled_generation(
+            &mut store,
+            &registration.inspection_obligation_id,
+            "immutable-source-b",
+            'b',
+            prompt,
+        );
+        let instances = store
+            .gardener_proposal_instances(&first.fingerprint)
+            .unwrap();
+        let current = instances.last().unwrap();
+        store
+            .decide_gardener_proposal_instance(
+                &current.id,
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                1_100,
+            )
+            .unwrap();
+        let claim = store
+            .claim_due_gardener(1_100, 60, 10)
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.obligation_id == current.implementation_obligation_id)
+            .unwrap();
+        store
+            .create_gardener_implementation_run(
+                &claim,
+                new_implementation_run("immutable-run-map"),
+                1_101,
+            )
+            .unwrap();
+
+        for table in [
+            "gardener_proposal_instances",
+            "gardener_proposal_observation_instances",
+            "gardener_proposal_instance_supersessions",
+            "gardener_proposal_instance_decisions",
+            "gardener_implementation_run_instances",
+        ] {
+            let update = format!("UPDATE {table} SET rowid = rowid");
+            assert!(store.connection.execute(&update, []).is_err(), "{table}");
+            let delete = format!("DELETE FROM {table}");
+            assert!(store.connection.execute(&delete, []).is_err(), "{table}");
+        }
+    }
+
+    #[test]
+    fn terminal_rejected_and_cancelled_instances_do_not_block_a_later_generation() {
+        for disposition in ["completed", "rejected", "cancelled"] {
+            let mut store = Store::open_in_memory().unwrap();
+            let registration = store
+                .register_gardener_repository(gardener_registration(1_000), 900)
+                .unwrap();
+            let prompt = format!("Reopen after {disposition}.");
+            let first = observe_scheduled_generation(
+                &mut store,
+                &registration.inspection_obligation_id,
+                &format!("{disposition}-source-a"),
+                'a',
+                &prompt,
+            );
+            let first_instance = store
+                .gardener_proposal_instances(&first.fingerprint)
+                .unwrap()
+                .remove(0);
+            match disposition {
+                "completed" => {
+                    store
+                        .decide_gardener_proposal_instance(
+                            &first_instance.id,
+                            ApprovalDecision::Approved,
+                            "operator",
+                            None,
+                            1_003,
+                        )
+                        .unwrap();
+                    let claim = store
+                        .claim_due_gardener(1_003, 60, 10)
+                        .unwrap()
+                        .into_iter()
+                        .find(|claim| {
+                            claim.obligation_id == first_instance.implementation_obligation_id
+                        })
+                        .unwrap();
+                    store
+                        .complete(
+                            &claim,
+                            Completion::Succeeded {
+                                evidence: Some("terminal".to_owned()),
+                            },
+                            1_004,
+                        )
+                        .unwrap();
+                }
+                "rejected" => {
+                    store
+                        .decide_gardener_proposal_instance(
+                            &first_instance.id,
+                            ApprovalDecision::Rejected,
+                            "operator",
+                            None,
+                            1_003,
+                        )
+                        .unwrap();
+                }
+                "cancelled" => store
+                    .cancel(&first_instance.implementation_obligation_id, 1_003)
+                    .unwrap(),
+                _ => unreachable!(),
+            }
+            observe_scheduled_generation(
+                &mut store,
+                &registration.inspection_obligation_id,
+                &format!("{disposition}-source-b"),
+                'b',
+                &prompt,
+            );
+            let instances = store
+                .gardener_proposal_instances(&first.fingerprint)
+                .unwrap();
+            assert_eq!(instances.len(), 2, "{disposition}");
+            assert_eq!(
+                instances[1].obligation_state,
+                ObligationState::AwaitingApproval,
+                "{disposition}"
+            );
+            assert_eq!(instances[1].approval_decision, None, "{disposition}");
+        }
     }
 
     #[test]
@@ -4467,6 +5492,139 @@ mod tests {
         assert_eq!(rejected.approval_decision, Some(ApprovalDecision::Rejected));
         assert_eq!(rejected.obligation_state, ObligationState::Attention);
         assert!(store.claim_due_gardener(2_000, 60, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn repeated_exact_decisions_preserve_history_and_use_the_latest_mapping() {
+        let mut store = Store::open_in_memory().unwrap();
+        let registration = store
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let proposal = observe_scheduled_generation(
+            &mut store,
+            &registration.inspection_obligation_id,
+            "decision-history",
+            'a',
+            "Retain exact decision history.",
+        );
+        let instance = store
+            .gardener_proposal_instances(&proposal.fingerprint)
+            .unwrap()
+            .remove(0);
+        store
+            .decide_gardener_proposal_instance(
+                &instance.id,
+                ApprovalDecision::Rejected,
+                "first-operator",
+                None,
+                1_003,
+            )
+            .unwrap();
+        store
+            .retry_attention(&instance.implementation_obligation_id, 1_004)
+            .unwrap();
+        let approved = store
+            .decide_gardener_proposal_instance(
+                &instance.id,
+                ApprovalDecision::Approved,
+                "second-operator",
+                Some("reconsidered"),
+                1_005,
+            )
+            .unwrap();
+        assert_eq!(approved.approval_decision, Some(ApprovalDecision::Approved));
+        assert_eq!(approved.obligation_state, ObligationState::Pending);
+        assert_eq!(
+            store
+                .connection
+                .query_row(
+                    "SELECT count(*) FROM gardener_proposal_instance_decisions
+                     WHERE instance_id = ?1",
+                    [&instance.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            2
+        );
+        let audit = store
+            .events(&instance.implementation_obligation_id)
+            .unwrap();
+        let details: serde_json::Value =
+            serde_json::from_str(&audit.last().unwrap().details_json).unwrap();
+        assert_eq!(details["proposal_instance_id"], instance.id);
+        assert_eq!(details["source_commit"], instance.source_commit);
+        assert_eq!(
+            details["source_observation_id"],
+            instance.source_observation_id
+        );
+        assert_eq!(details["generation"], 1);
+    }
+
+    #[test]
+    fn inspection_field_limits_count_unicode_characters() {
+        let mut store = Store::open_in_memory().unwrap();
+        let registration = store
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let due = store
+            .get(&registration.inspection_obligation_id)
+            .unwrap()
+            .unwrap()
+            .next_wake_at
+            .unwrap();
+        let claim = store.claim_due_gardener(due, 60, 1).unwrap().remove(0);
+        store
+            .start_gardener_inspection(&claim, new_inspection("unicode-limit", 'a'), due)
+            .unwrap();
+        store
+            .finish_gardener_inspection(
+                &claim,
+                "unicode-limit",
+                &InspectionResult {
+                    summary: "🦘".repeat(MAX_GARDENER_MODEL_TEXT_CHARS),
+                    proposed_goal_prompts: Vec::new(),
+                },
+                due + 1,
+            )
+            .unwrap();
+        store
+            .complete(&claim, Completion::Succeeded { evidence: None }, due + 2)
+            .unwrap();
+
+        let next_due = store
+            .get(&registration.inspection_obligation_id)
+            .unwrap()
+            .unwrap()
+            .next_wake_at
+            .unwrap();
+        let next_claim = store.claim_due_gardener(next_due, 60, 1).unwrap().remove(0);
+        store
+            .start_gardener_inspection(
+                &next_claim,
+                new_inspection("unicode-over-limit", 'b'),
+                next_due,
+            )
+            .unwrap();
+        assert!(matches!(
+            store.finish_gardener_inspection(
+                &next_claim,
+                "unicode-over-limit",
+                &InspectionResult {
+                    summary: "🦘".repeat(MAX_GARDENER_MODEL_TEXT_CHARS + 1),
+                    proposed_goal_prompts: Vec::new(),
+                },
+                next_due + 1,
+            ),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(
+            store
+                .gardener_inspection("unicode-over-limit")
+                .unwrap()
+                .unwrap()
+                .result_json
+                .is_none()
+        );
     }
 
     #[test]
@@ -4608,8 +5766,22 @@ mod tests {
             store.finish_gardener_implementation(&claim, "run-1", "not JSON", 1_007),
             Err(StoreError::Invalid(_))
         ));
+        assert!(matches!(
+            store.finish_gardener_implementation(
+                &claim,
+                "run-1",
+                r#"{"summary":"missing schema-required lists"}"#,
+                1_007
+            ),
+            Err(StoreError::Invalid(_))
+        ));
         store
-            .finish_gardener_implementation(&claim, "run-1", r#"{"summary":"done"}"#, 1_007)
+            .finish_gardener_implementation(
+                &claim,
+                "run-1",
+                r#"{"summary":"done","changed_paths":[],"checks":[]}"#,
+                1_007,
+            )
             .unwrap();
 
         let head = "b".repeat(40);
@@ -4769,7 +5941,7 @@ mod tests {
     }
 
     #[test]
-    fn implementation_run_captures_the_latest_proposal_observation_commit() {
+    fn implementation_run_uses_the_exact_approved_proposal_instance_source() {
         let mut store = Store::open_in_memory().unwrap();
         let registration = store
             .register_gardener_repository(gardener_registration(1_000), 900)
@@ -4822,9 +5994,13 @@ mod tests {
                 next_at + 2,
             )
             .unwrap();
+        let instances = store
+            .gardener_proposal_instances(&proposal.fingerprint)
+            .unwrap();
+        let latest = instances.last().unwrap();
         store
-            .decide_gardener_proposal(
-                &proposal.fingerprint,
+            .decide_gardener_proposal_instance(
+                &latest.id,
                 ApprovalDecision::Approved,
                 "operator",
                 None,
@@ -4835,7 +6011,7 @@ mod tests {
             .claim_due_gardener(next_at + 3, 1_000, 10)
             .unwrap()
             .into_iter()
-            .find(|claim| claim.obligation_id == proposal.implementation_obligation_id)
+            .find(|claim| claim.obligation_id == latest.implementation_obligation_id)
             .unwrap();
         let run = store
             .create_gardener_implementation_run(
@@ -4845,6 +6021,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(run.source_commit, "b".repeat(40));
+        assert_eq!(run.proposal_instance_id, latest.id);
+        assert_eq!(run.proposal_generation, 2);
+        assert_eq!(run.source_observation_id, latest.source_observation_id);
     }
 
     #[test]
@@ -4923,5 +6102,375 @@ mod tests {
             reopened.gardener_run_events("durable-run").unwrap(),
             events_before
         );
+    }
+
+    fn create_legacy_v5_database(
+        path: &Path,
+        sources: &[char],
+        approved: bool,
+        run_source: Option<char>,
+        running_without_run: bool,
+    ) {
+        let connection = Connection::open(path).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    applied_at INTEGER NOT NULL DEFAULT (unixepoch())
+                 );",
+            )
+            .unwrap();
+        for &(version, name, sql) in &MIGRATIONS[..5] {
+            connection.execute_batch(sql).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations(version, name) VALUES (?1, ?2)",
+                    params![version, name],
+                )
+                .unwrap();
+        }
+        let fingerprint = proposal_fingerprint(CANONICAL_REPOSITORY, "Legacy goal.");
+        let implementation_id = format!("gardener:implement:{fingerprint}");
+        connection
+            .execute(
+                "INSERT INTO obligations(
+                    id, description, state, occurrence, scheduled_at, next_wake_at,
+                    approval_required, attempts_made, max_attempts, retry_base_seconds,
+                    retry_max_seconds, lease_generation, lease_token, lease_expires_at,
+                    created_at, updated_at
+                 ) VALUES ('legacy-inspection-obligation', 'inspect', 'pending', 1, 10, 10,
+                           0, 0, 3, 60, 3600, 0, NULL, NULL, 10, 10)",
+                [],
+            )
+            .unwrap();
+        let is_running = run_source.is_some() || running_without_run;
+        let implementation_state = if is_running {
+            "running"
+        } else if approved {
+            "pending"
+        } else {
+            "awaiting_approval"
+        };
+        connection
+            .execute(
+                "INSERT INTO obligations(
+                    id, description, state, occurrence, scheduled_at, next_wake_at,
+                    approval_required, attempts_made, max_attempts, retry_base_seconds,
+                    retry_max_seconds, lease_generation, lease_token, lease_expires_at,
+                    created_at, updated_at
+                 ) VALUES (?1, 'implement', ?2, 1, 20, ?3, 1, ?4, 1, 60, 3600,
+                           ?4, ?5, ?6, 20, 20)",
+                params![
+                    implementation_id,
+                    implementation_state,
+                    (approved && !is_running).then_some(20),
+                    i64::from(is_running),
+                    is_running.then_some("legacy-token"),
+                    is_running.then_some(10_000_i64),
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO gardener_obligation_bindings(obligation_id, kind, created_at)
+                 VALUES ('legacy-inspection-obligation', 'inspection', 10),
+                        (?1, 'implementation', 20)",
+                [&implementation_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO gardener_repositories(
+                    repository, default_branch, checkout_path, inspection_cron,
+                    inspection_timezone, first_inspection_at, inspection_obligation_id,
+                    created_at, updated_at
+                 ) VALUES (?1, 'main', '/legacy', '* * * * *', 'UTC', 10,
+                           'legacy-inspection-obligation', 10, 10)",
+                [CANONICAL_REPOSITORY],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO gardener_proposals(
+                    fingerprint, repository, prompt, implementation_obligation_id, created_at
+                 ) VALUES (?1, ?2, 'Legacy goal.', ?3, 20)",
+                params![fingerprint, CANONICAL_REPOSITORY, implementation_id],
+            )
+            .unwrap();
+        for (index, source) in sources.iter().enumerate() {
+            let inspection_id = format!("legacy-inspection-{}", index + 1);
+            let source_commit = source.to_string().repeat(40);
+            connection
+                .execute(
+                    "INSERT INTO gardener_inspections(
+                        id, repository, obligation_id, occurrence, lease_generation,
+                        lease_token, source_commit, worktree_path, prompt_digest,
+                        result_json, started_at, completed_at
+                     ) VALUES (?1, ?2, 'legacy-inspection-obligation', ?3, ?3, 'token',
+                               ?4, ?5, ?6, ?7, ?8, ?8)",
+                    params![
+                        inspection_id,
+                        CANONICAL_REPOSITORY,
+                        (index + 1) as i64,
+                        source_commit,
+                        format!("/legacy/{inspection_id}"),
+                        "d".repeat(64),
+                        r#"{"summary":"legacy","proposed_goal_prompts":[]}"#,
+                        30 + index as i64,
+                    ],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO gardener_proposal_observations(
+                        proposal_fingerprint, inspection_id, source_commit, observed_at
+                     ) VALUES (?1, ?2, ?3, ?4)",
+                    params![fingerprint, inspection_id, source_commit, 40 + index as i64],
+                )
+                .unwrap();
+        }
+        if approved {
+            connection
+                .execute(
+                    "INSERT INTO approvals(
+                        obligation_id, occurrence, decision, actor, note, decided_at
+                     ) VALUES (?1, 1, 'approved', 'legacy-operator', 'legacy-note', 50)",
+                    [&implementation_id],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO audit_events(
+                        obligation_id, occurrence, event_type, occurred_at,
+                        from_state, to_state, details_json
+                     ) VALUES (?1, 1, 'approved', 50, 'awaiting_approval', 'pending',
+                               '{\"legacy\":true}')",
+                    [&implementation_id],
+                )
+                .unwrap();
+        }
+        connection
+            .execute(
+                "INSERT INTO gardener_events(
+                    repository, proposal_fingerprint, event_type, occurred_at, details_json
+                 ) VALUES (?1, ?2, 'legacy_marker', 51, '{\"legacy\":true}')",
+                params![CANONICAL_REPOSITORY, fingerprint],
+            )
+            .unwrap();
+        if is_running {
+            connection
+                .execute(
+                    "INSERT INTO attempts(
+                        obligation_id, occurrence, attempt_number, lease_generation,
+                        lease_token, claimed_at, outcome
+                     ) VALUES (?1, 1, 1, 1, 'legacy-token', 52, 'running')",
+                    [&implementation_id],
+                )
+                .unwrap();
+        }
+        if let Some(source) = run_source {
+            connection
+                .execute(
+                    "INSERT INTO gardener_implementation_runs(
+                        id, repository, proposal_fingerprint, obligation_id, occurrence,
+                        attempt_number, lease_generation, lease_token, source_commit,
+                        implementation_worktree_path, branch, phase, created_at, updated_at
+                     ) VALUES ('legacy-run', ?1, ?2, ?3, 1, 1, 1, 'legacy-token',
+                               ?4, '/legacy/run', 'codex/gardener-legacy', 'created', 52, 52)",
+                    params![
+                        CANONICAL_REPOSITORY,
+                        fingerprint,
+                        implementation_id,
+                        source.to_string().repeat(40)
+                    ],
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn migration_backfills_one_source_authority_and_exact_run_without_rewriting_evidence() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("legacy.sqlite3");
+        create_legacy_v5_database(&path, &['A'], true, Some('A'), false);
+
+        let store = Store::open(&path).unwrap();
+        let fingerprint = proposal_fingerprint(CANONICAL_REPOSITORY, "Legacy goal.");
+        let instances = store.gardener_proposal_instances(&fingerprint).unwrap();
+        assert_eq!(instances.len(), 1);
+        assert_eq!(
+            instances[0].approval_decision,
+            Some(ApprovalDecision::Approved)
+        );
+        assert_eq!(instances[0].source_observation_id, 1);
+        assert_eq!(instances[0].source_commit, "a".repeat(40));
+        let exact_observations = store
+            .proposal_instance_observations(&instances[0].id)
+            .unwrap();
+        assert_eq!(exact_observations.len(), 1);
+        assert_eq!(exact_observations[0].source_commit, "A".repeat(40));
+        let run = store
+            .gardener_implementation_run("legacy-run")
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.proposal_instance_id, instances[0].id);
+        assert_eq!(run.proposal_generation, 1);
+        assert_eq!(run.source_observation_id, 1);
+        assert_eq!(
+            store
+                .connection
+                .query_row(
+                    "SELECT details_json FROM audit_events WHERE sequence = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            r#"{"legacy":true}"#
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT count(*) FROM approvals", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT count(*) FROM gardener_events", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn migration_quarantines_ambiguous_multi_source_approval() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("legacy.sqlite3");
+        create_legacy_v5_database(&path, &['a', 'b'], true, None, false);
+
+        let store = Store::open(&path).unwrap();
+        let fingerprint = proposal_fingerprint(CANONICAL_REPOSITORY, "Legacy goal.");
+        let instances = store.gardener_proposal_instances(&fingerprint).unwrap();
+        assert_eq!(instances.len(), 2);
+        assert_eq!(instances[0].approval_decision, None);
+        assert_eq!(instances[0].obligation_state, ObligationState::Cancelled);
+        assert_eq!(instances[1].approval_decision, None);
+        assert_eq!(
+            instances[1].obligation_state,
+            ObligationState::AwaitingApproval
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row(
+                    "SELECT count(*) FROM gardener_proposal_instance_decisions",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT count(*) FROM approvals", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row(
+                    "SELECT details_json FROM audit_events WHERE sequence = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            r#"{"legacy":true}"#
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT count(*) FROM gardener_events", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn migration_keeps_ambiguous_running_work_leased_but_prevents_reclaim() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("legacy.sqlite3");
+        create_legacy_v5_database(&path, &['a', 'b'], true, None, true);
+
+        let mut store = Store::open(&path).unwrap();
+        let fingerprint = proposal_fingerprint(CANONICAL_REPOSITORY, "Legacy goal.");
+        let instances = store.gardener_proposal_instances(&fingerprint).unwrap();
+        assert_eq!(instances[0].obligation_state, ObligationState::Running);
+        assert!(instances[0].superseded_by.is_some());
+        assert_eq!(
+            instances[1].obligation_state,
+            ObligationState::AwaitingApproval
+        );
+        store.recover_expired_leases(10_000).unwrap();
+        assert_eq!(
+            store
+                .get(&instances[0].implementation_obligation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            ObligationState::Attention
+        );
+        assert!(
+            store
+                .claim_due_gardener(20_000, 60, 10)
+                .unwrap()
+                .into_iter()
+                .all(|claim| claim.obligation_id != instances[0].implementation_obligation_id)
+        );
+    }
+
+    #[test]
+    fn migration_keeps_an_ambiguous_legacy_run_visible_but_fences_continuation() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("legacy.sqlite3");
+        create_legacy_v5_database(&path, &['a', 'b'], true, Some('a'), false);
+
+        let mut store = Store::open(&path).unwrap();
+        let run = store
+            .gardener_implementation_run("legacy-run")
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.source_commit, "a".repeat(40));
+        assert_eq!(run.proposal_generation, 1);
+        let obligation = store.get(&run.obligation_id).unwrap().unwrap();
+        let claim = Claim {
+            obligation_id: obligation.id,
+            occurrence: obligation.occurrence,
+            attempt_number: obligation.attempts_made,
+            lease_token: obligation.lease_token.unwrap(),
+            lease_generation: obligation.lease_generation,
+            lease_expires_at: obligation.lease_expires_at.unwrap(),
+            description: obligation.description,
+        };
+        assert!(matches!(
+            store.record_implementation_codex_thread(
+                &claim,
+                "legacy-run",
+                "must-not-continue",
+                100,
+            ),
+            Err(StoreError::Fenced)
+        ));
+        assert!(store.gardener_run_events("legacy-run").unwrap().is_empty());
     }
 }

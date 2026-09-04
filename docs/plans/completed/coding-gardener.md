@@ -141,3 +141,12 @@ escalations were not explicitly denied; both findings were repaired and the
 new exact head passed re-review. Final merge, tree-identity and cleanup evidence
 belongs to the pull request landing comment. No deployment or service restart
 is part of this outcome.
+
+## Subsequent hardening
+
+The original content-fingerprint deduplication delivered here was superseded by
+the runtime-hardening programme's P3 package. The fingerprint remains the stable
+repository/prompt goal identity, while approval, rejection, supersession and
+dispatch now bind an immutable source observation, commit and monotonically
+numbered proposal instance. Historical rows and evidence from this completed
+slice remain unchanged.

@@ -40,16 +40,16 @@ is not silently interpreted as permission to grant rights.
 |---|---|---|---|
 | R1 | Renewal targets at most one lease duration after the latest heartbeat; same-time renewal is a no-op; expired running work is not projected as active | Satisfied by P1 landing `8154ca4a5bc4c3aa0356cc74e3874544b4231296` | P1 |
 | R2 | Codex, Git, GitHub and future child processes share heartbeat, deadline, cancellation, process-tree termination, bounded output and typed outcomes; shutdown is bounded | Satisfied by P1 landing `8154ca4a5bc4c3aa0356cc74e3874544b4231296`; terminal fixture repair on PR #7 | P1 |
-| R3 | Child environments, executables, Git configuration, hooks and credentials are explicit and least-authority; exact Git metadata is revalidated before credential-bearing work | P2 candidate on PR #8 clears ambient state, binds tool identities, rejects executable local Git configuration, confines GitHub credentials to mutations and revalidates topology/origin/head immediately before them; unlanded and human-held | P2 |
-| R4 | Candidate checks and evidence precede draft-to-ready promotion; exact PR heads remain authoritative; CI protects candidate code without secrets or privilege | P2 candidate on PR #8 qualifies a manifest-derived copy in a network-off OS sandbox before push, observes drafts without credentials, promotes only a passing re-observed head, and adds pinned token-cleared read-only CI; unlanded and human-held | P2 |
-| R5 | Approval selects an exact proposal generation and source observation; later source commits stale or supersede earlier instances; terminal goals may recur in later generations | Open: content fingerprint is reused forever and dispatch selects the latest observation | P3 |
+| R3 | Child environments, executables, Git configuration, hooks and credentials are explicit and least-authority; exact Git metadata is revalidated before credential-bearing work | Satisfied by P2 landing `9cf9329f374f545eccca596fd9df8a451a48a065` | P2 |
+| R4 | Candidate checks and evidence precede draft-to-ready promotion; exact PR heads remain authoritative; CI protects candidate code without secrets or privilege | Satisfied by P2 landing `9cf9329f374f545eccca596fd9df8a451a48a065` | P2 |
+| R5 | Approval selects an exact proposal generation and source observation; later source commits stale or supersede earlier instances; terminal goals may recur in later generations | P3 terminal candidate on PR #9 adds immutable source-bound instances, exact decisions and dispatch, deterministic migration and temporal tests | P3 |
 | R6 | Migrations run at startup, have immutable recorded digests and reject gaps/newer schemas; blocking DB work is isolated from async handlers; `doctor` reports integrity and reconciliation without repair | Open: every `Store::open` enters the migration loop and no doctor exists | P4 |
 | R7 | Snapshots are transactionally consistent and cursor-paginated with bounded queries, a global ordering envelope and an incremental change watermark | Open: histories are unbounded and topic projection globally loads then filters | P5 |
 | R8 | Ordinary, gardener and future outbox work use fair, bounded lanes without starvation while preserving existing claim/lease fencing | Open: one gardener-first synchronous scheduler thread | P5 |
-| R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | P1 satisfies typed process outcomes, bounded output evidence and lease/process temporal tests; P2 candidate adds durable tool/policy/check/tree manifests and bounded structured gardener results; later lifecycle properties remain for P3–P5 | P1–P5 |
+| R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | P1 satisfies typed process outcomes and lease/process temporal tests; P2 adds durable tool/policy/check/tree manifests; P3 candidate aligns Unicode model-field limits and tests proposal temporal properties; P4–P5 remain | P1–P5 |
 | R10 | Mutation routes identify runtime/API/schema build, validate local request origin and use a per-process mutation secret without widening loopback exposure | Open; stale-state preconditions and same-origin topology already exist | P4; human review |
-| R11 | Large modules are split along established semantic ownership after contracts settle | P1 establishes `process` as supervision owner; P2 candidate establishes `runtime_trust` as environment/executable/credential-policy owner while later package splits remain conditional | P1–P5 |
-| R12 | Toolchain and locked checks are pinned in CI; completed-plan claims are linted and reconciled; conditional licensing and live branch protection have explicit terminal decisions | P2 candidate pins Rust 1.85.0 and locked canonical checks in read-only secret-free CI; plan linting, protection and licensing decisions remain for P6 | P2/P6 |
+| R11 | Large modules are split along established semantic ownership after contracts settle | P1 establishes `process` as supervision owner; P2 establishes `runtime_trust`; P3 retains proposal lifecycle ownership in Store while later package splits remain conditional | P1–P5 |
+| R12 | Toolchain and locked checks are pinned in CI; completed-plan claims are linted and reconciled; conditional licensing and live branch protection have explicit terminal decisions | P2 pins Rust 1.85.0 and locked canonical checks in read-only secret-free CI; plan linting, protection and licensing decisions remain for P6 | P2/P6 |
 
 Already-satisfied evidence that must be retained includes atomic Store-owned
 lifecycle transitions, append-only audit events, generation/token fencing,
@@ -65,8 +65,8 @@ Only the next unblocked package is refined after each landing.
 |---|---|---|---|
 | P0 | Land this re-baselined programme checkpoint | `main` baseline above | Landed as [PR #5](https://github.com/robchristie/bokkie/pull/5) at `e8d3218433f97c8dfc542c80d0ac813d283d86b5` |
 | P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Landed as [PR #6](https://github.com/robchristie/bokkie/pull/6) at `8154ca4a5bc4c3aa0356cc74e3874544b4231296`; terminal fixture repair on [PR #7](https://github.com/robchristie/bokkie/pull/7) |
-| P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Human-held candidate on [PR #8](https://github.com/robchristie/bokkie/pull/8); implementation checkpoint `a6d12e76835cf406e584534ae3ba6b5c11c13272`, first-review repair `1fd723745152aeece226769b24c902bc423eca83`, runner portability repair `029d163c6133c9cea061334ed30e57a45b99f162`, worker-profile repair `1207beaea6ace76b75a3fd6f2b33c3428fc5dc29`, credential-channel repair `5ff18a8ba0aeb5189919cab340e6a4d329480fb3`, descendant-isolation repair `f43213055767eebdc8bbc58846114ba7e25fbd9e` |
-| P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Candidate |
+| P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Landed as [PR #8](https://github.com/robchristie/bokkie/pull/8) at `9cf9329f374f545eccca596fd9df8a451a48a065`; reviewed and landed tree `49fe98d01d6f8969be9f0bad19f815f31719b11e` |
+| P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Terminal candidate on [PR #9](https://github.com/robchristie/bokkie/pull/9); exact review, CI and landing pending |
 | P4 | Startup-only migration, manifest verification, DB executor/transactions, read-only doctor and reviewed local mutation protection | P3 schema | Candidate; security portion needs human review |
 | P5 | Fair execution lanes, paginated/incremental projections and global event envelope, with bounded fields and model-based lifecycle tests | P4 storage contract | Candidate |
 | P6 | Exact-head aggregate qualification, plan reconciliation/linter, toolchain and repository-policy closeout | P1–P5 | Candidate; live branch protection/licence decision may need human review |
@@ -90,34 +90,15 @@ remote-tracking references and live remote heads.
 
 ## Current phase
 
-P1 is terminal: its descendant-state fixture repair landed through PR #7 as
-`60535e6ecd5f882c17cce8a2f2222d7a190faa1e`. P2 is the active human-held
-candidate on PR #8. Its first exact-head review blocked unauthenticated `gh`
-observation, unisolated candidate code, executable local Git configuration and
-retained CI checkout credentials. The repair uses credential-free public API
-observation, a manifest-derived Bubblewrap boundary, fail-closed Git-config
-auditing and token-cleared CI. Local checks and representative real `curl` and
-Bubblewrap probes pass. The first repaired-head CI exposed that the GitHub image
-does not install Bubblewrap; orchestration fixtures now use a fake boundary
-while the hostile real-Bubblewrap probe remains conditional and passed locally.
-A second review blocked the example worker's missing `AF_NETLINK` and read-only
-common Git directory. The worker now uses a dedicated account, read-only
-checkout tree and writable separate common Git directory in private state; its
-exact systemd Bubblewrap policy probe passes. The same reviewer and new CI must
-pass the final exact head. A third review found the systemd credential mount was
-still descendant-readable; the CLI now accepts only a bounded one-shot standard
-input token, closes that descriptor and protects the credential-holding process
-before any child, while the example's backing object is root-only and
-worker-inaccessible. A fourth review found that a Codex child could daemonise,
-escape its process group and read a later same-UID mutation environment. Every
-Codex turn now runs through the identified Bubblewrap executable in a private
-PID namespace with private procfs; namespace teardown kills all descendants
-before publication can continue. The shared supervisor also kills silent
-same-group descendants after normal completion. A hostile control reproduces
-the credential read while the real boundary prevents it. The PR may be marked
-ready only after re-review and CI, then escalated for explicit human merge
-authority. No real gardener, credential, deployment or repository-policy
-mutation is part of this package.
+P2 is terminal through PR #8: independent review passed exact head
+`387e0300c7a7bca2136ab30748a47135c2b8847a`, exact CI passed, and squash merge
+`9cf9329f374f545eccca596fd9df8a451a48a065` retained the reviewed tree. P3 is
+the terminal candidate on PR #9. It keeps the stable repository/prompt goal
+fingerprint while binding each actionable proposal, decision, observation,
+supersession and implementation run to an immutable source instance and
+generation. Migration preserves legacy append-only evidence and transfers only
+unambiguous one-source authority. Deterministic Store, adapter and UI tests pass;
+independent exact-head review, CI, merge and cleanup remain.
 
 ## Durable evidence
 
@@ -136,6 +117,8 @@ mutation is part of this package.
 | P2 worker-profile review | `5f74e90de2904e1bfd95e50a8ae6978b493e5848` | `1207beaea6ace76b75a3fd6f2b33c3428fc5dc29` | Code and CI passed, but review BLOCKED the example worker: Bubblewrap needed `AF_NETLINK` and Git needed a writable common directory. The repair adds the address family and a documented worker-owned checkout with separate writable Git metadata; the exact systemd policy probe succeeds | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5535203787) and [CI run 33832528257](https://github.com/robchristie/bokkie/actions/runs/33832528257) |
 | P2 credential-channel review | `6ccf807e4c6cb9403786b2fcf6870b61986aba92` | `5ff18a8ba0aeb5189919cab340e6a4d329480fb3` | Code, CI and worker probes passed, but review BLOCKED the descendant-readable systemd credential mount. The repair replaces the path input with a bounded one-shot standard-input descriptor, closes it before child startup, marks the daemon non-dumpable, requires a root-only worker-inaccessible backing object, and adds a hostile descendant test | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5535284201) and [CI run 33833186151](https://github.com/robchristie/bokkie/actions/runs/33833186151) |
 | P2 descendant-isolation review | `9eff533da3d6f7a34378d3bb2c5b027726600800` | `f43213055767eebdc8bbc58846114ba7e25fbd9e` | Code and CI passed, but review BLOCKED a daemonised Codex descendant that could inspect a later same-UID mutation environment. The repair gives every Codex turn a private PID namespace and procfs with kernel-owned descendant teardown, retains parent-loss teardown, and makes the shared supervisor kill silent same-group descendants on normal completion | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5535325775) and [CI run 33833789310](https://github.com/robchristie/bokkie/actions/runs/33833789310) |
+| P2 reviewed landing | `387e0300c7a7bca2136ab30748a47135c2b8847a` | `9cf9329f374f545eccca596fd9df8a451a48a065` | Independent PASS; exact and post-merge CI passed; reviewed and landed trees both `49fe98d01d6f8969be9f0bad19f815f31719b11e` | [PR #8 terminal evidence](https://github.com/robchristie/bokkie/pull/8#issuecomment-5536130203) |
+| P3 source-bound generations | PR #9 terminal candidate | same | Stable goals now own immutable source generations; exact decision/dispatch, supersession, conservative v6 migration, reopen/race/terminal recurrence, stale claim/UI and Unicode-bound tests pass locally | [PR #9](https://github.com/robchristie/bokkie/pull/9), migration 0006 and Store/operator tests |
 
 ## Residual questions
 
