@@ -66,7 +66,10 @@ only one lane is waiting, it proceeds without an artificial turn delay.
 
 On `SIGTERM` or `SIGINT`, one shared admission gate serialises closure against
 the Store claim check across all lanes, stops new claims, and cancels active
-work. An interrupted fake invocation records a typed
+work. Closing admission does not wait for an already-admitted Store call or
+worker, so HTTP graceful shutdown begins immediately; the scheduler supervisor
+alone applies the bounded worker deadline. An interrupted fake invocation
+records a typed
 cancelled result while its lease remains valid; an active gardener child gets
 the same supervised cancellation signal. Lane joins are bounded to five
 seconds; Rust threads that fail to cooperate are detached and their claims
