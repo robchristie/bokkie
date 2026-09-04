@@ -102,7 +102,7 @@ must consume the P1 supervisor rather than introduce another process boundary.
 | Checkpoint | Owner revision | Consumer revision | Result | Evidence |
 |---|---|---|---|---|
 | Review re-baseline | `12f5c65901d07248d152ebf80548116cf0c7b040` | same | Open rows and preserved guarantees mapped; working tree initially clean | This plan and source paths in the review objective |
-| P1 bounded leases and supervised execution | `0c91f9a0482df8c40bb6ae444193366ac5c7dde1` | `P1_PLAN_CONSUMER` | 81 library, 1 CLI, 10 adapter and 21 attention-UI tests passed; Clippy and rustfmt passed; deterministic fixtures cover renewal/projection boundaries, never-exit, descendant termination, output overflow, deadline race, heartbeats, Store heartbeat failure, app-server/Git shutdown and ambiguous `gh` mutation | `src/process.rs`, Store/operator tests, and the P1 terminal pull request |
+| P1 bounded leases and supervised execution | `0c91f9a0482df8c40bb6ae444193366ac5c7dde1` | `b46788020a6b3953ac6f3dc20fef2e529d0d9d02` | 81 library, 1 CLI, 10 adapter and 21 attention-UI tests passed; Clippy and rustfmt passed; deterministic fixtures cover renewal/projection boundaries, never-exit, descendant termination, output overflow, deadline race, heartbeats, Store heartbeat failure, app-server/Git shutdown and ambiguous `gh` mutation | `src/process.rs`, Store/operator tests, and the P1 terminal pull request |
 
 ## Residual questions
 
