@@ -43,7 +43,7 @@ is not silently interpreted as permission to grant rights.
 | R3 | Child environments, executables, Git configuration, hooks and credentials are explicit and least-authority; exact Git metadata is revalidated before credential-bearing work | Satisfied by P2 landing `9cf9329f374f545eccca596fd9df8a451a48a065` | P2 |
 | R4 | Candidate checks and evidence precede draft-to-ready promotion; exact PR heads remain authoritative; CI protects candidate code without secrets or privilege | Satisfied by P2 landing `9cf9329f374f545eccca596fd9df8a451a48a065` | P2 |
 | R5 | Approval selects an exact proposal generation and source observation; later source commits stale or supersede earlier instances; terminal goals may recur in later generations | Satisfied by P3 landing `9920006635c01cd266e6f2cd3a3546fe21747867` | P3 |
-| R6 | Migrations run at startup, have immutable recorded digests and reject gaps/newer schemas; blocking DB work is isolated from async handlers; `doctor` reports integrity and reconciliation without repair | P4a terminal candidate: locally qualified; exact-head review, CI and landing pending | P4a |
+| R6 | Migrations run at startup, have immutable recorded digests and reject gaps/newer schemas; blocking DB work is isolated from async handlers; `doctor` reports integrity and reconciliation without repair | P4a terminal candidate: independent review and exact-head CI pass; landing pending | P4a |
 | R7 | Snapshots are transactionally consistent and cursor-paginated with bounded queries, a global ordering envelope and an incremental change watermark | Open: histories are unbounded and topic projection globally loads then filters | P5 |
 | R8 | Ordinary, gardener and future outbox work use fair, bounded lanes without starvation while preserving existing claim/lease fencing | Open: one gardener-first synchronous scheduler thread | P5 |
 | R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | P1 satisfies typed process outcomes and lease/process temporal tests; P2 adds durable tool/policy/check/tree manifests; P3 aligns Unicode model-field limits and tests proposal temporal properties; P4a–P5 remain | P1–P5 |
@@ -67,7 +67,7 @@ Only the next unblocked package is refined after each landing.
 | P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Landed as [PR #6](https://github.com/robchristie/bokkie/pull/6) at `8154ca4a5bc4c3aa0356cc74e3874544b4231296`; terminal fixture repair on [PR #7](https://github.com/robchristie/bokkie/pull/7) |
 | P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Landed as [PR #8](https://github.com/robchristie/bokkie/pull/8) at `9cf9329f374f545eccca596fd9df8a451a48a065`; reviewed and landed tree `49fe98d01d6f8969be9f0bad19f815f31719b11e` |
 | P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Landed as [PR #9](https://github.com/robchristie/bokkie/pull/9) at `9920006635c01cd266e6f2cd3a3546fe21747867`; reviewed and landed tree `c844e629c88d363497eed5918e4f2553d941ac38` |
-| P4a | Startup-only migration, immutable manifest verification, bounded HTTP database execution, consistent read snapshots and read-only doctor | P3 schema | Terminal candidate on [PR #10](https://github.com/robchristie/bokkie/pull/10); locked local checks pass; repair/adoption remains unauthorised |
+| P4a | Startup-only migration, immutable manifest verification, bounded HTTP database execution, consistent read snapshots and read-only doctor | P3 schema | [PR #10](https://github.com/robchristie/bokkie/pull/10) independently passed at `45e7b9761b2d8ef19cddfa5b46589805abd22951`; landing pending; repair/adoption remains unauthorised |
 | P4b | Reviewed API mutation secret, local Host/Origin validation and runtime/API/schema build identity | P4a storage contract | Candidate; access-control policy requires human review before merge |
 | P5 | Fair execution lanes, paginated/incremental projections and global event envelope, with bounded fields and model-based lifecycle tests | P4 storage contract | Candidate |
 | P6 | Exact-head aggregate qualification, plan reconciliation/linter, toolchain and repository-policy closeout | P1–P5 | Candidate; live branch protection/licence decision may need human review |
@@ -104,9 +104,12 @@ corruption, proposal-generation and external-reconciliation fixtures pass with
 131 library, 2 CLI and 12 adapter tests; locked all-feature Clippy, rustfmt and
 diff checks pass. The first review's repository-configured live-remote and torn
 multi-query projection findings are repaired with neutral HTTPS observation and
-one Store-owned proposal-instance snapshot. Exact-head re-review, CI and
-landing remain. P3 proposal authority is preserved; repair, adoption and
-external mutation remain outside this package.
+one Store-owned proposal-instance snapshot. Independent review passed exact
+head `45e7b9761b2d8ef19cddfa5b46589805abd22951`, tree
+`7deadaa6eb8d46c8d54c80ba53c2ff47eb192960`; exact-head CI run `33851124272`
+passed. Final plan-only reconciliation and landing remain. P3 proposal authority
+is preserved; repair, adoption and external mutation remain outside this
+package.
 
 ## Durable evidence
 
@@ -130,6 +133,7 @@ external mutation remain outside this package.
 | P4a storage design | `9920006635c01cd266e6f2cd3a3546fe21747867` | active package branch | Exact-prefix v1–v6 adoption plus appended digest metadata selected; HTTP and scheduler retain separate bounded storage owners; diagnosis captures database evidence before read-only external reconciliation | `src/store.rs`, migrations 0001–0006, `src/http.rs`, `src/service.rs` and this checkpoint |
 | P4a terminal candidate | P3 landed tree | terminal package branch | 131 library, 2 CLI and 12 adapter tests; locked all-feature Clippy, rustfmt and diff checks pass; temporary databases and repositories prove migrate-once compatibility, executor bounds, snapshot consistency, relational/source invariants and no doctor mutation | Migration, executor, doctor and adapter tests on the package branch |
 | P4a first exact-head review | `ff5871862e1df5bc0b16e6f29eb523e1bd7aeaf6` | same | BLOCK: live remote observation could honour hostile repository transport configuration; proposal-instance listing could combine multiple SQLite snapshots | [PR #10 review trajectory](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537425057) |
+| P4a repaired exact-head review | `45e7b9761b2d8ef19cddfa5b46589805abd22951` | same | Independent PASS; 131 library, 2 CLI and 12 adapter tests plus locked Clippy/rustfmt/diff passed; exact-head CI run `33851124272` passed | [PR #10 PASS evidence](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537523382) |
 
 ## Residual questions
 
