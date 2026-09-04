@@ -249,6 +249,7 @@ pub struct ReadOnlyInvocation {
     pub program: PathBuf,
     pub arguments: Vec<String>,
     pub environment: Vec<(String, String)>,
+    pub current_directory: Option<PathBuf>,
     pub timeout: Duration,
 }
 
@@ -277,6 +278,9 @@ impl ReadOnlyCommandExecutor for SystemReadOnlyCommandExecutor {
             .args(&invocation.arguments)
             .env_clear()
             .envs(invocation.environment.iter().cloned());
+        if let Some(current_directory) = &invocation.current_directory {
+            command.current_dir(current_directory);
+        }
 
         let limits = ProcessLimits {
             stdin_message_bytes: 1,
@@ -390,13 +394,7 @@ impl CommandExternalObserver {
     }
 
     fn git(&self, checkout: &Path, arguments: &[&str]) -> Result<String, ObservationError> {
-        const ALLOWED_SUBCOMMANDS: &[&str] = &[
-            "for-each-ref",
-            "ls-remote",
-            "remote",
-            "rev-parse",
-            "worktree",
-        ];
+        const ALLOWED_SUBCOMMANDS: &[&str] = &["config", "for-each-ref", "rev-parse", "worktree"];
         let Some(subcommand) = arguments.first() else {
             return Err(ObservationError::Invalid(
                 "empty Git observation was rejected".to_owned(),
@@ -425,6 +423,45 @@ impl CommandExternalObserver {
                 ("GIT_OPTIONAL_LOCKS".to_owned(), "0".to_owned()),
                 ("GIT_TERMINAL_PROMPT".to_owned(), "0".to_owned()),
             ],
+            current_directory: None,
+            timeout: self.timeout,
+        };
+        self.executor
+            .execute(&invocation)
+            .map(|output| output.stdout)
+    }
+
+    fn live_https_refs(&self, repository: &str) -> Result<String, ObservationError> {
+        if !valid_github_repository(repository) {
+            return Err(ObservationError::Invalid(
+                "registered repository is not a canonical GitHub owner/name".to_owned(),
+            ));
+        }
+        let invocation = ReadOnlyInvocation {
+            program: self.git_program.clone(),
+            arguments: vec![
+                "-c".to_owned(),
+                "credential.helper=".to_owned(),
+                "-c".to_owned(),
+                "core.hooksPath=/dev/null".to_owned(),
+                "-c".to_owned(),
+                "protocol.allow=never".to_owned(),
+                "-c".to_owned(),
+                "protocol.https.allow=always".to_owned(),
+                "ls-remote".to_owned(),
+                "--heads".to_owned(),
+                format!("https://github.com/{repository}.git"),
+            ],
+            environment: vec![
+                ("GIT_ASKPASS".to_owned(), "/bin/false".to_owned()),
+                ("GIT_CEILING_DIRECTORIES".to_owned(), "/".to_owned()),
+                ("GIT_CONFIG_GLOBAL".to_owned(), "/dev/null".to_owned()),
+                ("GIT_CONFIG_NOSYSTEM".to_owned(), "1".to_owned()),
+                ("GIT_OPTIONAL_LOCKS".to_owned(), "0".to_owned()),
+                ("GIT_TERMINAL_PROMPT".to_owned(), "0".to_owned()),
+                ("SSH_ASKPASS".to_owned(), "/bin/false".to_owned()),
+            ],
+            current_directory: Some(PathBuf::from("/")),
             timeout: self.timeout,
         };
         self.executor
@@ -454,6 +491,7 @@ impl CommandExternalObserver {
                 url.to_owned(),
             ],
             environment: Vec::new(),
+            current_directory: None,
             timeout: self.timeout,
         };
         self.executor
@@ -468,7 +506,30 @@ impl ExternalObserver for CommandExternalObserver {
         checkout: &RegisteredCheckout,
     ) -> Result<CheckoutObservation, ObservationError> {
         let root = self.git(&checkout.checkout_path, &["rev-parse", "--show-toplevel"])?;
-        let origin_url = self.git(&checkout.checkout_path, &["remote", "get-url", "origin"])?;
+        let origin_url = self.git(
+            &checkout.checkout_path,
+            &[
+                "config",
+                "--local",
+                "--no-includes",
+                "--get-all",
+                "remote.origin.url",
+            ],
+        )?;
+        let expected_root = std::fs::canonicalize(&checkout.checkout_path)
+            .unwrap_or_else(|_| checkout.checkout_path.clone());
+        let observed_root = std::fs::canonicalize(&root).unwrap_or_else(|_| PathBuf::from(&root));
+        if observed_root != expected_root {
+            return Err(ObservationError::Invalid(format!(
+                "checkout root {observed_root:?} does not match registered path {expected_root:?}"
+            )));
+        }
+        if !origin_matches_repository(&origin_url, &checkout.repository) {
+            return Err(ObservationError::Invalid(format!(
+                "raw checkout origin {origin_url:?} does not identify {}",
+                checkout.repository
+            )));
+        }
         let head = self.git(
             &checkout.checkout_path,
             &["rev-parse", "--verify", "HEAD^{commit}"],
@@ -497,7 +558,7 @@ impl ExternalObserver for CommandExternalObserver {
             .into_iter()
             .partition(|reference| reference.name.starts_with("refs/heads/"));
         let live_remote_branches = self
-            .git(&checkout.checkout_path, &["ls-remote", "--heads", "origin"])
+            .live_https_refs(&checkout.repository)
             .and_then(|output| parse_ls_remote(&output));
         Ok(CheckoutObservation {
             canonical_path: PathBuf::from(root),
@@ -1801,13 +1862,24 @@ fn add_warning(
 }
 
 fn origin_matches_repository(origin: &str, repository: &str) -> bool {
-    let trimmed = origin.trim().trim_end_matches('/').trim_end_matches(".git");
-    trimmed
-        .strip_prefix("https://github.com/")
-        .or_else(|| trimmed.strip_prefix("http://github.com/"))
-        .or_else(|| trimmed.strip_prefix("ssh://git@github.com/"))
-        .or_else(|| trimmed.strip_prefix("git@github.com:"))
-        == Some(repository)
+    matches!(
+        origin.trim(),
+        value if value == format!("https://github.com/{repository}")
+            || value == format!("https://github.com/{repository}.git")
+    )
+}
+
+fn valid_github_repository(repository: &str) -> bool {
+    let Some((owner, name)) = repository.split_once('/') else {
+        return false;
+    };
+    !owner.is_empty()
+        && !name.is_empty()
+        && !name.contains('/')
+        && owner
+            .bytes()
+            .chain(name.bytes())
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn is_commit_id(value: &str) -> bool {
@@ -2380,6 +2452,30 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct NeutralLiveRecordingExecutor {
+        live_invocation: Mutex<Option<ReadOnlyInvocation>>,
+    }
+
+    impl ReadOnlyCommandExecutor for NeutralLiveRecordingExecutor {
+        fn execute(
+            &self,
+            invocation: &ReadOnlyInvocation,
+        ) -> Result<ReadOnlyCommandOutput, ObservationError> {
+            if invocation
+                .arguments
+                .iter()
+                .any(|argument| argument == "ls-remote")
+            {
+                *self.live_invocation.lock().unwrap() = Some(invocation.clone());
+                return Ok(ReadOnlyCommandOutput {
+                    stdout: String::new(),
+                });
+            }
+            SystemReadOnlyCommandExecutor.execute(invocation)
+        }
+    }
+
     #[test]
     fn command_observer_uses_only_the_exact_read_only_allowlist() {
         let executor = Arc::new(RecordingExecutor::with_outputs([
@@ -2429,9 +2525,15 @@ mod tests {
             "-C",
             "/srv/bokkie",
         ];
-        let expected_git_suffixes: [&[&str]; 7] = [
+        let expected_git_suffixes: [&[&str]; 6] = [
             &["rev-parse", "--show-toplevel"],
-            &["remote", "get-url", "origin"],
+            &[
+                "config",
+                "--local",
+                "--no-includes",
+                "--get-all",
+                "remote.origin.url",
+            ],
             &["rev-parse", "--verify", "HEAD^{commit}"],
             &["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"],
             &["worktree", "list", "--porcelain", "-z"],
@@ -2441,9 +2543,8 @@ mod tests {
                 "refs/heads",
                 "refs/remotes/origin",
             ],
-            &["ls-remote", "--heads", "origin"],
         ];
-        for (invocation, suffix) in invocations.iter().take(7).zip(expected_git_suffixes) {
+        for (invocation, suffix) in invocations.iter().take(6).zip(expected_git_suffixes) {
             assert_eq!(invocation.program, Path::new("/usr/bin/git"));
             assert_eq!(
                 invocation.arguments,
@@ -2462,8 +2563,41 @@ mod tests {
                     ("GIT_TERMINAL_PROMPT".to_owned(), "0".to_owned()),
                 ]
             );
+            assert_eq!(invocation.current_directory, None);
             assert_eq!(invocation.timeout, Duration::from_secs(7));
         }
+        assert_eq!(invocations[6].program, Path::new("/usr/bin/git"));
+        assert_eq!(
+            invocations[6].arguments,
+            [
+                "-c",
+                "credential.helper=",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "protocol.allow=never",
+                "-c",
+                "protocol.https.allow=always",
+                "ls-remote",
+                "--heads",
+                "https://github.com/robchristie/bokkie.git",
+            ]
+            .map(str::to_owned)
+        );
+        assert_eq!(
+            invocations[6].environment,
+            [
+                ("GIT_ASKPASS".to_owned(), "/bin/false".to_owned()),
+                ("GIT_CEILING_DIRECTORIES".to_owned(), "/".to_owned()),
+                ("GIT_CONFIG_GLOBAL".to_owned(), "/dev/null".to_owned()),
+                ("GIT_CONFIG_NOSYSTEM".to_owned(), "1".to_owned()),
+                ("GIT_OPTIONAL_LOCKS".to_owned(), "0".to_owned()),
+                ("GIT_TERMINAL_PROMPT".to_owned(), "0".to_owned()),
+                ("SSH_ASKPASS".to_owned(), "/bin/false".to_owned()),
+            ]
+        );
+        assert_eq!(invocations[6].current_directory, Some(PathBuf::from("/")));
+        assert_eq!(invocations[6].timeout, Duration::from_secs(7));
         assert_eq!(invocations[7].program, Path::new("/usr/bin/curl"));
         assert_eq!(
             invocations[7].arguments,
@@ -2488,6 +2622,144 @@ mod tests {
             .map(str::to_owned)
         );
         assert!(invocations[7].environment.is_empty());
+        assert_eq!(invocations[7].current_directory, None);
+    }
+
+    #[test]
+    fn invalid_checkout_identity_stops_before_live_remote_observation() {
+        let executor = Arc::new(RecordingExecutor::with_outputs([
+            "/srv/bokkie",
+            "ext::hostile-transport",
+        ]));
+        let observer = CommandExternalObserver::with_executor(
+            "/usr/bin/git",
+            "/usr/bin/curl",
+            Duration::from_secs(2),
+            executor.clone(),
+        )
+        .unwrap();
+
+        let error = observer
+            .observe_checkout(&RegisteredCheckout {
+                repository: "robchristie/bokkie".to_owned(),
+                default_branch: "main".to_owned(),
+                checkout_path: PathBuf::from("/srv/bokkie"),
+                runs: Vec::new(),
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, ObservationError::Invalid(_)));
+        let invocations = executor.invocations.lock().unwrap();
+        assert_eq!(invocations.len(), 2);
+        assert!(
+            invocations
+                .iter()
+                .all(|invocation| !invocation.arguments.iter().any(|arg| arg == "ls-remote"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hostile_checkout_transport_config_cannot_reach_live_observation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let checkout = directory.path().join("checkout");
+        fs::create_dir(&checkout).unwrap();
+        git(&checkout, &["init", "--initial-branch=main"]);
+        git(&checkout, &["config", "user.name", "Doctor fixture"]);
+        git(
+            &checkout,
+            &["config", "user.email", "doctor@example.invalid"],
+        );
+        fs::write(checkout.join("README.md"), "fixture\n").unwrap();
+        git(&checkout, &["add", "README.md"]);
+        git(&checkout, &["commit", "-m", "Initialise fixture"]);
+        git(
+            &checkout,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/robchristie/bokkie.git",
+            ],
+        );
+        git(
+            &checkout,
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+
+        let sentinel = directory.path().join("transport-sentinel");
+        let hostile = directory.path().join("hostile-transport");
+        fs::write(
+            &hostile,
+            format!(
+                "#!/bin/sh\nprintf invoked > '{}'\nexit 1\n",
+                sentinel.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&hostile).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&hostile, permissions).unwrap();
+        git(&checkout, &["config", "protocol.ext.allow", "always"]);
+        git(
+            &checkout,
+            &["config", "core.sshCommand", hostile.to_str().unwrap()],
+        );
+        git(
+            &checkout,
+            &[
+                "config",
+                "credential.helper",
+                &format!("!{}", hostile.display()),
+            ],
+        );
+        git(
+            &checkout,
+            &[
+                "config",
+                &format!("url.ext::{}.insteadOf", hostile.display()),
+                "https://github.com/",
+            ],
+        );
+
+        let executor = Arc::new(NeutralLiveRecordingExecutor::default());
+        let observer = CommandExternalObserver::with_executor(
+            "/usr/bin/git",
+            "/usr/bin/curl",
+            Duration::from_secs(2),
+            executor.clone(),
+        )
+        .unwrap();
+        observer
+            .observe_checkout(&RegisteredCheckout {
+                repository: "robchristie/bokkie".to_owned(),
+                default_branch: "main".to_owned(),
+                checkout_path: checkout,
+                runs: Vec::new(),
+            })
+            .unwrap();
+
+        assert!(!sentinel.exists());
+        let live = executor.live_invocation.lock().unwrap().clone().unwrap();
+        assert_eq!(live.current_directory, Some(PathBuf::from("/")));
+        assert_eq!(
+            live.arguments.last().map(String::as_str),
+            Some("https://github.com/robchristie/bokkie.git")
+        );
+        assert!(!live.arguments.iter().any(|argument| argument == "origin"));
+        assert!(!live.arguments.iter().any(|argument| argument == "-C"));
+        assert!(
+            live.arguments
+                .windows(2)
+                .any(|pair| pair == ["-c", "protocol.allow=never"])
+        );
+        assert!(
+            live.arguments
+                .windows(2)
+                .any(|pair| pair == ["-c", "protocol.https.allow=always"])
+        );
     }
 
     struct FixedCheckoutObserver(CheckoutObservation);

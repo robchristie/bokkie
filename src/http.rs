@@ -558,7 +558,7 @@ async fn list_gardener_proposal_instances(
     State(state): State<ApiState>,
 ) -> Result<Response, ApiError> {
     with_store(&state, move |store, _| {
-        all_gardener_proposal_instances(store)
+        store.gardener_proposal_instances_all()
     })
     .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
@@ -821,14 +821,6 @@ fn require_gardener_proposal_instance(
     store
         .gardener_proposal_instance(instance_id)?
         .ok_or_else(|| StoreError::NotFound(instance_id.to_owned()))
-}
-
-fn all_gardener_proposal_instances(store: &Store) -> Result<Vec<ProposalInstance>, StoreError> {
-    let mut instances = Vec::new();
-    for proposal in store.gardener_proposals()? {
-        instances.extend(store.gardener_proposal_instances(&proposal.fingerprint)?);
-    }
-    Ok(instances)
 }
 
 fn require_gardener_run(store: &Store, id: &str) -> Result<GardenerImplementationRun, StoreError> {

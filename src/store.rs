@@ -148,6 +148,20 @@ impl Store {
         Ok(Self { connection })
     }
 
+    pub(crate) fn with_deferred_read<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let transaction = self.connection.unchecked_transaction()?;
+        match operation(self) {
+            Ok(value) => {
+                transaction.commit()?;
+                Ok(value)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn create(&mut self, new: NewObligation, now: i64) -> Result<Obligation, StoreError> {
         validate_new(&new)?;
         let id = new.id.clone();
@@ -868,6 +882,28 @@ impl Store {
         let rows = statement.query_map([fingerprint], proposal_instance_from_row)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StoreError::from)
+    }
+
+    /// Read every proposal instance from one SQLite snapshot. The HTTP list
+    /// projection must not combine a proposal catalogue from one database
+    /// state with per-proposal generations from another.
+    pub fn gardener_proposal_instances_all(&self) -> Result<Vec<ProposalInstance>, StoreError> {
+        self.gardener_proposal_instances_all_with_hook(|| Ok(()))
+    }
+
+    fn gardener_proposal_instances_all_with_hook(
+        &self,
+        between_catalogue_and_instances: impl FnOnce() -> Result<(), StoreError>,
+    ) -> Result<Vec<ProposalInstance>, StoreError> {
+        self.with_deferred_read(|store| {
+            let proposals = store.gardener_proposals()?;
+            between_catalogue_and_instances()?;
+            let mut instances = Vec::new();
+            for proposal in proposals {
+                instances.extend(store.gardener_proposal_instances(&proposal.fingerprint)?);
+            }
+            Ok(instances)
+        })
     }
 
     pub fn decide_gardener_proposal(
@@ -4208,6 +4244,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use tempfile::TempDir;
 
     use super::*;
@@ -4819,6 +4857,91 @@ mod tests {
                 .unwrap(),
             Some(crate::GardenerObligationKind::Inspection)
         );
+    }
+
+    #[test]
+    fn all_proposal_instances_are_from_one_snapshot_during_atomic_multi_proposal_write() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("proposal-instance-snapshot.sqlite");
+        let mut writer = Store::open(&path).unwrap();
+        let registration = writer
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let first_claim = writer.claim_due_gardener(1_000, 60, 1).unwrap().remove(0);
+        writer
+            .start_gardener_inspection(&first_claim, new_inspection("multi-source-a", 'a'), 1_001)
+            .unwrap();
+        let result = InspectionResult {
+            summary: "Two bounded improvements were found".to_owned(),
+            proposed_goal_prompts: vec![
+                "Implement atomic candidate alpha.".to_owned(),
+                "Implement atomic candidate beta.".to_owned(),
+            ],
+        };
+        let proposals = writer
+            .finish_gardener_inspection(&first_claim, "multi-source-a", &result, 1_002)
+            .unwrap();
+        assert_eq!(proposals.len(), 2);
+        writer
+            .complete(
+                &first_claim,
+                Completion::Succeeded { evidence: None },
+                1_003,
+            )
+            .unwrap();
+
+        let next_at = writer
+            .get(&registration.inspection_obligation_id)
+            .unwrap()
+            .unwrap()
+            .next_wake_at
+            .unwrap();
+        let second_claim = writer.claim_due_gardener(next_at, 60, 1).unwrap().remove(0);
+        writer
+            .start_gardener_inspection(
+                &second_claim,
+                new_inspection("multi-source-b", 'b'),
+                next_at + 1,
+            )
+            .unwrap();
+
+        let reader = Store::open_compatible(&path).unwrap();
+        let during = reader
+            .gardener_proposal_instances_all_with_hook(|| {
+                writer
+                    .finish_gardener_inspection(
+                        &second_claim,
+                        "multi-source-b",
+                        &result,
+                        next_at + 2,
+                    )
+                    .map(|_| ())
+            })
+            .unwrap();
+        let expected_fingerprints = proposals
+            .iter()
+            .map(|proposal| proposal.fingerprint.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(during.len(), 2);
+        assert!(during.iter().all(|instance| instance.generation == 1));
+        assert_eq!(
+            during
+                .iter()
+                .map(|instance| instance.proposal_fingerprint.clone())
+                .collect::<BTreeSet<_>>(),
+            expected_fingerprints
+        );
+
+        let after = reader.gardener_proposal_instances_all().unwrap();
+        assert_eq!(after.len(), 4);
+        for proposal in proposals {
+            let generations = after
+                .iter()
+                .filter(|instance| instance.proposal_fingerprint == proposal.fingerprint)
+                .map(|instance| instance.generation)
+                .collect::<Vec<_>>();
+            assert_eq!(generations, [1, 2]);
+        }
     }
 
     #[test]

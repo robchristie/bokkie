@@ -101,10 +101,12 @@ ownership, isolates HTTP SQLite work on a bounded owner thread and provides
 transactionally coherent diagnostic/operator reads plus a strictly read-only
 `doctor`. Deterministic migration, concurrency, shutdown, relational
 corruption, proposal-generation and external-reconciliation fixtures pass with
-128 library, 2 CLI and 12 adapter tests; locked all-feature Clippy, rustfmt and
-diff checks pass. Exact-head review, CI and landing remain. P3 proposal
-authority is preserved; repair, adoption and external mutation remain outside
-this package.
+131 library, 2 CLI and 12 adapter tests; locked all-feature Clippy, rustfmt and
+diff checks pass. The first review's repository-configured live-remote and torn
+multi-query projection findings are repaired with neutral HTTPS observation and
+one Store-owned proposal-instance snapshot. Exact-head re-review, CI and
+landing remain. P3 proposal authority is preserved; repair, adoption and
+external mutation remain outside this package.
 
 ## Durable evidence
 
@@ -126,7 +128,8 @@ this package.
 | P2 reviewed landing | `387e0300c7a7bca2136ab30748a47135c2b8847a` | `9cf9329f374f545eccca596fd9df8a451a48a065` | Independent PASS; exact and post-merge CI passed; reviewed and landed trees both `49fe98d01d6f8969be9f0bad19f815f31719b11e` | [PR #8 terminal evidence](https://github.com/robchristie/bokkie/pull/8#issuecomment-5536130203) |
 | P3 reviewed landing | `1f09350973632bb0fbdf9fd6c7e0103d6c21ed8b` | `9920006635c01cd266e6f2cd3a3546fe21747867` | Independent PASS; exact and post-merge CI passed; reviewed and landed trees both `c844e629c88d363497eed5918e4f2553d941ac38`; R5 and P3 portions of R9/R11 satisfied | [PR #9 terminal evidence](https://github.com/robchristie/bokkie/pull/9#issuecomment-5537029436) |
 | P4a storage design | `9920006635c01cd266e6f2cd3a3546fe21747867` | active package branch | Exact-prefix v1–v6 adoption plus appended digest metadata selected; HTTP and scheduler retain separate bounded storage owners; diagnosis captures database evidence before read-only external reconciliation | `src/store.rs`, migrations 0001–0006, `src/http.rs`, `src/service.rs` and this checkpoint |
-| P4a terminal candidate | P3 landed tree | terminal package branch | 128 library, 2 CLI and 12 adapter tests; locked all-feature Clippy, rustfmt and diff checks pass; temporary databases and repositories prove migrate-once compatibility, executor bounds, snapshot consistency, relational/source invariants and no doctor mutation | Migration, executor, doctor and adapter tests on the package branch |
+| P4a terminal candidate | P3 landed tree | terminal package branch | 131 library, 2 CLI and 12 adapter tests; locked all-feature Clippy, rustfmt and diff checks pass; temporary databases and repositories prove migrate-once compatibility, executor bounds, snapshot consistency, relational/source invariants and no doctor mutation | Migration, executor, doctor and adapter tests on the package branch |
+| P4a first exact-head review | `ff5871862e1df5bc0b16e6f29eb523e1bd7aeaf6` | same | BLOCK: live remote observation could honour hostile repository transport configuration; proposal-instance listing could combine multiple SQLite snapshots | [PR #10 review trajectory](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537425057) |
 
 ## Residual questions
 

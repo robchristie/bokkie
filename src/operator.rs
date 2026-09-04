@@ -34,7 +34,7 @@ struct ApprovalEvidence {
 
 impl Store {
     pub fn operator_snapshot(&self, captured_at: i64) -> Result<OperatorSnapshot, StoreError> {
-        self.with_deferred_operator_read(|store| store.operator_snapshot_inner(captured_at))
+        self.with_deferred_read(|store| store.operator_snapshot_inner(captured_at))
     }
 
     fn operator_snapshot_inner(&self, captured_at: i64) -> Result<OperatorSnapshot, StoreError> {
@@ -68,9 +68,7 @@ impl Store {
         obligation_id: &str,
         captured_at: i64,
     ) -> Result<ObligationTopic, StoreError> {
-        self.with_deferred_operator_read(|store| {
-            store.operator_topic_inner(obligation_id, captured_at)
-        })
+        self.with_deferred_read(|store| store.operator_topic_inner(obligation_id, captured_at))
     }
 
     fn operator_topic_inner(
@@ -293,20 +291,6 @@ impl Store {
             obligation_id: obligation_id.to_owned(),
             items,
         })
-    }
-
-    fn with_deferred_operator_read<T>(
-        &self,
-        operation: impl FnOnce(&Self) -> Result<T, StoreError>,
-    ) -> Result<T, StoreError> {
-        let transaction = self.connection.unchecked_transaction()?;
-        match operation(self) {
-            Ok(value) => {
-                transaction.commit()?;
-                Ok(value)
-            }
-            Err(error) => Err(error),
-        }
     }
 
     fn project_operator_obligation(
@@ -1554,7 +1538,7 @@ mod tests {
         let mut writer = Store::open_compatible(&path).unwrap();
 
         let (before, during) = reader
-            .with_deferred_operator_read(|owner| {
+            .with_deferred_read(|owner| {
                 let before = owner.list()?.len();
                 writer.create(new("committed-during-read", false), 100)?;
                 let during = owner.list()?.len();
