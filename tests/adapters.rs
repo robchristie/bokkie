@@ -1101,6 +1101,12 @@ fn scheduler_failure_stops_http_and_exits_non_zero() {
         error["error"]["message"]
             .as_str()
             .unwrap()
+            .contains("primary ordinary failure")
+    );
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
             .contains("attempts")
     );
 }

@@ -1,11 +1,11 @@
 //! Failure-isolated background execution lanes and deterministic service runner.
 
 use std::{
-    io,
+    fmt, io,
     panic::{self, AssertUnwindSafe},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, RecvTimeoutError},
     },
@@ -39,7 +39,15 @@ pub struct ClaimAdmission {
 #[derive(Debug)]
 struct ClaimAdmissionInner {
     closed: Arc<AtomicBool>,
-    claim_lock: Mutex<()>,
+    state: Mutex<AdmissionState>,
+    ready: Condvar,
+}
+
+#[derive(Debug)]
+struct AdmissionState {
+    active: bool,
+    waiting: [usize; 2],
+    next_lane: ExecutionLane,
 }
 
 impl ClaimAdmission {
@@ -47,7 +55,12 @@ impl ClaimAdmission {
         Self {
             inner: Arc::new(ClaimAdmissionInner {
                 closed: Arc::new(AtomicBool::new(false)),
-                claim_lock: Mutex::new(()),
+                state: Mutex::new(AdmissionState {
+                    active: false,
+                    waiting: [0, 0],
+                    next_lane: ExecutionLane::Gardener,
+                }),
+                ready: Condvar::new(),
             }),
         }
     }
@@ -57,11 +70,19 @@ impl ClaimAdmission {
         // Publish closure before waiting for an already-admitted claim. Any
         // later mutex winner observes `closed` and cannot enter its Store call.
         self.inner.closed.store(true, Ordering::SeqCst);
-        let _guard = self
+        let mut state = self
             .inner
-            .claim_lock
+            .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.inner.ready.notify_all();
+        while state.active {
+            state = self
+                .inner
+                .ready
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
     }
 
     pub fn is_closed(&self) -> bool {
@@ -72,28 +93,78 @@ impl ClaimAdmission {
         CancellationToken::from_flag(Arc::clone(&self.inner.closed))
     }
 
-    /// Run one Store claim only if admission remains open. Claim errors and
-    /// panics close admission before releasing the claim mutex.
-    fn claim<T, E>(&self, claim: impl FnOnce() -> Result<T, E>) -> Result<Option<T>, E> {
-        let _guard = self
+    /// Run one Store claim only if admission remains open and this lane owns
+    /// the next fair turn. Claim errors and panics close admission before the
+    /// next waiter can enter Store.
+    fn claim<T, E>(
+        &self,
+        lane: ExecutionLane,
+        claim: impl FnOnce() -> Result<T, E>,
+    ) -> Result<Option<T>, E> {
+        let lane_index = lane_index(lane);
+        let other_index = 1 - lane_index;
+        let mut state = self
             .inner
-            .claim_lock
+            .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if self.is_closed() {
-            return Ok(None);
+        state.waiting[lane_index] += 1;
+        loop {
+            if self.is_closed() {
+                state.waiting[lane_index] -= 1;
+                self.inner.ready.notify_all();
+                return Ok(None);
+            }
+            let other_waiting = state.waiting[other_index] > 0;
+            if !state.active && (!other_waiting || state.next_lane == lane) {
+                break;
+            }
+            state = self
+                .inner
+                .ready
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
-        match panic::catch_unwind(AssertUnwindSafe(claim)) {
+        state.waiting[lane_index] -= 1;
+        state.active = true;
+        state.next_lane = other_lane(lane);
+        drop(state);
+
+        let result = panic::catch_unwind(AssertUnwindSafe(claim));
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.active = false;
+        match &result {
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => self.inner.closed.store(true, Ordering::SeqCst),
+        }
+        self.inner.ready.notify_all();
+        drop(state);
+
+        match result {
             Ok(Ok(value)) => Ok(Some(value)),
-            Ok(Err(error)) => {
-                self.inner.closed.store(true, Ordering::SeqCst);
-                Err(error)
-            }
-            Err(payload) => {
-                self.inner.closed.store(true, Ordering::SeqCst);
-                panic::resume_unwind(payload)
-            }
+            Ok(Err(error)) => Err(error),
+            Err(payload) => panic::resume_unwind(payload),
         }
+    }
+}
+
+fn lane_index(lane: ExecutionLane) -> usize {
+    match lane {
+        ExecutionLane::Ordinary => 0,
+        ExecutionLane::Gardener => 1,
+        ExecutionLane::Outbox => panic!("outbox claim admission is not implemented"),
+    }
+}
+
+fn other_lane(lane: ExecutionLane) -> ExecutionLane {
+    match lane {
+        ExecutionLane::Ordinary => ExecutionLane::Gardener,
+        ExecutionLane::Gardener => ExecutionLane::Ordinary,
+        ExecutionLane::Outbox => panic!("outbox claim admission is not implemented"),
     }
 }
 
@@ -144,14 +215,8 @@ pub enum LaneFailureCause {
 pub enum SchedulerError {
     #[error("invalid scheduler configuration: {0}")]
     Configuration(String),
-    #[error("{lane} execution lane failed: {cause}")]
-    LaneFailed {
-        lane: ExecutionLane,
-        #[source]
-        cause: Box<LaneFailureCause>,
-    },
-    #[error("{lane} execution lane did not stop within {} seconds", LANE_JOIN_TIMEOUT.as_secs())]
-    LaneTimeout { lane: ExecutionLane },
+    #[error("{0}")]
+    Shutdown(#[source] Box<LaneShutdownFailure>),
     #[error("could not start scheduler supervisor thread: {0}")]
     Thread(#[source] io::Error),
 }
@@ -160,28 +225,80 @@ impl SchedulerError {
     pub fn is_configuration(&self) -> bool {
         match self {
             Self::Configuration(_) => true,
-            Self::LaneFailed { cause, .. } => matches!(
-                cause.as_ref(),
-                LaneFailureCause::Gardener(GardenerRunnerError::Configuration(_))
-            ),
-            Self::LaneTimeout { .. } | Self::Thread(_) => false,
+            Self::Shutdown(failure) => failure.primary.as_ref().is_some_and(|primary| {
+                matches!(
+                    primary.cause.as_ref(),
+                    LaneFailureCause::Gardener(GardenerRunnerError::Configuration(_))
+                )
+            }),
+            Self::Thread(_) => false,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct WorkerId {
-    lane: ExecutionLane,
-    slot: usize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionWorkerId {
+    pub lane: ExecutionLane,
+    /// One-based worker number within the lane.
+    pub slot: usize,
+}
+
+impl fmt::Display for ExecutionWorkerId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}[{}]", self.lane, self.slot)
+    }
+}
+
+#[derive(Debug)]
+pub struct LaneFailure {
+    pub lane: ExecutionLane,
+    pub cause: Box<LaneFailureCause>,
+}
+
+#[derive(Debug)]
+pub struct LaneShutdownFailure {
+    pub primary: Option<LaneFailure>,
+    pub timed_out: Vec<ExecutionWorkerId>,
+}
+
+impl fmt::Display for LaneShutdownFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("execution lane shutdown failed")?;
+        if let Some(primary) = &self.primary {
+            write!(
+                formatter,
+                "; primary {} failure: {}",
+                primary.lane, primary.cause
+            )?;
+        }
+        if !self.timed_out.is_empty() {
+            formatter.write_str("; timed out workers: ")?;
+            for (index, worker) in self.timed_out.iter().enumerate() {
+                if index > 0 {
+                    formatter.write_str(", ")?;
+                }
+                write!(formatter, "{worker}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for LaneShutdownFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.primary
+            .as_ref()
+            .map(|primary| primary.cause.as_ref() as &(dyn std::error::Error + 'static))
+    }
 }
 
 struct WorkerExit {
-    id: WorkerId,
+    id: ExecutionWorkerId,
     result: Result<(), LaneFailureCause>,
 }
 
 struct Worker {
-    id: WorkerId,
+    id: ExecutionWorkerId,
     thread: thread::JoinHandle<()>,
 }
 
@@ -214,17 +331,13 @@ impl Scheduler {
         config.validate()?;
         // Startup owns migration. The scheduler and every worker are only
         // compatible-schema consumers.
-        Store::open_compatible(&config.database).map_err(|cause| SchedulerError::LaneFailed {
-            lane: ExecutionLane::Ordinary,
-            cause: Box::new(cause.into()),
+        Store::open_compatible(&config.database).map_err(|cause| {
+            shutdown_error(Some((ExecutionLane::Ordinary, cause.into())), Vec::new())
         })?;
         if let Some(runtime) = &gardener {
-            runtime
-                .validate(config.lease_seconds)
-                .map_err(|cause| SchedulerError::LaneFailed {
-                    lane: ExecutionLane::Gardener,
-                    cause: Box::new(cause.into()),
-                })?;
+            runtime.validate(config.lease_seconds).map_err(|cause| {
+                shutdown_error(Some((ExecutionLane::Gardener, cause.into())), Vec::new())
+            })?;
         }
 
         let admission = ClaimAdmission::new();
@@ -262,9 +375,11 @@ impl Scheduler {
             .take()
             .expect("scheduler supervisor thread is present")
             .join()
-            .map_err(|_| SchedulerError::LaneFailed {
-                lane: ExecutionLane::Ordinary,
-                cause: Box::new(LaneFailureCause::Panicked),
+            .map_err(|_| {
+                shutdown_error(
+                    Some((ExecutionLane::Ordinary, LaneFailureCause::Panicked)),
+                    Vec::new(),
+                )
             })?
     }
 }
@@ -283,9 +398,9 @@ fn scheduler_loop(
     for slot in 0..config.ordinary_concurrency {
         let worker_config = config.clone();
         let worker_admission = admission.clone();
-        let id = WorkerId {
+        let id = ExecutionWorkerId {
             lane: ExecutionLane::Ordinary,
-            slot,
+            slot: slot + 1,
         };
         match spawn_worker(id, sender.clone(), admission.clone(), move || {
             ordinary_lane_loop(&worker_config, &worker_admission)
@@ -303,9 +418,9 @@ fn scheduler_loop(
         if let Some(runtime) = gardener {
             let worker_config = config.clone();
             let worker_admission = admission.clone();
-            let id = WorkerId {
+            let id = ExecutionWorkerId {
                 lane: ExecutionLane::Gardener,
-                slot: 0,
+                slot: 1,
             };
             match spawn_worker(id, sender.clone(), admission.clone(), move || {
                 gardener_lane_loop(&worker_config, &runtime, &worker_admission)
@@ -320,24 +435,39 @@ fn scheduler_loop(
     }
     drop(sender);
 
+    supervise_workers(
+        workers,
+        receiver,
+        admission,
+        exit_sender,
+        first_failure,
+        LANE_JOIN_TIMEOUT,
+    )
+}
+
+fn supervise_workers(
+    mut workers: Vec<Worker>,
+    receiver: mpsc::Receiver<WorkerExit>,
+    admission: ClaimAdmission,
+    exit_sender: oneshot::Sender<()>,
+    mut first_failure: Option<(ExecutionLane, LaneFailureCause)>,
+    join_timeout: Duration,
+) -> Result<(), SchedulerError> {
     let mut exit_sender = Some(exit_sender);
     if first_failure.is_some() {
         let _ = exit_sender.take().expect("exit sender is present").send(());
     }
-    let mut stop_deadline = admission
-        .is_closed()
-        .then(|| Instant::now() + LANE_JOIN_TIMEOUT);
+    let mut stop_deadline = admission.is_closed().then(|| Instant::now() + join_timeout);
 
     while !workers.is_empty() {
         if admission.is_closed() && stop_deadline.is_none() {
-            stop_deadline = Some(Instant::now() + LANE_JOIN_TIMEOUT);
+            stop_deadline = Some(Instant::now() + join_timeout);
         }
         let wait = stop_deadline
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
             .unwrap_or(Duration::from_millis(100));
         if wait.is_zero() {
-            let lane = workers[0].id.lane;
-            return terminal_result(first_failure, Some(lane));
+            return terminal_result(first_failure, timed_out_workers(&workers));
         }
 
         match receiver.recv_timeout(wait) {
@@ -358,21 +488,20 @@ fn scheduler_loop(
                         .unwrap_or(LaneFailureCause::StoppedUnexpectedly);
                     first_failure = Some((worker_exit.id.lane, cause));
                     admission.close();
-                    stop_deadline = Some(Instant::now() + LANE_JOIN_TIMEOUT);
+                    stop_deadline = Some(Instant::now() + join_timeout);
                     let _ = exit_sender.take().expect("exit sender is present").send(());
                 }
             }
             Err(RecvTimeoutError::Timeout) if stop_deadline.is_none() => {}
             Err(RecvTimeoutError::Timeout) => {
-                let lane = workers[0].id.lane;
-                return terminal_result(first_failure, Some(lane));
+                return terminal_result(first_failure, timed_out_workers(&workers));
             }
             Err(RecvTimeoutError::Disconnected) => {
                 let lane = workers[0].id.lane;
-                return Err(SchedulerError::LaneFailed {
-                    lane,
-                    cause: Box::new(LaneFailureCause::Panicked),
-                });
+                return Err(shutdown_error(
+                    Some((lane, LaneFailureCause::Panicked)),
+                    timed_out_workers(&workers),
+                ));
             }
         }
     }
@@ -380,32 +509,53 @@ fn scheduler_loop(
     if let Some(sender) = exit_sender.take() {
         let _ = sender.send(());
     }
-    terminal_result(first_failure, None)
+    terminal_result(first_failure, Vec::new())
+}
+
+fn timed_out_workers(workers: &[Worker]) -> Vec<ExecutionWorkerId> {
+    let mut timed_out: Vec<_> = workers.iter().map(|worker| worker.id).collect();
+    timed_out.sort_by_key(|worker| {
+        let lane = match worker.lane {
+            ExecutionLane::Ordinary => 0,
+            ExecutionLane::Gardener => 1,
+            ExecutionLane::Outbox => 2,
+        };
+        (lane, worker.slot)
+    });
+    timed_out
 }
 
 fn terminal_result(
     failure: Option<(ExecutionLane, LaneFailureCause)>,
-    timeout: Option<ExecutionLane>,
+    timed_out: Vec<ExecutionWorkerId>,
 ) -> Result<(), SchedulerError> {
-    if let Some((lane, cause)) = failure {
-        Err(SchedulerError::LaneFailed {
-            lane,
-            cause: Box::new(cause),
-        })
-    } else if let Some(lane) = timeout {
-        Err(SchedulerError::LaneTimeout { lane })
+    if failure.is_some() || !timed_out.is_empty() {
+        Err(shutdown_error(failure, timed_out))
     } else {
         Ok(())
     }
 }
 
+fn shutdown_error(
+    failure: Option<(ExecutionLane, LaneFailureCause)>,
+    timed_out: Vec<ExecutionWorkerId>,
+) -> SchedulerError {
+    SchedulerError::Shutdown(Box::new(LaneShutdownFailure {
+        primary: failure.map(|(lane, cause)| LaneFailure {
+            lane,
+            cause: Box::new(cause),
+        }),
+        timed_out,
+    }))
+}
+
 fn spawn_worker(
-    id: WorkerId,
+    id: ExecutionWorkerId,
     sender: mpsc::Sender<WorkerExit>,
     admission: ClaimAdmission,
     work: impl FnOnce() -> Result<(), LaneFailureCause> + Send + 'static,
 ) -> Result<Worker, LaneFailureCause> {
-    let name = format!("bokkie-{}-{}", id.lane, id.slot + 1);
+    let name = format!("bokkie-{}-{}", id.lane, id.slot);
     let thread = thread::Builder::new()
         .name(name)
         .spawn(move || {
@@ -429,8 +579,9 @@ fn ordinary_lane_loop(
     let clock = SystemClock;
 
     while !admission.is_closed() {
-        let Some(mut claims) =
-            admission.claim(|| store.claim_due(clock.now(), config.lease_seconds, 1))?
+        let Some(mut claims) = admission.claim(ExecutionLane::Ordinary, || {
+            store.claim_due(clock.now(), config.lease_seconds, 1)
+        })?
         else {
             break;
         };
@@ -478,8 +629,9 @@ fn gardener_lane_loop(
     )?;
 
     while !admission.is_closed() {
-        let Some(mut claims) =
-            admission.claim(|| store.claim_due_gardener(clock.now(), config.lease_seconds, 1))?
+        let Some(mut claims) = admission.claim(ExecutionLane::Gardener, || {
+            store.claim_due_gardener(clock.now(), config.lease_seconds, 1)
+        })?
         else {
             break;
         };
@@ -638,6 +790,128 @@ mod tests {
         }
     }
 
+    fn seed_lane_backlogs(database: &std::path::Path, per_lane: usize) {
+        let mut store = Store::open(database).unwrap();
+        for index in 0..per_lane {
+            create_due(&mut store, &format!("ordinary-fair-{index}"));
+            let gardener_id = format!("gardener-fair-{index}");
+            create_due(&mut store, &gardener_id);
+            let connection = rusqlite::Connection::open(database).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO gardener_obligation_bindings(obligation_id, kind, created_at)
+                     VALUES (?1, 'inspection', 1)",
+                    [&gardener_id],
+                )
+                .unwrap();
+        }
+    }
+
+    fn claim_store_lane(store: &mut Store, lane: ExecutionLane) -> Result<Vec<Claim>, StoreError> {
+        match lane {
+            ExecutionLane::Ordinary => store.claim_due(SystemClock.now(), 30, 1),
+            ExecutionLane::Gardener => store.claim_due_gardener(SystemClock.now(), 30, 1),
+            ExecutionLane::Outbox => unreachable!(),
+        }
+    }
+
+    fn spawn_store_claimant(
+        database: PathBuf,
+        admission: ClaimAdmission,
+        lane: ExecutionLane,
+        turn_sender: mpsc::Sender<ExecutionLane>,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let mut store = Store::open_compatible(database).unwrap();
+            let claims = admission
+                .claim(lane, || {
+                    turn_sender.send(lane).unwrap();
+                    claim_store_lane(&mut store, lane)
+                })
+                .unwrap()
+                .expect("admission remains open");
+            assert_eq!(claims.len(), 1, "{lane} backlog unexpectedly exhausted");
+        })
+    }
+
+    fn assert_store_claims_alternate_after(leader_lane: ExecutionLane) {
+        const ORDINARY_WAITERS: usize = 8;
+        const GARDENER_WAITERS: usize = 3;
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("fair-admission.sqlite");
+        seed_lane_backlogs(&database, 16);
+        let admission = ClaimAdmission::new();
+        let (turn_sender, turn_receiver) = mpsc::channel();
+        let (leader_active_sender, leader_active_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+
+        let leader_database = database.clone();
+        let leader_admission = admission.clone();
+        let leader_turn_sender = turn_sender.clone();
+        let leader = thread::spawn(move || {
+            let mut store = Store::open_compatible(leader_database).unwrap();
+            let claims = leader_admission
+                .claim(leader_lane, || {
+                    leader_turn_sender.send(leader_lane).unwrap();
+                    let claims = claim_store_lane(&mut store, leader_lane)?;
+                    leader_active_sender.send(()).unwrap();
+                    release_receiver.recv().unwrap();
+                    Ok::<_, StoreError>(claims)
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(claims.len(), 1);
+        });
+        leader_active_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            turn_receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            leader_lane
+        );
+
+        let mut claimants = Vec::new();
+        for _ in 0..ORDINARY_WAITERS {
+            claimants.push(spawn_store_claimant(
+                database.clone(),
+                admission.clone(),
+                ExecutionLane::Ordinary,
+                turn_sender.clone(),
+            ));
+        }
+        for _ in 0..GARDENER_WAITERS {
+            claimants.push(spawn_store_claimant(
+                database.clone(),
+                admission.clone(),
+                ExecutionLane::Gardener,
+                turn_sender.clone(),
+            ));
+        }
+        wait_until(Duration::from_secs(2), || {
+            admission
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .waiting
+                == [ORDINARY_WAITERS, GARDENER_WAITERS]
+        });
+        release_sender.send(()).unwrap();
+
+        let mut expected = other_lane(leader_lane);
+        for _ in 0..(GARDENER_WAITERS * 2) {
+            assert_eq!(
+                turn_receiver.recv_timeout(Duration::from_secs(2)).unwrap(),
+                expected
+            );
+            expected = other_lane(expected);
+        }
+        leader.join().unwrap();
+        for claimant in claimants {
+            claimant.join().unwrap();
+        }
+    }
+
     #[test]
     fn ordinary_capacity_is_bounded_and_shutdown_admits_no_more_claims() {
         let temporary = TempDir::new().unwrap();
@@ -746,9 +1020,9 @@ mod tests {
             let (progress_sender, progress_receiver) = mpsc::channel();
             let blocked_barrier = Arc::clone(&barrier);
             let blocked = spawn_worker(
-                WorkerId {
+                ExecutionWorkerId {
                     lane: blocked_lane,
-                    slot: 0,
+                    slot: 1,
                 },
                 exit_sender.clone(),
                 admission.clone(),
@@ -761,9 +1035,9 @@ mod tests {
             .unwrap();
             barrier.wait();
             let progressing = spawn_worker(
-                WorkerId {
+                ExecutionWorkerId {
                     lane: other_lane,
-                    slot: 0,
+                    slot: 1,
                 },
                 exit_sender,
                 admission,
@@ -795,13 +1069,19 @@ mod tests {
     }
 
     #[test]
+    fn saturated_store_claimants_alternate_lane_turns_in_both_directions() {
+        assert_store_claims_alternate_after(ExecutionLane::Ordinary);
+        assert_store_claims_alternate_after(ExecutionLane::Gardener);
+    }
+
+    #[test]
     fn worker_panics_are_reported_with_their_lane_identity() {
         let (sender, receiver) = mpsc::channel();
         let admission = ClaimAdmission::new();
         let worker = spawn_worker(
-            WorkerId {
+            ExecutionWorkerId {
                 lane: ExecutionLane::Gardener,
-                slot: 0,
+                slot: 1,
             },
             sender,
             admission.clone(),
@@ -818,18 +1098,29 @@ mod tests {
     #[test]
     fn closing_admission_prevents_a_claim_waiting_for_the_gate() {
         let admission = ClaimAdmission::new();
-        let gate = admission
-            .inner
-            .claim_lock
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (active_sender, active_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let active_admission = admission.clone();
+        let active = thread::spawn(move || {
+            active_admission
+                .claim(ExecutionLane::Ordinary, || {
+                    active_sender.send(()).unwrap();
+                    release_receiver.recv().unwrap();
+                    Ok::<_, ()>(())
+                })
+                .unwrap()
+        });
+        active_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
         let (waiting_sender, waiting_receiver) = mpsc::channel();
         let (claim_sender, claim_receiver) = mpsc::channel();
         let (executed_sender, executed_receiver) = mpsc::channel();
         let claimant_admission = admission.clone();
         let claimant = thread::spawn(move || {
             waiting_sender.send(()).unwrap();
-            let result = claimant_admission.claim(|| {
+            let result = claimant_admission.claim(ExecutionLane::Gardener, || {
                 executed_sender.send(()).unwrap();
                 Ok::<_, ()>(())
             });
@@ -838,12 +1129,22 @@ mod tests {
         waiting_receiver
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
+        wait_until(Duration::from_secs(1), || {
+            admission
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .waiting[1]
+                == 1
+        });
 
         let closer_admission = admission.clone();
         let closer = thread::spawn(move || closer_admission.close());
         wait_until(Duration::from_secs(1), || admission.is_closed());
-        drop(gate);
+        release_sender.send(()).unwrap();
 
+        assert_eq!(active.join().unwrap(), Some(()));
         assert_eq!(
             claim_receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
             Ok(None)
@@ -870,21 +1171,141 @@ mod tests {
         wait_until(Duration::from_secs(2), || admission.is_closed());
         let error = scheduler.shutdown().unwrap_err();
         match error {
-            SchedulerError::LaneFailed { lane, cause } => {
-                assert_eq!(lane, ExecutionLane::Ordinary);
-                assert!(matches!(cause.as_ref(), LaneFailureCause::Store(_)));
+            SchedulerError::Shutdown(failure) => {
+                let primary = failure.primary.as_ref().expect("primary failure");
+                assert_eq!(primary.lane, ExecutionLane::Ordinary);
+                assert!(matches!(primary.cause.as_ref(), LaneFailureCause::Store(_)));
+                assert!(failure.timed_out.is_empty());
             }
             other => panic!("unexpected scheduler result: {other}"),
         }
         let mut claim_executed = false;
         let result = admission
-            .claim(|| {
+            .claim(ExecutionLane::Ordinary, || {
                 claim_executed = true;
                 Ok::<_, ()>(())
             })
             .unwrap();
         assert_eq!(result, None);
         assert!(!claim_executed, "a failed lane must leave admission closed");
+    }
+
+    #[test]
+    fn shutdown_error_retains_primary_failure_and_every_timed_out_worker() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("aggregate-shutdown.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        create_due(&mut store, "leased-one");
+        create_due(&mut store, "leased-two");
+        drop(store);
+
+        let admission = ClaimAdmission::new();
+        let (exit_sender, exit_receiver) = mpsc::channel();
+        let (active_sender, active_receiver) = mpsc::channel();
+        let (done_sender, done_receiver) = mpsc::channel();
+        let release = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+        for slot in 1..=2 {
+            let worker_database = database.clone();
+            let worker_admission = admission.clone();
+            let worker_active_sender = active_sender.clone();
+            let worker_done_sender = done_sender.clone();
+            let worker_release = Arc::clone(&release);
+            let id = ExecutionWorkerId {
+                lane: ExecutionLane::Ordinary,
+                slot,
+            };
+            workers.push(
+                spawn_worker(id, exit_sender.clone(), admission.clone(), move || {
+                    let mut store = Store::open_compatible(worker_database)?;
+                    let claims = worker_admission
+                        .claim(ExecutionLane::Ordinary, || {
+                            store.claim_due(SystemClock.now(), 30, 1)
+                        })?
+                        .expect("admission is open");
+                    assert_eq!(claims.len(), 1);
+                    worker_active_sender.send(()).unwrap();
+                    worker_release.wait();
+                    worker_done_sender.send(()).unwrap();
+                    Ok(())
+                })
+                .unwrap(),
+            );
+        }
+        for _ in 0..2 {
+            active_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap();
+        }
+
+        let failing_id = ExecutionWorkerId {
+            lane: ExecutionLane::Gardener,
+            slot: 1,
+        };
+        workers.push(
+            spawn_worker(failing_id, exit_sender, admission.clone(), || {
+                Err(LaneFailureCause::Gardener(
+                    GardenerRunnerError::Configuration("supervisor fixture failure".to_owned()),
+                ))
+            })
+            .unwrap(),
+        );
+        let (notify_sender, _notify_receiver) = oneshot::channel();
+        let error = supervise_workers(
+            workers,
+            exit_receiver,
+            admission,
+            notify_sender,
+            None,
+            Duration::from_millis(50),
+        )
+        .unwrap_err();
+
+        let failure = match &error {
+            SchedulerError::Shutdown(failure) => failure,
+            other => panic!("unexpected supervisor result: {other}"),
+        };
+        let primary = failure.primary.as_ref().expect("primary lane failure");
+        assert_eq!(primary.lane, ExecutionLane::Gardener);
+        assert!(matches!(
+            primary.cause.as_ref(),
+            LaneFailureCause::Gardener(GardenerRunnerError::Configuration(_))
+        ));
+        assert_eq!(
+            failure.timed_out,
+            vec![
+                ExecutionWorkerId {
+                    lane: ExecutionLane::Ordinary,
+                    slot: 1,
+                },
+                ExecutionWorkerId {
+                    lane: ExecutionLane::Ordinary,
+                    slot: 2,
+                },
+            ]
+        );
+        let message = error.to_string();
+        assert!(message.contains("primary gardener failure"));
+        assert!(message.contains("ordinary[1]"));
+        assert!(message.contains("ordinary[2]"));
+
+        let leased = Store::open_compatible(&database).unwrap().list().unwrap();
+        assert_eq!(
+            leased
+                .iter()
+                .filter(|obligation| {
+                    obligation.state == ObligationState::Running
+                        && obligation.lease_expires_at.is_some()
+                })
+                .count(),
+            2,
+            "detached workers leave their already-durable claims visibly leased"
+        );
+
+        release.wait();
+        for _ in 0..2 {
+            done_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        }
     }
 
     #[test]

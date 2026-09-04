@@ -59,7 +59,10 @@ delayed fake work is in flight, its worker renews the lease. `--fake-delay-ms`
 creates a deterministic window for shutdown and crash-recovery qualification.
 `--fake-outcome` accepts `succeed`, `fail-retryable`, or `fail-terminal`. The
 service lease must be at least two seconds because durable timestamps have
-one-second resolution.
+one-second resolution. Claim admission alternates lane classes whenever both
+ordinary and gardener workers are waiting; multiple ordinary slots therefore
+cannot consume consecutive admission turns while the gardener is queued. When
+only one lane is waiting, it proceeds without an artificial turn delay.
 
 On `SIGTERM` or `SIGINT`, one shared admission gate serialises closure against
 the Store claim check across all lanes, stops new claims, and cancels active
@@ -69,9 +72,11 @@ the same supervised cancellation signal. Lane joins are bounded to five
 seconds; Rust threads that fail to cooperate are detached and their claims
 remain recoverable through lease expiry. A lane store failure or panic stops
 admission, cancels the other lanes, begins HTTP graceful shutdown, and exits
-non-zero with the lane identity and cause. An abrupt kill leaves a claim running
-only until its lease expires; a restarted scheduler records the expired attempt
-and applies the persisted retry policy.
+non-zero with the initiating lane and cause. If other workers miss the shared
+join deadline, the same error also lists every timed-out lane and one-based slot
+identity before their threads are detached. An abrupt kill leaves a claim
+running only until its lease expires; a restarted scheduler records the expired
+attempt and applies the persisted retry policy.
 
 Failed attempts persist a typed disposition as well as the legacy `retryable`
 projection. Only `retry_safe` permits automatic backoff. `needs_reconciliation`,
