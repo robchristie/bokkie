@@ -1,11 +1,16 @@
 # Coding gardener
 
 - Status: complete
+- Delivery state: landed
 - Owner: `bokkie`
 - Source revision: `093194ae69bef837dada4e7dcfb9443438f77699`
 - Target repository: `robchristie/bokkie`
-- Target branch: `codex/coding-gardener`
-- Last updated: 2026-09-03
+- Historical target branch: `codex/coding-gardener` (removed after landing)
+- Reviewed head: `6e5b32d7288291104323b38feca5618c753241fe`
+- Reviewed and landed tree: `8a76438501d2ba9431f047a8fbb02712a98b4dc0`
+- Landed commit: `70efea7b7ff3b85e5d65fea8ca767b736f004cdb`
+- Landed date: 2026-09-03
+- Last updated: 2026-09-05
 
 ## Outcome
 
@@ -122,7 +127,7 @@ passes. That candidate then receives the canonical and landing gates.
 | Durable registration and proposal lifecycle | Migration/store tests for reopen, recurrence, deduplication, exact-content approval and events | complete at `dda602c` |
 | App-server and isolated Git execution | Protocol tests plus fake-process proof of read-only exact-commit inspection and persisted identities | complete at `91727f4` |
 | Exact-head verification and adapters | End-to-end fake Git/GitHub/app-server process test, recovery cases, CLI/HTTP/operator docs | complete at `3c599d406000971ea6c615ff3e2d61fb0a46af22` |
-| Terminal qualification and landing | Canonical check, exact-head independent review, ready PR, CI, squash merge and post-merge reconciliation | qualified at `3c599d406000971ea6c615ff3e2d61fb0a46af22`; final landing evidence is recorded on [PR #2](https://github.com/robchristie/bokkie/pull/2) |
+| Terminal qualification and landing | Canonical check, exact-head independent review, ready PR, CI, squash merge and post-merge reconciliation | Independent PASS at `6e5b32d7288291104323b38feca5618c753241fe`; landed as `70efea7b7ff3b85e5d65fea8ca767b736f004cdb`; exact trees match |
 
 ## Authority and human-review boundaries
 
@@ -135,12 +140,15 @@ destructive repository operation. Those remain explicit human boundaries.
 ## Completion
 
 The coherent slice passed the canonical repository check and independent
-exact-head review on [pull request #2](https://github.com/robchristie/bokkie/pull/2). The first reviewed candidate was rejected
-because effective Git origins were not proven canonical and app-server
-escalations were not explicitly denied; both findings were repaired and the
-new exact head passed re-review. Final merge, tree-identity and cleanup evidence
-belongs to the pull request landing comment. No deployment or service restart
-is part of this outcome.
+exact-head review on [pull request #2](https://github.com/robchristie/bokkie/pull/2).
+The first reviewed candidate was rejected because effective Git origins were
+not proven canonical and app-server escalations were not explicitly denied;
+both findings were repaired and exact head
+`6e5b32d7288291104323b38feca5618c753241fe` passed re-review. Squash merge
+`70efea7b7ff3b85e5d65fea8ca767b736f004cdb` has the identical tree
+`8a76438501d2ba9431f047a8fbb02712a98b4dc0`; the task worktree and branch were
+removed. PR #3 subsequently repaired a post-merge fake-executable fixture race.
+No deployment or service restart is part of this outcome.
 
 ## Subsequent hardening
 

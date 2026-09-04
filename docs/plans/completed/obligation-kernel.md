@@ -1,10 +1,15 @@
 # Obligation kernel
 
 - Status: complete
+- Delivery state: landed
 - Owner: `bokkie`
 - Related issue or pull request: [#1](https://github.com/robchristie/bokkie/pull/1)
 - Terminal coordination pull request: #1
-- Last updated: 2026-09-03
+- Reviewed head: `438310d986f3b8695a25a27fd6ca4bb3aeb36733`
+- Reviewed and landed tree: `cd0753282ab588dcb66e8ffc109adcbca321d922`
+- Landed commit: `093194ae69bef837dada4e7dcfb9443438f77699`
+- Landed date: 2026-09-03
+- Last updated: 2026-09-05
 
 ## Outcome
 
@@ -62,17 +67,17 @@ never silently loses overdue, failed, approval-bound, or interrupted work.
 
 | Repository or resource | Role | Authority | Branch or revision |
 |---|---|---|---|
-| `robchristie/bokkie` | Product and delivery owner | Read/write; ordinary reviewed changes may land | `codex/obligation-kernel` |
+| `robchristie/bokkie` | Product and delivery owner | Read/write; ordinary reviewed changes may land | Historical branch `codex/obligation-kernel` (removed after landing) |
 | `bokkie.old`, `bokkie.old2` | Historical local reference only | Read-only; no copying without review | Local working trees |
 
-## Current phase
+## Historical landing evidence
 
-The complete candidate is implemented on pull request #1. Kernel and adapter
-tests prove the lifecycle, fake execution, loopback service, graceful shutdown,
-scheduler-failure propagation, and abrupt process recovery behaviours. The
-remaining delivery work is exact-head independent review, applicable GitHub
-checks, merge, and post-merge reconciliation; those are landing evidence rather
-than product acceptance criteria.
+Pull request #1 passed independent review at
+`438310d986f3b8695a25a27fd6ca4bb3aeb36733` and squash-merged as
+`093194ae69bef837dada4e7dcfb9443438f77699`. The reviewed and landed trees are
+both `cd0753282ab588dcb66e8ffc109adcbca321d922`. Post-merge local tests, strict
+Clippy, rustfmt and the diff check passed; GitHub status checks were not yet
+configured. The task branch was deleted and local references were cleaned.
 
 ## Decisions made
 
@@ -94,10 +99,14 @@ than product acceptance criteria.
 | Historical prototype scan | local reference | n/a | `bokkie.old`: 9 tests passed; required reliability features absent | complete | Agent report; source paths recorded in task history |
 | Lifecycle kernel | `f2d6d2c` | same | 10 tests passed; Clippy and rustfmt passed | complete | `src/store.rs`, embedded migrations, and focused unit tests |
 | Service and recovery | `9c5886b` | same | 17 tests passed; CLI/API, graceful shutdown, scheduler failure, and daemon crash recovery passed | complete | `tests/adapters.rs` and pull request #1 |
+| Terminal landing | `438310d986f3b8695a25a27fd6ca4bb3aeb36733` | `093194ae69bef837dada4e7dcfb9443438f77699` | Independent PASS; exact reviewed/landed tree; post-merge canonical checks passed | complete | [Pull request #1](https://github.com/robchristie/bokkie/pull/1) |
 
 ## Deferred or out of scope
 
-- Polyorama UI and notification delivery.
+- Polyorama UI and notification delivery were excluded from this original
+  kernel slice. The local attention UI was subsequently delivered by
+  [pull request #4](https://github.com/robchristie/bokkie/pull/4); notifications
+  remain outside the repository capability.
 - Codex app-server adapter and real domain runners.
 - Provider idempotency, transactional outbox delivery, and external health
   monitoring, which become meaningful with the first side-effecting runner.

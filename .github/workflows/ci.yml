@@ -6,30 +6,47 @@ on:
   push:
     branches: [main]
 
-# This workflow reads candidate code only. It has no write token, secrets, or
-# deployment credentials.
+# Candidate code is read only. Jobs receive no write permission, repository
+# secrets, deployment credentials or elevated execution privilege.
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  GH_TOKEN: ""
+  GITHUB_TOKEN: ""
+  ACTIONS_RUNTIME_TOKEN: ""
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN: ""
+  ACTIONS_ID_TOKEN_REQUEST_URL: ""
+
 jobs:
-  check:
-    name: Locked Rust checks
+  plan-governance:
+    name: Plan governance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out candidate
+        # actions/checkout v7.0.1: official verified Node 24 release commit.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Test and lint repository contracts
+        run: |
+          python3 -m unittest discover -s tools/tests -p 'test_*.py'
+          python3 tools/plan_lint.py
+          python3 tools/toolchain_contract.py
+
+  backend:
+    name: Locked backend checks
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       RUSTUP_TOOLCHAIN: 1.85.0
-      CARGO_TERM_COLOR: always
-      # Candidate-controlled build and test code receives no GitHub or Actions
-      # service token. Checkout receives its read token through the pinned
-      # action input and removes it before these commands run.
-      GH_TOKEN: ""
-      GITHUB_TOKEN: ""
-      ACTIONS_RUNTIME_TOKEN: ""
-      ACTIONS_ID_TOKEN_REQUEST_TOKEN: ""
-      ACTIONS_ID_TOKEN_REQUEST_URL: ""
     steps:
       - name: Check out candidate
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        # actions/checkout v7.0.1: official verified Node 24 release commit.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -46,7 +63,7 @@ jobs:
             exit 1
           fi
 
-      - name: Install pinned Rust toolchain
+      - name: Install exact backend toolchain
         run: |
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
           rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy rustfmt
@@ -59,3 +76,25 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+  attention-ui:
+    name: Locked attention UI checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
+    steps:
+      - name: Check out candidate
+        # actions/checkout v7.0.1: official verified Node 24 release commit.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install exact UI toolchain
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy rustfmt
+          rustup target add --toolchain "$RUSTUP_TOOLCHAIN" wasm32-unknown-unknown
+
+      - name: Test, lint and build native and Wasm contracts
+        run: tools/check-ui.sh

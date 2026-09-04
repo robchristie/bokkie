@@ -12,9 +12,9 @@
 
 ## Verification
 
-- Run the canonical check before proposing a change: `cargo test --all-targets
-  && cargo clippy --all-targets --all-features -- -D warnings && cargo fmt
-  --all -- --check`.
+- Run the canonical governance and backend check before proposing a change:
+  `tools/check.sh`. Run `tools/check-ui.sh` when the attention UI, its shared
+  API contract, toolchain boundary or CI surface is affected.
 - Add executable tests for lifecycle, persistence, scheduling, and recovery
   behaviour. Prefer deterministic clocks over wall-clock sleeps.
 - Inspect the final diff and stage only intended files.
