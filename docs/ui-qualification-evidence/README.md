@@ -1,7 +1,7 @@
 # Bokkie attention UI qualification evidence
 
 This retained set qualifies the exact Bokkie application and harness revision
-`22abe68ac093cb16059cc52c89a9048b27f97c83`, consuming Polyorama
+`14db6a5bcab9065f8b1c8579540439d088c01e8d`, consuming Polyorama
 `0e725f5a97a6d99a6bc4c961dfc05b4e9252ba1d`.
 The fixture input is created by `bokkie-ui-fixture` with its fixed Unix time
 `1788381000`; every run creates a new database beneath an owned
@@ -23,7 +23,7 @@ The fixture input is created by `bokkie-ui-fixture` with its fixed Unix time
 
 | Evidence | Classification | Result |
 | --- | --- | --- |
-| `browser-interactions.json` | Direct except its labelled disconnected app-surface approximation | Exact gardener confirmation was inspected; a same-port process restart rejected its old mutation token, rotated session identity, cleared the confirmation and refreshed current state without mutation. Safe cancellation then reached the real conditional HTTP/Store path and retained a `cancelled` audit event; a real 409 produced stale state with disabled submit; keyboard focus, refresh-preserved selection/scroll, loading, empty DB/inbox, 5,000 rows and warmed idle passed. |
+| `browser-interactions.json` | Direct except its labelled disconnected app-surface approximation | Exact gardener confirmation was inspected; a same-port process restart rejected its old mutation token, rotated session identity, cleared the confirmation and refreshed bounded pages without mutation. Safe cancellation then drained `/operator/changes`, refetched only its affected obligation/topic and retained a `cancelled` audit event without a full snapshot read; a real 409 produced stale state with disabled submit. Keyboard focus, refresh-preserved selection/scroll, loading, empty DB/inbox, a 5,000-row multipage snapshot and warmed idle passed. |
 | `browser-gardener-confirmation-semantic.json` | Direct current-frame Rust observation | Exact prompt, fingerprint, occurrence, consequence, bounds, enabled states and selectable measured text accompany the physical confirmation capture. |
 | `browser-semantic.json`, `browser-text.json` | Direct for recorded Rust semantics and measured Polyorama text | Semantic and text audits are empty. Native egui controls and ordinary labels are exclusions, not silently certified. |
 | `native-interaction.json`, `native-semantic.json`, `native-durable-result.json` | Direct native functional evidence | X11 pointer selection and confirmation inspection plus keyboard focus passed; a direct conditional harness POST retained the durable event, while the browser journey separately proves UI submission. Semantic and measured-text audits passed. |
