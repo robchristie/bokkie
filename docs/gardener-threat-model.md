@@ -72,8 +72,12 @@ need the smallest practical repository and operation scope. They must not be
 placed in repository files, command arguments, logs, CI secrets, shared user
 homes, or the kernel service. Deliver a short-lived, repository-scoped
 credential only to the gardener worker through host configuration approved by
-the operator; keep its credential/configuration directory mode `0700` and
-separate from the kernel state directory. The credential must be absent from
+the operator. The example has PID 1 open a root-only source as a one-shot
+standard-input descriptor: the worker cannot traverse its backing directory,
+and Bokkie consumes and closes the descriptor and makes itself non-dumpable
+before any child starts. A systemd service-owned credential mount is not used
+because same-UID descendants could read it by path. The credential must be
+absent from
 inspection, proposal, verification, candidate-check and public-observation
 children. It is available only to Git push, `gh pr create`, and `gh pr ready`
 after metadata revalidation. Exact draft/ready state is observed separately

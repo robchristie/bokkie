@@ -157,14 +157,17 @@ bokkie --database ./bokkie.sqlite serve \
   --gardener-github-public-observer-executable /usr/bin/curl \
   --gardener-cargo-executable /usr/bin/cargo \
   --gardener-candidate-sandbox-executable /usr/bin/bwrap \
-  --gardener-github-token-file /run/credentials/bokkie-gardener/github_token \
   --gardener-heartbeat-ms 10000 \
   --gardener-process-timeout-ms 1800000
 ```
 
-The optional token file must be absolute, private and at most 16 KiB. Bokkie
-reads it at start-up and injects its value only into the Git push, draft PR
-creation and ready-promotion processes; it is absent from Codex, local checks,
+The optional `--gardener-github-token-stdin` flag reads at most 16 KiB once from
+standard input, closes the descriptor and makes the credential-holding Linux
+process non-dumpable before resolving or spawning a child. Supply it only
+through a one-shot broker or supervisor-opened descriptor whose backing object
+the worker account cannot traverse or read; never redirect it from a
+worker-readable file. Bokkie injects the value only into the Git push, draft PR
+creation and ready-promotion processes. It is absent from Codex, local checks,
 read-only Git and public `curl` observations, and retained output. Public PR
 state observation is HTTPS-only, bounded and fails closed if unavailable or
 rate limited. A missing credential lets
@@ -324,11 +327,15 @@ initialise the isolated network namespace. It deliberately omits
 operator using a verified native Codex binary may add that restriction after a
 representative service-manager probe.
 
-The example consumes a systemd-managed `github_token`
-credential through `$CREDENTIALS_DIRECTORY`; the operator must provision that
-credential separately. Do not put a token in the unit, repository, command
-line, broad service environment, or kernel service. No real credential is
-included or exercised by this repository.
+The example has PID 1 open `/etc/bokkie-gardener/github-token` as standard input
+before it drops to the worker account. Configuration management must keep the
+parent directory root-owned mode `0700` and the source root-owned mode `0400`,
+so neither Bokkie nor any descendant can open the backing path. Bokkie consumes
+and closes the descriptor before any child starts. Do not use
+`LoadCredential=` here: its service-owned credential mount remains readable to
+same-UID descendants. Do not put a token in the unit, repository, command line,
+broad service environment, worker-readable file, or kernel service. No real
+credential is included or exercised by this repository.
 
 Current limitations include one scheduler worker, no authentication, no remote
 exposure, no notification delivery, no automatic merge or deployment, and a
