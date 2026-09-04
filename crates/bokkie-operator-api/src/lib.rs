@@ -46,6 +46,11 @@ pub enum ExceptionReason {
     AwaitingApproval {
         subject: ApprovalSubject,
     },
+    ExpiredLease {
+        token: String,
+        generation: u64,
+        expires_at: i64,
+    },
     Attention {
         cause: AttentionCause,
         error: Option<String>,

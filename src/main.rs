@@ -126,6 +126,9 @@ enum Command {
         gardener_gh_executable: PathBuf,
         #[arg(long, default_value_t = 10_000)]
         gardener_heartbeat_ms: u64,
+        /// Absolute wall-clock limit for each gardener child process.
+        #[arg(long, default_value_t = 1_800_000)]
+        gardener_process_timeout_ms: u64,
         /// Explicit static UI asset directory served at /ui on this loopback origin.
         #[arg(long)]
         ui_dir: Option<PathBuf>,
@@ -226,6 +229,7 @@ struct ServeOptions {
     gardener_git_executable: PathBuf,
     gardener_gh_executable: PathBuf,
     gardener_heartbeat_ms: u64,
+    gardener_process_timeout_ms: u64,
     ui_dir: Option<PathBuf>,
 }
 
@@ -320,6 +324,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             gardener_git_executable,
             gardener_gh_executable,
             gardener_heartbeat_ms,
+            gardener_process_timeout_ms,
             ui_dir,
         } => {
             serve(
@@ -336,6 +341,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                     gardener_git_executable,
                     gardener_gh_executable,
                     gardener_heartbeat_ms,
+                    gardener_process_timeout_ms,
                     ui_dir,
                 },
             )
@@ -599,7 +605,8 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
             options.gardener_git_executable,
             options.gardener_gh_executable,
         )
-        .with_heartbeat_interval(Duration::from_millis(options.gardener_heartbeat_ms));
+        .with_heartbeat_interval(Duration::from_millis(options.gardener_heartbeat_ms))
+        .with_process_timeout(Duration::from_millis(options.gardener_process_timeout_ms));
         Scheduler::start_configured(scheduler_config, Some(gardener))?
     } else {
         Scheduler::start(scheduler_config)?

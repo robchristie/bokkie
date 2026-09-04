@@ -4,21 +4,24 @@
 //! Unknown notifications remain forward-compatible, while every server request
 //! is rejected because the gardener never grants interactive approvals.
 
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::thread::{self, JoinHandle};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use crate::process::{
+    CancellationToken, EffectRisk, JsonlReceive, ProcessError, ProcessHeartbeat, ProcessLimits,
+    ProcessOutcome, ProcessSupervisor, SupervisedChild,
+};
+
 const INITIALIZE_REQUEST_ID: i64 = 1;
 const THREAD_START_REQUEST_ID: i64 = 2;
 const TURN_START_REQUEST_ID: i64 = 3;
 const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
-const GRACEFUL_EXIT_WAIT: Duration = Duration::from_millis(500);
+const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// The purpose of a Codex turn and, consequently, the access it receives.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,6 +110,10 @@ pub enum AppServerError {
     InvalidRequest(String),
     #[error("app-server I/O failed: {0}")]
     Io(#[from] io::Error),
+    #[error(transparent)]
+    Process(#[from] ProcessError),
+    #[error("app-server supervision ended the session: {outcome}")]
+    Supervision { outcome: Box<ProcessOutcome> },
     #[error("app-server protocol failed: {0}")]
     Protocol(String),
     #[error("app-server observer failed during {callback}: {message}")]
@@ -114,11 +121,11 @@ pub enum AppServerError {
         callback: &'static str,
         message: String,
     },
-    #[error("app-server session failed: {reason}; process status: {status:?}; stderr: {stderr}")]
+    #[error("app-server session failed: {reason}; process status: {status:?}; {evidence}")]
     Session {
         reason: String,
         status: Option<String>,
-        stderr: String,
+        evidence: Box<crate::process::ProcessEvidence>,
     },
 }
 
@@ -127,6 +134,9 @@ pub enum AppServerError {
 pub struct AppServerClient {
     executable: PathBuf,
     heartbeat_interval: Duration,
+    execution_timeout: Duration,
+    limits: ProcessLimits,
+    cancellation: CancellationToken,
 }
 
 impl AppServerClient {
@@ -134,11 +144,29 @@ impl AppServerClient {
         Self {
             executable: executable.into(),
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
+            execution_timeout: DEFAULT_EXECUTION_TIMEOUT,
+            limits: ProcessLimits::default(),
+            cancellation: CancellationToken::new(),
         }
     }
 
     pub fn with_heartbeat_interval(mut self, interval: Duration) -> Self {
         self.heartbeat_interval = interval;
+        self
+    }
+
+    pub fn with_execution_timeout(mut self, timeout: Duration) -> Self {
+        self.execution_timeout = timeout;
+        self
+    }
+
+    pub fn with_process_limits(mut self, limits: ProcessLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
         self
     }
 
@@ -148,9 +176,9 @@ impl AppServerClient {
         request: &TurnRequest<'_>,
         observer: &mut dyn AppServerObserver,
     ) -> Result<TurnResult, AppServerError> {
-        if self.heartbeat_interval.is_zero() {
+        if self.heartbeat_interval.is_zero() || self.execution_timeout.is_zero() {
             return Err(AppServerError::InvalidRequest(
-                "heartbeat interval must be positive".to_owned(),
+                "heartbeat interval and execution timeout must be positive".to_owned(),
             ));
         }
         let cwd = request.cwd.to_str().ok_or_else(|| {
@@ -162,199 +190,128 @@ impl AppServerClient {
             ));
         }
 
-        let mut transport = ChildTransport::spawn(&self.executable, request.cwd)?;
+        let supervisor = ProcessSupervisor::new(
+            self.heartbeat_interval,
+            self.limits,
+            self.cancellation.clone(),
+        )
+        .map_err(AppServerError::InvalidRequest)?;
+        let deadline = Instant::now()
+            .checked_add(self.execution_timeout)
+            .ok_or_else(|| {
+                AppServerError::InvalidRequest("execution deadline is out of range".to_owned())
+            })?;
+        let mut transport =
+            ChildTransport::spawn(&supervisor, &self.executable, request.cwd, deadline)?;
         let result = run_protocol(
             &mut transport,
             request,
             cwd,
             observer,
-            self.heartbeat_interval,
+            self.limits.final_message_bytes,
         );
-        let diagnostics = transport.reap();
-
         match result {
             Ok(result) => {
-                diagnostics.reap_error?;
-                Ok(result)
+                transport.close_stdin();
+                let outcome = transport.wait(observer)?;
+                match outcome {
+                    ProcessOutcome::Completed { status, .. } if status.success() => Ok(result),
+                    outcome => Err(AppServerError::Supervision {
+                        outcome: Box::new(outcome),
+                    }),
+                }
             }
-            Err(error) => Err(AppServerError::Session {
-                reason: error.to_string(),
-                status: diagnostics.status.map(|status| status.to_string()),
-                stderr: diagnostics.stderr.trim_end().to_owned(),
-            }),
+            Err(error @ AppServerError::Supervision { .. }) => Err(error),
+            Err(error) => {
+                let evidence = transport.abort()?;
+                Err(AppServerError::Session {
+                    reason: error.to_string(),
+                    status: None,
+                    evidence: Box::new(evidence),
+                })
+            }
         }
     }
 }
 
 trait LineTransport {
     fn send(&mut self, message: &Value) -> Result<(), AppServerError>;
-    fn receive(&mut self, timeout: Duration) -> Result<Receive, AppServerError>;
+    fn receive(&mut self, heartbeat: &mut dyn ProcessHeartbeat) -> Result<Receive, AppServerError>;
 }
 
 #[derive(Debug)]
 enum Receive {
     Line(String),
+    #[cfg(test)]
     Timeout,
     Eof,
 }
 
-#[derive(Debug)]
-enum ReaderMessage {
-    Line(String),
-    Eof,
-    Error(io::Error),
-}
-
 struct ChildTransport {
-    child: Child,
-    stdin: Option<BufWriter<ChildStdin>>,
-    receiver: Receiver<ReaderMessage>,
-    stdout_reader: Option<JoinHandle<()>>,
-    stderr_reader: Option<JoinHandle<io::Result<String>>>,
+    child: SupervisedChild,
 }
 
 impl ChildTransport {
-    fn spawn(executable: &Path, cwd: &Path) -> Result<Self, AppServerError> {
-        let mut child = Command::new(executable)
-            .arg("app-server")
-            .current_dir(cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+    fn spawn(
+        supervisor: &ProcessSupervisor,
+        executable: &Path,
+        cwd: &Path,
+        deadline: Instant,
+    ) -> Result<Self, AppServerError> {
+        let mut command = Command::new(executable);
+        command.arg("app-server").current_dir(cwd);
+        let child = supervisor
+            .spawn(&mut command, deadline, EffectRisk::None)
             .map_err(|source| AppServerError::Spawn {
                 executable: executable.to_owned(),
-                source,
+                source: match source {
+                    ProcessError::Spawn(source) | ProcessError::Io(source) => source,
+                    ProcessError::ReaderPanicked => io::Error::other("output reader panicked"),
+                },
             })?;
-
-        let stdin = child.stdin.take().expect("piped child stdin is available");
-        let stdout = child
-            .stdout
-            .take()
-            .expect("piped child stdout is available");
-        let stderr = child
-            .stderr
-            .take()
-            .expect("piped child stderr is available");
-        let (sender, receiver) = mpsc::channel();
-        let stdout_reader = thread::spawn(move || read_stdout(stdout, sender));
-        let stderr_reader = thread::spawn(move || read_stderr(stderr));
-
-        Ok(Self {
-            child,
-            stdin: Some(BufWriter::new(stdin)),
-            receiver,
-            stdout_reader: Some(stdout_reader),
-            stderr_reader: Some(stderr_reader),
-        })
+        Ok(Self { child })
     }
 
-    fn reap(mut self) -> ProcessDiagnostics {
-        self.stdin.take();
-        let deadline = Instant::now() + GRACEFUL_EXIT_WAIT;
-        let mut reap_error = None;
-        let status = loop {
-            match self.child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) if Instant::now() < deadline => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Ok(None) => {
-                    if let Err(error) = self.child.kill()
-                        && error.kind() != io::ErrorKind::InvalidInput
-                    {
-                        reap_error = Some(AppServerError::Io(error));
-                    }
-                    match self.child.wait() {
-                        Ok(status) => break Some(status),
-                        Err(error) => {
-                            reap_error = Some(AppServerError::Io(error));
-                            break None;
-                        }
-                    }
-                }
-                Err(error) => {
-                    reap_error = Some(AppServerError::Io(error));
-                    break None;
-                }
-            }
-        };
+    fn close_stdin(&mut self) {
+        self.child.close_stdin();
+    }
 
-        if let Some(handle) = self.stdout_reader.take() {
-            let _ = handle.join();
-        }
-        let stderr = self
-            .stderr_reader
-            .take()
-            .and_then(|handle| handle.join().ok())
-            .and_then(Result::ok)
-            .unwrap_or_default();
+    fn wait(
+        &mut self,
+        observer: &mut dyn AppServerObserver,
+    ) -> Result<ProcessOutcome, AppServerError> {
+        self.child
+            .wait(&mut AppHeartbeat(observer))
+            .map_err(Into::into)
+    }
 
-        ProcessDiagnostics {
-            status,
-            stderr,
-            reap_error: match reap_error {
-                Some(error) => Err(error),
-                None => Ok(()),
-            },
-        }
+    fn abort(&mut self) -> Result<crate::process::ProcessEvidence, AppServerError> {
+        self.child.abort().map_err(Into::into)
     }
 }
 
 impl LineTransport for ChildTransport {
     fn send(&mut self, message: &Value) -> Result<(), AppServerError> {
-        let stdin = self.stdin.as_mut().ok_or_else(|| {
-            AppServerError::Protocol("app-server stdin is already closed".to_owned())
-        })?;
-        serde_json::to_writer(&mut *stdin, message)
-            .map_err(|error| AppServerError::Protocol(error.to_string()))?;
-        stdin.write_all(b"\n")?;
-        stdin.flush()?;
-        Ok(())
+        self.child.write_json(message).map_err(Into::into)
     }
 
-    fn receive(&mut self, timeout: Duration) -> Result<Receive, AppServerError> {
-        match self.receiver.recv_timeout(timeout) {
-            Ok(ReaderMessage::Line(line)) => Ok(Receive::Line(line)),
-            Ok(ReaderMessage::Eof) | Err(RecvTimeoutError::Disconnected) => Ok(Receive::Eof),
-            Ok(ReaderMessage::Error(error)) => Err(AppServerError::Io(error)),
-            Err(RecvTimeoutError::Timeout) => Ok(Receive::Timeout),
+    fn receive(&mut self, heartbeat: &mut dyn ProcessHeartbeat) -> Result<Receive, AppServerError> {
+        match self.child.receive_jsonl(heartbeat)? {
+            JsonlReceive::Line(line) => Ok(Receive::Line(line)),
+            JsonlReceive::Eof => Ok(Receive::Eof),
+            JsonlReceive::Terminal(outcome) => Err(AppServerError::Supervision {
+                outcome: Box::new(outcome),
+            }),
         }
     }
 }
 
-struct ProcessDiagnostics {
-    status: Option<ExitStatus>,
-    stderr: String,
-    reap_error: Result<(), AppServerError>,
-}
+struct AppHeartbeat<'a>(&'a mut dyn AppServerObserver);
 
-fn read_stdout(stdout: ChildStdout, sender: mpsc::Sender<ReaderMessage>) {
-    let mut reader = BufReader::new(stdout);
-    loop {
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                let _ = sender.send(ReaderMessage::Eof);
-                return;
-            }
-            Ok(_) => {
-                if sender.send(ReaderMessage::Line(line)).is_err() {
-                    return;
-                }
-            }
-            Err(error) => {
-                let _ = sender.send(ReaderMessage::Error(error));
-                return;
-            }
-        }
+impl ProcessHeartbeat for AppHeartbeat<'_> {
+    fn heartbeat(&mut self) -> Result<(), String> {
+        self.0.heartbeat()
     }
-}
-
-fn read_stderr(mut stderr: ChildStderr) -> io::Result<String> {
-    let mut output = String::new();
-    stderr.read_to_string(&mut output)?;
-    Ok(output)
 }
 
 fn run_protocol(
@@ -362,9 +319,9 @@ fn run_protocol(
     request: &TurnRequest<'_>,
     cwd: &str,
     observer: &mut dyn AppServerObserver,
-    heartbeat_interval: Duration,
+    final_message_limit: usize,
 ) -> Result<TurnResult, AppServerError> {
-    let mut heartbeat = Heartbeat::new(observer, heartbeat_interval);
+    let mut heartbeat = AppHeartbeat(observer);
     transport.send(&json!({
         "id": INITIALIZE_REQUEST_ID,
         "method": "initialize",
@@ -393,7 +350,7 @@ fn run_protocol(
     let thread_response = wait_for_response(transport, THREAD_START_REQUEST_ID, &mut heartbeat)?;
     let thread_id = required_string(&thread_response, &["thread", "id"], "thread/start response")?;
     heartbeat
-        .observer
+        .0
         .record_thread(&thread_id)
         .map_err(|message| AppServerError::Observer {
             callback: "record_thread",
@@ -417,14 +374,20 @@ fn run_protocol(
     let turn_response = wait_for_response(transport, TURN_START_REQUEST_ID, &mut heartbeat)?;
     let turn_id = required_string(&turn_response, &["turn", "id"], "turn/start response")?;
     heartbeat
-        .observer
+        .0
         .record_turn(&turn_id)
         .map_err(|message| AppServerError::Observer {
             callback: "record_turn",
             message,
         })?;
 
-    let final_message = wait_for_completion(transport, &thread_id, &turn_id, &mut heartbeat)?;
+    let final_message = wait_for_completion(
+        transport,
+        &thread_id,
+        &turn_id,
+        &mut heartbeat,
+        final_message_limit,
+    )?;
     Ok(TurnResult {
         thread_id,
         turn_id,
@@ -435,10 +398,10 @@ fn run_protocol(
 fn wait_for_response(
     transport: &mut dyn LineTransport,
     expected_id: i64,
-    heartbeat: &mut Heartbeat<'_>,
+    heartbeat: &mut dyn ProcessHeartbeat,
 ) -> Result<Value, AppServerError> {
     loop {
-        match heartbeat.receive(transport)? {
+        match transport.receive(heartbeat)? {
             Receive::Eof => {
                 return Err(AppServerError::Protocol(format!(
                     "unexpected EOF while waiting for response {expected_id}"
@@ -458,7 +421,8 @@ fn wait_for_response(
                     return deny_server_request(transport, id, &method);
                 }
             },
-            Receive::Timeout => unreachable!("heartbeat consumes transport timeouts"),
+            #[cfg(test)]
+            Receive::Timeout => {}
         }
     }
 }
@@ -467,11 +431,12 @@ fn wait_for_completion(
     transport: &mut dyn LineTransport,
     thread_id: &str,
     turn_id: &str,
-    heartbeat: &mut Heartbeat<'_>,
+    heartbeat: &mut dyn ProcessHeartbeat,
+    final_message_limit: usize,
 ) -> Result<String, AppServerError> {
     let mut final_message = None;
     loop {
-        match heartbeat.receive(transport)? {
+        match transport.receive(heartbeat)? {
             Receive::Eof => {
                 return Err(AppServerError::Protocol(
                     "unexpected EOF while waiting for turn/completed".to_owned(),
@@ -519,57 +484,23 @@ fn wait_for_completion(
                             "turn {turn_id} finished with status {status}{detail}"
                         )));
                     }
-                    return final_message.ok_or_else(|| {
+                    let final_message = final_message.ok_or_else(|| {
                         AppServerError::Protocol(format!(
                             "turn {turn_id} completed without a final agent message"
                         ))
-                    });
+                    })?;
+                    if final_message.len() > final_message_limit {
+                        return Err(AppServerError::Protocol(format!(
+                            "turn {turn_id} final message exceeds the configured bound"
+                        )));
+                    }
+                    return Ok(final_message);
                 }
                 Message::Notification { .. } => {}
             },
-            Receive::Timeout => unreachable!("heartbeat consumes transport timeouts"),
+            #[cfg(test)]
+            Receive::Timeout => {}
         }
-    }
-}
-
-struct Heartbeat<'a> {
-    observer: &'a mut dyn AppServerObserver,
-    interval: Duration,
-    last: Instant,
-}
-
-impl<'a> Heartbeat<'a> {
-    fn new(observer: &'a mut dyn AppServerObserver, interval: Duration) -> Self {
-        Self {
-            observer,
-            interval,
-            last: Instant::now(),
-        }
-    }
-
-    fn receive(&mut self, transport: &mut dyn LineTransport) -> Result<Receive, AppServerError> {
-        loop {
-            let timeout = self.interval.saturating_sub(self.last.elapsed());
-            if timeout.is_zero() {
-                self.emit()?;
-                continue;
-            }
-            match transport.receive(timeout)? {
-                Receive::Timeout => self.emit()?,
-                received => return Ok(received),
-            }
-        }
-    }
-
-    fn emit(&mut self) -> Result<(), AppServerError> {
-        self.observer
-            .heartbeat()
-            .map_err(|message| AppServerError::Observer {
-                callback: "heartbeat",
-                message,
-            })?;
-        self.last = Instant::now();
-        Ok(())
     }
 }
 
@@ -720,6 +651,7 @@ fn parse_message(line: &str) -> Result<Message, AppServerError> {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use std::{fs, os::unix::fs::PermissionsExt, thread};
 
     struct FakeTransport {
         received: VecDeque<Receive>,
@@ -741,8 +673,20 @@ mod tests {
             Ok(())
         }
 
-        fn receive(&mut self, _timeout: Duration) -> Result<Receive, AppServerError> {
-            Ok(self.received.pop_front().unwrap_or(Receive::Eof))
+        fn receive(
+            &mut self,
+            heartbeat: &mut dyn ProcessHeartbeat,
+        ) -> Result<Receive, AppServerError> {
+            let received = self.received.pop_front().unwrap_or(Receive::Eof);
+            if matches!(received, Receive::Timeout) {
+                heartbeat
+                    .heartbeat()
+                    .map_err(|message| AppServerError::Observer {
+                        callback: "heartbeat",
+                        message,
+                    })?;
+            }
+            Ok(received)
         }
     }
 
@@ -821,7 +765,7 @@ mod tests {
             &request(kind),
             "/worktree",
             observer,
-            Duration::from_secs(1),
+            ProcessLimits::default().final_message_bytes,
         )
     }
 
@@ -1074,6 +1018,20 @@ mod tests {
     }
 
     #[test]
+    fn completed_turn_rejects_an_oversized_final_message() {
+        let mut transport = FakeTransport::new(successful_exchange([]));
+        let error = run_protocol(
+            &mut transport,
+            &request(TurnKind::Inspection),
+            "/worktree",
+            &mut NoopObserver,
+            3,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("final message exceeds"));
+    }
+
+    #[test]
     fn eof_aborts_instead_of_accepting_partial_output() {
         let mut messages = successful_exchange([]);
         messages.pop();
@@ -1082,5 +1040,89 @@ mod tests {
         let error = run_fake(&mut transport, TurnKind::Inspection, &mut NoopObserver).unwrap_err();
 
         assert!(error.to_string().contains("unexpected EOF"));
+    }
+
+    #[test]
+    fn shutdown_cancellation_stops_a_running_app_server() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("never-app-server");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n[ \"$1\" = app-server ] || exit 2\nwhile :; do :; done\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).unwrap();
+        let cancellation = CancellationToken::new();
+        let cancelling = cancellation.clone();
+        let cancel_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            cancelling.cancel();
+        });
+
+        let schema = json!({"type": "object"});
+        let turn_request = TurnRequest {
+            kind: TurnKind::Inspection,
+            cwd: directory.path(),
+            prompt: "never completes",
+            output_schema: &schema,
+        };
+        let started = Instant::now();
+        let error = AppServerClient::new(&executable)
+            .with_heartbeat_interval(Duration::from_millis(5))
+            .with_execution_timeout(Duration::from_secs(2))
+            .with_cancellation(cancellation)
+            .run(&turn_request, &mut NoopObserver)
+            .unwrap_err();
+        cancel_thread.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        let AppServerError::Supervision { outcome } = error else {
+            panic!("expected supervised cancellation");
+        };
+        assert!(matches!(outcome.as_ref(), ProcessOutcome::Cancelled(_)));
+    }
+
+    #[test]
+    fn heartbeat_store_failure_stops_a_running_app_server() {
+        struct FencedStoreObserver;
+        impl AppServerObserver for FencedStoreObserver {
+            fn heartbeat(&mut self) -> Result<(), String> {
+                Err("Store lease heartbeat was fenced".to_owned())
+            }
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("never-app-server");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n[ \"$1\" = app-server ] || exit 2\nwhile :; do :; done\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).unwrap();
+        let schema = json!({"type": "object"});
+        let turn_request = TurnRequest {
+            kind: TurnKind::Inspection,
+            cwd: directory.path(),
+            prompt: "never completes",
+            output_schema: &schema,
+        };
+
+        let error = AppServerClient::new(&executable)
+            .with_heartbeat_interval(Duration::from_millis(5))
+            .with_execution_timeout(Duration::from_secs(2))
+            .run(&turn_request, &mut FencedStoreObserver)
+            .unwrap_err();
+
+        let AppServerError::Supervision { outcome } = error else {
+            panic!("expected supervised heartbeat failure");
+        };
+        assert!(matches!(
+            outcome.as_ref(),
+            ProcessOutcome::HeartbeatFailure { message, .. } if message.contains("fenced")
+        ));
     }
 }

@@ -149,10 +149,19 @@ bokkie --database ./bokkie.sqlite serve \
   --gardener-codex-executable /usr/bin/codex \
   --gardener-git-executable /usr/bin/git \
   --gardener-gh-executable /usr/bin/gh \
-  --gardener-heartbeat-ms 10000
+  --gardener-heartbeat-ms 10000 \
+  --gardener-process-timeout-ms 1800000
 ```
 
-The heartbeat must be positive and no more than one third of the lease. An
+The heartbeat must be positive and no more than one third of the lease. The
+process timeout is an absolute deadline for each Codex, Git, or `gh` child and
+is deliberately independent of the renewable lease duration. All three use the
+same supervised process boundary: shutdown cancellation and deadline expiry
+terminate the child's Unix process group, output and JSONL messages have fixed
+bounds, and retained failure evidence includes stream tails, byte counts,
+SHA-256 digests, and truncation flags. An interrupted command that might have
+changed external state is recorded as ambiguous and requires reconciliation;
+it is not inferred to have succeeded from process exit or narrative output. An
 inspection resolves `origin/main`, records its exact commit, and uses a
 disposable detached worktree with read-only, network-off Codex access. An
 approved implementation uses a separate isolated branch worktree with

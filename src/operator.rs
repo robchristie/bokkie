@@ -46,6 +46,7 @@ impl Store {
                     &obligation,
                     proposals.get(&obligation.id),
                     state_revision,
+                    captured_at,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -254,8 +255,9 @@ impl Store {
         obligation: &Obligation,
         proposal: Option<&Proposal>,
         state_revision: i64,
+        captured_at: i64,
     ) -> Result<OperatorObligation, StoreError> {
-        let exception = self.exception_reason(obligation, proposal)?;
+        let exception = self.exception_reason(obligation, proposal, captured_at)?;
         let liveness = match obligation.state {
             state if state.is_terminal() => None,
             ObligationState::Pending | ObligationState::RetryScheduled => {
@@ -268,21 +270,36 @@ impl Store {
                     })?,
                 })
             }
-            ObligationState::Running => Some(DurableLiveness::ActiveLease {
-                token: obligation.lease_token.clone().ok_or_else(|| {
+            ObligationState::Running => {
+                let token = obligation.lease_token.clone().ok_or_else(|| {
                     StoreError::Invalid(format!(
                         "running obligation {:?} lacks a lease",
                         obligation.id
                     ))
-                })?,
-                generation: obligation.lease_generation,
-                expires_at: obligation.lease_expires_at.ok_or_else(|| {
+                })?;
+                let expires_at = obligation.lease_expires_at.ok_or_else(|| {
                     StoreError::Invalid(format!(
                         "running obligation {:?} lacks lease expiry",
                         obligation.id
                     ))
-                })?,
-            }),
+                })?;
+                if expires_at <= captured_at {
+                    Some(DurableLiveness::HumanAttention {
+                        reason: exception.clone().ok_or_else(|| {
+                            StoreError::Invalid(format!(
+                                "expired running obligation {:?} lacks an exception reason",
+                                obligation.id
+                            ))
+                        })?,
+                    })
+                } else {
+                    Some(DurableLiveness::ActiveLease {
+                        token,
+                        generation: obligation.lease_generation,
+                        expires_at,
+                    })
+                }
+            }
             ObligationState::AwaitingApproval | ObligationState::Attention => {
                 Some(DurableLiveness::HumanAttention {
                     reason: exception.clone().ok_or_else(|| {
@@ -323,7 +340,28 @@ impl Store {
         &self,
         obligation: &Obligation,
         proposal: Option<&Proposal>,
+        captured_at: i64,
     ) -> Result<Option<ExceptionReason>, StoreError> {
+        if obligation.state == ObligationState::Running {
+            let expires_at = obligation.lease_expires_at.ok_or_else(|| {
+                StoreError::Invalid(format!(
+                    "running obligation {:?} lacks lease expiry",
+                    obligation.id
+                ))
+            })?;
+            if expires_at <= captured_at {
+                return Ok(Some(ExceptionReason::ExpiredLease {
+                    token: obligation.lease_token.clone().ok_or_else(|| {
+                        StoreError::Invalid(format!(
+                            "running obligation {:?} lacks a lease",
+                            obligation.id
+                        ))
+                    })?,
+                    generation: obligation.lease_generation,
+                    expires_at,
+                }));
+            }
+        }
         if obligation.state == ObligationState::AwaitingApproval {
             let subject = proposal.map_or(ApprovalSubject::Generic, |proposal| {
                 ApprovalSubject::GardenerProposal {
@@ -610,6 +648,71 @@ mod tests {
                 max_delay_seconds: 20,
             },
         }
+    }
+
+    #[test]
+    fn expired_running_lease_is_projected_as_attention_until_store_recovers_it() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.create(new("lease", false), 100).unwrap();
+        store.claim_due(100, 10, 1).unwrap();
+
+        let before_expiry = store.operator_snapshot(109).unwrap();
+        let before_expiry = before_expiry
+            .obligations
+            .into_iter()
+            .find(|item| item.id == "lease")
+            .unwrap();
+        assert!(before_expiry.exception.is_none());
+        assert!(matches!(
+            before_expiry.liveness,
+            Some(DurableLiveness::ActiveLease {
+                expires_at: 110,
+                ..
+            })
+        ));
+
+        for captured_at in [110, 111] {
+            let expired = store
+                .operator_snapshot(captured_at)
+                .unwrap()
+                .obligations
+                .into_iter()
+                .find(|item| item.id == "lease")
+                .unwrap();
+            assert_eq!(expired.state, OperatorObligationState::Running);
+            assert!(matches!(
+                expired.exception,
+                Some(ExceptionReason::ExpiredLease {
+                    generation: 1,
+                    expires_at: 110,
+                    ..
+                })
+            ));
+            assert!(matches!(
+                expired.liveness,
+                Some(DurableLiveness::HumanAttention {
+                    reason: ExceptionReason::ExpiredLease {
+                        expires_at: 110,
+                        ..
+                    }
+                })
+            ));
+        }
+
+        assert_eq!(store.recover_expired_leases(110).unwrap(), 1);
+        let recovered = store
+            .operator_snapshot(111)
+            .unwrap()
+            .obligations
+            .into_iter()
+            .find(|item| item.id == "lease")
+            .unwrap();
+        assert_eq!(recovered.state, OperatorObligationState::RetryScheduled);
+        assert!(recovered.exception.is_none());
+        assert!(matches!(
+            recovered.liveness,
+            Some(DurableLiveness::FutureWake { wake_at: 120 })
+        ));
     }
 
     fn finish_gardener_run(

@@ -9,12 +9,19 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, ExitStatus, Output, Stdio};
+use std::process::{Command, ExitStatus};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use thiserror::Error;
+
+#[cfg(test)]
+use crate::process::NoopHeartbeat;
+use crate::process::{
+    CancellationToken, EffectRisk, ProcessError, ProcessEvidence, ProcessHeartbeat, ProcessLimits,
+    ProcessOutcome, ProcessSupervisor,
+};
 
 pub const CANONICAL_REPOSITORY: &str = "robchristie/bokkie";
 pub const CANONICAL_DEFAULT_BRANCH: &str = "main";
@@ -22,6 +29,8 @@ pub const GARDENER_BRANCH_PREFIX: &str = "codex/gardener-";
 const CANONICAL_HTTPS_URL: &str = "https://github.com/robchristie/bokkie.git";
 const EXECUTABLE_FILE_BUSY_ATTEMPTS: usize = 4;
 const EXECUTABLE_FILE_BUSY_BACKOFF: Duration = Duration::from_millis(5);
+const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 
 /// An exact SHA-1 Git commit identity.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -108,10 +117,14 @@ pub struct ProcessFailure {
     pub status: ExitStatus,
     pub stdout: String,
     pub stderr: String,
+    pub evidence: ProcessEvidence,
 }
 
 struct ExecutedOutput {
-    output: Output,
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: String,
+    evidence: ProcessEvidence,
     arguments: Vec<String>,
 }
 
@@ -119,19 +132,22 @@ impl fmt::Display for ProcessFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "{} {:?} in {} exited with {}; stdout: {}; stderr: {}",
+            "{} {:?} in {} exited with {}; stdout: {}; stderr: {}; {}",
             self.program.display(),
             self.arguments,
             self.cwd.display(),
             self.status,
             self.stdout.trim_end(),
-            self.stderr.trim_end()
+            self.stderr.trim_end(),
+            self.evidence,
         )
     }
 }
 
 #[derive(Debug, Error)]
 pub enum GitWorkspaceError {
+    #[error("invalid process supervision configuration: {0}")]
+    InvalidSupervision(String),
     #[error("checkout path must be an existing absolute directory: {0}")]
     InvalidCheckout(PathBuf),
     #[error("invalid exact commit identity {0:?}; expected 40 lowercase hexadecimal characters")]
@@ -159,6 +175,13 @@ pub enum GitWorkspaceError {
         cwd: PathBuf,
         #[source]
         source: io::Error,
+    },
+    #[error("supervised process {program} {arguments:?} in {cwd} ended with {outcome}")]
+    Supervision {
+        program: PathBuf,
+        arguments: Vec<String>,
+        cwd: PathBuf,
+        outcome: Box<ProcessOutcome>,
     },
     #[error("process failed: {0}")]
     Command(#[from] Box<ProcessFailure>),
@@ -220,12 +243,28 @@ pub enum GitWorkspaceError {
 
 impl std::error::Error for ProcessFailure {}
 
+impl GitWorkspaceError {
+    pub fn is_ambiguous_external_state(&self) -> bool {
+        matches!(
+            self,
+            Self::Supervision {
+                outcome,
+                ..
+            } if matches!(outcome.as_ref(), ProcessOutcome::AmbiguousExternalState { .. })
+        )
+    }
+}
+
 /// Process-backed Git/GitHub adapter for the one canonical gardener target.
 #[derive(Clone, Debug)]
 pub struct GitWorkspace {
     checkout: PathBuf,
     git_executable: PathBuf,
     gh_executable: PathBuf,
+    heartbeat_interval: Duration,
+    execution_timeout: Duration,
+    process_limits: ProcessLimits,
+    cancellation: CancellationToken,
 }
 
 impl GitWorkspace {
@@ -247,7 +286,32 @@ impl GitWorkspace {
             checkout,
             git_executable: git_executable.into(),
             gh_executable: gh_executable.into(),
+            heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
+            execution_timeout: DEFAULT_EXECUTION_TIMEOUT,
+            process_limits: ProcessLimits::default(),
+            cancellation: CancellationToken::new(),
         })
+    }
+
+    pub fn with_supervision(
+        mut self,
+        heartbeat_interval: Duration,
+        execution_timeout: Duration,
+        process_limits: ProcessLimits,
+        cancellation: CancellationToken,
+    ) -> Result<Self, GitWorkspaceError> {
+        ProcessSupervisor::new(heartbeat_interval, process_limits, cancellation.clone())
+            .map_err(GitWorkspaceError::InvalidSupervision)?;
+        if execution_timeout.is_zero() {
+            return Err(GitWorkspaceError::InvalidSupervision(
+                "process execution timeout must be positive".to_owned(),
+            ));
+        }
+        self.heartbeat_interval = heartbeat_interval;
+        self.execution_timeout = execution_timeout;
+        self.process_limits = process_limits;
+        self.cancellation = cancellation;
+        Ok(self)
     }
 
     pub fn checkout(&self) -> &Path {
@@ -255,15 +319,21 @@ impl GitWorkspace {
     }
 
     /// Updates and resolves exactly `origin/main` after a read-only remote fetch.
-    pub fn resolve_origin_main(&self) -> Result<CommitId, GitWorkspaceError> {
-        self.ensure_canonical_origin(&self.checkout, RemoteOperation::Fetch)?;
+    pub fn resolve_origin_main(
+        &self,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<CommitId, GitWorkspaceError> {
+        self.ensure_canonical_origin(&self.checkout, RemoteOperation::Fetch, heartbeat)?;
         self.git_success(
             &self.checkout,
             ["fetch", "--quiet", "origin", CANONICAL_DEFAULT_BRANCH],
+            EffectRisk::None,
+            heartbeat,
         )?;
         self.resolve_revision(
             &self.checkout,
             &format!("refs/remotes/origin/{CANONICAL_DEFAULT_BRANCH}^{{commit}}"),
+            heartbeat,
         )
     }
 
@@ -272,9 +342,10 @@ impl GitWorkspace {
         &self,
         path: impl AsRef<Path>,
         source_commit: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<RegisteredWorktree, GitWorkspaceError> {
         let path = normalise_new_worktree_path(path.as_ref())?;
-        self.ensure_canonical_origin(&self.checkout, RemoteOperation::WorktreeCreation)?;
+        self.ensure_canonical_origin(&self.checkout, RemoteOperation::WorktreeCreation, heartbeat)?;
         self.git_success(
             &self.checkout,
             [
@@ -284,9 +355,11 @@ impl GitWorkspace {
                 path.as_os_str().to_owned(),
                 OsString::from(source_commit.as_str()),
             ],
+            EffectRisk::AmbiguousOnInterruption,
+            heartbeat,
         )?;
-        self.verify_head_path(&path, source_commit)?;
-        self.verify_detached(&path)?;
+        self.verify_head_path(&path, source_commit, heartbeat)?;
+        self.verify_detached(&path, heartbeat)?;
         Ok(RegisteredWorktree {
             path,
             owner_checkout: self.checkout.clone(),
@@ -301,13 +374,14 @@ impl GitWorkspace {
         path: impl AsRef<Path>,
         branch: &str,
         source_commit: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<RegisteredWorktree, GitWorkspaceError> {
         validate_branch(branch)?;
         let path = normalise_new_worktree_path(path.as_ref())?;
-        if self.local_branch_exists(branch)? {
+        if self.local_branch_exists(branch, heartbeat)? {
             return Err(GitWorkspaceError::BranchExists(branch.to_owned()));
         }
-        self.ensure_canonical_origin(&self.checkout, RemoteOperation::WorktreeCreation)?;
+        self.ensure_canonical_origin(&self.checkout, RemoteOperation::WorktreeCreation, heartbeat)?;
         self.git_success(
             &self.checkout,
             [
@@ -318,9 +392,11 @@ impl GitWorkspace {
                 path.as_os_str().to_owned(),
                 OsString::from(source_commit.as_str()),
             ],
+            EffectRisk::AmbiguousOnInterruption,
+            heartbeat,
         )?;
-        self.verify_head_path(&path, source_commit)?;
-        self.verify_branch_path(&path, branch)?;
+        self.verify_head_path(&path, source_commit, heartbeat)?;
+        self.verify_branch_path(&path, branch, heartbeat)?;
         Ok(RegisteredWorktree {
             path,
             owner_checkout: self.checkout.clone(),
@@ -336,18 +412,20 @@ impl GitWorkspace {
         &self,
         worktree: &RegisteredWorktree,
         expected: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<(), GitWorkspaceError> {
         self.ensure_owned(worktree)?;
-        self.verify_head_path(&worktree.path, expected)
+        self.verify_head_path(&worktree.path, expected, heartbeat)
     }
 
     /// Returns Git porcelain v1 status, including all untracked non-ignored files.
     pub fn porcelain_status(
         &self,
         worktree: &RegisteredWorktree,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<String, GitWorkspaceError> {
         self.ensure_owned(worktree)?;
-        self.status_path(&worktree.path)
+        self.status_path(&worktree.path, heartbeat)
     }
 
     /// Commits all currently observed non-ignored changes in a branch worktree.
@@ -355,24 +433,35 @@ impl GitWorkspace {
         &self,
         worktree: &RegisteredWorktree,
         message: &str,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<CommitId, GitWorkspaceError> {
         self.ensure_owned(worktree)?;
         let branch = worktree
             .branch()
             .ok_or_else(|| GitWorkspaceError::InvalidBranch("detached worktree".to_owned()))?;
-        self.verify_branch_path(&worktree.path, branch)?;
+        self.verify_branch_path(&worktree.path, branch, heartbeat)?;
         if message.trim().is_empty() {
             return Err(GitWorkspaceError::EmptyCommitMessage);
         }
-        if self.status_path(&worktree.path)?.is_empty() {
+        if self.status_path(&worktree.path, heartbeat)?.is_empty() {
             return Err(GitWorkspaceError::NoChanges(worktree.path.clone()));
         }
 
-        self.git_success(&worktree.path, ["add", "--all"])?;
-        self.git_success(&worktree.path, ["commit", "--message", message])?;
-        let commit = self.resolve_revision(&worktree.path, "HEAD^{commit}")?;
-        self.verify_head_path(&worktree.path, &commit)?;
-        let status = self.status_path(&worktree.path)?;
+        self.git_success(
+            &worktree.path,
+            ["add", "--all"],
+            EffectRisk::AmbiguousOnInterruption,
+            heartbeat,
+        )?;
+        self.git_success(
+            &worktree.path,
+            ["commit", "--message", message],
+            EffectRisk::AmbiguousOnInterruption,
+            heartbeat,
+        )?;
+        let commit = self.resolve_revision(&worktree.path, "HEAD^{commit}", heartbeat)?;
+        self.verify_head_path(&worktree.path, &commit, heartbeat)?;
+        let status = self.status_path(&worktree.path, heartbeat)?;
         if !status.is_empty() {
             return Err(GitWorkspaceError::CommitLeftChanges {
                 path: worktree.path.clone(),
@@ -387,17 +476,23 @@ impl GitWorkspace {
         &self,
         worktree: &RegisteredWorktree,
         expected_head: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<(), GitWorkspaceError> {
         self.ensure_owned(worktree)?;
         let branch = worktree
             .branch()
             .ok_or_else(|| GitWorkspaceError::InvalidBranch("detached worktree".to_owned()))?;
         validate_branch(branch)?;
-        self.verify_branch_path(&worktree.path, branch)?;
-        self.verify_head_path(&worktree.path, expected_head)?;
+        self.verify_branch_path(&worktree.path, branch, heartbeat)?;
+        self.verify_head_path(&worktree.path, expected_head, heartbeat)?;
         let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
-        self.ensure_canonical_origin(&worktree.path, RemoteOperation::Push)?;
-        self.git_success(&worktree.path, ["push", "origin", refspec.as_str()])?;
+        self.ensure_canonical_origin(&worktree.path, RemoteOperation::Push, heartbeat)?;
+        self.git_success(
+            &worktree.path,
+            ["push", "origin", refspec.as_str()],
+            EffectRisk::AmbiguousOnInterruption,
+            heartbeat,
+        )?;
         Ok(())
     }
 
@@ -409,13 +504,16 @@ impl GitWorkspace {
         &self,
         branch: &str,
         expected_head: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<CommitId, GitWorkspaceError> {
         validate_branch(branch)?;
         let reference = format!("refs/heads/{branch}");
-        self.ensure_canonical_origin(&self.checkout, RemoteOperation::Fetch)?;
+        self.ensure_canonical_origin(&self.checkout, RemoteOperation::Fetch, heartbeat)?;
         let output = self.git_success(
             &self.checkout,
             ["ls-remote", "--refs", "origin", reference.as_str()],
+            EffectRisk::None,
+            heartbeat,
         )?;
         let mut lines = output.lines();
         let line = lines.next().ok_or_else(|| {
@@ -456,6 +554,7 @@ impl GitWorkspace {
         expected_head: &CommitId,
         title: &str,
         body: &str,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<PullRequestIdentity, GitWorkspaceError> {
         validate_branch(branch)?;
         if title.trim().is_empty() {
@@ -463,21 +562,25 @@ impl GitWorkspace {
                 "title must not be empty".to_owned(),
             ));
         }
-        self.gh_success([
-            "pr",
-            "create",
-            "--repo",
-            CANONICAL_REPOSITORY,
-            "--base",
-            CANONICAL_DEFAULT_BRANCH,
-            "--head",
-            branch,
-            "--title",
-            title,
-            "--body",
-            body,
-        ])?;
-        self.observe_pull_request(branch, expected_head)
+        self.gh_success(
+            [
+                "pr",
+                "create",
+                "--repo",
+                CANONICAL_REPOSITORY,
+                "--base",
+                CANONICAL_DEFAULT_BRANCH,
+                "--head",
+                branch,
+                "--title",
+                title,
+                "--body",
+                body,
+            ],
+            EffectRisk::AmbiguousOnInterruption,
+            heartbeat,
+        )?;
+        self.observe_pull_request(branch, expected_head, heartbeat)
     }
 
     /// Observes a PR exclusively through structured `gh` JSON output.
@@ -485,17 +588,22 @@ impl GitWorkspace {
         &self,
         branch: &str,
         expected_head: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<PullRequestIdentity, GitWorkspaceError> {
         validate_branch(branch)?;
-        let output = self.gh_success([
-            "pr",
-            "view",
-            branch,
-            "--repo",
-            CANONICAL_REPOSITORY,
-            "--json",
-            "number,url,headRefOid,state,isDraft",
-        ])?;
+        let output = self.gh_success(
+            [
+                "pr",
+                "view",
+                branch,
+                "--repo",
+                CANONICAL_REPOSITORY,
+                "--json",
+                "number,url,headRefOid,state,isDraft",
+            ],
+            EffectRisk::None,
+            heartbeat,
+        )?;
         let observation: PullRequestObservation = serde_json::from_str(&output)?;
         validate_pull_request_observation(branch, expected_head, observation)
     }
@@ -504,16 +612,17 @@ impl GitWorkspace {
     pub fn remove_clean_worktree(
         &self,
         worktree: &RegisteredWorktree,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<(), GitWorkspaceError> {
         self.ensure_owned(worktree)?;
         validate_existing_removal_path(&worktree.path)?;
-        let registered = self.registered_worktree_paths()?;
+        let registered = self.registered_worktree_paths(heartbeat)?;
         if !registered.iter().any(|path| path == &worktree.path) {
             return Err(GitWorkspaceError::WorktreeNotRegistered(
                 worktree.path.clone(),
             ));
         }
-        let status = self.status_path(&worktree.path)?;
+        let status = self.status_path(&worktree.path, heartbeat)?;
         if !status.is_empty() {
             return Err(GitWorkspaceError::DirtyWorktree {
                 path: worktree.path.clone(),
@@ -527,10 +636,12 @@ impl GitWorkspace {
                 OsString::from("remove"),
                 worktree.path.as_os_str().to_owned(),
             ],
+            EffectRisk::AmbiguousOnInterruption,
+            heartbeat,
         )?;
         if worktree.path.exists()
             || self
-                .registered_worktree_paths()?
+                .registered_worktree_paths(heartbeat)?
                 .iter()
                 .any(|path| path == &worktree.path)
         {
@@ -554,17 +665,38 @@ impl GitWorkspace {
         &self,
         cwd: &Path,
         operation: RemoteOperation,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<(), GitWorkspaceError> {
         let outputs = match operation {
             RemoteOperation::Fetch => {
-                vec![self.git_success(cwd, ["remote", "get-url", "--all", "origin"])?]
+                vec![self.git_success(
+                    cwd,
+                    ["remote", "get-url", "--all", "origin"],
+                    EffectRisk::None,
+                    heartbeat,
+                )?]
             }
             RemoteOperation::WorktreeCreation => vec![
-                self.git_success(cwd, ["remote", "get-url", "--all", "origin"])?,
-                self.git_success(cwd, ["remote", "get-url", "--push", "--all", "origin"])?,
+                self.git_success(
+                    cwd,
+                    ["remote", "get-url", "--all", "origin"],
+                    EffectRisk::None,
+                    heartbeat,
+                )?,
+                self.git_success(
+                    cwd,
+                    ["remote", "get-url", "--push", "--all", "origin"],
+                    EffectRisk::None,
+                    heartbeat,
+                )?,
             ],
             RemoteOperation::Push => {
-                vec![self.git_success(cwd, ["remote", "get-url", "--push", "--all", "origin"])?]
+                vec![self.git_success(
+                    cwd,
+                    ["remote", "get-url", "--push", "--all", "origin"],
+                    EffectRisk::None,
+                    heartbeat,
+                )?]
             }
         };
         let urls = outputs
@@ -580,13 +712,19 @@ impl GitWorkspace {
         Ok(())
     }
 
-    fn local_branch_exists(&self, branch: &str) -> Result<bool, GitWorkspaceError> {
+    fn local_branch_exists(
+        &self,
+        branch: &str,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<bool, GitWorkspaceError> {
         let reference = format!("refs/heads/{branch}");
         let output = self.git_output(
             &self.checkout,
             ["show-ref", "--verify", "--quiet", reference.as_str()],
+            EffectRisk::None,
+            heartbeat,
         )?;
-        match output.output.status.code() {
+        match output.status.code() {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
             _ => Err(self
@@ -595,8 +733,13 @@ impl GitWorkspace {
         }
     }
 
-    fn verify_head_path(&self, path: &Path, expected: &CommitId) -> Result<(), GitWorkspaceError> {
-        let actual = self.resolve_revision(path, "HEAD^{commit}")?;
+    fn verify_head_path(
+        &self,
+        path: &Path,
+        expected: &CommitId,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<(), GitWorkspaceError> {
+        let actual = self.resolve_revision(path, "HEAD^{commit}", heartbeat)?;
         if &actual != expected {
             return Err(GitWorkspaceError::HeadMismatch {
                 path: path.to_owned(),
@@ -607,14 +750,23 @@ impl GitWorkspace {
         Ok(())
     }
 
-    fn verify_detached(&self, path: &Path) -> Result<(), GitWorkspaceError> {
-        let output = self.git_output(path, ["symbolic-ref", "--quiet", "HEAD"])?;
-        match output.output.status.code() {
+    fn verify_detached(
+        &self,
+        path: &Path,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<(), GitWorkspaceError> {
+        let output = self.git_output(
+            path,
+            ["symbolic-ref", "--quiet", "HEAD"],
+            EffectRisk::None,
+            heartbeat,
+        )?;
+        match output.status.code() {
             Some(1) => Ok(()),
             Some(0) => Err(GitWorkspaceError::BranchMismatch {
                 path: path.to_owned(),
                 expected: "detached HEAD".to_owned(),
-                actual: stdout(&self.git_executable, output.output)?
+                actual: stdout(&self.git_executable, output.stdout)?
                     .trim()
                     .to_owned(),
             }),
@@ -624,9 +776,19 @@ impl GitWorkspace {
         }
     }
 
-    fn verify_branch_path(&self, path: &Path, expected: &str) -> Result<(), GitWorkspaceError> {
+    fn verify_branch_path(
+        &self,
+        path: &Path,
+        expected: &str,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<(), GitWorkspaceError> {
         let actual = self
-            .git_success(path, ["symbolic-ref", "--quiet", "--short", "HEAD"])?
+            .git_success(
+                path,
+                ["symbolic-ref", "--quiet", "--short", "HEAD"],
+                EffectRisk::None,
+                heartbeat,
+            )?
             .trim()
             .to_owned();
         if actual != expected {
@@ -639,19 +801,46 @@ impl GitWorkspace {
         Ok(())
     }
 
-    fn resolve_revision(&self, cwd: &Path, revision: &str) -> Result<CommitId, GitWorkspaceError> {
-        let stdout = self.git_success(cwd, ["rev-parse", "--verify", revision])?;
+    fn resolve_revision(
+        &self,
+        cwd: &Path,
+        revision: &str,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<CommitId, GitWorkspaceError> {
+        let stdout = self.git_success(
+            cwd,
+            ["rev-parse", "--verify", revision],
+            EffectRisk::None,
+            heartbeat,
+        )?;
         let value = stdout.strip_suffix('\n').unwrap_or(&stdout);
         let value = value.strip_suffix('\r').unwrap_or(value);
         CommitId::parse(value.to_owned())
     }
 
-    fn status_path(&self, path: &Path) -> Result<String, GitWorkspaceError> {
-        self.git_success(path, ["status", "--porcelain=v1", "--untracked-files=all"])
+    fn status_path(
+        &self,
+        path: &Path,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<String, GitWorkspaceError> {
+        self.git_success(
+            path,
+            ["status", "--porcelain=v1", "--untracked-files=all"],
+            EffectRisk::None,
+            heartbeat,
+        )
     }
 
-    fn registered_worktree_paths(&self) -> Result<Vec<PathBuf>, GitWorkspaceError> {
-        let output = self.git_success(&self.checkout, ["worktree", "list", "--porcelain"])?;
+    fn registered_worktree_paths(
+        &self,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<Vec<PathBuf>, GitWorkspaceError> {
+        let output = self.git_success(
+            &self.checkout,
+            ["worktree", "list", "--porcelain"],
+            EffectRisk::None,
+            heartbeat,
+        )?;
         output
             .lines()
             .filter_map(|line| line.strip_prefix("worktree "))
@@ -664,44 +853,63 @@ impl GitWorkspace {
             .collect()
     }
 
-    fn git_success<I, S>(&self, cwd: &Path, arguments: I) -> Result<String, GitWorkspaceError>
+    fn git_success<I, S>(
+        &self,
+        cwd: &Path,
+        arguments: I,
+        risk: EffectRisk,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<String, GitWorkspaceError>
     where
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        let output = self.git_output(cwd, arguments)?;
-        if !output.output.status.success() {
+        let output = self.git_output(cwd, arguments, risk, heartbeat)?;
+        if !output.status.success() {
             return Err(self
                 .process_failure(&self.git_executable, cwd, &output)
                 .into());
         }
-        stdout(&self.git_executable, output.output)
+        stdout(&self.git_executable, output.stdout)
     }
 
     fn git_output<I, S>(
         &self,
         cwd: &Path,
         arguments: I,
+        risk: EffectRisk,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<ExecutedOutput, GitWorkspaceError>
     where
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        self.run(&self.git_executable, cwd, arguments)
+        self.run(&self.git_executable, cwd, arguments, risk, heartbeat)
     }
 
-    fn gh_success<I, S>(&self, arguments: I) -> Result<String, GitWorkspaceError>
+    fn gh_success<I, S>(
+        &self,
+        arguments: I,
+        risk: EffectRisk,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<String, GitWorkspaceError>
     where
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        let output = self.run(&self.gh_executable, &self.checkout, arguments)?;
-        if !output.output.status.success() {
+        let output = self.run(
+            &self.gh_executable,
+            &self.checkout,
+            arguments,
+            risk,
+            heartbeat,
+        )?;
+        if !output.status.success() {
             return Err(self
                 .process_failure(&self.gh_executable, &self.checkout, &output)
                 .into());
         }
-        stdout(&self.gh_executable, output.output)
+        stdout(&self.gh_executable, output.stdout)
     }
 
     fn run<I, S>(
@@ -709,6 +917,8 @@ impl GitWorkspace {
         program: &Path,
         cwd: &Path,
         arguments: I,
+        risk: EffectRisk,
+        heartbeat: &mut dyn ProcessHeartbeat,
     ) -> Result<ExecutedOutput, GitWorkspaceError>
     where
         I: IntoIterator<Item = S>,
@@ -716,14 +926,53 @@ impl GitWorkspace {
     {
         let arguments = arguments.into_iter().map(Into::into).collect::<Vec<_>>();
         let displayed_arguments = display_arguments(&arguments);
-        let child = retry_executable_file_busy(|| {
-            Command::new(program)
-                .args(&arguments)
-                .current_dir(cwd)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
+        self.run_observed(
+            program,
+            cwd,
+            arguments,
+            displayed_arguments,
+            risk,
+            heartbeat,
+        )
+    }
+
+    fn run_observed<I, S>(
+        &self,
+        program: &Path,
+        cwd: &Path,
+        arguments: I,
+        displayed_arguments: Vec<String>,
+        risk: EffectRisk,
+        heartbeat: &mut dyn ProcessHeartbeat,
+    ) -> Result<ExecutedOutput, GitWorkspaceError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        let arguments = arguments.into_iter().map(Into::into).collect::<Vec<_>>();
+        let supervisor = ProcessSupervisor::new(
+            self.heartbeat_interval,
+            self.process_limits,
+            self.cancellation.clone(),
+        )
+        .map_err(GitWorkspaceError::InvalidSupervision)?;
+        let mut child = retry_executable_file_busy(|| {
+            let mut command = Command::new(program);
+            command.args(&arguments).current_dir(cwd);
+            let deadline = Instant::now()
+                .checked_add(self.execution_timeout)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "execution deadline is out of range",
+                    )
+                })?;
+            supervisor
+                .spawn(&mut command, deadline, risk)
+                .map_err(|error| match error {
+                    ProcessError::Spawn(source) | ProcessError::Io(source) => source,
+                    ProcessError::ReaderPanicked => io::Error::other("output reader panicked"),
+                })
         })
         .map_err(|source| GitWorkspaceError::Spawn {
             program: program.to_owned(),
@@ -731,18 +980,33 @@ impl GitWorkspace {
             cwd: cwd.to_owned(),
             source,
         })?;
-        let output = child
-            .wait_with_output()
-            .map_err(|source| GitWorkspaceError::Wait {
+        child.close_stdin();
+        let outcome = child
+            .wait(heartbeat)
+            .map_err(|error| GitWorkspaceError::Wait {
                 program: program.to_owned(),
                 arguments: displayed_arguments.clone(),
                 cwd: cwd.to_owned(),
-                source,
+                source: match error {
+                    ProcessError::Spawn(source) | ProcessError::Io(source) => source,
+                    ProcessError::ReaderPanicked => io::Error::other("output reader panicked"),
+                },
             })?;
-        Ok(ExecutedOutput {
-            output,
-            arguments: displayed_arguments,
-        })
+        match outcome {
+            ProcessOutcome::Completed { status, evidence } => Ok(ExecutedOutput {
+                status,
+                stdout: evidence.stdout.tail_bytes.clone(),
+                stderr: evidence.stderr.tail.clone(),
+                evidence,
+                arguments: displayed_arguments,
+            }),
+            outcome => Err(GitWorkspaceError::Supervision {
+                program: program.to_owned(),
+                arguments: displayed_arguments,
+                cwd: cwd.to_owned(),
+                outcome: Box::new(outcome),
+            }),
+        }
     }
 
     fn process_failure(
@@ -755,9 +1019,10 @@ impl GitWorkspace {
             program: program.to_owned(),
             arguments: executed.arguments.clone(),
             cwd: cwd.to_owned(),
-            status: executed.output.status,
-            stdout: String::from_utf8_lossy(&executed.output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&executed.output.stderr).into_owned(),
+            status: executed.status,
+            stdout: String::from_utf8_lossy(&executed.stdout).into_owned(),
+            stderr: executed.stderr.clone(),
+            evidence: executed.evidence.clone(),
         })
     }
 }
@@ -931,8 +1196,8 @@ fn validate_path_shape(path: &Path) -> Result<(), GitWorkspaceError> {
     Ok(())
 }
 
-fn stdout(program: &Path, output: Output) -> Result<String, GitWorkspaceError> {
-    String::from_utf8(output.stdout).map_err(|source| GitWorkspaceError::NonUtf8Output {
+fn stdout(program: &Path, output: Vec<u8>) -> Result<String, GitWorkspaceError> {
+    String::from_utf8(output).map_err(|source| GitWorkspaceError::NonUtf8Output {
         program: program.to_owned(),
         stream: "stdout",
         source,
@@ -1030,10 +1295,17 @@ mod tests {
     fn resolves_origin_main_and_creates_exact_detached_and_branch_heads() {
         let fixture = RepositoryFixture::new();
         let adapter = fixture.adapter("unused-gh");
-        assert_eq!(adapter.resolve_origin_main().unwrap(), fixture.source);
+        assert_eq!(
+            adapter.resolve_origin_main(&mut NoopHeartbeat).unwrap(),
+            fixture.source
+        );
 
         let detached = adapter
-            .create_detached_worktree(fixture.path("inspection"), &fixture.source)
+            .create_detached_worktree(
+                fixture.path("inspection"),
+                &fixture.source,
+                &mut NoopHeartbeat,
+            )
             .unwrap();
         assert_eq!(detached.kind(), &WorktreeKind::Detached);
         assert_eq!(
@@ -1047,17 +1319,28 @@ mod tests {
 
         let branch_name = "codex/gardener-exact-head";
         let branch = adapter
-            .create_branch_worktree(fixture.path("implementation"), branch_name, &fixture.source)
+            .create_branch_worktree(
+                fixture.path("implementation"),
+                branch_name,
+                &fixture.source,
+                &mut NoopHeartbeat,
+            )
             .unwrap();
         assert_eq!(branch.branch(), Some(branch_name));
-        adapter.verify_head(&branch, &fixture.source).unwrap();
+        adapter
+            .verify_head(&branch, &fixture.source, &mut NoopHeartbeat)
+            .unwrap();
         assert_eq!(
             git_stdout(branch.path(), ["branch", "--show-current"]),
             branch_name
         );
 
-        adapter.remove_clean_worktree(&detached).unwrap();
-        adapter.remove_clean_worktree(&branch).unwrap();
+        adapter
+            .remove_clean_worktree(&detached, &mut NoopHeartbeat)
+            .unwrap();
+        adapter
+            .remove_clean_worktree(&branch, &mut NoopHeartbeat)
+            .unwrap();
     }
 
     #[test]
@@ -1066,30 +1349,46 @@ mod tests {
         let adapter = fixture.adapter("unused-gh");
         let branch_name = "codex/gardener-dirty-commit";
         let worktree = adapter
-            .create_branch_worktree(fixture.path("implementation"), branch_name, &fixture.source)
+            .create_branch_worktree(
+                fixture.path("implementation"),
+                branch_name,
+                &fixture.source,
+                &mut NoopHeartbeat,
+            )
             .unwrap();
         fs::write(worktree.path().join("README.md"), "changed\n").unwrap();
         fs::write(worktree.path().join("new.txt"), "new\n").unwrap();
         fs::write(worktree.path().join(".gitignore"), "ignored.txt\n").unwrap();
         fs::write(worktree.path().join("ignored.txt"), "ignored\n").unwrap();
 
-        let status = adapter.porcelain_status(&worktree).unwrap();
+        let status = adapter
+            .porcelain_status(&worktree, &mut NoopHeartbeat)
+            .unwrap();
         assert!(status.contains("README.md"));
         assert!(status.contains("new.txt"));
         assert!(!status.contains("ignored.txt"));
         let commit = adapter
-            .commit_all(&worktree, "Test gardener commit")
+            .commit_all(&worktree, "Test gardener commit", &mut NoopHeartbeat)
             .unwrap();
         assert_ne!(commit, fixture.source);
-        assert_eq!(adapter.porcelain_status(&worktree).unwrap(), "");
+        assert_eq!(
+            adapter
+                .porcelain_status(&worktree, &mut NoopHeartbeat)
+                .unwrap(),
+            ""
+        );
         assert!(matches!(
-            adapter.commit_all(&worktree, "Nothing"),
+            adapter.commit_all(&worktree, "Nothing", &mut NoopHeartbeat),
             Err(GitWorkspaceError::NoChanges(_))
         ));
 
-        adapter.push_branch(&worktree, &commit).unwrap();
+        adapter
+            .push_branch(&worktree, &commit, &mut NoopHeartbeat)
+            .unwrap();
         assert_eq!(
-            adapter.observe_remote_branch(branch_name, &commit).unwrap(),
+            adapter
+                .observe_remote_branch(branch_name, &commit, &mut NoopHeartbeat)
+                .unwrap(),
             commit
         );
         assert_eq!(
@@ -1114,7 +1413,9 @@ mod tests {
                 "refs/heads/unrelated"
             ]
         ));
-        adapter.remove_clean_worktree(&worktree).unwrap();
+        adapter
+            .remove_clean_worktree(&worktree, &mut NoopHeartbeat)
+            .unwrap();
     }
 
     #[test]
@@ -1123,7 +1424,7 @@ mod tests {
         let adapter = fixture.adapter("unused-gh");
         let branch = "codex/gardener-observed";
         assert!(matches!(
-            adapter.observe_remote_branch(branch, &fixture.source),
+            adapter.observe_remote_branch(branch, &fixture.source, &mut NoopHeartbeat),
             Err(GitWorkspaceError::InvalidRemoteBranch(message))
                 if message.contains("was not found")
         ));
@@ -1138,7 +1439,7 @@ mod tests {
         );
         let other = CommitId::parse("a".repeat(40)).unwrap();
         assert!(matches!(
-            adapter.observe_remote_branch(branch, &other),
+            adapter.observe_remote_branch(branch, &other, &mut NoopHeartbeat),
             Err(GitWorkspaceError::InvalidRemoteBranch(message))
                 if message.contains("expected head")
         ));
@@ -1173,7 +1474,7 @@ mod tests {
 
         let error = fixture
             .adapter("unused-gh")
-            .resolve_origin_main()
+            .resolve_origin_main(&mut NoopHeartbeat)
             .unwrap_err();
 
         assert!(matches!(
@@ -1193,9 +1494,11 @@ mod tests {
 
         let worktree_path = fixture.path("rejected-worktree");
         assert!(matches!(
-            fixture
-                .adapter("unused-gh")
-                .create_detached_worktree(&worktree_path, &fixture.source),
+            fixture.adapter("unused-gh").create_detached_worktree(
+                &worktree_path,
+                &fixture.source,
+                &mut NoopHeartbeat,
+            ),
             Err(GitWorkspaceError::NonCanonicalOrigin {
                 operation: "worktree creation",
                 ..
@@ -1212,10 +1515,17 @@ mod tests {
         let adapter = fixture.adapter("unused-gh");
         let branch_name = "codex/gardener-rejected-push";
         let worktree = adapter
-            .create_branch_worktree(fixture.path("implementation"), branch_name, &fixture.source)
+            .create_branch_worktree(
+                fixture.path("implementation"),
+                branch_name,
+                &fixture.source,
+                &mut NoopHeartbeat,
+            )
             .unwrap();
         fs::write(worktree.path().join("README.md"), "changed\n").unwrap();
-        let commit = adapter.commit_all(&worktree, "Test rejected push").unwrap();
+        let commit = adapter
+            .commit_all(&worktree, "Test rejected push", &mut NoopHeartbeat)
+            .unwrap();
 
         let noncanonical = fixture.path("noncanonical-push.git");
         git(
@@ -1237,7 +1547,9 @@ mod tests {
         );
         fs::write(&fixture.git_log, "").unwrap();
 
-        let error = adapter.push_branch(&worktree, &commit).unwrap_err();
+        let error = adapter
+            .push_branch(&worktree, &commit, &mut NoopHeartbeat)
+            .unwrap_err();
 
         assert!(matches!(
             error,
@@ -1273,14 +1585,23 @@ mod tests {
             ["branch", branch, fixture.source.as_str()],
         );
         assert!(matches!(
-            adapter.create_branch_worktree(fixture.path("branch"), branch, &fixture.source),
+            adapter.create_branch_worktree(
+                fixture.path("branch"),
+                branch,
+                &fixture.source,
+                &mut NoopHeartbeat,
+            ),
             Err(GitWorkspaceError::BranchExists(found)) if found == branch
         ));
 
         let existing = fixture.path("existing");
         fs::create_dir(&existing).unwrap();
         assert!(matches!(
-            adapter.create_detached_worktree(&existing, &fixture.source),
+            adapter.create_detached_worktree(
+                &existing,
+                &fixture.source,
+                &mut NoopHeartbeat,
+            ),
             Err(GitWorkspaceError::WorktreePathExists(path)) if path == existing
         ));
     }
@@ -1300,7 +1621,13 @@ mod tests {
         let adapter = fixture.adapter(gh);
         let branch = "codex/gardener-ready-pr";
         let identity = adapter
-            .create_ready_pull_request(branch, &fixture.source, "A title", "A body")
+            .create_ready_pull_request(
+                branch,
+                &fixture.source,
+                "A title",
+                "A body",
+                &mut NoopHeartbeat,
+            )
             .unwrap();
         assert_eq!(
             identity,
@@ -1333,7 +1660,11 @@ mod tests {
         );
         let error = fixture
             .adapter(gh)
-            .observe_pull_request("codex/gardener-mismatch", &fixture.source)
+            .observe_pull_request(
+                "codex/gardener-mismatch",
+                &fixture.source,
+                &mut NoopHeartbeat,
+            )
             .unwrap_err();
         assert!(error.to_string().contains("expected head"));
 
@@ -1347,7 +1678,7 @@ mod tests {
         );
         let error = fixture
             .adapter(gh)
-            .observe_pull_request("codex/gardener-draft", &fixture.source)
+            .observe_pull_request("codex/gardener-draft", &fixture.source, &mut NoopHeartbeat)
             .unwrap_err();
         assert!(error.to_string().contains("draft"));
     }
@@ -1361,9 +1692,11 @@ mod tests {
             "not JSON",
         );
         assert!(matches!(
-            fixture
-                .adapter(gh)
-                .observe_pull_request("codex/gardener-malformed", &fixture.source),
+            fixture.adapter(gh).observe_pull_request(
+                "codex/gardener-malformed",
+                &fixture.source,
+                &mut NoopHeartbeat,
+            ),
             Err(GitWorkspaceError::InvalidPullRequestJson(_))
         ));
 
@@ -1377,7 +1710,11 @@ mod tests {
         );
         let error = fixture
             .adapter(gh)
-            .observe_pull_request("codex/gardener-repository", &fixture.source)
+            .observe_pull_request(
+                "codex/gardener-repository",
+                &fixture.source,
+                &mut NoopHeartbeat,
+            )
             .unwrap_err();
         assert!(error.to_string().contains("canonical pull request"));
     }
@@ -1396,18 +1733,24 @@ mod tests {
         ));
 
         let worktree = adapter
-            .create_detached_worktree(fixture.path("retained"), &fixture.source)
+            .create_detached_worktree(
+                fixture.path("retained"),
+                &fixture.source,
+                &mut NoopHeartbeat,
+            )
             .unwrap();
         fs::write(worktree.path().join("untracked.txt"), "retain me\n").unwrap();
         assert!(matches!(
-            adapter.remove_clean_worktree(&worktree),
+            adapter.remove_clean_worktree(&worktree, &mut NoopHeartbeat),
             Err(GitWorkspaceError::DirtyWorktree { .. })
         ));
         assert!(worktree.path().exists());
 
         let other = RepositoryFixture::new();
         assert!(matches!(
-            other.adapter("unused-gh").remove_clean_worktree(&worktree),
+            other
+                .adapter("unused-gh")
+                .remove_clean_worktree(&worktree, &mut NoopHeartbeat),
             Err(GitWorkspaceError::WrongCheckout { .. })
         ));
         assert!(worktree.path().exists());
@@ -1473,10 +1816,89 @@ mod tests {
         let workspace = GitWorkspace::new(root.path(), &executable, &executable).unwrap();
 
         assert!(matches!(
-            workspace.gh_success(std::iter::empty::<OsString>()),
+            workspace.gh_success(
+                std::iter::empty::<OsString>(),
+                EffectRisk::None,
+                &mut NoopHeartbeat,
+            ),
             Err(GitWorkspaceError::Command(_))
         ));
         assert_eq!(fs::read_to_string(log).unwrap(), "invoked");
+    }
+
+    #[test]
+    fn shutdown_cancellation_stops_a_running_git_command() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("never-git");
+        write_executable(&executable, "#!/bin/sh\nwhile :; do :; done\n");
+        let cancellation = CancellationToken::new();
+        let cancelling = cancellation.clone();
+        let workspace = GitWorkspace::new(root.path(), &executable, "unused-gh")
+            .unwrap()
+            .with_supervision(
+                Duration::from_millis(5),
+                Duration::from_secs(2),
+                ProcessLimits::default(),
+                cancellation,
+            )
+            .unwrap();
+        let cancel_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            cancelling.cancel();
+        });
+
+        let started = Instant::now();
+        let error = workspace
+            .git_success(
+                root.path(),
+                std::iter::empty::<OsString>(),
+                EffectRisk::None,
+                &mut NoopHeartbeat,
+            )
+            .unwrap_err();
+        cancel_thread.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        let GitWorkspaceError::Supervision { outcome, .. } = error else {
+            panic!("expected supervised cancellation");
+        };
+        assert!(matches!(outcome.as_ref(), ProcessOutcome::Cancelled(_)));
+    }
+
+    #[test]
+    fn interrupted_gh_mutation_reports_ambiguous_external_state() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("never-gh");
+        write_executable(&executable, "#!/bin/sh\nwhile :; do :; done\n");
+        let cancellation = CancellationToken::new();
+        let cancelling = cancellation.clone();
+        let workspace = GitWorkspace::new(root.path(), "unused-git", &executable)
+            .unwrap()
+            .with_supervision(
+                Duration::from_millis(5),
+                Duration::from_secs(2),
+                ProcessLimits::default(),
+                cancellation,
+            )
+            .unwrap();
+        let cancel_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            cancelling.cancel();
+        });
+        let head = CommitId::parse("a".repeat(40)).unwrap();
+
+        let error = workspace
+            .create_ready_pull_request(
+                "codex/gardener-ambiguous",
+                &head,
+                "A title",
+                "A body",
+                &mut NoopHeartbeat,
+            )
+            .unwrap_err();
+        cancel_thread.join().unwrap();
+
+        assert!(error.is_ambiguous_external_state());
     }
 
     fn fake_gh(root: &Path, log: &Path, json: &str) -> PathBuf {

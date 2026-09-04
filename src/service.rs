@@ -16,6 +16,7 @@ use thiserror::Error;
 use tokio::sync::oneshot;
 
 use crate::gardener_runner::{GardenerRunner, GardenerRunnerError, GardenerRuntimeConfig};
+use crate::process::CancellationToken;
 use crate::{Claim, Completion, RunResult, Runner, Store, StoreError, SystemClock, UnixClock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +72,9 @@ impl Scheduler {
         }
 
         let stop = Arc::new(AtomicBool::new(false));
+        let gardener = gardener.map(|runtime| {
+            runtime.with_cancellation(CancellationToken::from_flag(Arc::clone(&stop)))
+        });
         let scheduler_stop = Arc::clone(&stop);
         let (exit_sender, exit) = oneshot::channel();
         let thread = thread::Builder::new()

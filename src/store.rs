@@ -2436,11 +2436,15 @@ fn apply_transition(
         } => {
             let obligation = require_obligation(transaction, &claim.obligation_id)?;
             verify_claim(&obligation, claim, now)?;
-            let lease_expires_at = obligation
-                .lease_expires_at
-                .unwrap_or(now)
-                .max(now)
-                .saturating_add(lease_seconds);
+            // A heartbeat grants a bounded horizon from the heartbeat itself.
+            // It must not accumulate unused time from a previous lease.
+            let lease_expires_at = now.saturating_add(lease_seconds);
+            if obligation.lease_expires_at == Some(lease_expires_at) {
+                return Ok(TransitionResult {
+                    claim: None,
+                    lease_expires_at: Some(lease_expires_at),
+                });
+            }
             transaction.execute(
                 "UPDATE obligations SET lease_expires_at = ?2, updated_at = ?3 WHERE id = ?1",
                 params![claim.obligation_id, lease_expires_at, now],
@@ -3156,6 +3160,47 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["created", "claimed", "completed"]
         );
+    }
+
+    #[test]
+    fn lease_renewals_are_bounded_by_each_heartbeat_and_identical_renewal_is_a_no_op() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.create(one_off("lease", 100), 100).unwrap();
+        let claim = store.claim_due(100, 30, 1).unwrap().remove(0);
+
+        for (heartbeat, expected_expiry) in [(101, 131), (110, 140), (120, 150)] {
+            assert_eq!(
+                store.renew_lease(&claim, heartbeat, 30).unwrap(),
+                expected_expiry
+            );
+            let obligation = store.get("lease").unwrap().unwrap();
+            assert_eq!(obligation.lease_expires_at, Some(expected_expiry));
+            assert_eq!(obligation.updated_at, heartbeat);
+        }
+
+        let events_before = store.events("lease").unwrap();
+        let updated_at_before = store.get("lease").unwrap().unwrap().updated_at;
+        assert_eq!(store.renew_lease(&claim, 120, 30).unwrap(), 150);
+        assert_eq!(store.events("lease").unwrap(), events_before);
+        assert_eq!(
+            store.get("lease").unwrap().unwrap().updated_at,
+            updated_at_before
+        );
+    }
+
+    #[test]
+    fn renewal_is_fenced_at_the_lease_expiry_boundary() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.create(one_off("lease", 100), 100).unwrap();
+        let claim = store.claim_due(100, 30, 1).unwrap().remove(0);
+
+        assert_eq!(store.renew_lease(&claim, 129, 30).unwrap(), 159);
+        let events_before = store.events("lease").unwrap();
+        assert!(matches!(
+            store.renew_lease(&claim, 159, 30),
+            Err(StoreError::Fenced)
+        ));
+        assert_eq!(store.events("lease").unwrap(), events_before);
     }
 
     #[test]
