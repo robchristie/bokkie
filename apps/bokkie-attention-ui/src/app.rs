@@ -178,6 +178,29 @@ struct AffectedRefresh {
     waiting_for_topic: bool,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum ProjectionRefreshPlan {
+    FullRebuild,
+    AdvanceOnly,
+    Affected(BTreeSet<String>),
+}
+
+fn projection_refresh_plan(
+    mut affected: BTreeSet<String>,
+    ambiguous: bool,
+    mut extra_affected: BTreeSet<String>,
+) -> ProjectionRefreshPlan {
+    if ambiguous {
+        return ProjectionRefreshPlan::FullRebuild;
+    }
+    affected.append(&mut extra_affected);
+    if affected.is_empty() {
+        ProjectionRefreshPlan::AdvanceOnly
+    } else {
+        ProjectionRefreshPlan::Affected(affected)
+    }
+}
+
 pub struct AttentionApp {
     workspace: Workspace,
     dock: DockBehaviour,
@@ -634,29 +657,30 @@ impl AttentionApp {
             ),
             Ok(ChangeProgress::Complete {
                 watermark,
-                mut affected,
+                affected,
                 ambiguous,
             }) => {
                 self.change_assembly = None;
-                if ambiguous {
-                    self.recover_projection(
+                let extra_affected = std::mem::take(&mut self.change_extra_affected);
+                match projection_refresh_plan(affected, ambiguous, extra_affected) {
+                    ProjectionRefreshPlan::FullRebuild => self.recover_projection(
                         "A global projection change did not identify an obligation",
                         context,
-                    );
-                    return;
-                }
-                affected.append(&mut self.change_extra_affected);
-                if affected.is_empty() {
-                    if let Err(error) =
-                        self.model
-                            .apply_incremental(watermark, current_unix_seconds(), Vec::new())
-                    {
-                        self.recover_projection(&error, context);
-                    } else {
-                        self.schedule_poll();
+                    ),
+                    ProjectionRefreshPlan::AdvanceOnly => {
+                        if let Err(error) = self.model.apply_incremental(
+                            watermark,
+                            current_unix_seconds(),
+                            Vec::new(),
+                        ) {
+                            self.recover_projection(&error, context);
+                        } else {
+                            self.schedule_poll();
+                        }
                     }
-                } else {
-                    self.begin_affected_refresh(generation, watermark, affected, context);
+                    ProjectionRefreshPlan::Affected(affected) => {
+                        self.begin_affected_refresh(generation, watermark, affected, context);
+                    }
                 }
             }
             Err(error) => self.recover_projection(&error, context),
@@ -2638,7 +2662,8 @@ mod tests {
     use bokkie_operator_api::{
         API_CONTRACT_VERSION, ActionCapability, ActionConsequence, ActionPrecondition,
         BOKKIE_BUILD_ID, DisabledReason, OperatorCapabilities, OperatorObligationState,
-        OperatorSnapshot, SUPPORTED_SCHEMA_VERSION, ServiceIdentity, SessionBootstrap,
+        OperatorSnapshot, ProjectionChange, ProjectionChangePage, ProjectionEventProvenance,
+        ProjectionEventSource, SUPPORTED_SCHEMA_VERSION, ServiceIdentity, SessionBootstrap,
     };
 
     use super::*;
@@ -2713,6 +2738,16 @@ mod tests {
             mutation_token: "a".repeat(64),
         })
         .unwrap()
+    }
+
+    fn service_identity() -> ServiceIdentity {
+        ServiceIdentity {
+            build: BOKKIE_BUILD_ID.to_owned(),
+            api_contract_version: API_CONTRACT_VERSION,
+            schema_version: SUPPORTED_SCHEMA_VERSION,
+            process_id: 42,
+            session_id: "session-one".to_owned(),
+        }
     }
 
     fn test_app() -> AttentionApp {
@@ -2794,6 +2829,60 @@ mod tests {
         app.poll_transport(&context);
         assert!(app.session.is_some());
         assert!(app.snapshot_assembly.is_some());
+    }
+
+    #[test]
+    fn exact_gardener_decisions_route_to_affected_only_refresh() {
+        for (revision, event_type) in [(41, "proposal_approved"), (42, "proposal_rejected")] {
+            let obligation_id = format!("gardener:implement:instance-{revision}");
+            let instance_id = format!("instance-{revision}");
+            let mut changes = ChangeAssembly::new(1, revision - 1);
+            let exact_change = ProjectionChange {
+                revision,
+                provenance: ProjectionEventProvenance::LiveAppend,
+                source: ProjectionEventSource::GardenerEvent { sequence: revision },
+                event_type: event_type.to_owned(),
+                occurred_at: 1_788_381_000,
+                obligation_id: Some(obligation_id.clone()),
+                occurrence: Some(1),
+                repository: Some("robchristie/bokkie".to_owned()),
+                inspection_id: None,
+                proposal_fingerprint: Some("goal-fingerprint".to_owned()),
+                proposal_instance_id: Some(instance_id.clone()),
+                run_id: None,
+            };
+            assert_eq!(
+                exact_change.obligation_id.as_deref(),
+                Some(obligation_id.as_str())
+            );
+            assert_eq!(
+                exact_change.proposal_instance_id.as_deref(),
+                Some(instance_id.as_str())
+            );
+            let ChangeProgress::Complete {
+                affected,
+                ambiguous,
+                watermark,
+            } = changes
+                .push(ProjectionChangePage {
+                    service: service_identity(),
+                    requested_after: revision - 1,
+                    requested_through: None,
+                    next_after: None,
+                    watermark: revision,
+                    changes: vec![exact_change],
+                })
+                .unwrap()
+            else {
+                panic!("single gardener decision page should complete")
+            };
+            assert_eq!(watermark, revision);
+            assert!(!ambiguous);
+            assert_eq!(
+                projection_refresh_plan(affected, ambiguous, BTreeSet::new()),
+                ProjectionRefreshPlan::Affected(BTreeSet::from([obligation_id]))
+            );
+        }
     }
 
     #[test]

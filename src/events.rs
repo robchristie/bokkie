@@ -166,14 +166,16 @@ fn query_changes(
                 coalesce(a.event_type, g.event_type, re.event_type) AS event_type,
                 coalesce(a.occurred_at, g.occurred_at, re.occurred_at) AS occurred_at,
                 coalesce(a.details_json, g.details_json, re.details_json) AS details_json,
-                coalesce(a.obligation_id, gpi.implementation_obligation_id,
+                coalesce(a.obligation_id, gdpi.implementation_obligation_id,
+                         gpi.implementation_obligation_id,
                          gi.obligation_id, run.obligation_id) AS obligation_id,
                 coalesce(a.occurrence, gi.occurrence, run.occurrence) AS occurrence,
                 coalesce(g.repository, run.repository, ap.repository) AS repository,
                 g.inspection_id,
                 coalesce(g.proposal_fingerprint, run.proposal_fingerprint,
+                         gdpi.proposal_fingerprint,
                          api.proposal_fingerprint) AS proposal_fingerprint,
-                coalesce(gpi.id, ri.instance_id, api.id) AS proposal_instance_id,
+                coalesce(gdpi.id, gpi.id, ri.instance_id, api.id) AS proposal_instance_id,
                 re.run_id
          FROM event_envelopes e
          LEFT JOIN audit_events a ON a.sequence = e.audit_event_sequence
@@ -186,10 +188,18 @@ fn query_changes(
          LEFT JOIN gardener_proposal_observation_instances gpoi
            ON gpoi.observation_id = gpo.id
          LEFT JOIN gardener_proposal_instances gpi ON gpi.id = gpoi.instance_id
+         LEFT JOIN gardener_proposal_instances gdpi
+           ON gdpi.id = json_extract(g.details_json, '$.proposal_instance_id')
          LEFT JOIN gardener_implementation_runs run ON run.id = re.run_id
          LEFT JOIN gardener_implementation_run_instances ri ON ri.run_id = run.id
          LEFT JOIN gardener_proposal_instances api
-           ON api.implementation_obligation_id = a.obligation_id
+           ON api.id = coalesce(
+                json_extract(a.details_json, '$.proposal_instance_id'),
+                (SELECT min(scoped.id)
+                   FROM gardener_proposal_instances scoped
+                  WHERE scoped.implementation_obligation_id = a.obligation_id
+                 HAVING count(*) = 1)
+           )
          LEFT JOIN gardener_proposals ap
            ON ap.fingerprint = api.proposal_fingerprint
          WHERE e.sequence > ?1 AND e.sequence <= ?2
@@ -262,7 +272,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::migrations::MIGRATIONS;
+    use crate::{ApprovalDecision, migrations::MIGRATIONS};
 
     fn create_v8(path: &Path) -> Connection {
         let connection = Connection::open(path).unwrap();
@@ -530,6 +540,96 @@ mod tests {
         assert_eq!(
             items[2].obligation_id.as_deref(),
             Some("implementation-obligation")
+        );
+    }
+
+    #[test]
+    fn proposal_decision_changes_use_the_exact_persisted_instance_identity() {
+        let mut store = Store::open_in_memory().unwrap();
+        insert_domain_fixture(&store.connection);
+        store
+            .connection
+            .execute_batch(
+                "INSERT INTO obligations(
+                    id, description, state, occurrence, scheduled_at, next_wake_at,
+                    approval_required, attempts_made, max_attempts, retry_base_seconds,
+                    retry_max_seconds, lease_generation, created_at, updated_at
+                 ) VALUES (
+                    'implementation-obligation-2', 'implement second',
+                    'awaiting_approval', 1, 10, NULL, 1, 0, 1, 60, 3600, 0, 10, 10
+                 );
+                 INSERT INTO gardener_obligation_bindings(obligation_id, kind, created_at)
+                 VALUES ('implementation-obligation-2', 'implementation', 10);
+                 INSERT INTO gardener_inspections(
+                    id, repository, obligation_id, occurrence, lease_generation,
+                    lease_token, source_commit, worktree_path, prompt_digest,
+                    result_json, started_at, completed_at
+                 ) VALUES (
+                    'inspection-2', 'robchristie/bokkie', 'inspection-obligation', 1, 2,
+                    'lease-2', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                    '/tmp/inspection-2',
+                    'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                    '{}', 11, 12
+                 );
+                 INSERT INTO gardener_proposal_observations(
+                    proposal_fingerprint, inspection_id, source_commit, observed_at
+                 ) VALUES (
+                    'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+                    'inspection-2', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 12
+                 );
+                 INSERT INTO gardener_proposal_instances(
+                    id, proposal_fingerprint, source_commit, source_observation_id,
+                    source_inspection_id, generation, implementation_obligation_id, created_at
+                 ) VALUES (
+                    'proposal-instance-2',
+                    'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+                    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 2, 'inspection-2', 2,
+                    'implementation-obligation-2', 12
+                 );",
+            )
+            .unwrap();
+        store
+            .decide_gardener_proposal_instance(
+                "proposal-instance-1",
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                100,
+            )
+            .unwrap();
+        store
+            .decide_gardener_proposal_instance(
+                "proposal-instance-2",
+                ApprovalDecision::Rejected,
+                "operator",
+                None,
+                101,
+            )
+            .unwrap();
+
+        let changes = store
+            .change_page(0, None, 10)
+            .unwrap()
+            .items
+            .into_iter()
+            .filter(|change| change.event_type.starts_with("proposal_"))
+            .collect::<Vec<_>>();
+        assert_eq!(changes.len(), 2);
+        assert_eq!(
+            changes[0].proposal_instance_id.as_deref(),
+            Some("proposal-instance-1")
+        );
+        assert_eq!(
+            changes[0].obligation_id.as_deref(),
+            Some("implementation-obligation")
+        );
+        assert_eq!(
+            changes[1].proposal_instance_id.as_deref(),
+            Some("proposal-instance-2")
+        );
+        assert_eq!(
+            changes[1].obligation_id.as_deref(),
+            Some("implementation-obligation-2")
         );
     }
 

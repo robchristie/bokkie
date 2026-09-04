@@ -17,10 +17,10 @@ use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 use crate::{
-    ApprovalDecision, CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, DbExecutor, DbExecutorError,
-    GardenerImplementationRun, GardenerInspection, NewObligation, NewRepositoryRegistration,
-    Obligation, Proposal, Recurrence, RepositoryRegistration, RetryPolicy, Store, StoreError,
-    SystemClock, UnixClock,
+    ApprovalDecision, CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, DEFAULT_PAGE_SIZE,
+    DbExecutor, DbExecutorError, GardenerImplementationRun, GardenerInspection,
+    MAX_CHANGE_PAGE_SIZE, NewObligation, NewRepositoryRegistration, Obligation, Proposal,
+    Recurrence, RepositoryRegistration, RetryPolicy, Store, StoreError, SystemClock, UnixClock,
     gardener::ProposalInstance,
     http_security::{ApiRuntime, bootstrap_response, enforce},
 };
@@ -417,7 +417,7 @@ async fn operator_changes(
     Query(query): Query<ChangeQuery>,
 ) -> Result<Response, ApiError> {
     let identity = state.runtime.identity();
-    let limit = crate::page_limit(query.limit)?;
+    let limit = change_page_limit(query.limit)?;
     with_store(&state, move |store, _| {
         let page = store.change_page(query.after, query.through, limit)?;
         let changes = page
@@ -469,6 +469,18 @@ async fn operator_changes(
     })
     .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+fn change_page_limit(requested: Option<usize>) -> Result<usize, ApiError> {
+    let limit = requested.unwrap_or(DEFAULT_PAGE_SIZE);
+    if (1..=MAX_CHANGE_PAGE_SIZE).contains(&limit) {
+        Ok(limit)
+    } else {
+        Err(StoreError::Invalid(format!(
+            "change page limit {limit} is outside 1..={MAX_CHANGE_PAGE_SIZE}"
+        ))
+        .into())
+    }
 }
 
 async fn operator_topic(
@@ -1985,6 +1997,43 @@ mod tests {
         assert_eq!(page.requested_after, 0);
         assert!(page.next_after.is_some());
         assert_eq!(page.service.schema_version, 9);
+    }
+
+    #[tokio::test]
+    async fn incremental_changes_accept_the_dedicated_one_thousand_item_limit() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("change-limit-http.sqlite");
+        drop(Store::open(&database).unwrap());
+        let application = test_router(database);
+
+        for limit in [500, 501, 1_000] {
+            let response = application
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/operator/changes?limit={limit}"))
+                        .header("host", TEST_AUTHORITY)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "limit {limit}");
+        }
+
+        let response = application
+            .oneshot(
+                Request::builder()
+                    .uri("/operator/changes?limit=1001")
+                    .header("host", TEST_AUTHORITY)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, body) = response_json(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "invalid_request");
     }
 
     #[tokio::test]

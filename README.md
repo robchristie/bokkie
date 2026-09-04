@@ -40,6 +40,11 @@ The project pins Rust 1.85.0 in [`rust-toolchain.toml`](rust-toolchain.toml)
 and requires SQLite development support. GitHub CI uses that same pinned
 toolchain on an unprivileged, read-only runner and performs the locked checks
 below without secrets.
+The attention UI separately pins Rust 1.97.1 because its resolved
+Polyorama/egui/wgpu graph requires a newer compiler; its locked commands and
+scoped toolchain are documented in the
+[attention UI README](apps/bokkie-attention-ui/README.md).
+
 Once the initial implementation is present, run the canonical check with:
 
 ```sh

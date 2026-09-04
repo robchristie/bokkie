@@ -13,20 +13,22 @@ lifecycle actions.
 Build and run the native application against a disposable local service:
 
 ```sh
-cargo build -p bokkie-attention-ui --bin bokkie-attention-ui
-BOKKIE_API_BASE=http://127.0.0.1:7744 cargo run -p bokkie-attention-ui
+cargo +1.97.1 build --locked -p bokkie-attention-ui --bin bokkie-attention-ui
+BOKKIE_API_BASE=http://127.0.0.1:7744 \
+  cargo +1.97.1 run --locked -p bokkie-attention-ui
 ```
 
 Build the browser module and serve the source assets on Bokkie's origin:
 
 ```sh
-cargo build -p bokkie-attention-ui --lib --target wasm32-unknown-unknown
+cargo +1.97.1 build --locked -p bokkie-attention-ui --lib \
+  --target wasm32-unknown-unknown
 wasm-bindgen \
   --target web \
   --out-dir apps/bokkie-attention-ui/web/pkg \
   --out-name bokkie_attention_ui \
   target/wasm32-unknown-unknown/debug/bokkie_attention_ui.wasm
-cargo run -p bokkie -- \
+cargo +1.97.1 run --locked -p bokkie -- \
   --database /path/to/disposable.sqlite \
   serve \
   --bind 127.0.0.1:7744 \
@@ -117,13 +119,23 @@ loopback base (and rejects credentials, queries and fragments). Do not use
 either form with an operator database until you have separately assessed the
 requested lifecycle action.
 
-Run the focused application checks with:
+The repository root pins Rust 1.85.0 for Bokkie's canonical backend checks.
+The already-resolved Polyorama, egui and wgpu dependency graph requires newer
+Rust, so this application has a separate exact Rust 1.97.1 pin in
+[`rust-toolchain.toml`](rust-toolchain.toml), including Clippy, rustfmt and the
+Wasm target. Commands below remain explicit because they are run from the
+repository root, where Rustup would otherwise select the backend toolchain.
+
+Run the focused, locked application checks from the repository root with:
 
 ```sh
-cargo test -p bokkie-attention-ui --all-targets
-cargo clippy -p bokkie-attention-ui --all-targets --all-features -- -D warnings
-cargo build -p bokkie-attention-ui --bin bokkie-attention-ui
-cargo build -p bokkie-attention-ui --lib --target wasm32-unknown-unknown
+cargo +1.97.1 test --locked -p bokkie-attention-ui --all-targets
+cargo +1.97.1 clippy --locked -p bokkie-attention-ui \
+  --all-targets --all-features -- -D warnings
+cargo +1.97.1 build --locked -p bokkie-attention-ui --bin bokkie-attention-ui
+cargo +1.97.1 build --locked -p bokkie-attention-ui --lib \
+  --target wasm32-unknown-unknown
+cargo +1.97.1 fmt -p bokkie-attention-ui -- --check
 ```
 
 Run deterministic UI qualification from the repository root with:

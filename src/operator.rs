@@ -13,11 +13,12 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ApprovalDecision, GardenerImplementationRun, GardenerVerificationVerdict, Obligation,
-    ObligationState, Store, StoreError,
+    ApprovalDecision, AuditEvent, GardenerEvent, GardenerImplementationRun, GardenerRunEvent,
+    GardenerVerificationVerdict, Obligation, ObligationState, ProposalObservation, Store,
+    StoreError,
     gardener::ProposalInstance,
     store::{
-        approval_transition_is_legal, cancel_transition_is_legal,
+        approval_transition_is_legal, attempt_from_row, audit_from_row, cancel_transition_is_legal,
         gardener_proposal_transition_is_legal, generic_approval_transition_is_legal,
         obligation_from_row, proposal_instance_for_obligation, retry_transition_is_legal,
     },
@@ -43,6 +44,104 @@ struct SnapshotCursorKey {
     updated_at: i64,
     id: String,
 }
+
+/// API-v1 topic ordering is observable: wall-clock time, source category,
+/// source-local sequence, then stable source identity. The watermark makes
+/// this mutable multi-table projection an exact, restart-on-change walk.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct TopicCursorKey {
+    captured_at: i64,
+    occurred_at: i64,
+    source_rank: i64,
+    source_sequence: String,
+    stable_id: String,
+}
+
+#[derive(Debug)]
+struct TopicCandidate {
+    key: TopicCursorKey,
+    source: TopicSource,
+    source_identity: String,
+    occurrence: Option<u32>,
+    event_type: String,
+}
+
+const TOPIC_CANDIDATES_SQL: &str = "
+    WITH direct_fingerprints(fingerprint) AS (
+        SELECT DISTINCT proposal_fingerprint
+          FROM gardener_proposal_instances
+         WHERE implementation_obligation_id = ?1
+    ), related_inspections(id) AS (
+        SELECT id FROM gardener_inspections WHERE obligation_id = ?1
+        UNION
+        SELECT source_inspection_id FROM gardener_proposal_instances
+         WHERE implementation_obligation_id = ?1
+        UNION
+        SELECT po.inspection_id
+          FROM gardener_proposal_observations po
+         WHERE po.proposal_fingerprint IN (SELECT fingerprint FROM direct_fingerprints)
+    ), related_fingerprints(fingerprint) AS (
+        SELECT fingerprint FROM direct_fingerprints
+        UNION
+        SELECT DISTINCT po.proposal_fingerprint
+          FROM gardener_proposal_observations po
+         WHERE NOT EXISTS (SELECT 1 FROM direct_fingerprints)
+           AND po.inspection_id IN (SELECT id FROM related_inspections)
+    ), topic_items(
+        occurred_at, source_rank, source_sequence, stable_id,
+        source_kind, source_identity, occurrence, event_type
+    ) AS (
+        SELECT occurred_at, 0, CAST(sequence AS TEXT), 'audit:' || sequence,
+               'audit', CAST(sequence AS TEXT), occurrence, event_type
+          FROM audit_events WHERE obligation_id = ?1
+        UNION ALL
+        SELECT decided_at, 1, CAST(id AS TEXT), 'approval:' || id,
+               'approval', CAST(id AS TEXT), occurrence, decision
+          FROM approvals WHERE obligation_id = ?1
+        UNION ALL
+        SELECT claimed_at, 2, CAST(id AS TEXT), 'attempt:' || id,
+               'attempt', CAST(id AS TEXT), occurrence, 'attempt_' || outcome
+          FROM attempts WHERE obligation_id = ?1
+        UNION ALL
+        SELECT started_at, 3, id, 'gardener-inspection:' || id,
+               'inspection', id, occurrence, 'gardener_inspection'
+          FROM gardener_inspections WHERE id IN (SELECT id FROM related_inspections)
+        UNION ALL
+        SELECT p.created_at, 4, p.fingerprint, 'gardener-proposal:' || p.fingerprint,
+               'proposal', p.fingerprint, o.occurrence, 'gardener_proposal'
+          FROM gardener_proposals p
+          JOIN obligations o ON o.id = p.implementation_obligation_id
+         WHERE p.fingerprint IN (SELECT fingerprint FROM related_fingerprints)
+        UNION ALL
+        SELECT pi.created_at, 5, CAST(pi.generation AS TEXT) || ':' || pi.id,
+               'gardener-proposal-instance:' || pi.id,
+               'instance', pi.id, o.occurrence, 'gardener_proposal_instance'
+          FROM gardener_proposal_instances pi
+          JOIN obligations o ON o.id = pi.implementation_obligation_id
+         WHERE pi.proposal_fingerprint IN (SELECT fingerprint FROM related_fingerprints)
+        UNION ALL
+        SELECT po.observed_at, 6, CAST(po.id AS TEXT), 'gardener-observation:' || po.id,
+               'observation', CAST(po.id AS TEXT), NULL, 'gardener_proposal_observed'
+          FROM gardener_proposal_observations po
+         WHERE po.proposal_fingerprint IN (SELECT fingerprint FROM related_fingerprints)
+        UNION ALL
+        SELECT g.occurred_at, 7, CAST(g.sequence AS TEXT), 'gardener-event:' || g.sequence,
+               'gardener_event', CAST(g.sequence AS TEXT), NULL, g.event_type
+          FROM gardener_events g
+         WHERE g.inspection_id IN (SELECT id FROM related_inspections)
+            OR g.proposal_fingerprint IN (SELECT fingerprint FROM related_fingerprints)
+        UNION ALL
+        SELECT r.created_at, 8, r.id, 'gardener-run:' || r.id,
+               'run', r.id, r.occurrence, 'gardener_run_' || r.phase
+          FROM gardener_implementation_runs r WHERE r.obligation_id = ?1
+        UNION ALL
+        SELECT re.occurred_at, 9, CAST(re.sequence AS TEXT),
+               'gardener-run-event:' || re.sequence,
+               'run_event', CAST(re.sequence AS TEXT), NULL, re.event_type
+          FROM gardener_run_events re
+          JOIN gardener_implementation_runs r ON r.id = re.run_id
+         WHERE r.obligation_id = ?1
+    )";
 
 fn approval_evidence_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApprovalEvidence> {
     let decision = row.get::<_, String>(3)?.parse().map_err(|error: String| {
@@ -288,9 +387,11 @@ impl Store {
         self.operator_topic_page(obligation_id, captured_at, None, None, None)
     }
 
-    /// Bounded selected-topic projection ordered by the durable global event
-    /// envelope. Legacy backfill order is deterministic but explicitly
-    /// non-causal in the envelope provenance; live rows have append order.
+    /// Bounded selected-topic projection preserving the observable API-v1
+    /// order: occurrence time, source category, source-local sequence and
+    /// stable source identity. The exact global watermark protects the
+    /// multi-table projection from mixing revisions between pages; it is not
+    /// substituted for the source-local sequence exposed on each item.
     pub fn operator_topic_page(
         &self,
         obligation_id: &str,
@@ -324,130 +425,75 @@ impl Store {
         let limit = crate::page_limit(requested_limit)?;
         let current = crate::pagination::watermark(&self.connection)?;
         let (watermark, after, upper, projection_at) = if let Some(cursor) = cursor {
-            let state = crate::pagination::decode_cursor_exact::<(i64, i64)>(
+            let state = crate::pagination::decode_cursor_exact::<TopicCursorKey>(
                 cursor,
                 &scope,
                 requested_watermark,
                 current,
             )?;
-            if state.after.0 != state.upper.0 {
+            if state.after.captured_at != state.upper.captured_at {
                 return Err(StoreError::Invalid(
                     "invalid page cursor: topic time is inconsistent".to_owned(),
                 ));
             }
-            (state.watermark, state.after.1, state.upper.1, state.after.0)
+            let projection_at = state.after.captured_at;
+            (state.watermark, state.after, state.upper, projection_at)
         } else {
+            let upper = self
+                .topic_candidate_upper(obligation_id, captured_at)?
+                .unwrap_or_else(|| topic_cursor_min(captured_at));
             (
                 crate::pagination::initial_watermark(current, requested_watermark)?,
-                0,
-                current,
+                topic_cursor_min(captured_at),
+                upper,
                 captured_at,
             )
         };
-        let mut statement = self.connection.prepare(
-            "SELECT e.sequence, e.provenance, e.source_kind,
-                    coalesce(e.audit_event_sequence, e.gardener_event_sequence,
-                             e.gardener_run_event_sequence) AS source_sequence,
-                    coalesce(a.event_type, g.event_type, re.event_type),
-                    coalesce(a.occurred_at, g.occurred_at, re.occurred_at),
-                    coalesce(a.details_json, g.details_json, re.details_json),
-                    a.occurrence, g.inspection_id, g.proposal_fingerprint, re.run_id
-             FROM event_envelopes e
-             LEFT JOIN audit_events a ON a.sequence = e.audit_event_sequence
-             LEFT JOIN gardener_events g ON g.sequence = e.gardener_event_sequence
-             LEFT JOIN gardener_run_events re ON re.sequence = e.gardener_run_event_sequence
-             WHERE e.sequence > ?1 AND e.sequence <= ?2
-               AND (
-                    a.obligation_id = ?3
-                    OR re.run_id IN (
-                        SELECT id FROM gardener_implementation_runs WHERE obligation_id = ?3
-                    )
-                    OR g.inspection_id IN (
-                        SELECT id FROM gardener_inspections WHERE obligation_id = ?3
-                        UNION
-                        SELECT source_inspection_id FROM gardener_proposal_instances
-                         WHERE implementation_obligation_id = ?3
-                    )
-                    OR g.proposal_fingerprint IN (
-                        SELECT proposal_fingerprint FROM gardener_proposal_instances
-                         WHERE implementation_obligation_id = ?3
-                        UNION
-                        SELECT po.proposal_fingerprint
-                          FROM gardener_proposal_observations po
-                          JOIN gardener_inspections gi ON gi.id = po.inspection_id
-                         WHERE gi.obligation_id = ?3
-                    )
-               )
-             ORDER BY e.sequence LIMIT ?4",
-        )?;
+        let page_query = format!(
+            "{TOPIC_CANDIDATES_SQL}
+             SELECT occurred_at, source_rank, source_sequence, stable_id,
+                    source_kind, source_identity, occurrence, event_type
+               FROM topic_items
+              WHERE (occurred_at, source_rank, source_sequence, stable_id)
+                    > (?2, ?3, ?4, ?5)
+                AND (occurred_at, source_rank, source_sequence, stable_id)
+                    <= (?6, ?7, ?8, ?9)
+              ORDER BY occurred_at, source_rank, source_sequence, stable_id
+              LIMIT ?10"
+        );
+        let mut statement = self.connection.prepare(&page_query)?;
         let rows = statement.query_map(
             params![
-                after,
-                upper,
                 obligation_id,
+                after.occurred_at,
+                after.source_rank,
+                after.source_sequence,
+                after.stable_id,
+                upper.occurred_at,
+                upper.source_rank,
+                upper.source_sequence,
+                upper.stable_id,
                 i64::try_from(limit + 1).expect("bounded limit")
             ],
-            |row| {
-                let envelope_sequence: i64 = row.get(0)?;
-                let provenance: String = row.get(1)?;
-                let source_kind: String = row.get(2)?;
-                let source_sequence: i64 = row.get(3)?;
-                let event_type: String = row.get(4)?;
-                let occurred_at: i64 = row.get(5)?;
-                let details_json: String = row.get(6)?;
-                let source = match source_kind.as_str() {
-                    "audit_event" => TopicSource::AuditEvent,
-                    "gardener_event" => TopicSource::GardenerEvent,
-                    "gardener_run_event" => TopicSource::GardenerRunEvent,
-                    other => {
-                        return Err(rusqlite::Error::FromSqlConversionFailure(
-                            2,
-                            rusqlite::types::Type::Text,
-                            format!("unknown envelope source {other:?}").into(),
-                        ));
-                    }
-                };
-                let evidence = serde_json::json!({
-                    "envelope_provenance": provenance,
-                    "source_sequence": source_sequence,
-                    "details_json": details_json,
-                    "inspection_id": row.get::<_, Option<String>>(8)?,
-                    "proposal_fingerprint": row.get::<_, Option<String>>(9)?,
-                    "run_id": row.get::<_, Option<String>>(10)?,
-                });
-                Ok(TopicItem {
-                    occurred_at,
-                    source,
-                    source_sequence: envelope_sequence.to_string(),
-                    stable_id: format!("envelope:{envelope_sequence}"),
-                    occurrence: row.get(7)?,
-                    event_type,
-                    evidence,
-                })
-            },
+            |row| topic_candidate_from_row(row, projection_at),
         )?;
-        let mut items = rows.collect::<Result<Vec<_>, _>>()?;
-        let next_cursor = if items.len() > limit {
-            items.truncate(limit);
-            let last = items.last().expect("non-empty page");
-            let after = last
-                .stable_id
-                .strip_prefix("envelope:")
-                .expect("generated envelope identity")
-                .parse::<i64>()
-                .expect("generated numeric envelope identity");
+        let mut candidates = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = if candidates.len() > limit {
+            candidates.truncate(limit);
             Some(crate::pagination::encode_cursor(
                 &scope,
                 watermark,
-                (projection_at, after),
-                (projection_at, upper),
+                candidates.last().expect("non-empty page").key.clone(),
+                upper,
             )?)
         } else {
             None
         };
-        for item in &mut items {
-            self.enrich_topic_item(item)?;
-        }
+        drop(statement);
+        let items = candidates
+            .into_iter()
+            .map(|candidate| self.topic_item_from_candidate(candidate))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(ObligationTopic {
             captured_at: projection_at,
             obligation_id: obligation_id.to_owned(),
@@ -458,67 +504,211 @@ impl Store {
         })
     }
 
-    /// Attach bounded, directly related current evidence without placing it
-    /// in the causal envelope order. Mutable evidence is safe here because a
-    /// topic continuation requires the exact same global watermark.
-    fn enrich_topic_item(&self, item: &mut TopicItem) -> Result<(), StoreError> {
-        let Some(evidence) = item.evidence.as_object_mut() else {
-            return Ok(());
+    fn topic_candidate_upper(
+        &self,
+        obligation_id: &str,
+        captured_at: i64,
+    ) -> Result<Option<TopicCursorKey>, StoreError> {
+        let query = format!(
+            "{TOPIC_CANDIDATES_SQL}
+             SELECT occurred_at, source_rank, source_sequence, stable_id
+               FROM topic_items
+              ORDER BY occurred_at DESC, source_rank DESC,
+                       source_sequence DESC, stable_id DESC
+              LIMIT 1"
+        );
+        self.connection
+            .query_row(&query, [obligation_id], |row| {
+                Ok(TopicCursorKey {
+                    captured_at,
+                    occurred_at: row.get(0)?,
+                    source_rank: row.get(1)?,
+                    source_sequence: row.get(2)?,
+                    stable_id: row.get(3)?,
+                })
+            })
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    fn topic_item_from_candidate(
+        &self,
+        candidate: TopicCandidate,
+    ) -> Result<TopicItem, StoreError> {
+        let evidence = match candidate.source {
+            TopicSource::AuditEvent => self.topic_audit_evidence(&candidate.source_identity)?,
+            TopicSource::ApprovalDecision => {
+                self.topic_approval_evidence(&candidate.source_identity)?
+            }
+            TopicSource::Attempt => self.topic_attempt_evidence(&candidate.source_identity)?,
+            TopicSource::GardenerInspection => self
+                .gardener_inspection(&candidate.source_identity)?
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(topic_serialisation_error)?
+                .ok_or_else(|| missing_topic_source("inspection", &candidate.source_identity))?,
+            TopicSource::GardenerProposal => self
+                .gardener_proposal(&candidate.source_identity)?
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(topic_serialisation_error)?
+                .ok_or_else(|| missing_topic_source("proposal", &candidate.source_identity))?,
+            TopicSource::GardenerProposalInstance => self
+                .gardener_proposal_instance(&candidate.source_identity)?
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(topic_serialisation_error)?
+                .ok_or_else(|| {
+                    missing_topic_source("proposal instance", &candidate.source_identity)
+                })?,
+            TopicSource::GardenerObservation => {
+                self.topic_observation_evidence(&candidate.source_identity)?
+            }
+            TopicSource::GardenerEvent => {
+                self.topic_gardener_event_evidence(&candidate.source_identity)?
+            }
+            TopicSource::GardenerImplementationRun => self
+                .gardener_implementation_run(&candidate.source_identity)?
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(topic_serialisation_error)?
+                .ok_or_else(|| missing_topic_source("run", &candidate.source_identity))?,
+            TopicSource::GardenerRunEvent => {
+                self.topic_run_event_evidence(&candidate.source_identity)?
+            }
         };
-        let mut related = serde_json::Map::new();
-        if let Some(inspection_id) = evidence
-            .get("inspection_id")
-            .and_then(|value| value.as_str())
-        {
-            if let Some(inspection) = self.gardener_inspection(inspection_id)? {
-                related.insert(
-                    "inspection".to_owned(),
-                    serde_json::to_value(inspection).map_err(topic_serialisation_error)?,
-                );
-            }
-        }
-        if let Some(fingerprint) = evidence
-            .get("proposal_fingerprint")
-            .and_then(|value| value.as_str())
-        {
-            if let Some(proposal) = self.gardener_proposal(fingerprint)? {
-                related.insert(
-                    "proposal".to_owned(),
-                    serde_json::to_value(proposal).map_err(topic_serialisation_error)?,
-                );
-            }
-        }
-        if let Some(run_id) = evidence.get("run_id").and_then(|value| value.as_str()) {
-            if let Some(run) = self.gardener_implementation_run(run_id)? {
-                related.insert(
-                    "implementation_run".to_owned(),
-                    serde_json::to_value(run).map_err(topic_serialisation_error)?,
-                );
-            }
-        }
-        let details = evidence
-            .get("details_json")
-            .and_then(|value| value.as_str())
-            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
-        if let Some(instance_id) = details
-            .as_ref()
-            .and_then(|value| value.get("proposal_instance_id"))
-            .and_then(|value| value.as_str())
-        {
-            if let Some(instance) = self.gardener_proposal_instance(instance_id)? {
-                related.insert(
-                    "proposal_instance".to_owned(),
-                    serde_json::to_value(instance).map_err(topic_serialisation_error)?,
-                );
-            }
-        }
-        if !related.is_empty() {
-            evidence.insert(
-                "related_evidence".to_owned(),
-                serde_json::Value::Object(related),
-            );
-        }
-        Ok(())
+        Ok(TopicItem {
+            occurred_at: candidate.key.occurred_at,
+            source: candidate.source,
+            source_sequence: candidate.key.source_sequence,
+            stable_id: candidate.key.stable_id,
+            occurrence: candidate.occurrence,
+            event_type: candidate.event_type,
+            evidence,
+        })
+    }
+
+    fn topic_audit_evidence(&self, identity: &str) -> Result<serde_json::Value, StoreError> {
+        let sequence = topic_numeric_identity("audit event", identity)?;
+        let event: AuditEvent = self
+            .connection
+            .query_row(
+                "SELECT sequence, obligation_id, occurrence, event_type, occurred_at,
+                        from_state, to_state, details_json
+                   FROM audit_events WHERE sequence = ?1",
+                [sequence],
+                audit_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("audit event", identity))?;
+        serde_json::to_value(event).map_err(topic_serialisation_error)
+    }
+
+    fn topic_approval_evidence(&self, identity: &str) -> Result<serde_json::Value, StoreError> {
+        let id = topic_numeric_identity("approval", identity)?;
+        let approval = self
+            .connection
+            .query_row(
+                "SELECT id, obligation_id, occurrence, decision, actor, note, decided_at
+                   FROM approvals WHERE id = ?1",
+                [id],
+                approval_evidence_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("approval", identity))?;
+        serde_json::to_value(approval).map_err(topic_serialisation_error)
+    }
+
+    fn topic_attempt_evidence(&self, identity: &str) -> Result<serde_json::Value, StoreError> {
+        let id = topic_numeric_identity("attempt", identity)?;
+        let attempt = self
+            .connection
+            .query_row(
+                "SELECT id, obligation_id, occurrence, attempt_number, lease_generation,
+                        lease_token, claimed_at, completed_at, outcome, retryable,
+                        failure_disposition, error, evidence
+                   FROM attempts WHERE id = ?1",
+                [id],
+                attempt_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("attempt", identity))?;
+        serde_json::to_value(attempt).map_err(topic_serialisation_error)
+    }
+
+    fn topic_observation_evidence(&self, identity: &str) -> Result<serde_json::Value, StoreError> {
+        let id = topic_numeric_identity("proposal observation", identity)?;
+        let observation: ProposalObservation = self
+            .connection
+            .query_row(
+                "SELECT id, proposal_fingerprint, inspection_id, source_commit, observed_at
+                   FROM gardener_proposal_observations WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok(ProposalObservation {
+                        id: row.get(0)?,
+                        proposal_fingerprint: row.get(1)?,
+                        inspection_id: row.get(2)?,
+                        source_commit: row.get(3)?,
+                        observed_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("proposal observation", identity))?;
+        serde_json::to_value(observation).map_err(topic_serialisation_error)
+    }
+
+    fn topic_gardener_event_evidence(
+        &self,
+        identity: &str,
+    ) -> Result<serde_json::Value, StoreError> {
+        let sequence = topic_numeric_identity("gardener event", identity)?;
+        let event: GardenerEvent = self
+            .connection
+            .query_row(
+                "SELECT sequence, repository, inspection_id, proposal_fingerprint,
+                        event_type, occurred_at, details_json
+                   FROM gardener_events WHERE sequence = ?1",
+                [sequence],
+                |row| {
+                    Ok(GardenerEvent {
+                        sequence: row.get(0)?,
+                        repository: row.get(1)?,
+                        inspection_id: row.get(2)?,
+                        proposal_fingerprint: row.get(3)?,
+                        event_type: row.get(4)?,
+                        occurred_at: row.get(5)?,
+                        details_json: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("gardener event", identity))?;
+        serde_json::to_value(event).map_err(topic_serialisation_error)
+    }
+
+    fn topic_run_event_evidence(&self, identity: &str) -> Result<serde_json::Value, StoreError> {
+        let sequence = topic_numeric_identity("gardener run event", identity)?;
+        let event: GardenerRunEvent = self
+            .connection
+            .query_row(
+                "SELECT sequence, run_id, event_type, occurred_at, details_json
+                   FROM gardener_run_events WHERE sequence = ?1",
+                [sequence],
+                |row| {
+                    Ok(GardenerRunEvent {
+                        sequence: row.get(0)?,
+                        run_id: row.get(1)?,
+                        event_type: row.get(2)?,
+                        occurred_at: row.get(3)?,
+                        details_json: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| missing_topic_source("gardener run event", identity))?;
+        serde_json::to_value(event).map_err(topic_serialisation_error)
     }
 
     #[cfg(test)]
@@ -1162,6 +1352,92 @@ fn snapshot_cursor_key(item: &Obligation, captured_at: i64) -> SnapshotCursorKey
     }
 }
 
+fn topic_cursor_min(captured_at: i64) -> TopicCursorKey {
+    TopicCursorKey {
+        captured_at,
+        occurred_at: i64::MIN,
+        source_rank: i64::MIN,
+        source_sequence: String::new(),
+        stable_id: String::new(),
+    }
+}
+
+fn topic_candidate_from_row(
+    row: &rusqlite::Row<'_>,
+    captured_at: i64,
+) -> rusqlite::Result<TopicCandidate> {
+    let source_rank: i64 = row.get(1)?;
+    let source = match source_rank {
+        0 => TopicSource::AuditEvent,
+        1 => TopicSource::ApprovalDecision,
+        2 => TopicSource::Attempt,
+        3 => TopicSource::GardenerInspection,
+        4 => TopicSource::GardenerProposal,
+        5 => TopicSource::GardenerProposalInstance,
+        6 => TopicSource::GardenerObservation,
+        7 => TopicSource::GardenerEvent,
+        8 => TopicSource::GardenerImplementationRun,
+        9 => TopicSource::GardenerRunEvent,
+        value => {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                1,
+                rusqlite::types::Type::Integer,
+                format!("unknown topic source rank {value}").into(),
+            ));
+        }
+    };
+    let source_kind: String = row.get(4)?;
+    if source_kind != topic_source_kind(source) {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Text,
+            format!("topic source rank {source_rank} conflicts with {source_kind:?}").into(),
+        ));
+    }
+    Ok(TopicCandidate {
+        key: TopicCursorKey {
+            captured_at,
+            occurred_at: row.get(0)?,
+            source_rank,
+            source_sequence: row.get(2)?,
+            stable_id: row.get(3)?,
+        },
+        source,
+        source_identity: row.get(5)?,
+        occurrence: row.get(6)?,
+        event_type: row.get(7)?,
+    })
+}
+
+fn topic_source_kind(source: TopicSource) -> &'static str {
+    match source {
+        TopicSource::AuditEvent => "audit",
+        TopicSource::ApprovalDecision => "approval",
+        TopicSource::Attempt => "attempt",
+        TopicSource::GardenerInspection => "inspection",
+        TopicSource::GardenerProposal => "proposal",
+        TopicSource::GardenerProposalInstance => "instance",
+        TopicSource::GardenerObservation => "observation",
+        TopicSource::GardenerEvent => "gardener_event",
+        TopicSource::GardenerImplementationRun => "run",
+        TopicSource::GardenerRunEvent => "run_event",
+    }
+}
+
+fn topic_numeric_identity(kind: &str, identity: &str) -> Result<i64, StoreError> {
+    identity.parse::<i64>().map_err(|error| {
+        StoreError::Invalid(format!(
+            "invalid {kind} topic identity {identity:?}: {error}"
+        ))
+    })
+}
+
+fn missing_topic_source(kind: &str, identity: &str) -> StoreError {
+    StoreError::Invalid(format!(
+        "{kind} topic source {identity:?} disappeared inside a stable read snapshot"
+    ))
+}
+
 #[cfg(test)]
 fn topic_item(
     occurred_at: i64,
@@ -1698,8 +1974,13 @@ mod tests {
         assert!(matches!(error, StoreError::Conflict(message) if message.contains("source-bound")));
 
         let topic = store
-            .operator_topic_legacy_for_test(&proposal.implementation_obligation_id, 101)
+            .operator_topic(&proposal.implementation_obligation_id, 101)
             .unwrap();
+        let legacy_items = store
+            .operator_topic_legacy_for_test(&proposal.implementation_obligation_id, 101)
+            .unwrap()
+            .items;
+        assert_eq!(topic.items, legacy_items);
         assert_eq!(topic.captured_at, 101);
         assert!(topic.items.windows(2).all(|items| {
             (
@@ -1737,7 +2018,7 @@ mod tests {
             item.source == TopicSource::GardenerEvent && item.event_type == "proposal_created"
         }));
         let inspection_topic = store
-            .operator_topic_legacy_for_test("gardener:inspect:robchristie/bokkie", 101)
+            .operator_topic("gardener:inspect:robchristie/bokkie", 101)
             .unwrap();
         assert!(inspection_topic.items.iter().any(|item| {
             item.source == TopicSource::GardenerProposal
@@ -1871,8 +2152,77 @@ mod tests {
             }) if summary == "A blocking issue remains"
         ));
         let completed_topic = store
-            .operator_topic_legacy_for_test(&proposal.implementation_obligation_id, 114)
+            .operator_topic(&proposal.implementation_obligation_id, 114)
             .unwrap();
+        for source in [
+            TopicSource::AuditEvent,
+            TopicSource::ApprovalDecision,
+            TopicSource::Attempt,
+            TopicSource::GardenerInspection,
+            TopicSource::GardenerProposal,
+            TopicSource::GardenerProposalInstance,
+            TopicSource::GardenerObservation,
+            TopicSource::GardenerEvent,
+            TopicSource::GardenerImplementationRun,
+            TopicSource::GardenerRunEvent,
+        ] {
+            assert!(
+                completed_topic
+                    .items
+                    .iter()
+                    .any(|item| item.source == source),
+                "missing production topic source {source:?}"
+            );
+        }
+        for item in &completed_topic.items {
+            let typed_source_sequence = match item.source {
+                TopicSource::AuditEvent | TopicSource::GardenerEvent => item.evidence["sequence"]
+                    .as_i64()
+                    .map(|value| value.to_string()),
+                TopicSource::ApprovalDecision
+                | TopicSource::Attempt
+                | TopicSource::GardenerObservation => {
+                    item.evidence["id"].as_i64().map(|value| value.to_string())
+                }
+                TopicSource::GardenerRunEvent => item.evidence["sequence"]
+                    .as_i64()
+                    .map(|value| value.to_string()),
+                TopicSource::GardenerInspection | TopicSource::GardenerImplementationRun => {
+                    item.evidence["id"].as_str().map(str::to_owned)
+                }
+                TopicSource::GardenerProposal => {
+                    item.evidence["fingerprint"].as_str().map(str::to_owned)
+                }
+                TopicSource::GardenerProposalInstance => Some(format!(
+                    "{}:{}",
+                    item.evidence["generation"].as_u64().unwrap(),
+                    item.evidence["id"].as_str().unwrap()
+                )),
+            }
+            .expect("complete typed source evidence");
+            assert_eq!(item.source_sequence, typed_source_sequence);
+        }
+        let mut paged_items = Vec::new();
+        let mut cursor = None;
+        let mut watermark = None;
+        loop {
+            let page = store
+                .operator_topic_page(
+                    &proposal.implementation_obligation_id,
+                    114,
+                    cursor.as_deref(),
+                    watermark,
+                    Some(3),
+                )
+                .unwrap();
+            watermark.get_or_insert(page.watermark);
+            paged_items.extend(page.items);
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(paged_items, completed_topic.items);
         let run = completed_topic
             .items
             .iter()
@@ -2137,7 +2487,7 @@ mod tests {
             watermark.get_or_insert(page.watermark);
             revisions.extend(page.items.iter().map(|item| {
                 item.stable_id
-                    .strip_prefix("envelope:")
+                    .strip_prefix("audit:")
                     .unwrap()
                     .parse::<i64>()
                     .unwrap()

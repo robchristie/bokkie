@@ -5074,7 +5074,7 @@ pub(crate) fn obligation_from_row(row: &Row<'_>) -> rusqlite::Result<Obligation>
     })
 }
 
-fn attempt_from_row(row: &Row<'_>) -> rusqlite::Result<Attempt> {
+pub(crate) fn attempt_from_row(row: &Row<'_>) -> rusqlite::Result<Attempt> {
     Ok(Attempt {
         id: row.get(0)?,
         obligation_id: row.get(1)?,
@@ -5092,7 +5092,7 @@ fn attempt_from_row(row: &Row<'_>) -> rusqlite::Result<Attempt> {
     })
 }
 
-fn audit_from_row(row: &Row<'_>) -> rusqlite::Result<AuditEvent> {
+pub(crate) fn audit_from_row(row: &Row<'_>) -> rusqlite::Result<AuditEvent> {
     let from: Option<String> = row.get(5)?;
     Ok(AuditEvent {
         sequence: row.get(0)?,
