@@ -3102,8 +3102,11 @@ printf '[{{"number":42,"html_url":"https://github.com/robchristie/bokkie/pull/42
         assert!(!observer_log.contains("fake-token"));
     }
 
+    // Credential stripping is covered deterministically by runtime_trust. This
+    // opt-in probe records the installed GitHub CLI's current live behaviour.
     #[test]
-    fn real_gh_requires_authentication_even_for_public_pr_view() {
+    #[ignore = "live installed-gh probe; run explicitly during tool qualification"]
+    fn live_real_gh_requires_authentication_even_for_public_pr_view() {
         let Some(gh) = [Path::new("/usr/bin/gh"), Path::new("/usr/local/bin/gh")]
             .into_iter()
             .find(|path| path.is_file())
