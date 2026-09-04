@@ -189,7 +189,9 @@ impl Fixture {
         let codex_script = format!(
             r#"#!/usr/bin/env python3
 import json
+import hashlib
 import pathlib
+import sqlite3
 import subprocess
 import sys
 
@@ -214,15 +216,38 @@ for raw in sys.stdin:
     if method == "initialize":
         print(json.dumps({{"id": request["id"], "result": {{}}}}), flush=True)
     elif method == "thread/start":
+        assert "model" not in request["params"] and "profile" not in request["params"]
         count = int(count_path.read_text()) + 1 if count_path.exists() else 1
         count_path.write_text(str(count))
         thread_id = "thread-" + str(count)
         print(json.dumps({{"id": request["id"], "result": {{"thread": {{"id": thread_id}}}}}}), flush=True)
     elif method == "turn/start":
         turn_id = "turn-" + thread_id.split("-")[-1]
-        print(json.dumps({{"id": request["id"], "result": {{"turn": {{"id": turn_id}}}}}}), flush=True)
         prompt = request["params"]["input"][0]["text"]
         sandbox = request["params"]["sandboxPolicy"]["type"]
+        kind = "implementation" if sandbox == "workspaceWrite" else "verification" if "independent, read-only verifier" in prompt else "inspection"
+        # This fake transport deliberately has database access so a separate
+        # connection proves the manifest committed before the turn was sent.
+        db = sqlite3.connect("file:" + {database} + "?mode=ro", uri=True)
+        if kind == "inspection":
+            owner = db.execute("SELECT id FROM gardener_inspections WHERE worktree_path = ?", (str(pathlib.Path.cwd()),)).fetchone()[0]
+            rows = db.execute("SELECT details_json FROM gardener_events WHERE inspection_id = ? AND event_type = ?", (owner, kind + "_turn_manifest_recorded")).fetchall()
+        else:
+            column = "implementation_worktree_path" if kind == "implementation" else "verification_worktree_path"
+            owner = db.execute("SELECT id FROM gardener_implementation_runs WHERE " + column + " = ?", (str(pathlib.Path.cwd()),)).fetchone()[0]
+            rows = db.execute("SELECT details_json FROM gardener_run_events WHERE run_id = ? AND event_type = ?", (owner, kind + "_turn_manifest_recorded")).fetchall()
+        assert len(rows) == 1, rows
+        manifest = json.loads(rows[0][0])
+        assert manifest["owner_id"] == owner and manifest["kind"] == kind
+        assert manifest["codex_profile_override"] is None and manifest["codex_model_override"] is None
+        assert "model" not in request["params"] and "profile" not in request["params"]
+        assert manifest["prompt_digest"] == hashlib.sha256(prompt.encode()).hexdigest()
+        schema = json.dumps(request["params"]["outputSchema"], sort_keys=True, separators=(",", ":"))
+        assert manifest["output_schema_digest"] == hashlib.sha256(schema.encode()).hexdigest()
+        assert manifest["head"] == subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        assert len(json.loads(manifest["bokkie_build"])["sha256"]) == 64
+        db.close()
+        print(json.dumps({{"id": request["id"], "result": {{"turn": {{"id": turn_id}}}}}}), flush=True)
         if sandbox == "workspaceWrite":
             pathlib.Path.cwd().joinpath("gardened.txt").write_text("implemented by fake Codex\n")
             message = {{"summary": "implemented and checked", "changed_paths": ["gardened.txt"], "checks": ["fake check passed"]}}
@@ -236,6 +261,8 @@ for raw in sys.stdin:
         print(json.dumps({{"method": "turn/completed", "params": {{"threadId": thread_id, "turn": {{"id": turn_id, "status": "completed", "items": []}}}}}}), flush=True)
 "#,
             log = serde_json::to_string(codex_log.to_str().unwrap()).unwrap(),
+            database =
+                serde_json::to_string(root.path().join("bokkie.sqlite").to_str().unwrap()).unwrap(),
             count = serde_json::to_string(codex_count.to_str().unwrap()).unwrap(),
             verdict = serde_json::to_string(verdict).unwrap(),
             mismatch = serde_json::to_string(&mismatch).unwrap(),
@@ -458,7 +485,10 @@ fn complete_process_flow_persists_exact_identities_and_passes_verification() {
     let mut store = fixture.store();
     let implementation_claim = fixture.inspect_and_approve(&mut store);
 
-    let config = fixture.config();
+    let config = fixture.config().with_codex_identity(
+        Some("declared-profile".to_owned()),
+        Some("declared-model".to_owned()),
+    );
     let runner = GardenerRunner::new(&config, 30, &fixture.clock).unwrap();
     let result = runner.execute(&mut store, &implementation_claim);
     assert!(matches!(result.completion, Completion::Succeeded { .. }));
@@ -503,7 +533,65 @@ fn complete_process_flow_persists_exact_identities_and_passes_verification() {
         .unwrap();
     assert_eq!(qualification.head, run.git_commit.as_deref().unwrap());
     assert!(qualification.checks_json.contains("\"kind\":\"passed\""));
+    let inspection = &store.gardener_inspections().unwrap()[0];
+    let inspection_manifest = store
+        .gardener_turn_manifest(&inspection.id, GardenerTurnKind::Inspection)
+        .unwrap()
+        .unwrap();
+    let implementation_manifest = store
+        .gardener_turn_manifest(&run.id, GardenerTurnKind::Implementation)
+        .unwrap()
+        .unwrap();
+    let verification_manifest = store
+        .gardener_turn_manifest(&run.id, GardenerTurnKind::Verification)
+        .unwrap()
+        .unwrap();
+    assert_eq!(inspection_manifest.source_commit, inspection.source_commit);
+    assert_eq!(implementation_manifest.source_commit, run.source_commit);
+    assert_eq!(verification_manifest.source_commit, run.source_commit);
+    assert_eq!(
+        verification_manifest.declared_codex_profile.as_deref(),
+        Some("declared-profile")
+    );
+    assert_eq!(
+        verification_manifest.declared_codex_model.as_deref(),
+        Some("declared-model")
+    );
+    assert_eq!(verification_manifest.codex_profile_override, None);
+    assert_eq!(verification_manifest.codex_model_override, None);
+    assert_eq!(verification_manifest.head, qualification.head);
+    assert_ne!(
+        implementation_manifest.prompt_digest,
+        verification_manifest.prompt_digest
+    );
+    assert_ne!(
+        implementation_manifest.output_schema_digest,
+        verification_manifest.output_schema_digest
+    );
+    assert_eq!(
+        implementation_manifest.bokkie_build,
+        verification_manifest.bokkie_build
+    );
+    assert_eq!(
+        implementation_manifest.check_commands_json,
+        manifest.check_commands_json
+    );
     let events = store.gardener_run_events(&run.id).unwrap();
+    let candidate_event = events
+        .iter()
+        .find(|event| event.event_type == "candidate_qualified")
+        .unwrap();
+    let candidate_details: Value = serde_json::from_str(&candidate_event.details_json).unwrap();
+    assert_eq!(
+        candidate_details["diff_manifest_bytes"],
+        qualification.diff_manifest_json.len()
+    );
+    assert_eq!(
+        candidate_details["changed_path_count"],
+        serde_json::from_str::<Vec<Value>>(&qualification.diff_manifest_json)
+            .unwrap()
+            .len()
+    );
     let sequence = |event_type: &str| {
         events
             .iter()
@@ -537,6 +625,32 @@ fn complete_process_flow_persists_exact_identities_and_passes_verification() {
     );
 
     let transcript = fs::read_to_string(&fixture.codex_log).unwrap();
+    let requests = transcript
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let turns = requests
+        .iter()
+        .filter(|request| request["method"] == "turn/start");
+    let threads = requests
+        .iter()
+        .filter(|request| request["method"] == "thread/start");
+    for ((turn, thread), turn_manifest) in turns.zip(threads).zip([
+        &inspection_manifest,
+        &implementation_manifest,
+        &verification_manifest,
+    ]) {
+        let policy = json!({
+            "runtime_policy_digest": manifest.sandbox_policy_digest,
+            "thread_sandbox": thread["params"]["sandbox"],
+            "turn_sandbox": turn["params"]["sandboxPolicy"],
+            "approval_policy": turn["params"]["approvalPolicy"],
+        });
+        assert_eq!(
+            turn_manifest.sandbox_policy_digest,
+            digest(&policy.to_string())
+        );
+    }
     assert!(transcript.lines().count() >= 12);
     assert!(transcript.contains("\"type\":\"readOnly\""));
     assert!(transcript.contains("\"type\":\"workspaceWrite\""));

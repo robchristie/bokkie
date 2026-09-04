@@ -24,13 +24,13 @@ use crate::{
     gardener::{
         CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerCandidateQualification,
         GardenerEvent, GardenerImplementationRun, GardenerInspection, GardenerPublicationState,
-        GardenerReproducibilityManifest, GardenerRunEvent, GardenerRunPhase,
-        GardenerVerificationVerdict, InspectionResult, MAX_GARDENER_MODEL_ITEM_CHARS,
-        MAX_GARDENER_MODEL_ITEMS, MAX_GARDENER_MODEL_MESSAGE_BYTES, MAX_GARDENER_MODEL_TEXT_CHARS,
-        MAX_GARDENER_PROMPT_CHARS, MAX_GARDENER_PROMPTS, NewGardenerImplementationRun,
-        NewGardenerInspection, NewRepositoryRegistration, Proposal, ProposalInstance,
-        ProposalObservation, RepositoryRegistration, normalise_goal_prompt, proposal_fingerprint,
-        proposal_instance_id,
+        GardenerReproducibilityManifest, GardenerRunEvent, GardenerRunPhase, GardenerTurnKind,
+        GardenerTurnManifest, GardenerVerificationVerdict, InspectionResult,
+        MAX_GARDENER_MODEL_ITEM_CHARS, MAX_GARDENER_MODEL_ITEMS, MAX_GARDENER_MODEL_MESSAGE_BYTES,
+        MAX_GARDENER_MODEL_TEXT_CHARS, MAX_GARDENER_PROMPT_CHARS, MAX_GARDENER_PROMPTS,
+        NewGardenerImplementationRun, NewGardenerInspection, NewRepositoryRegistration, Proposal,
+        ProposalInstance, ProposalObservation, RepositoryRegistration, normalise_goal_prompt,
+        proposal_fingerprint, proposal_instance_id,
     },
     recurrence::RecurrenceError,
 };
@@ -1810,6 +1810,105 @@ impl Store {
         gardener_reproducibility_manifest(&self.connection, run_id)
     }
 
+    /// Persist complete turn evidence before starting Codex. Existing append-only
+    /// events retain the manifest and its global envelope without a second state path.
+    pub fn record_gardener_turn_manifest(
+        &mut self,
+        claim: &Claim,
+        manifest: &GardenerTurnManifest,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        validate_turn_manifest(manifest)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let repository = match manifest.kind {
+            GardenerTurnKind::Inspection => {
+                let inspection =
+                    require_current_inspection(&transaction, claim, &manifest.owner_id, now)?;
+                if inspection.completed_at.is_some()
+                    || inspection.codex_thread_id.is_some()
+                    || inspection.codex_turn_id.is_some()
+                    || inspection.source_commit != manifest.source_commit
+                    || inspection.source_commit != manifest.head
+                    || inspection.prompt_digest != manifest.prompt_digest
+                {
+                    return Err(StoreError::Conflict(
+                        "inspection manifest must match its source and prompt before Codex starts"
+                            .to_owned(),
+                    ));
+                }
+                Some(inspection.repository)
+            }
+            GardenerTurnKind::Implementation | GardenerTurnKind::Verification => {
+                let run =
+                    require_current_gardener_run(&transaction, claim, &manifest.owner_id, now)?;
+                let head = match manifest.kind {
+                    GardenerTurnKind::Implementation => {
+                        require_run_phase(&run, GardenerRunPhase::Created)?;
+                        Some(run.source_commit.as_str())
+                    }
+                    GardenerTurnKind::Verification => {
+                        require_run_phase(&run, GardenerRunPhase::VerificationStarted)?;
+                        run.verification_head.as_deref()
+                    }
+                    GardenerTurnKind::Inspection => unreachable!(),
+                };
+                if run.source_commit != manifest.source_commit
+                    || head != Some(manifest.head.as_str())
+                {
+                    return Err(StoreError::Conflict(
+                        "turn manifest must match the run source and exact execution head"
+                            .to_owned(),
+                    ));
+                }
+                None
+            }
+        };
+        if let Some(existing) =
+            gardener_turn_manifest(&transaction, &manifest.owner_id, manifest.kind)?
+        {
+            if existing != *manifest {
+                return Err(StoreError::Conflict(
+                    "turn already has a different reproducibility manifest".to_owned(),
+                ));
+            }
+            transaction.commit()?;
+            return Ok(());
+        }
+        let details = serde_json::to_value(manifest)
+            .map_err(|error| StoreError::Invalid(error.to_string()))?;
+        if let Some(repository) = repository {
+            append_gardener_event(
+                &transaction,
+                &repository,
+                Some(&manifest.owner_id),
+                None,
+                turn_manifest_event_type(manifest.kind),
+                now,
+                details,
+            )?;
+        } else {
+            append_gardener_run_event(
+                &transaction,
+                &manifest.owner_id,
+                turn_manifest_event_type(manifest.kind),
+                now,
+                details,
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn gardener_turn_manifest(
+        &self,
+        owner_id: &str,
+        kind: GardenerTurnKind,
+    ) -> Result<Option<GardenerTurnManifest>, StoreError> {
+        gardener_turn_manifest(&self.connection, owner_id, kind)
+    }
+
     /// Record Bokkie's credential-free candidate manifests and passing checks
     /// before a branch may be pushed.
     pub fn record_gardener_candidate_qualification(
@@ -1819,6 +1918,8 @@ impl Store {
         now: i64,
     ) -> Result<(), StoreError> {
         validate_candidate_qualification(qualification)?;
+        let diff_manifest =
+            validate_json_array("candidate diff manifest", &qualification.diff_manifest_json)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1868,6 +1969,8 @@ impl Store {
                 "head": qualification.head,
                 "duration_ms": qualification.duration_ms,
                 "diff_manifest_digest": json_digest(&qualification.diff_manifest_json),
+                "diff_manifest_bytes": qualification.diff_manifest_json.len(),
+                "changed_path_count": diff_manifest.as_array().expect("validated array").len(),
                 "tree_manifest_digest": json_digest(&qualification.tree_manifest_json),
                 "checks_digest": json_digest(&qualification.checks_json),
             }),
@@ -3199,6 +3302,68 @@ fn validate_reproducibility_manifest(
         ));
     }
     Ok(())
+}
+
+fn validate_turn_manifest(manifest: &GardenerTurnManifest) -> Result<(), StoreError> {
+    validate_hex_identity("turn execution head", &manifest.head, &[40, 64])?;
+    validate_optional_bounded(
+        "Codex profile override",
+        manifest.codex_profile_override.as_deref(),
+    )?;
+    validate_optional_bounded(
+        "Codex model override",
+        manifest.codex_model_override.as_deref(),
+    )?;
+    // Keep the compatibility manifest's common identity checks authoritative.
+    validate_reproducibility_manifest(&GardenerReproducibilityManifest {
+        run_id: manifest.owner_id.clone(),
+        bokkie_build: manifest.bokkie_build.clone(),
+        source_commit: manifest.source_commit.clone(),
+        prompt_digest: manifest.prompt_digest.clone(),
+        implementation_schema_digest: manifest.output_schema_digest.clone(),
+        verification_schema_digest: manifest.output_schema_digest.clone(),
+        codex_profile: manifest.declared_codex_profile.clone(),
+        codex_model: manifest.declared_codex_model.clone(),
+        executable_manifest_json: manifest.executable_manifest_json.clone(),
+        sandbox_policy_digest: manifest.sandbox_policy_digest.clone(),
+        environment_policy_digest: manifest.environment_policy_digest.clone(),
+        check_commands_json: manifest.check_commands_json.clone(),
+        recorded_at: manifest.recorded_at,
+    })
+}
+
+fn turn_manifest_event_type(kind: GardenerTurnKind) -> &'static str {
+    match kind {
+        GardenerTurnKind::Inspection => "inspection_turn_manifest_recorded",
+        GardenerTurnKind::Implementation => "implementation_turn_manifest_recorded",
+        GardenerTurnKind::Verification => "verification_turn_manifest_recorded",
+    }
+}
+
+fn gardener_turn_manifest(
+    connection: &Connection,
+    owner_id: &str,
+    kind: GardenerTurnKind,
+) -> Result<Option<GardenerTurnManifest>, StoreError> {
+    let query = if kind == GardenerTurnKind::Inspection {
+        "SELECT details_json FROM gardener_events WHERE inspection_id = ?1 AND event_type = ?2"
+    } else {
+        "SELECT details_json FROM gardener_run_events WHERE run_id = ?1 AND event_type = ?2"
+    };
+    let details: Option<String> = connection
+        .query_row(
+            query,
+            params![owner_id, turn_manifest_event_type(kind)],
+            |row| row.get(0),
+        )
+        .optional()?;
+    details
+        .map(|details| {
+            serde_json::from_str(&details).map_err(|error| {
+                StoreError::Invalid(format!("invalid persisted turn manifest: {error}"))
+            })
+        })
+        .transpose()
 }
 
 fn validate_candidate_qualification(
@@ -5162,6 +5327,10 @@ where
 }
 
 #[cfg(test)]
+#[path = "store_model_tests.rs"]
+mod model_tests;
+
+#[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
@@ -6032,6 +6201,155 @@ mod tests {
                 1_010,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn turn_manifests_are_source_bound_append_only_and_claim_fenced() {
+        fn manifest(owner_id: &str, kind: GardenerTurnKind) -> GardenerTurnManifest {
+            let common = reproducibility_manifest(owner_id, &"a".repeat(40));
+            GardenerTurnManifest {
+                owner_id: owner_id.to_owned(),
+                kind,
+                bokkie_build: common.bokkie_build,
+                source_commit: common.source_commit.clone(),
+                head: common.source_commit,
+                prompt_digest: "d".repeat(64),
+                output_schema_digest: "2".repeat(64),
+                declared_codex_profile: common.codex_profile,
+                declared_codex_model: common.codex_model,
+                codex_profile_override: None,
+                codex_model_override: None,
+                executable_manifest_json: common.executable_manifest_json,
+                sandbox_policy_digest: common.sandbox_policy_digest,
+                environment_policy_digest: common.environment_policy_digest,
+                check_commands_json: common.check_commands_json,
+                recorded_at: 1_004,
+            }
+        }
+        fn assert_record(
+            store: &mut Store,
+            claim: &Claim,
+            manifest: &GardenerTurnManifest,
+            now: i64,
+        ) {
+            let mut wrong_head = manifest.clone();
+            wrong_head.head = "f".repeat(40);
+            assert!(matches!(
+                store.record_gardener_turn_manifest(claim, &wrong_head, now),
+                Err(StoreError::Conflict(_))
+            ));
+            store
+                .record_gardener_turn_manifest(claim, manifest, now)
+                .unwrap();
+            store
+                .record_gardener_turn_manifest(claim, manifest, now)
+                .unwrap();
+            let mut changed = manifest.clone();
+            changed.output_schema_digest = "9".repeat(64);
+            assert!(matches!(
+                store.record_gardener_turn_manifest(claim, &changed, now),
+                Err(StoreError::Conflict(_))
+            ));
+            let mut stale = claim.clone();
+            stale.lease_generation += 1;
+            assert!(matches!(
+                store.record_gardener_turn_manifest(&stale, manifest, now),
+                Err(StoreError::Fenced)
+            ));
+            assert_eq!(
+                store
+                    .gardener_turn_manifest(&manifest.owner_id, manifest.kind)
+                    .unwrap(),
+                Some(manifest.clone())
+            );
+        }
+
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let claim = store.claim_due_gardener(1_000, 10, 1).unwrap().remove(0);
+        store
+            .start_gardener_inspection(&claim, new_inspection("inspection-1", 'a'), 1_001)
+            .unwrap();
+        let inspection = manifest("inspection-1", GardenerTurnKind::Inspection);
+        let mut wrong_prompt = inspection.clone();
+        wrong_prompt.prompt_digest = "e".repeat(64);
+        assert!(matches!(
+            store.record_gardener_turn_manifest(&claim, &wrong_prompt, 1_002),
+            Err(StoreError::Conflict(_))
+        ));
+        assert_record(&mut store, &claim, &inspection, 1_002);
+        assert_eq!(
+            store
+                .gardener_events()
+                .unwrap()
+                .iter()
+                .filter(|event| event.event_type == "inspection_turn_manifest_recorded")
+                .count(),
+            1
+        );
+        store
+            .record_inspection_codex_thread(&claim, "inspection-1", "thread", 1_003)
+            .unwrap();
+        assert!(matches!(
+            store.record_gardener_turn_manifest(&claim, &inspection, 1_003),
+            Err(StoreError::Conflict(_))
+        ));
+        store.recover_expired_leases(1_010).unwrap();
+        assert!(matches!(
+            store.record_gardener_turn_manifest(&claim, &inspection, 1_010),
+            Err(StoreError::Fenced)
+        ));
+        assert!(store.connection.execute("UPDATE gardener_events SET details_json = '{}' WHERE event_type = 'inspection_turn_manifest_recorded'", []).is_err());
+        assert!(store.connection.execute("DELETE FROM gardener_events WHERE event_type = 'inspection_turn_manifest_recorded'", []).is_err());
+
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("turns.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let (claim, _) = approved_implementation_claim(&mut store, 1_000);
+        store
+            .create_gardener_implementation_run(&claim, new_implementation_run("run-1"), 1_004)
+            .unwrap();
+        let implementation = manifest("run-1", GardenerTurnKind::Implementation);
+        let mut verification = manifest("run-1", GardenerTurnKind::Verification);
+        verification.head = "b".repeat(40);
+        assert!(matches!(
+            store.record_gardener_turn_manifest(&claim, &verification, 1_004),
+            Err(StoreError::Conflict(_))
+        ));
+        assert_record(&mut store, &claim, &implementation, 1_004);
+        advance_run_to_pull_request(&mut store, &claim, "run-1", &verification.head);
+        store
+            .start_gardener_verification(
+                &claim,
+                "run-1",
+                "/tmp/verification",
+                &verification.head,
+                1_011,
+            )
+            .unwrap();
+        assert_record(&mut store, &claim, &verification, 1_011);
+        assert!(matches!(
+            store.record_gardener_turn_manifest(&claim, &implementation, 1_011),
+            Err(StoreError::Conflict(_))
+        ));
+        assert!(store.connection.execute("UPDATE gardener_run_events SET details_json = '{}' WHERE event_type LIKE '%turn_manifest_recorded'", []).is_err());
+        assert!(store.connection.execute("DELETE FROM gardener_run_events WHERE event_type LIKE '%turn_manifest_recorded'", []).is_err());
+        drop(store);
+        let store = Store::open_compatible(&path).unwrap();
+        assert_eq!(
+            store
+                .gardener_turn_manifest("run-1", GardenerTurnKind::Implementation)
+                .unwrap(),
+            Some(implementation)
+        );
+        assert_eq!(
+            store
+                .gardener_turn_manifest("run-1", GardenerTurnKind::Verification)
+                .unwrap(),
+            Some(verification)
+        );
     }
 
     #[test]

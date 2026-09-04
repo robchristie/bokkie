@@ -153,6 +153,32 @@ Publication is an evidence sequence, not an assertion in a pull-request body:
 Ready status is not merge authority. The gardener never merges, deploys,
 releases, or restarts Bokkie.
 
+### Reproducibility evidence
+
+Before each inspection, implementation or verification Codex session starts,
+Store commits a typed turn manifest into the existing append-only gardener
+event stream. It binds the inspection or run, original source, exact execution
+head, exact prompt and output-schema digests, running Bokkie binary SHA-256,
+observed executable identities and versions, sandbox and environment-policy
+digests, and fixed candidate-check commands. Store requires the current claim
+and pre-execution phase, rejects changed manifests, and retains these events
+after worktree cleanup. Verification has its own prompt/schema identity and
+candidate head; it cannot inherit the implementation prompt identity.
+
+The original run manifest remains available for compatibility. Deterministic
+candidate-check results remain with the exact-head candidate qualification,
+including each invocation, executable identity, duration, status and bounded
+output evidence. The run links those results to its pre-execution build,
+environment and declared command manifest.
+
+The optional CLI profile and model labels retain their documented narrative
+meaning. Turn manifests call them `declared_codex_profile` and
+`declared_codex_model`, separately from actual request overrides, which are
+absent. Neither a label nor an absent override proves Codex's effective default
+model or profile configuration; that configuration is not observed by this
+client. Recorded identities support tracing an execution, but do not claim
+that a model turn can be reproduced deterministically.
+
 ## Residual limits
 
 These controls do not make the local single-user HTTP API authenticated, prove
