@@ -1,6 +1,9 @@
 use std::{sync::mpsc::Sender, time::Duration};
 
-use bokkie_operator_api::{ActionPrecondition, ObligationTopic, OperatorSnapshot};
+use bokkie_operator_api::{
+    API_CONTRACT_VERSION, ActionPrecondition, BOKKIE_BUILD_ID, ObligationTopic, OperatorSnapshot,
+    SUPPORTED_SCHEMA_VERSION, ServiceIdentity, SessionBootstrap,
+};
 use eframe::egui;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -20,6 +23,7 @@ pub struct ActionRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApiRequest {
+    Bootstrap,
     Snapshot,
     Topic {
         obligation_id: String,
@@ -30,6 +34,7 @@ pub enum ApiRequest {
 
 #[derive(Debug)]
 pub enum ApiPayload {
+    Bootstrap(ApiSession),
     Snapshot(OperatorSnapshot),
     Topic(ObligationTopic),
     ActionAccepted,
@@ -38,14 +43,57 @@ pub enum ApiPayload {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApiFailure {
     Conflict(String),
+    SessionChanged(String),
     Other(String),
 }
 
 impl std::fmt::Display for ApiFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Conflict(message) | Self::Other(message) => formatter.write_str(message),
+            Self::Conflict(message) | Self::SessionChanged(message) | Self::Other(message) => {
+                formatter.write_str(message)
+            }
         }
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct ApiSession {
+    service: ServiceIdentity,
+    mutation_token: String,
+}
+
+impl std::fmt::Debug for ApiSession {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ApiSession")
+            .field("service", &self.service)
+            .field("mutation_token", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl ApiSession {
+    fn from_bootstrap(bootstrap: SessionBootstrap) -> Result<Self, ApiFailure> {
+        validate_compatibility(&bootstrap.service)?;
+        if bootstrap.mutation_token.len() != 64
+            || !bootstrap
+                .mutation_token
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(ApiFailure::Other(
+                "Bokkie returned an invalid mutation session".to_owned(),
+            ));
+        }
+        Ok(Self {
+            service: bootstrap.service,
+            mutation_token: bootstrap.mutation_token,
+        })
+    }
+
+    fn matches(&self, service: &ServiceIdentity) -> bool {
+        self.service == *service
     }
 }
 
@@ -89,30 +137,70 @@ impl Transport {
         Self {}
     }
 
-    pub fn send(&self, request: ApiRequest, sender: Sender<ApiMessage>, context: egui::Context) {
-        let endpoint = self.endpoint(&request);
-        let mut http = match &request {
-            ApiRequest::Snapshot | ApiRequest::Topic { .. } => ehttp::Request::get(endpoint),
-            ApiRequest::Act(action) => {
-                let body = action_body(action);
-                let mut request = ehttp::Request::post(endpoint, body);
-                request.headers.insert("Content-Type", "application/json");
-                request
+    pub fn send(
+        &self,
+        request: ApiRequest,
+        session: Option<&ApiSession>,
+        sender: Sender<ApiMessage>,
+        context: egui::Context,
+    ) {
+        let mut http = match self.http_request(&request, session) {
+            Ok(http) => http,
+            Err(error) => {
+                let _ = sender.send(ApiMessage {
+                    request,
+                    result: Err(error),
+                });
+                context.request_repaint();
+                return;
             }
         };
         http.timeout = Some(Duration::from_secs(5));
         http.headers.insert("Accept", "application/json");
+        let expected_session = session.cloned();
         ehttp::fetch(http, move |response| {
             let result = response
                 .map_err(|error| ApiFailure::Other(error.to_string()))
-                .and_then(|response| decode(&request, response));
+                .and_then(|response| decode(&request, response, expected_session.as_ref()));
             let _ = sender.send(ApiMessage { request, result });
             context.request_repaint();
         });
     }
 
+    fn http_request(
+        &self,
+        request: &ApiRequest,
+        session: Option<&ApiSession>,
+    ) -> Result<ehttp::Request, ApiFailure> {
+        let endpoint = self.endpoint(request);
+        match request {
+            ApiRequest::Bootstrap | ApiRequest::Snapshot | ApiRequest::Topic { .. } => {
+                Ok(ehttp::Request::get(endpoint))
+            }
+            ApiRequest::Act(action) => {
+                let session = session.ok_or_else(|| {
+                    ApiFailure::SessionChanged(
+                        "A current Bokkie mutation session is required".to_owned(),
+                    )
+                })?;
+                let body = action_body(action);
+                let mut request = ehttp::Request::new(
+                    ehttp::Method::POST,
+                    endpoint,
+                    &[("Content-Type", "application/json")],
+                )
+                .with_body(body);
+                request
+                    .headers
+                    .insert("X-Bokkie-Mutation-Token", &session.mutation_token);
+                Ok(request)
+            }
+        }
+    }
+
     fn endpoint(&self, request: &ApiRequest) -> String {
         let path = match request {
+            ApiRequest::Bootstrap => "/bootstrap".to_owned(),
             ApiRequest::Snapshot => "/operator/snapshot".to_owned(),
             ApiRequest::Topic { obligation_id, .. } => format!(
                 "/operator/obligations/{}/topic",
@@ -172,24 +260,53 @@ fn action_endpoint(request: &ActionRequest) -> String {
     }
 }
 
-fn decode(request: &ApiRequest, response: ehttp::Response) -> Result<ApiPayload, ApiFailure> {
+fn decode(
+    request: &ApiRequest,
+    response: ehttp::Response,
+    expected_session: Option<&ApiSession>,
+) -> Result<ApiPayload, ApiFailure> {
     if !response.ok {
-        let message = serde_json::from_slice::<ErrorEnvelope>(&response.bytes)
-            .map(|body| body.error.message)
+        let (code, message) = serde_json::from_slice::<ErrorEnvelope>(&response.bytes)
+            .map(|body| (Some(body.error.code), body.error.message))
             .unwrap_or_else(|_| {
-                format!(
-                    "request failed with HTTP {} {}",
-                    response.status, response.status_text
+                (
+                    None,
+                    format!(
+                        "request failed with HTTP {} {}",
+                        response.status, response.status_text
+                    ),
                 )
             });
-        return if response.status == 409 {
-            Err(ApiFailure::Conflict(message))
-        } else {
-            Err(ApiFailure::Other(message))
+        return match (response.status, code.as_deref()) {
+            (409, _) => Err(ApiFailure::Conflict(message)),
+            (403, Some("mutation_token_required" | "mutation_token_invalid")) => {
+                Err(ApiFailure::SessionChanged(message))
+            }
+            _ => Err(ApiFailure::Other(message)),
         };
     }
     match request {
-        ApiRequest::Snapshot => decode_json(&response).map(ApiPayload::Snapshot),
+        ApiRequest::Bootstrap => decode_json::<SessionBootstrap>(&response)
+            .and_then(ApiSession::from_bootstrap)
+            .map(ApiPayload::Bootstrap),
+        ApiRequest::Snapshot => decode_json::<OperatorSnapshot>(&response).and_then(|snapshot| {
+            let service = snapshot.service.as_ref().ok_or_else(|| {
+                ApiFailure::SessionChanged(
+                    "Bokkie operator snapshot omitted its process identity".to_owned(),
+                )
+            })?;
+            let session = expected_session.ok_or_else(|| {
+                ApiFailure::SessionChanged(
+                    "Bokkie operator snapshot arrived without a bootstrap session".to_owned(),
+                )
+            })?;
+            if !session.matches(service) {
+                return Err(ApiFailure::SessionChanged(
+                    "Bokkie restarted or changed its API session".to_owned(),
+                ));
+            }
+            Ok(ApiPayload::Snapshot(snapshot))
+        }),
         ApiRequest::Topic { .. } => decode_json(&response).map(ApiPayload::Topic),
         ApiRequest::Act(_) => Ok(ApiPayload::ActionAccepted),
     }
@@ -219,12 +336,49 @@ struct ErrorEnvelope {
 
 #[derive(Deserialize)]
 struct ErrorBody {
+    code: String,
     message: String,
+}
+
+fn validate_compatibility(service: &ServiceIdentity) -> Result<(), ApiFailure> {
+    if service.build != BOKKIE_BUILD_ID
+        || service.api_contract_version != API_CONTRACT_VERSION
+        || service.schema_version != SUPPORTED_SCHEMA_VERSION
+    {
+        return Err(ApiFailure::Other(format!(
+            "Incompatible Bokkie service (build {}, API {}, schema {}); this UI requires build {}, API {}, schema {}",
+            service.build,
+            service.api_contract_version,
+            service.schema_version,
+            BOKKIE_BUILD_ID,
+            API_CONTRACT_VERSION,
+            SUPPORTED_SCHEMA_VERSION
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn service(session_id: &str) -> ServiceIdentity {
+        ServiceIdentity {
+            build: BOKKIE_BUILD_ID.to_owned(),
+            api_contract_version: API_CONTRACT_VERSION,
+            schema_version: SUPPORTED_SCHEMA_VERSION,
+            process_id: 42,
+            session_id: session_id.to_owned(),
+        }
+    }
+
+    fn session(session_id: &str, token: &str) -> ApiSession {
+        ApiSession::from_bootstrap(SessionBootstrap {
+            service: service(session_id),
+            mutation_token: token.to_owned(),
+        })
+        .unwrap()
+    }
 
     fn action(action: LifecycleAction) -> ApiRequest {
         ApiRequest::Act(Box::new(ActionRequest {
@@ -267,6 +421,10 @@ mod tests {
     fn endpoints_use_operator_reads_and_exact_lifecycle_paths() {
         let transport = Transport::new("http://127.0.0.1:7744/").unwrap();
         assert_eq!(
+            transport.endpoint(&ApiRequest::Bootstrap),
+            "http://127.0.0.1:7744/bootstrap"
+        );
+        assert_eq!(
             transport.endpoint(&ApiRequest::Snapshot),
             "http://127.0.0.1:7744/operator/snapshot"
         );
@@ -307,8 +465,78 @@ mod tests {
                 .to_vec(),
         };
         assert!(matches!(
-            decode(&action(LifecycleAction::Approve), response),
+            decode(&action(LifecycleAction::Approve), response, None),
             Err(ApiFailure::Conflict(message)) if message == "occurrence changed"
+        ));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn mutations_require_a_memory_only_session_and_submit_its_header() {
+        let transport = Transport::new("http://127.0.0.1:7744").unwrap();
+        let request = action(LifecycleAction::Cancel);
+        assert!(matches!(
+            transport.http_request(&request, None),
+            Err(ApiFailure::SessionChanged(_))
+        ));
+
+        let token = "a".repeat(64);
+        let session = session("session-one", &token);
+        let http = transport.http_request(&request, Some(&session)).unwrap();
+        assert_eq!(
+            http.headers.get("X-Bokkie-Mutation-Token"),
+            Some(token.as_str())
+        );
+        assert_eq!(http.headers.get("Content-Type"), Some("application/json"));
+        assert!(!format!("{session:?}").contains(&token));
+    }
+
+    #[test]
+    fn incompatible_bootstrap_and_restarted_snapshot_fail_closed() {
+        let mut incompatible = service("session-one");
+        incompatible.api_contract_version += 1;
+        assert!(matches!(
+            ApiSession::from_bootstrap(SessionBootstrap {
+                service: incompatible,
+                mutation_token: "a".repeat(64),
+            }),
+            Err(ApiFailure::Other(message)) if message.contains("Incompatible")
+        ));
+
+        let old_session = session("session-one", &"a".repeat(64));
+        let response = ehttp::Response {
+            url: "http://127.0.0.1:7744/operator/snapshot".to_owned(),
+            ok: true,
+            status: 200,
+            status_text: "OK".to_owned(),
+            headers: ehttp::Headers::default(),
+            bytes: serde_json::to_vec(&OperatorSnapshot {
+                captured_at: 100,
+                service: Some(service("session-two")),
+                obligations: Vec::new(),
+            })
+            .unwrap(),
+        };
+        assert!(matches!(
+            decode(&ApiRequest::Snapshot, response, Some(&old_session)),
+            Err(ApiFailure::SessionChanged(message)) if message.contains("restarted")
+        ));
+    }
+
+    #[test]
+    fn stale_token_error_is_classified_as_a_session_change() {
+        let response = ehttp::Response {
+            url: "http://127.0.0.1:7744/operator/obligations/id/cancel".to_owned(),
+            ok: false,
+            status: 403,
+            status_text: "Forbidden".to_owned(),
+            headers: ehttp::Headers::default(),
+            bytes: br#"{"error":{"code":"mutation_token_invalid","message":"acquire a current session"}}"#
+                .to_vec(),
+        };
+        assert!(matches!(
+            decode(&action(LifecycleAction::Cancel), response, None),
+            Err(ApiFailure::SessionChanged(message)) if message == "acquire a current session"
         ));
     }
 

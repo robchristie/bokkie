@@ -3,6 +3,38 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Version of the HTTP contract consumed by the bundled operator UI.
+pub const API_CONTRACT_VERSION: u32 = 1;
+/// Exact SQLite migration version understood by this build of the UI.
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 7;
+/// Stable package identity; the per-process session ID distinguishes restarts.
+pub const BOKKIE_BUILD_ID: &str = concat!("bokkie/", env!("CARGO_PKG_VERSION"));
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ServiceIdentity {
+    pub build: String,
+    pub api_contract_version: u32,
+    pub schema_version: i64,
+    pub process_id: u32,
+    pub session_id: String,
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SessionBootstrap {
+    pub service: ServiceIdentity,
+    pub mutation_token: String,
+}
+
+impl std::fmt::Debug for SessionBootstrap {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SessionBootstrap")
+            .field("service", &self.service)
+            .field("mutation_token", &"[REDACTED]")
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperatorObligationState {
@@ -175,6 +207,9 @@ pub struct OperatorObligation {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OperatorSnapshot {
     pub captured_at: i64,
+    /// HTTP handlers populate this process identity; Store-only projections omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<ServiceIdentity>,
     /// Genuine exceptions first, followed by operational state, wake/update and ID.
     pub obligations: Vec<OperatorObligation>,
 }

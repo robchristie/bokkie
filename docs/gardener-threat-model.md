@@ -13,6 +13,11 @@ The gardener may inspect and propose changes only for the registered canonical
 proposal before an implementation is eligible. The kernel service remains
 fake-only unless the gardener is explicitly enabled.
 
+The separate [local HTTP API threat model](http-api-threat-model.md) owns Host,
+browser Origin and per-process mutation-session controls. Those controls do not
+turn actor text into authentication or protect a mutation token from a
+malicious same-user process.
+
 ## Assets and trusted inputs
 
 Assets requiring protection are the operator database and audit trail, the

@@ -16,7 +16,7 @@ use bokkie::{
     ApprovalDecision, Completion, DbExecutor, GardenerCandidateQualification,
     GardenerVerificationVerdict, InspectionResult, NewGardenerImplementationRun,
     NewGardenerInspection, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
-    Store, http::router_with_ui_executor,
+    Store, http::router_with_ui_executor, http_security::ApiRuntime,
 };
 use uuid::Uuid;
 
@@ -73,6 +73,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tokio::net::TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
             .await?;
     let address = listener.local_addr()?;
+    let runtime = ApiRuntime::new(
+        address,
+        bokkie::migration_manifest().last().unwrap().version,
+    )
+    .map_err(|error| io::Error::other(format!("OS randomness unavailable: {error}")))?;
+    let service_identity = runtime.identity();
     println!(
         "{}",
         serde_json::json!({
@@ -81,12 +87,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "database_kind": "new_temporary_fixture",
             "gardener_runtime": false,
             "root": root.0,
+            "service": service_identity,
         })
     );
     io::stdout().flush()?;
     axum::serve(
         listener,
-        router_with_ui_executor(database_executor.clone(), ui_dir),
+        router_with_ui_executor(database_executor.clone(), ui_dir, runtime),
     )
     .with_graceful_shutdown(async {
         let _ = tokio::signal::ctrl_c().await;

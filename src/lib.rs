@@ -13,6 +13,7 @@ pub mod gardener;
 pub mod gardener_runner;
 pub mod git_workspace;
 pub mod http;
+pub mod http_security;
 pub mod migrations;
 pub mod operator;
 pub mod process;

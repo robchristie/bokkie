@@ -34,19 +34,29 @@ cargo run -p bokkie -- \
 ```
 
 Then open `http://127.0.0.1:7744/ui/`. The generated `web/pkg` directory is
-ignored. This arrangement adds no CORS policy, authentication change, proxy,
+ignored. This arrangement adds no CORS policy, multi-user authentication, proxy,
 non-loopback listener or second database path.
 
 ## Operate the workspace
 
 The workspace reads Bokkie's projected HTTP state; it never reads SQLite. On
-start, manual refresh and a bounded wake-up it requests a current snapshot.
+start it acquires the same-origin `/bootstrap` session, validates the Bokkie
+build/API/schema identity, retains the mutation token only in memory and then
+requests a current snapshot. Manual refresh and bounded wake-ups reuse that
+session.
 While refreshing it retains the last snapshot and a surviving selection and
 scroll position. A failed snapshot or selected-topic request marks retained
 data **Stale** and disables lifecycle decisions until a current snapshot is
 received. A `409` transition conflict similarly preserves the confirmation
 draft, refreshes current state, and requires the operator to review it before
 trying again. Responses for an older selected topic are discarded.
+
+A process restart, changed session identity or rejected token is a different
+failure: the UI clears the token and open confirmation, marks retained state
+stale, obtains a fresh bootstrap and snapshot, and requires a new review. It
+never automatically retries a mutation. Every action supplies the token only
+in `X-Bokkie-Mutation-Token`; the Store precondition remains a separate,
+additive concurrent-state check.
 
 Buttons reflect backend capabilities rather than UI-invented transitions. Each
 approve, reject, retry or cancel action opens a separate confirmation with its
@@ -61,8 +71,10 @@ source commit, source observation, source inspection and immutable prompt.
 Those identities are also part of the backend precondition. Submission is blocked
 if the reviewed state no longer matches the current snapshot, and the backend
 returns HTTP 409 if it changes before mutation. The actor is persisted audit
-evidence but is not authentication: this remains an unauthenticated loopback
-service.
+evidence but is not authentication. The mutation token protects the local
+loopback adapter against CSRF, DNS rebinding and stale sessions; it is not a
+user-authentication or authorisation system and does not protect against a
+malicious same-user process.
 
 The browser module deliberately has no configurable API origin. Serve it only
 from Bokkie's loopback `/ui/` route, using the same origin as its relative API

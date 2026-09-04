@@ -104,12 +104,13 @@ done
 jq -e '.ui_snapshot.nodes | any(.focused and (.actions | index("confirm_lifecycle_action")))' "$SNAPSHOT" >/dev/null
 
 curl --fail --silent "http://$ADDRESS/operator/snapshot" >"$RUNTIME/native-reviewed-snapshot.json"
+MUTATION_TOKEN="$(curl --fail --silent "http://$ADDRESS/bootstrap" | jq -er '.mutation_token')"
 jq '{
   precondition: (.obligations[] | select(.id == "approval-safe-cancel") | .capabilities.cancel.precondition),
   actor: "operator",
   note: null
 }' "$RUNTIME/native-reviewed-snapshot.json" >"$RUNTIME/native-action.json"
-curl --fail --silent --request POST \
+printf 'header = "X-Bokkie-Mutation-Token: %s"\n' "$MUTATION_TOKEN" | curl --config - --fail --silent --request POST \
   --header 'Content-Type: application/json' \
   --data-binary "@$RUNTIME/native-action.json" \
   "http://$ADDRESS/operator/obligations/approval-safe-cancel/cancel" \

@@ -1346,13 +1346,23 @@ fn http_json(
     path: &str,
     body: Option<Value>,
 ) -> Option<(u16, Value)> {
+    let mutation_token = (method == "POST")
+        .then(|| {
+            http_json(address, "GET", "/bootstrap", None)?.1["mutation_token"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .flatten();
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(100)).ok()?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
     let body = body.map(|value| value.to_string()).unwrap_or_default();
+    let token_header = mutation_token
+        .map(|token| format!("X-Bokkie-Mutation-Token: {token}\r\n"))
+        .unwrap_or_default();
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\n{token_header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(request.as_bytes()).ok()?;

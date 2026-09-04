@@ -258,6 +258,14 @@ impl AppModel {
         self.status = format!("{action_label} accepted; refreshing durable state");
     }
 
+    pub fn record_session_change(&mut self, message: &str) {
+        self.confirmation = None;
+        self.action_busy = false;
+        self.mark_stale(format!(
+            "Bokkie process session changed: {message}; review current state before deciding"
+        ));
+    }
+
     pub fn select(&mut self, obligation_id: String) -> bool {
         if self.selected_obligation.as_deref() == Some(&obligation_id) {
             return false;
@@ -540,6 +548,7 @@ mod tests {
         };
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
+            service: None,
             obligations: vec![
                 obligation("first", OperatorObligationState::Pending),
                 obligation("second", OperatorObligationState::Running),
@@ -556,6 +565,7 @@ mod tests {
         let mut model = AppModel::default();
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
+            service: None,
             obligations: vec![obligation("kept", OperatorObligationState::Pending)],
         });
         model.mark_stale("service disconnected");
@@ -603,6 +613,7 @@ mod tests {
         let mut model = AppModel::default();
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
+            service: None,
             obligations: vec![proposal],
         });
         model
@@ -665,6 +676,7 @@ mod tests {
         let mut model = AppModel::default();
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
+            service: None,
             obligations: vec![proposal.clone()],
         });
         model
@@ -703,6 +715,7 @@ mod tests {
         current.gardener_generation = Some(2);
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 121,
+            service: None,
             obligations: vec![proposal],
         });
 
@@ -727,6 +740,7 @@ mod tests {
         let mut model = AppModel::default();
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
+            service: None,
             obligations: states
                 .into_iter()
                 .enumerate()
@@ -750,6 +764,7 @@ mod tests {
         assert_eq!(model.connection, ConnectionState::Loading);
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
+            service: None,
             obligations: vec![approval],
         });
         model.begin_confirmation(LifecycleAction::Approve).unwrap();
@@ -770,6 +785,7 @@ mod tests {
         let mut model = AppModel::default();
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
+            service: None,
             obligations: vec![approval],
         });
         model.begin_confirmation(LifecycleAction::Approve).unwrap();
@@ -792,6 +808,7 @@ mod tests {
             .state_revision += 1;
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 121,
+            service: None,
             obligations: vec![refreshed],
         });
         let confirmation = model.confirmation.as_ref().unwrap();
@@ -806,10 +823,37 @@ mod tests {
     }
 
     #[test]
+    fn process_session_change_invalidates_confirmation_and_retains_snapshot_stale() {
+        let mut approval = obligation("approval", OperatorObligationState::AwaitingApproval);
+        approval.exception = Some(ExceptionReason::AwaitingApproval {
+            subject: ApprovalSubject::Generic,
+        });
+        approval.capabilities.approve =
+            capability(true, ActionConsequence::ScheduleCurrentOccurrence);
+        let mut model = AppModel::default();
+        model.apply_snapshot(OperatorSnapshot {
+            captured_at: 120,
+            service: None,
+            obligations: vec![approval],
+        });
+        model.begin_confirmation(LifecycleAction::Approve).unwrap();
+        model.action_busy = true;
+
+        model.record_session_change("service restarted");
+
+        assert!(model.confirmation.is_none());
+        assert_eq!(model.obligations()[0].id, "approval");
+        assert!(matches!(model.connection, ConnectionState::Stale { .. }));
+        assert!(!model.action_busy);
+        assert!(model.status.contains("decisions disabled"));
+    }
+
+    #[test]
     fn empty_database_becomes_current_and_disabled_reasons_are_observable() {
         let mut model = AppModel::default();
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
+            service: None,
             obligations: Vec::new(),
         });
         assert!(model.obligations().is_empty());
