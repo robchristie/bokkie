@@ -40,8 +40,8 @@ is not silently interpreted as permission to grant rights.
 |---|---|---|---|
 | R1 | Renewal targets at most one lease duration after the latest heartbeat; same-time renewal is a no-op; expired running work is not projected as active | Satisfied by P1 landing `8154ca4a5bc4c3aa0356cc74e3874544b4231296` | P1 |
 | R2 | Codex, Git, GitHub and future child processes share heartbeat, deadline, cancellation, process-tree termination, bounded output and typed outcomes; shutdown is bounded | Satisfied by P1 landing `8154ca4a5bc4c3aa0356cc74e3874544b4231296`; terminal fixture repair on PR #7 | P1 |
-| R3 | Child environments, executables, Git configuration, hooks and credentials are explicit and least-authority; exact Git metadata is revalidated before credential-bearing work | P2 candidate on PR #8 clears ambient state, binds tool identities, confines GitHub credentials and revalidates topology/origin/head immediately before mutation; unlanded and human-held | P2 |
-| R4 | Candidate checks and evidence precede draft-to-ready promotion; exact PR heads remain authoritative; CI protects candidate code without secrets or privilege | P2 candidate on PR #8 qualifies locally before push, records drafts, promotes only a passing re-observed head, and adds pinned read-only CI; unlanded and human-held | P2 |
+| R3 | Child environments, executables, Git configuration, hooks and credentials are explicit and least-authority; exact Git metadata is revalidated before credential-bearing work | P2 candidate on PR #8 clears ambient state, binds tool identities, rejects executable local Git configuration, confines GitHub credentials to mutations and revalidates topology/origin/head immediately before them; unlanded and human-held | P2 |
+| R4 | Candidate checks and evidence precede draft-to-ready promotion; exact PR heads remain authoritative; CI protects candidate code without secrets or privilege | P2 candidate on PR #8 qualifies a manifest-derived copy in a network-off OS sandbox before push, observes drafts without credentials, promotes only a passing re-observed head, and adds pinned token-cleared read-only CI; unlanded and human-held | P2 |
 | R5 | Approval selects an exact proposal generation and source observation; later source commits stale or supersede earlier instances; terminal goals may recur in later generations | Open: content fingerprint is reused forever and dispatch selects the latest observation | P3 |
 | R6 | Migrations run at startup, have immutable recorded digests and reject gaps/newer schemas; blocking DB work is isolated from async handlers; `doctor` reports integrity and reconciliation without repair | Open: every `Store::open` enters the migration loop and no doctor exists | P4 |
 | R7 | Snapshots are transactionally consistent and cursor-paginated with bounded queries, a global ordering envelope and an incremental change watermark | Open: histories are unbounded and topic projection globally loads then filters | P5 |
@@ -65,7 +65,7 @@ Only the next unblocked package is refined after each landing.
 |---|---|---|---|
 | P0 | Land this re-baselined programme checkpoint | `main` baseline above | Landed as [PR #5](https://github.com/robchristie/bokkie/pull/5) at `e8d3218433f97c8dfc542c80d0ac813d283d86b5` |
 | P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Landed as [PR #6](https://github.com/robchristie/bokkie/pull/6) at `8154ca4a5bc4c3aa0356cc74e3874544b4231296`; terminal fixture repair on [PR #7](https://github.com/robchristie/bokkie/pull/7) |
-| P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Human-held candidate on [PR #8](https://github.com/robchristie/bokkie/pull/8); implementation checkpoint `a6d12e76835cf406e584534ae3ba6b5c11c13272` |
+| P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Human-held candidate on [PR #8](https://github.com/robchristie/bokkie/pull/8); implementation checkpoint `a6d12e76835cf406e584534ae3ba6b5c11c13272`, first-review repair `1fd723745152aeece226769b24c902bc423eca83` |
 | P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Candidate |
 | P4 | Startup-only migration, manifest verification, DB executor/transactions, read-only doctor and reviewed local mutation protection | P3 schema | Candidate; security portion needs human review |
 | P5 | Fair execution lanes, paginated/incremental projections and global event envelope, with bounded fields and model-based lifecycle tests | P4 storage contract | Candidate |
@@ -92,13 +92,15 @@ remote-tracking references and live remote heads.
 
 P1 is terminal: its descendant-state fixture repair landed through PR #7 as
 `60535e6ecd5f882c17cce8a2f2222d7a190faa1e`. P2 is the active human-held
-candidate on PR #8. It consumes the P1 supervisor and has passed the pinned
-local canonical gate with fake executables, temporary repositories and fake
-credentials. Because it changes credential handling and consequential security
-policy, one independent exact-head review and green CI are required before the
-PR may be marked ready and escalated for explicit human merge authority. No
-real gardener, credential, deployment or repository-policy mutation is part of
-this package.
+candidate on PR #8. Its first exact-head review blocked unauthenticated `gh`
+observation, unisolated candidate code, executable local Git configuration and
+retained CI checkout credentials. The repair uses credential-free public API
+observation, a manifest-derived Bubblewrap boundary, fail-closed Git-config
+auditing and token-cleared CI. Local checks and representative real `curl` and
+Bubblewrap probes pass. The same reviewer must now re-review the final exact
+head and new CI must pass before the PR may be marked ready and escalated for
+explicit human merge authority. No real gardener, credential, deployment or
+repository-policy mutation is part of this package.
 
 ## Durable evidence
 
@@ -111,6 +113,8 @@ this package.
 | P1 descendant fixture repair | `670861e553d81f7c045f4d6607ac82326015afc4` | `2b4a511e74313908cc7df590b763b35bbe04ab15` | Descendant fixture passed 100 consecutive runs; 84 library, 1 CLI, 10 adapter and 21 attention-UI tests passed; Clippy and rustfmt passed | [PR #7](https://github.com/robchristie/bokkie/pull/7) |
 | P1 terminal repair landing | `7804e2bbbd0f9f52587c1ca274c2b347afc0fccc` | `60535e6ecd5f882c17cce8a2f2222d7a190faa1e` | PR #7 merged; starting P2 tree `36fadcfd643739730238f074de48eb3c8e8ea304` includes the repaired Linux terminal-state fixture | [PR #7](https://github.com/robchristie/bokkie/pull/7) |
 | P2 trust/publication implementation | `a6d12e76835cf406e584534ae3ba6b5c11c13272` | PR #8 terminal plan head | 90 library, 1 CLI and 10 adapter tests passed under Rust 1.85.0; locked Clippy, rustfmt and diff checks passed; deterministic fixtures cover hostile environment, tool replacement, Git topology, candidate manifests, failed-check publication denial, draft retention and pass-only promotion | [PR #8](https://github.com/robchristie/bokkie/pull/8) and `src/runtime_trust.rs`, `src/git_workspace.rs`, `src/gardener_runner.rs`, migration 0005 |
+| P2 first exact-head review | `c73c3976077351918934abaf36f1be53230901a6` | same | BLOCK: real `gh` could not observe a public PR unauthenticated; candidate checks lacked an OS boundary; local proxy/TLS Git config survived; checkout credentials persisted in CI | [Durable review verdict](https://github.com/robchristie/bokkie/pull/8#issuecomment-5534926481) |
+| P2 trust-boundary repair | `1fd723745152aeece226769b24c902bc423eca83` | PR #8 terminal plan head | 93 library, 1 CLI and 10 adapter tests passed; locked Clippy, rustfmt, diff and actionlint checks passed; real env-cleared public `curl` observation and Bubblewrap hostile-sentinel probes passed; worker-unit parsing reports only the expected absent local `/usr/bin/bokkie` | PR #8 repair diff and the first-review verdict above |
 
 ## Residual questions
 
