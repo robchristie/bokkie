@@ -43,12 +43,12 @@ is not silently interpreted as permission to grant rights.
 | R3 | Child environments, executables, Git configuration, hooks and credentials are explicit and least-authority; exact Git metadata is revalidated before credential-bearing work | Satisfied by P2 landing `9cf9329f374f545eccca596fd9df8a451a48a065` | P2 |
 | R4 | Candidate checks and evidence precede draft-to-ready promotion; exact PR heads remain authoritative; CI protects candidate code without secrets or privilege | Satisfied by P2 landing `9cf9329f374f545eccca596fd9df8a451a48a065` | P2 |
 | R5 | Approval selects an exact proposal generation and source observation; later source commits stale or supersede earlier instances; terminal goals may recur in later generations | Satisfied by P3 landing `9920006635c01cd266e6f2cd3a3546fe21747867` | P3 |
-| R6 | Migrations run at startup, have immutable recorded digests and reject gaps/newer schemas; blocking DB work is isolated from async handlers; `doctor` reports integrity and reconciliation without repair | P4a terminal candidate: independent review and exact-head CI pass; landing pending | P4a |
+| R6 | Migrations run at startup, have immutable recorded digests and reject gaps/newer schemas; blocking DB work is isolated from async handlers; `doctor` reports integrity and reconciliation without repair | Satisfied by P4a landing `87c8d42f1757c9656fbb010723b9e4bb1477dd69` | P4a |
 | R7 | Snapshots are transactionally consistent and cursor-paginated with bounded queries, a global ordering envelope and an incremental change watermark | Open: histories are unbounded and topic projection globally loads then filters | P5 |
 | R8 | Ordinary, gardener and future outbox work use fair, bounded lanes without starvation while preserving existing claim/lease fencing | Open: one gardener-first synchronous scheduler thread | P5 |
-| R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | P1 satisfies typed process outcomes and lease/process temporal tests; P2 adds durable tool/policy/check/tree manifests; P3 aligns Unicode model-field limits and tests proposal temporal properties; P4a–P5 remain | P1–P5 |
-| R10 | Mutation routes identify runtime/API/schema build, validate local request origin and use a per-process mutation secret without widening loopback exposure | Open; stale-state preconditions and same-origin topology already exist | P4; human review |
-| R11 | Large modules are split along established semantic ownership after contracts settle | P1 establishes `process` as supervision owner; P2 establishes `runtime_trust`; P3 retains proposal lifecycle ownership in Store while later package splits remain conditional | P1–P5 |
+| R9 | Failure disposition, invocation/check manifests, tool and policy identities, model-controlled field limits and lifecycle temporal properties are typed, persisted and executably tested | P1 satisfies typed process outcomes and lease/process temporal tests; P2 adds durable tool/policy/check/tree manifests; P3 aligns Unicode model-field limits and proposal temporal properties; P4a adds immutable schema manifests and diagnostic identities; P4b adds explicit build/API/schema/process identities; P5 model-based lane/projection properties remain | P1–P5 |
+| R10 | Mutation routes identify runtime/API/schema build, validate local request origin and use a per-process mutation secret without widening loopback exposure | P4b implementation is locally qualified and independently reviewed with exact-head CI; explicit human review and merge authority remain | P4b; human review |
+| R11 | Large modules are split along established semantic ownership after contracts settle | P1 establishes `process` as supervision owner; P2 establishes `runtime_trust`; P3 retains proposal lifecycle ownership in Store; P4a establishes `db_executor`; P4b establishes `http_security` while the UI transport owns ephemeral session acquisition; later P5 splits remain conditional | P1–P5 |
 | R12 | Toolchain and locked checks are pinned in CI; completed-plan claims are linted and reconciled; conditional licensing and live branch protection have explicit terminal decisions | P2 pins Rust 1.85.0 and locked canonical checks in read-only secret-free CI; plan linting, protection and licensing decisions remain for P6 | P2/P6 |
 
 Already-satisfied evidence that must be retained includes atomic Store-owned
@@ -67,8 +67,8 @@ Only the next unblocked package is refined after each landing.
 | P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Landed as [PR #6](https://github.com/robchristie/bokkie/pull/6) at `8154ca4a5bc4c3aa0356cc74e3874544b4231296`; terminal fixture repair on [PR #7](https://github.com/robchristie/bokkie/pull/7) |
 | P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Landed as [PR #8](https://github.com/robchristie/bokkie/pull/8) at `9cf9329f374f545eccca596fd9df8a451a48a065`; reviewed and landed tree `49fe98d01d6f8969be9f0bad19f815f31719b11e` |
 | P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Landed as [PR #9](https://github.com/robchristie/bokkie/pull/9) at `9920006635c01cd266e6f2cd3a3546fe21747867`; reviewed and landed tree `c844e629c88d363497eed5918e4f2553d941ac38` |
-| P4a | Startup-only migration, immutable manifest verification, bounded HTTP database execution, consistent read snapshots and read-only doctor | P3 schema | [PR #10](https://github.com/robchristie/bokkie/pull/10) independently passed at `45e7b9761b2d8ef19cddfa5b46589805abd22951`; landing pending; repair/adoption remains unauthorised |
-| P4b | Reviewed API mutation secret, local Host/Origin validation and runtime/API/schema build identity | P4a storage contract | Candidate; access-control policy requires human review before merge |
+| P4a | Startup-only migration, immutable manifest verification, bounded HTTP database execution, consistent read snapshots and read-only doctor | P3 schema | Landed as [PR #10](https://github.com/robchristie/bokkie/pull/10) at `87c8d42f1757c9656fbb010723b9e4bb1477dd69`; final reviewed and landed tree `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba` |
+| P4b | Reviewed API mutation secret, local Host/Origin validation and runtime/API/schema build identity | P4a storage contract | Human-held [PR #11](https://github.com/robchristie/bokkie/pull/11); local kernel, adapter, UI, Wasm and real-browser qualification plus implementation exact-head review/CI pass; explicit human merge authority remains |
 | P5 | Fair execution lanes, paginated/incremental projections and global event envelope, with bounded fields and model-based lifecycle tests | P4 storage contract | Candidate |
 | P6 | Exact-head aggregate qualification, plan reconciliation/linter, toolchain and repository-policy closeout | P1–P5 | Candidate; live branch protection/licence decision may need human review |
 
@@ -91,25 +91,23 @@ remote-tracking references and live remote heads.
 
 ## Current phase
 
-P3 is terminal through PR #9: independent review passed exact head
-`1f09350973632bb0fbdf9fd6c7e0103d6c21ed8b`, exact and post-merge CI passed,
-and squash merge `9920006635c01cd266e6f2cd3a3546fe21747867` retained reviewed tree
-`c844e629c88d363497eed5918e4f2553d941ac38`. P4 is refined into P4a storage
-integrity and P4b reviewed API security. P4a's terminal candidate records an
-immutable digest-bound schema manifest, gives process startup sole migration
-ownership, isolates HTTP SQLite work on a bounded owner thread and provides
-transactionally coherent diagnostic/operator reads plus a strictly read-only
-`doctor`. Deterministic migration, concurrency, shutdown, relational
-corruption, proposal-generation and external-reconciliation fixtures pass with
-131 library, 2 CLI and 12 adapter tests; locked all-feature Clippy, rustfmt and
-diff checks pass. The first review's repository-configured live-remote and torn
-multi-query projection findings are repaired with neutral HTTPS observation and
-one Store-owned proposal-instance snapshot. Independent review passed exact
-head `45e7b9761b2d8ef19cddfa5b46589805abd22951`, tree
-`7deadaa6eb8d46c8d54c80ba53c2ff47eb192960`; exact-head CI run `33851124272`
-passed. Final plan-only reconciliation and landing remain. P3 proposal authority
-is preserved; repair, adoption and external mutation remain outside this
-package.
+P4a is terminal through PR #10 at `87c8d42f1757c9656fbb010723b9e4bb1477dd69`:
+final exact-head review, exact and post-merge CI passed, and the reviewed and
+landed tree is `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba`. P4b now has one local
+candidate: a process-memory 256-bit mutation token delivered only by the
+same-origin bootstrap contract; exact Host and browser Origin/fetch validation;
+JSON and method fencing across every mutation route; build/API/schema/process
+identity; and browser/native session refresh that invalidates stale tokens and
+confirmations without retrying a mutation. Store-owned P3 occurrence, revision
+and exact proposal preconditions remain additive. Kernel, adapter and UI tests,
+native/Wasm builds and a real same-origin browser restart journey pass. No
+schema migration is needed. Access-control policy remains on the explicit
+`human-review-required` hold: retained qualification is tied to implementation
+revision `22abe68ac093cb16059cc52c89a9048b27f97c83`; independent security review
+passed on exact code/evidence head `6b3417c92beb9d503280a57a408f5463d6e6b22f`
+and exact-head CI run `33854712721` passed. Only terminal programme
+reconciliation follows that reviewed head. The human review and merge decision
+remain.
 
 ## Durable evidence
 
@@ -134,6 +132,9 @@ package.
 | P4a terminal candidate | P3 landed tree | terminal package branch | 131 library, 2 CLI and 12 adapter tests; locked all-feature Clippy, rustfmt and diff checks pass; temporary databases and repositories prove migrate-once compatibility, executor bounds, snapshot consistency, relational/source invariants and no doctor mutation | Migration, executor, doctor and adapter tests on the package branch |
 | P4a first exact-head review | `ff5871862e1df5bc0b16e6f29eb523e1bd7aeaf6` | same | BLOCK: live remote observation could honour hostile repository transport configuration; proposal-instance listing could combine multiple SQLite snapshots | [PR #10 review trajectory](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537425057) |
 | P4a repaired exact-head review | `45e7b9761b2d8ef19cddfa5b46589805abd22951` | same | Independent PASS; 131 library, 2 CLI and 12 adapter tests plus locked Clippy/rustfmt/diff passed; exact-head CI run `33851124272` passed | [PR #10 PASS evidence](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537523382) |
+| P4a reviewed landing | `0854d10ae9b05b569d8d56113d43bd55d6eebdbe` | `87c8d42f1757c9656fbb010723b9e4bb1477dd69` | Final plan-only review and exact/post-merge CI passed; reviewed and landed trees both `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba`; R6 and P4a portions of R9/R11 satisfied | [PR #10 terminal evidence](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537586056) |
+| P4b local access-control candidate | `87c8d42f1757c9656fbb010723b9e4bb1477dd69` | `22abe68ac093cb16059cc52c89a9048b27f97c83` | 139 library, 2 CLI, 12 adapter and 27 UI tests pass; locked Clippy/rustfmt/diff and native/Wasm builds pass; real same-origin browser/native fixtures prove restart rotation, rejected stale token, cleared confirmation, conditional mutation and retained audit evidence without retaining the token | [`docs/ui-qualification-evidence`](../../ui-qualification-evidence/README.md) and HTTP/UI focused tests |
+| P4b reviewed implementation | `22abe68ac093cb16059cc52c89a9048b27f97c83` | `6b3417c92beb9d503280a57a408f5463d6e6b22f` | Independent exact-head security review passed without findings; exact-head locked CI run `33854712721` passed; access-control policy remains held for explicit human review and merge authority | [PR #11](https://github.com/robchristie/bokkie/pull/11) |
 
 ## Residual questions
 

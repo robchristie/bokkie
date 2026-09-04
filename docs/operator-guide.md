@@ -1,9 +1,13 @@
 # Operator guide
 
-Bokkie is currently a single-user, local service. SQLite is authoritative and
-the HTTP interface has no authentication or authorisation. The executable
-therefore refuses a non-loopback bind. Do not place the API behind a public
-proxy, forward its port, or relax the loopback restriction.
+Bokkie is currently a single-user, local service. SQLite is authoritative. The
+HTTP interface has no user authentication or authorisation, but it does enforce
+a local request boundary: an exact loopback Host, same-origin browser metadata,
+and a per-process mutation token. The executable refuses a non-loopback bind.
+Do not place the API behind a proxy, forward its port, relax the loopback
+restriction or add a CORS exception. See the
+[local HTTP threat model](http-api-threat-model.md) before exposing an API
+client.
 
 The supplied fake runner is for kernel qualification. It does not perform
 external work and must not be mistaken for a production executor.
@@ -96,6 +100,15 @@ both forms are in [the application README](../apps/bokkie-attention-ui/README.md
 For browser use, build the Wasm assets, then start the existing service with
 `--ui-dir apps/bokkie-attention-ui/web` and open `/ui/` on that listener. Do
 not add a proxy, port forwarding, CORS policy or a non-loopback bind.
+
+Both UI builds first read `GET /bootstrap`. They retain its mutation token only
+in process memory and attach it as `X-Bokkie-Mutation-Token` on each action.
+The bootstrap, health and operator snapshot responses identify the Bokkie
+build, API contract, SQLite schema, operating-system process and process
+session. A restart rotates the token and session identity. A stale token or
+identity mismatch clears any open confirmation, refreshes bootstrap and state,
+and requires a new operator review; the UI never retries a mutation
+automatically.
 
 Use **Refresh** before acting if the state is not current. The workspace keeps
 the prior snapshot, selected obligation and context visible during refresh; a
@@ -275,14 +288,30 @@ never automatically merges, deploys, releases, or restarts Bokkie.
 
 ## HTTP API
 
-The API accepts and returns JSON. Errors use
+The API accepts and returns JSON. `GET /bootstrap` returns the process session
+identity and its 256-bit hexadecimal mutation token with `Cache-Control:
+no-store`. The secret is never persisted, logged, placed in a URL or copied
+into durable state. Every `POST`, including legacy bodyless retry/cancel and
+gardener routes, requires both `Content-Type: application/json` and the exact
+token in `X-Bokkie-Mutation-Token`. Non-browser/native clients may omit
+`Origin`; they still require the exact Host and mutation token. Browser
+requests must report the configured same origin, and cross-site/null/file
+origins or cross-site fetch metadata are rejected. `GET` and `HEAD` are the
+only non-mutating methods; there is no `OPTIONS`/CORS route.
+
+Errors use
 `{"error":{"code":"...","message":"..."}}` and distinguish invalid input
-(400 or 422), missing obligations (404), disallowed methods (405), transition
-conflicts (409), and internal storage errors (500).
+(400 or 422), forbidden origin/session requests (403), missing obligations
+(404), disallowed methods (405), wrong Host authorities (421), unsupported
+mutation content types (415), transition conflicts (409), and internal storage
+errors (500). Security errors never echo a supplied token.
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/bootstrap` | Acquire this process's API/session identity and mutation token |
 | `GET` | `/health` | Check that the database can be opened and read |
+| `GET` | `/operator/snapshot` | Read one coherent operator projection with service identity |
+| `GET` | `/operator/obligations/{id}/topic` | Read one obligation evidence timeline |
 | `POST` | `/obligations` | Create an obligation |
 | `GET` | `/obligations` | List obligations |
 | `GET` | `/obligations/{id}` | Show an obligation |
@@ -320,10 +349,14 @@ conflicts (409), and internal storage errors (500).
 
 Create fields correspond to the CLI flags, using snake case: `description` is
 required; `id` and `scheduled_at` are optional; recurrence fields must appear
-together. The established lifecycle routes retain their original contracts:
+together. The established lifecycle routes retain their original JSON body contracts:
 approval and rejection bodies require an `actor` and accept an optional `note`,
-while retry and cancellation may use an empty body. Gardener proposal decisions
-use the same legacy decision body.
+while retry and cancellation may use an empty body. Even an empty-body legacy
+mutation must declare `Content-Type: application/json` and carry the current
+mutation header, so it is a documented non-browser compatibility path rather
+than a browser simple-request path. The bundled browser UI uses only the
+conditional `/operator` routes. Gardener proposal decisions use the same
+legacy decision body.
 
 The conditional `/operator` mutation routes require every body to copy the
 `precondition` from that action's available capability in the latest
@@ -404,7 +437,7 @@ fails closed if its identity or version cannot be obtained. Do not remove the
 unit's user, mount or PID namespace allowance: it is required for the private
 Codex PID boundary as well as candidate checks.
 
-Current limitations include one scheduler worker, no authentication, no remote
+Current limitations include one scheduler worker, no user authentication, no remote
 exposure, no notification delivery, no automatic merge or deployment, and a
 coding-gardener runtime restricted to the canonical repository and explicit
 service opt-in. There is no supported destructive migration or downgrade path.

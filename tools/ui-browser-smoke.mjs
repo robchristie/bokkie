@@ -24,10 +24,11 @@ const json = value => JSON.stringify(
   2,
 );
 
-async function startFixture(variant) {
+async function startFixture(variant, port = null) {
   await stopFixture();
   fixture = spawn('target/debug/bokkie-ui-fixture', [
     '--ui-dir', 'apps/bokkie-attention-ui/web', '--variant', variant,
+    ...(port == null ? [] : ['--port', String(port)]),
   ], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
   fixture.stderr.setEncoding('utf8');
   let diagnostics = '';
@@ -261,11 +262,31 @@ try {
     prompt: state.interaction.confirmation_prompt,
     submitted: false,
   });
-  await clickAction(page, 'dismiss_lifecycle_confirmation');
-  await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
-    .interaction.confirmation_action == null
-      && !window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().ui_snapshot.nodes
-        .some(candidate => candidate.id === 'bokkie.lifecycle-confirmation'));
+
+  const firstSession = observations.states.full.fixture.service.session_id;
+  const restartPort = Number(observations.states.full.fixture.address.split(':').at(-1));
+  await stopFixture();
+  url = await startFixture('full', restartPort);
+  if (!url.endsWith(`:${restartPort}/ui/`)) throw new Error('fixture restart changed origin');
+  await clickAction(page, 'confirm_lifecycle_action');
+  await page.waitForFunction(firstSession => {
+    const state = window.__BOKKIE_ATTENTION_HANDLE.test_snapshot();
+    return state.interaction.confirmation_action == null
+      && state.interaction.connection === 'current'
+      && state.ui_snapshot.nodes.some(candidate => candidate.id === 'pane.1');
+  }, firstSession, { timeout: 15_000 });
+  state = audit(await snapshot(page), 'process restart session refresh');
+  observations.journeys.push({
+    name: 'process restart invalidates mutation session',
+    classification: 'direct rejected old-token submission followed by same-origin bootstrap and fresh snapshot',
+    old_session: firstSession,
+    new_session: observations.states.full.fixture.service.session_id,
+    confirmation_cleared: state.interaction.confirmation_action == null,
+    connection: state.interaction.connection,
+  });
+  if (firstSession === observations.states.full.fixture.service.session_id) {
+    throw new Error('fixture restart did not rotate its session identity');
+  }
 
   await clickId(page, 'bokkie.inbox-row.approval-safe-cancel');
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().interaction.selected_obligation
@@ -307,10 +328,14 @@ try {
     .some(candidate => candidate.enabled && candidate.actions.includes('confirm_lifecycle_action')));
   await page.evaluate(async () => {
     const snapshot = await (await fetch('/operator/snapshot')).json();
+    const bootstrap = await (await fetch('/bootstrap', { cache: 'no-store' })).json();
     const obligation = snapshot.obligations.find(item => item.id === 'attention-nonretryable');
     await fetch('/operator/obligations/attention-nonretryable/cancel', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Bokkie-Mutation-Token': bootstrap.mutation_token,
+      },
       body: JSON.stringify({
         precondition: obligation.capabilities.cancel.precondition,
         actor: '',
@@ -475,9 +500,10 @@ try {
     classification: 'direct failed same-origin fetch after fixture shutdown; app surface classification approximate',
   };
 
-  // A deliberate 409 is part of the stale-confirmation journey.
+  // Deliberate 403 and 409 responses are part of stale-session/state journeys.
   for (let index = unexpected.length - 1; index >= 0; index -= 1) {
-    if (unexpected[index].includes('409 (Conflict)')) {
+    if (unexpected[index].includes('409 (Conflict)')
+        || unexpected[index].includes('403 (Forbidden)')) {
       unexpected.splice(index, 1);
     }
   }

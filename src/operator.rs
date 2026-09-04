@@ -59,6 +59,7 @@ impl Store {
         obligations.sort_by_key(operator_sort_key);
         Ok(OperatorSnapshot {
             captured_at,
+            service: None,
             obligations,
         })
     }

@@ -66,8 +66,13 @@ proposal generation. The stable goal fingerprint remains a catalogue identity;
 decisions and dispatch use the proposal instance, source observation, commit and
 generation.
 
-`serve` runs the scheduler and unauthenticated HTTP API together and refuses
-non-loopback binding. It remains fake-only unless the operator supplies
+`serve` runs the scheduler and local HTTP API together and refuses non-loopback
+binding. Every request must name the exact configured literal loopback
+authority. Browser requests must also be same-origin, and every HTTP mutation
+requires a high-entropy per-process token obtained from the same-origin
+`/bootstrap` contract. This is CSRF and DNS-rebinding protection for a local
+single-user service, not user authentication or authorisation. It remains
+fake-only unless the operator supplies
 `--enable-coding-gardener` and an existing absolute
 `--gardener-worktree-root`. Enabling the runtime does not register a checkout,
 approve work, merge a pull request, deploy, or restart Bokkie.
@@ -94,8 +99,11 @@ HTTP projections; it never opens SQLite directly and cannot create a second
 state path. It shows the exception inbox, obligation ledger and selected
 evidence timeline, while offering only actions that the backend declares legal.
 Native builds use a literal loopback HTTP base. Browser builds use relative API
-paths and must be served by this same loopback Bokkie origin at `/ui/`; there is
-no CORS exception, proxy, authentication layer or remote-access mode.
+paths and must be served by this same loopback Bokkie origin at `/ui/`.
+Browser and native transports bootstrap a process session in memory, attach its
+token only as `X-Bokkie-Mutation-Token`, and discard stale tokens and
+confirmations when Bokkie restarts or its identity is incompatible. There is no
+CORS exception, proxy, multi-user authentication layer or remote-access mode.
 
 Every lifecycle action requires a separate confirmation. Gardener decisions
 also display and submit the stable goal fingerprint, exact immutable proposal
@@ -114,3 +122,8 @@ known accessibility/rendering limits, are in the [attention UI README](apps/bokk
 The UI remains a local single-user operator tool: it does not add authentication,
 notifications, remote access, automatic gardener execution, merge, deployment
 or release authority.
+
+The [local HTTP threat model](docs/http-api-threat-model.md) defines the exact
+Host, Origin, mutation-token and restart boundaries. In particular, the token
+does not protect against a malicious process already running as the same local
+user.

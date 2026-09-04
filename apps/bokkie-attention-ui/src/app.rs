@@ -31,7 +31,9 @@ use crate::{
         LifecycleAction, OBLIGATIONS_PANE_ID, OperatorStateLabel, StateFilter, TIMELINE_PANE_ID,
         consequence_label, operator_workspace,
     },
-    transport::{ActionRequest, ApiFailure, ApiMessage, ApiPayload, ApiRequest, Transport},
+    transport::{
+        ActionRequest, ApiFailure, ApiMessage, ApiPayload, ApiRequest, ApiSession, Transport,
+    },
     ui_observation::{
         InteractionObservation, TestSnapshot, VirtualisationObservation, finish_snapshot, root_node,
     },
@@ -204,6 +206,7 @@ pub struct AttentionApp {
     dock: DockBehaviour,
     model: AppModel,
     transport: Option<Transport>,
+    session: Option<ApiSession>,
     sender: Sender<ApiMessage>,
     receiver: Receiver<ApiMessage>,
     preferences: UiPreferences,
@@ -245,6 +248,7 @@ impl AttentionApp {
             dock: DockBehaviour::default(),
             model,
             transport,
+            session: None,
             sender,
             receiver,
             preferences,
@@ -254,7 +258,7 @@ impl AttentionApp {
             last_test_snapshot: TestSnapshot::default(),
             test_observer,
         };
-        app.dispatch(ApiRequest::Snapshot, &creation.egui_ctx);
+        app.dispatch(ApiRequest::Bootstrap, &creation.egui_ctx);
         app
     }
 
@@ -281,16 +285,26 @@ impl AttentionApp {
             return;
         };
         match &request {
+            ApiRequest::Bootstrap => self.model.snapshot_busy = true,
             ApiRequest::Snapshot => self.model.snapshot_busy = true,
             ApiRequest::Topic { .. } => self.model.topic_busy = true,
             ApiRequest::Act(_) => self.model.action_busy = true,
         }
-        transport.send(request, self.sender.clone(), context.clone());
+        transport.send(
+            request,
+            self.session.as_ref(),
+            self.sender.clone(),
+            context.clone(),
+        );
     }
 
     fn poll_transport(&mut self, context: &egui::Context) {
         while let Ok(message) = self.receiver.try_recv() {
             match (message.request, message.result) {
+                (ApiRequest::Bootstrap, Ok(ApiPayload::Bootstrap(session))) => {
+                    self.session = Some(session);
+                    self.dispatch(ApiRequest::Snapshot, context);
+                }
                 (ApiRequest::Snapshot, Ok(ApiPayload::Snapshot(snapshot))) => {
                     let poll = poll_delay(&snapshot);
                     self.model.apply_snapshot(snapshot);
@@ -321,6 +335,18 @@ impl AttentionApp {
                 (ApiRequest::Act(_), Err(ApiFailure::Conflict(message))) => {
                     self.model.record_transition_conflict(&message);
                     self.dispatch(ApiRequest::Snapshot, context);
+                }
+                (_, Err(ApiFailure::SessionChanged(message))) => {
+                    self.session = None;
+                    self.model.record_session_change(&message);
+                    self.next_poll_at = None;
+                    self.dispatch(ApiRequest::Bootstrap, context);
+                }
+                (ApiRequest::Bootstrap, Err(error)) => {
+                    self.session = None;
+                    self.model
+                        .mark_stale(format!("Session bootstrap failed: {error}"));
+                    self.next_poll_at = Some(Instant::now() + RECONNECT_DELAY);
                 }
                 (ApiRequest::Snapshot, Err(error)) => {
                     self.model
@@ -364,7 +390,12 @@ impl AttentionApp {
         let now = Instant::now();
         if now >= deadline && !self.model.snapshot_busy && !self.model.action_busy {
             self.next_poll_at = None;
-            self.dispatch(ApiRequest::Snapshot, context);
+            let request = if self.session.is_some() {
+                ApiRequest::Snapshot
+            } else {
+                ApiRequest::Bootstrap
+            };
+            self.dispatch(request, context);
         } else if deadline > now {
             context.request_repaint_after(deadline.duration_since(now));
         }
@@ -392,7 +423,12 @@ impl AttentionApp {
             match intent {
                 OperatorIntent::Refresh => {
                     self.next_poll_at = None;
-                    self.dispatch(ApiRequest::Snapshot, context);
+                    let request = if self.session.is_some() {
+                        ApiRequest::Snapshot
+                    } else {
+                        ApiRequest::Bootstrap
+                    };
+                    self.dispatch(request, context);
                 }
                 OperatorIntent::Select {
                     obligation_id,
@@ -2228,6 +2264,7 @@ mod tests {
         assert_eq!(
             poll_delay(&OperatorSnapshot {
                 captured_at: 100,
+                service: None,
                 obligations: vec![late, early]
             }),
             Duration::from_secs(3)
@@ -2235,6 +2272,7 @@ mod tests {
         assert_eq!(
             poll_delay(&OperatorSnapshot {
                 captured_at: 100,
+                service: None,
                 obligations: vec![fixture(3)]
             }),
             Duration::from_secs(10)
@@ -2242,6 +2280,7 @@ mod tests {
         assert_eq!(
             poll_delay(&OperatorSnapshot {
                 captured_at: 100,
+                service: None,
                 obligations: Vec::new()
             }),
             POLL_MAX

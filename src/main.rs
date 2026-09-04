@@ -16,6 +16,7 @@ use bokkie::{
     GardenerRuntimeConfig, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
     Store, StoreError, SystemClock, UnixClock,
     http::{error_json, router_with_executor, router_with_ui_executor, validate_loopback},
+    http_security::ApiRuntime,
     migration_manifest, run_doctor,
     runtime_trust::{ChildEnvironment, GitHubCredential},
     service::{Scheduler, SchedulerConfig, SchedulerError, ServiceFakeOutcome},
@@ -762,6 +763,12 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
     // process that immediately fails service start-up or mutate its database.
     let listener = tokio::net::TcpListener::bind(options.bind).await?;
     let local_address = listener.local_addr()?;
+    let api_runtime = ApiRuntime::new(local_address, migration_manifest().last().unwrap().version)
+        .map_err(|error| {
+            AppError::Io(io::Error::other(format!(
+                "could not generate the per-process HTTP mutation secret: {error}"
+            )))
+        })?;
 
     // This is the service's sole migration step. Long-lived consumers below
     // only accept an already current immutable manifest.
@@ -857,8 +864,10 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
     );
 
     let application = match options.ui_dir {
-        Some(ui_dir) => router_with_ui_executor(database_executor.clone(), ui_dir),
-        None => router_with_executor(database_executor.clone()),
+        Some(ui_dir) => {
+            router_with_ui_executor(database_executor.clone(), ui_dir, api_runtime.clone())
+        }
+        None => router_with_executor(database_executor.clone(), api_runtime),
     };
     let server_result = axum::serve(listener, application)
         .with_graceful_shutdown(shutdown_signal(stop, scheduler_exit))
