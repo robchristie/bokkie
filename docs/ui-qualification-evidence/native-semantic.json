@@ -1,7 +1,7 @@
 {
-  "frame_number": 43,
+  "frame_number": 36,
   "ui_snapshot": {
-    "frame": 43,
+    "frame": 36,
     "pixels_per_point": 1.0,
     "root": "application",
     "nodes": [
@@ -99,7 +99,7 @@
         "id": "bokkie.inbox-row.approval-safe-cancel",
         "parent": "pane.1",
         "role": "result_row",
-        "name": "Safe temporary approval-bound lifecycle action\nAwaiting a generic operator decision\napproval-safe-cancel · occurrence 1 · 15h ago\nSchedule the current occurrence or Move the current occurrence to attention or Permanently cancel this obligation · current",
+        "name": "Safe temporary approval-bound lifecycle action\nAwaiting a generic operator decision\napproval-safe-cancel · occurrence 1 · 1d ago\nSchedule the current occurrence or Move the current occurrence to attention or Permanently cancel this obligation · current",
         "description": null,
         "rect": {
           "min_x": 0.0,
@@ -121,7 +121,7 @@
         "id": "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
         "parent": "pane.1",
         "role": "result_row",
-        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nAwaiting an exact gardener proposal decision · d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · occurrence 1 · 15h ago\nPermanently cancel this obligation or Schedule implementation of this exact immutable proposal or Reject this exact immutable proposal into attention · current",
+        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nAwaiting exact gardener proposal instance pi:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f:1111111111111111111111111111111111111111:1 · generation 1 · goal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · occurrence 1 · 1d ago\nPermanently cancel this obligation or Schedule implementation of this exact immutable proposal or Reject this exact immutable proposal into attention · current",
         "description": null,
         "rect": {
           "min_x": 0.0,
@@ -143,7 +143,7 @@
         "id": "bokkie.inbox-row.attention-exhausted",
         "parent": "pane.1",
         "role": "result_row",
-        "name": "Representative attention-exhausted state\nRetry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-exhausted · occurrence 1 · 15h ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "name": "Representative attention-exhausted state\nRetry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-exhausted · occurrence 1 · 1d ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
         "description": null,
         "rect": {
           "min_x": 0.0,
@@ -187,7 +187,7 @@
         "id": "bokkie.obligation-row.approval-safe-cancel",
         "parent": "pane.2",
         "role": "result_row",
-        "name": "Safe temporary approval-bound lifecycle action\napproval-safe-cancel · Awaiting approval · occurrence 1 · attempts 0/3\nHuman attention: Awaiting a generic operator decision\nOne-off\nError: No last error · Evidence: No last evidence · updated 15h ago",
+        "name": "Safe temporary approval-bound lifecycle action\napproval-safe-cancel · Awaiting approval · occurrence 1 · attempts 0/3\nHuman attention: Awaiting a generic operator decision\nOne-off\nError: No last error · Evidence: No last evidence · updated 1d ago",
         "description": null,
         "rect": {
           "min_x": 343.0,
@@ -209,7 +209,7 @@
         "id": "bokkie.obligation-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
         "parent": "pane.2",
         "role": "result_row",
-        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · Awaiting approval · occurrence 1 · attempts 0/1\nHuman attention: Awaiting an exact gardener proposal decision · d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nOne-off\nError: No last error · Evidence: No last evidence · updated 15h ago",
+        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · Awaiting approval · occurrence 1 · attempts 0/1\nHuman attention: Awaiting exact gardener proposal instance pi:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f:1111111111111111111111111111111111111111:1 · generation 1 · goal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nOne-off\nError: No last error · Evidence: No last evidence · updated 1d ago",
         "description": null,
         "rect": {
           "min_x": 343.0,
@@ -231,7 +231,7 @@
         "id": "bokkie.obligation-row.attention-exhausted",
         "parent": "pane.2",
         "role": "result_row",
-        "name": "Representative attention-exhausted state\nattention-exhausted · Attention · occurrence 1 · attempts 1/1\nHuman attention: Retry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nOne-off\nError: Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee · Evidence: evidence:attention-exhausted:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff · updated 15h ago",
+        "name": "Representative attention-exhausted state\nattention-exhausted · Attention · occurrence 1 · attempts 1/1\nHuman attention: Retry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nOne-off\nError: Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee · Evidence: evidence:attention-exhausted:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff · updated 1d ago",
         "description": null,
         "rect": {
           "min_x": 343.0,
@@ -730,7 +730,7 @@
         "painted_rect": {
           "min_x": 7.0,
           "min_y": 229.34375,
-          "max_x": 316.5625,
+          "max_x": 309.40625,
           "max_y": 244.34375
         },
         "clip_rect": {
@@ -832,7 +832,7 @@
         "painted_rect": {
           "min_x": 7.0,
           "min_y": 348.35938,
-          "max_x": 328.9375,
+          "max_x": 255.96875,
           "max_y": 384.35938
         },
         "clip_rect": {
@@ -1002,7 +1002,7 @@
         "painted_rect": {
           "min_x": 7.0,
           "min_y": 551.03125,
-          "max_x": 316.53125,
+          "max_x": 309.375,
           "max_y": 566.03125
         },
         "clip_rect": {
@@ -1345,7 +1345,7 @@
         "painted_rect": {
           "min_x": 350.0,
           "min_y": 297.32812,
-          "max_x": 727.4375,
+          "max_x": 720.28125,
           "max_y": 315.32812
         },
         "clip_rect": {
@@ -1447,7 +1447,7 @@
         "painted_rect": {
           "min_x": 350.0,
           "min_y": 420.9375,
-          "max_x": 780.9375,
+          "max_x": 779.9375,
           "max_y": 435.9375
         },
         "clip_rect": {
@@ -1515,7 +1515,7 @@
         "painted_rect": {
           "min_x": 350.0,
           "min_y": 473.32812,
-          "max_x": 727.4375,
+          "max_x": 720.28125,
           "max_y": 491.32812
         },
         "clip_rect": {
@@ -2318,7 +2318,7 @@
         "painted_rect": {
           "min_x": 967.56,
           "min_y": 396.73438,
-          "max_x": 1125.435,
+          "max_x": 1118.2788,
           "max_y": 411.73438
         },
         "clip_rect": {

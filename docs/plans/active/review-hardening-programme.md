@@ -102,8 +102,9 @@ confirmations without retrying a mutation. Store-owned P3 occurrence, revision
 and exact proposal preconditions remain additive. Kernel, adapter and UI tests,
 native/Wasm builds and a real same-origin browser restart journey pass. No
 schema migration is needed. Access-control policy remains on the explicit
-`human-review-required` hold: commit identity, independent exact-head security
-review, CI and the human merge decision remain.
+`human-review-required` hold: retained qualification is tied to implementation
+revision `22abe68ac093cb16059cc52c89a9048b27f97c83`; independent exact-head
+security review, CI and the human merge decision remain.
 
 ## Durable evidence
 
@@ -129,6 +130,7 @@ review, CI and the human merge decision remain.
 | P4a first exact-head review | `ff5871862e1df5bc0b16e6f29eb523e1bd7aeaf6` | same | BLOCK: live remote observation could honour hostile repository transport configuration; proposal-instance listing could combine multiple SQLite snapshots | [PR #10 review trajectory](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537425057) |
 | P4a repaired exact-head review | `45e7b9761b2d8ef19cddfa5b46589805abd22951` | same | Independent PASS; 131 library, 2 CLI and 12 adapter tests plus locked Clippy/rustfmt/diff passed; exact-head CI run `33851124272` passed | [PR #10 PASS evidence](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537523382) |
 | P4a reviewed landing | `0854d10ae9b05b569d8d56113d43bd55d6eebdbe` | `87c8d42f1757c9656fbb010723b9e4bb1477dd69` | Final plan-only review and exact/post-merge CI passed; reviewed and landed trees both `0372ed9a79c1cc036ca306a0a12d34c47c0ad7ba`; R6 and P4a portions of R9/R11 satisfied | [PR #10 terminal evidence](https://github.com/robchristie/bokkie/pull/10#issuecomment-5537586056) |
+| P4b local access-control candidate | `87c8d42f1757c9656fbb010723b9e4bb1477dd69` | `22abe68ac093cb16059cc52c89a9048b27f97c83` | 139 library, 2 CLI, 12 adapter and 27 UI tests pass; locked Clippy/rustfmt/diff and native/Wasm builds pass; real same-origin browser/native fixtures prove restart rotation, rejected stale token, cleared confirmation, conditional mutation and retained audit evidence without retaining the token | [`docs/ui-qualification-evidence`](../../ui-qualification-evidence/README.md) and HTTP/UI focused tests |
 
 ## Residual questions
 

@@ -1,5 +1,5 @@
 {
-  "frame": "6",
+  "frame": "8",
   "pixels_per_point": 1,
   "root": "application",
   "nodes": [
@@ -91,7 +91,7 @@
       "id": "bokkie.obligation-row.large-00000",
       "parent": "pane.2",
       "role": "result_row",
-      "name": "Large deterministic ledger row 00000\nlarge-00000 · Pending · occurrence 1 · attempts 0/3\nFuture wake at Unix 2103741000\nOne-off\nError: No last error · Evidence: No last evidence · updated 15h ago",
+      "name": "Large deterministic ledger row 00000\nlarge-00000 · Pending · occurrence 1 · attempts 0/3\nFuture wake at Unix 2103741000\nOne-off\nError: No last error · Evidence: No last evidence · updated 1d ago",
       "rect": {
         "min_x": 385,
         "min_y": 174,
@@ -108,7 +108,7 @@
       "id": "bokkie.obligation-row.large-00001",
       "parent": "pane.2",
       "role": "result_row",
-      "name": "Large deterministic ledger row 00001\nlarge-00001 · Pending · occurrence 1 · attempts 0/3\nFuture wake at Unix 2103741001\nOne-off\nError: No last error · Evidence: No last evidence · updated 15h ago",
+      "name": "Large deterministic ledger row 00001\nlarge-00001 · Pending · occurrence 1 · attempts 0/3\nFuture wake at Unix 2103741001\nOne-off\nError: No last error · Evidence: No last evidence · updated 1d ago",
       "rect": {
         "min_x": 385,
         "min_y": 350,
@@ -125,7 +125,7 @@
       "id": "bokkie.obligation-row.large-00002",
       "parent": "pane.2",
       "role": "result_row",
-      "name": "Large deterministic ledger row 00002\nlarge-00002 · Pending · occurrence 1 · attempts 0/3\nFuture wake at Unix 2103741002\nOne-off\nError: No last error · Evidence: No last evidence · updated 15h ago",
+      "name": "Large deterministic ledger row 00002\nlarge-00002 · Pending · occurrence 1 · attempts 0/3\nFuture wake at Unix 2103741002\nOne-off\nError: No last error · Evidence: No last evidence · updated 1d ago",
       "rect": {
         "min_x": 385,
         "min_y": 526,
@@ -142,7 +142,7 @@
       "id": "bokkie.obligation-row.large-00003",
       "parent": "pane.2",
       "role": "result_row",
-      "name": "Large deterministic ledger row 00003\nlarge-00003 · Pending · occurrence 1 · attempts 0/3\nFuture wake at Unix 2103741003\nOne-off\nError: No last error · Evidence: No last evidence · updated 15h ago",
+      "name": "Large deterministic ledger row 00003\nlarge-00003 · Pending · occurrence 1 · attempts 0/3\nFuture wake at Unix 2103741003\nOne-off\nError: No last error · Evidence: No last evidence · updated 1d ago",
       "rect": {
         "min_x": 385,
         "min_y": 702,
@@ -700,7 +700,7 @@
       "painted_rect": {
         "min_x": 392,
         "min_y": 297.328125,
-        "max_x": 769.4375,
+        "max_x": 762.28125,
         "max_y": 315.328125
       },
       "clip_rect": {
@@ -860,7 +860,7 @@
       "painted_rect": {
         "min_x": 392,
         "min_y": 473.328125,
-        "max_x": 769.4375,
+        "max_x": 762.28125,
         "max_y": 491.328125
       },
       "clip_rect": {
@@ -1020,7 +1020,7 @@
       "painted_rect": {
         "min_x": 392,
         "min_y": 649.328125,
-        "max_x": 769.4375,
+        "max_x": 762.28125,
         "max_y": 667.328125
       },
       "clip_rect": {
@@ -1180,7 +1180,7 @@
       "painted_rect": {
         "min_x": 392,
         "min_y": 825.328125,
-        "max_x": 769.4375,
+        "max_x": 762.28125,
         "max_y": 843.328125
       },
       "clip_rect": {
@@ -1784,7 +1784,7 @@
       "painted_rect": {
         "min_x": 1087.300048828125,
         "min_y": 359.734375,
-        "max_x": 1245.175048828125,
+        "max_x": 1238.018798828125,
         "max_y": 374.734375
       },
       "clip_rect": {
