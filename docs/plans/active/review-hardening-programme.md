@@ -106,8 +106,13 @@ lane/failure state and Store action preconditions. The attention UI walks
 bounded initial pages, polls that watermark, refetches only affected projections
 and fails stale on gaps or session rotation. Deterministic Store, adapter and UI
 tests cover concurrent WAL reads, same-second streams, cursor tamper and limits,
-scoped 5,000-row histories and incremental browser/native journeys. Exact-head
-review, CI and landing are next; P6 then owns merged-main aggregate
+scoped 5,000-row histories and incremental browser/native journeys. The first
+exact-head review found incomplete gardener-decision invalidations, a production
+topic compatibility regression, an HTTP limit mismatch and a non-executable UI
+toolchain claim. The repair restores all ten API-v1 topic categories under
+bounded scoped SQL, derives exact decision identities, accepts the documented
+change limit and pins the separate UI compiler. Re-review, CI and landing are
+next; P6 then owns merged-main aggregate
 qualification, plan linting and the human-held repository-policy decisions.
 
 ## Durable evidence
@@ -146,7 +151,9 @@ qualification, plan linting and the human-held repository-policy decisions.
 | P5a plan-head CI review | `a595df9c48b1d3fdc01ab56c5df49d12ee2d0563` | same | BLOCK: exact-head CI run `33872508645` failed a pre-existing live installed-`gh` exit-status assertion; plan-only delta was accurate and no implementation regression was found | [Durable review verdict](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540414246) |
 | P5a deterministic-check repair | `fb38b5d1e4cf5daf5668f5a1e3e40fe3f84079fe` | terminal plan head | Live installed-`gh` behaviour is explicit-only; controlled credential stripping remains canonical. Locked canonical checks pass with 158 library tests and one explicit-only probe, 2 CLI and 13 adapter tests; the live probe also passes when requested; Clippy/rustfmt/diff pass | `src/git_workspace.rs` and PR #12 repair diff |
 | P5a reviewed landing | `94024ae2a9bb266bbfb9102105728fbde99671f8` | `b8bda7877e63d73780f04dafe097fb7425cccc7a` | Reviewed and landed tree `365b4c870e5d50ff48c1117092679a4719ff3b83`; exact-head and post-merge CI passed | [PR #12 terminal evidence](https://github.com/robchristie/bokkie/pull/12#issuecomment-5540503144) |
-| P5b integrated candidate | `14db6a5bcab9065f8b1c8579540439d088c01e8d` | terminal plan head | Schema v9/API v1; 175 library tests pass with one explicit-only probe ignored, plus 2 CLI, 14 adapter and 37 UI tests; locked Clippy/rustfmt/diff and native/Wasm/browser qualification pass | [PR #13](https://github.com/robchristie/bokkie/pull/13), `src/events.rs`, `src/pagination.rs` and [`docs/ui-qualification-evidence`](../../ui-qualification-evidence/README.md) |
+| P5b initial candidate | `14db6a5bcab9065f8b1c8579540439d088c01e8d` | `8b1a51659b357ff2973c260fee1b168795b9b26f` | Schema v9/API v1; locked canonical and UI qualification passed | [PR #13](https://github.com/robchristie/bokkie/pull/13) |
+| P5b first exact-head review | `8b1a51659b357ff2973c260fee1b168795b9b26f` | same | BLOCK: gardener decisions lacked exact invalidation IDs; production topic broke source identity and omitted v1 categories; HTTP limit and UI toolchain claims mismatched | [Durable review verdict](https://github.com/robchristie/bokkie/pull/13#issuecomment-5541733088) |
+| P5b compatibility repair | `4744b85f794a5d6df135afbc7c35c0d552cbe2f2` | terminal plan head | 177 library tests pass with one explicit-only probe ignored, plus 2 CLI, 14 adapter and 38 UI tests; locked Clippy/rustfmt/diff, native/Wasm builds and browser/native qualification pass | PR #13 repair diff, `src/events.rs`, `src/operator.rs`, `src/http.rs` and [`docs/ui-qualification-evidence`](../../ui-qualification-evidence/README.md) |
 
 ## Residual questions
 

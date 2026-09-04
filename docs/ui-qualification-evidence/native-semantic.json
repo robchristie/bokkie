@@ -1,7 +1,7 @@
 {
-  "frame_number": 50,
+  "frame_number": 49,
   "ui_snapshot": {
-    "frame": 50,
+    "frame": 49,
     "pixels_per_point": 1.0,
     "root": "application",
     "nodes": [
@@ -2229,7 +2229,7 @@
       {
         "component_id": {
           "kind": "section_heading",
-          "instance": 657549819534691308
+          "instance": 3957230077040081407
         },
         "parent_id": null,
         "role": "section_heading",
@@ -2263,11 +2263,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": 1315101838092639038
+          "instance": 7914457955056906392
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": 657550919046319519
+          "instance": 3957228977528453196
         },
         "role": "secondary",
         "horizontal_alignment": "start",
@@ -2300,11 +2300,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": 1315101838092639039
+          "instance": 7914457955056906393
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": 657550919046319519
+          "instance": 3957228977528453196
         },
         "role": "body",
         "horizontal_alignment": "start",
@@ -2337,11 +2337,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": 1315104037115895460
+          "instance": 7914464552126675658
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": 657552018557947730
+          "instance": 3957232276063337829
         },
         "role": "secondary",
         "horizontal_alignment": "start",
@@ -2374,11 +2374,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": 1315104037115895461
+          "instance": 7914464552126675659
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": 657552018557947730
+          "instance": 3957232276063337829
         },
         "role": "body",
         "horizontal_alignment": "start",
@@ -2392,7 +2392,7 @@
         "painted_rect": {
           "min_x": 967.56,
           "min_y": 436.82812,
-          "max_x": 1031.56,
+          "max_x": 1007.81,
           "max_y": 451.82812
         },
         "clip_rect": {
@@ -2411,11 +2411,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": 1315106236139151882
+          "instance": 7914462353103419236
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": 657553118069575941
+          "instance": 3957231176551709618
         },
         "role": "secondary",
         "horizontal_alignment": "start",
@@ -2448,11 +2448,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": 1315106236139151883
+          "instance": 7914462353103419237
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": 657553118069575941
+          "instance": 3957231176551709618
         },
         "role": "body",
         "horizontal_alignment": "start",
@@ -2485,11 +2485,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": 1315090842976356928
+          "instance": 7914451357987137126
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": 657545421488178464
+          "instance": 3957225678993568563
         },
         "role": "secondary",
         "horizontal_alignment": "start",
@@ -2522,11 +2522,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": 1315090842976356929
+          "instance": 7914451357987137127
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": 657545421488178464
+          "instance": 3957225678993568563
         },
         "role": "body",
         "horizontal_alignment": "start",
@@ -2548,6 +2548,154 @@
           "min_y": 506.96875,
           "max_x": 1280.0,
           "max_y": 542.0625
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "selectable",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "property_row",
+          "instance": 1206201886515524968
+        },
+        "parent_id": {
+          "kind": "property_row",
+          "instance": 603100943257762484
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 796.0,
+          "min_y": 547.0625,
+          "max_x": 960.56,
+          "max_y": 582.15625
+        },
+        "painted_rect": {
+          "min_x": 796.0,
+          "min_y": 557.1094,
+          "max_x": 872.5,
+          "max_y": 572.1094
+        },
+        "clip_rect": {
+          "min_x": 796.1,
+          "min_y": 547.0625,
+          "max_x": 960.56,
+          "max_y": 582.15625
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "property_row",
+          "instance": 1206201886515524969
+        },
+        "parent_id": {
+          "kind": "property_row",
+          "instance": 603100943257762484
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 967.56,
+          "min_y": 547.0625,
+          "max_x": 1280.0,
+          "max_y": 582.15625
+        },
+        "painted_rect": {
+          "min_x": 967.56,
+          "min_y": 557.1094,
+          "max_x": 1085.8726,
+          "max_y": 572.1094
+        },
+        "clip_rect": {
+          "min_x": 967.56,
+          "min_y": 547.0625,
+          "max_x": 1280.0,
+          "max_y": 582.15625
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "selectable",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "property_row",
+          "instance": 1206204085538781390
+        },
+        "parent_id": {
+          "kind": "property_row",
+          "instance": 603102042769390695
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 796.0,
+          "min_y": 587.15625,
+          "max_x": 960.56,
+          "max_y": 622.25
+        },
+        "painted_rect": {
+          "min_x": 796.0,
+          "min_y": 597.2031,
+          "max_x": 842.4375,
+          "max_y": 612.2031
+        },
+        "clip_rect": {
+          "min_x": 796.1,
+          "min_y": 587.15625,
+          "max_x": 960.56,
+          "max_y": 622.25
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "property_row",
+          "instance": 1206204085538781391
+        },
+        "parent_id": {
+          "kind": "property_row",
+          "instance": 603102042769390695
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 967.56,
+          "min_y": 587.15625,
+          "max_x": 1280.0,
+          "max_y": 622.25
+        },
+        "painted_rect": {
+          "min_x": 967.56,
+          "min_y": 597.2031,
+          "max_x": 1073.6538,
+          "max_y": 612.2031
+        },
+        "clip_rect": {
+          "min_x": 967.56,
+          "min_y": 587.15625,
+          "max_x": 1280.0,
+          "max_y": 622.25
         },
         "baseline": null,
         "overflow": "ellipsis",
@@ -2627,7 +2775,7 @@
     ],
     "text_audit": [],
     "text_audit_coverage": {
-      "measured_components": 61,
+      "measured_components": 65,
       "native_text_controls": 2,
       "observed_native_controls": 0,
       "excluded_categories": [

@@ -34,7 +34,7 @@
   "semantic_audit": [],
   "text_audit": [],
   "text_audit_coverage": {
-    "measured_components": 61,
+    "measured_components": 65,
     "native_text_controls": 2,
     "observed_native_controls": 0,
     "excluded_categories": [

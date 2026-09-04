@@ -2,7 +2,7 @@
   "browser": {
     "version": "151.0.7922.34",
     "backend": "browser WebGPU requested through eframe/wgpu",
-    "source_revision": "14db6a5bcab9065f8b1c8579540439d088c01e8d",
+    "source_revision": "4744b85f794a5d6df135afbc7c35c0d552cbe2f2",
     "webgpu": {
       "navigator_gpu": true,
       "adapter_available": true,
@@ -36,8 +36,8 @@
     {
       "name": "process restart invalidates mutation session",
       "classification": "direct rejected old-token submission followed by same-origin bootstrap and fresh snapshot",
-      "old_session": "61ec62c1-dbd0-4920-98d6-a14468f921f4",
-      "new_session": "a2c7fb0c-9a95-4959-b728-c1280f32de27",
+      "old_session": "9d0ada3c-de74-497d-9143-1476e112b48c",
+      "new_session": "16db613b-ef33-47ad-9a03-16092b2f2ed9",
       "confirmation_cleared": true,
       "connection": "current"
     },
@@ -49,10 +49,10 @@
         "last_event": "cancelled"
       },
       "incremental_requests": [
-        "http://127.0.0.1:39327/operator/obligations/approval%2Dsafe%2Dcancel/cancel",
-        "http://127.0.0.1:39327/operator/changes?after=250",
-        "http://127.0.0.1:39327/operator/obligations/approval%2Dsafe%2Dcancel",
-        "http://127.0.0.1:39327/operator/obligations/approval%2Dsafe%2Dcancel/topic"
+        "http://127.0.0.1:40005/operator/obligations/approval%2Dsafe%2Dcancel/cancel",
+        "http://127.0.0.1:40005/operator/changes?after=250",
+        "http://127.0.0.1:40005/operator/obligations/approval%2Dsafe%2Dcancel",
+        "http://127.0.0.1:40005/operator/obligations/approval%2Dsafe%2Dcancel/topic"
       ]
     },
     {
@@ -80,38 +80,38 @@
   "states": {
     "full": {
       "fixture": {
-        "address": "127.0.0.1:39327",
+        "address": "127.0.0.1:40005",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-6522d984-1e00-4d0e-98fb-c18c4322a1f9",
+        "root": "/tmp/bokkie-ui-qualification-b0c46a0a-6a83-4f4f-9300-883749a17a94",
         "service": {
           "api_contract_version": 1,
           "build": "bokkie/0.1.0",
-          "process_id": 2875739,
+          "process_id": 3149750,
           "schema_version": 9,
-          "session_id": "a2c7fb0c-9a95-4959-b728-c1280f32de27"
+          "session_id": "16db613b-ef33-47ad-9a03-16092b2f2ed9"
         },
         "variant": "full"
       },
       "warmed_idle": {
-        "before": "166",
-        "after": "166",
+        "before": "167",
+        "after": "167",
         "stable": true,
         "interval_ms": 1000
       }
     },
     "empty": {
       "fixture": {
-        "address": "127.0.0.1:42673",
+        "address": "127.0.0.1:40879",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-77fc3ca3-8d99-4909-9d56-e41996d2a27c",
+        "root": "/tmp/bokkie-ui-qualification-1af049d2-69cd-4787-a59a-5bc376ba02b4",
         "service": {
           "api_contract_version": 1,
           "build": "bokkie/0.1.0",
-          "process_id": 2876659,
+          "process_id": 3150588,
           "schema_version": 9,
-          "session_id": "2bf244a0-b8c4-4950-8c8e-c9bbd4d5cb73"
+          "session_id": "e459eb1c-6ae3-439c-bf53-0527201ec5ca"
         },
         "variant": "empty"
       },
@@ -126,16 +126,16 @@
     },
     "empty-inbox": {
       "fixture": {
-        "address": "127.0.0.1:35203",
+        "address": "127.0.0.1:38233",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-1de7fbb0-6c89-40e2-8422-339582fabbb6",
+        "root": "/tmp/bokkie-ui-qualification-70e2636b-8e58-4d01-946e-0e068a558d3c",
         "service": {
           "api_contract_version": 1,
           "build": "bokkie/0.1.0",
-          "process_id": 2876809,
+          "process_id": 3150832,
           "schema_version": 9,
-          "session_id": "c4ae6142-93c1-468e-9d8c-433e5b036a1b"
+          "session_id": "021d186b-cd01-4b1c-a5ac-e43ffab3e655"
         },
         "variant": "empty-inbox"
       }
@@ -147,16 +147,16 @@
     },
     "large": {
       "fixture": {
-        "address": "127.0.0.1:45981",
+        "address": "127.0.0.1:40451",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-a90a71f2-48cf-4cb9-a3e0-94b5dc2a6ee6",
+        "root": "/tmp/bokkie-ui-qualification-756dcff2-d395-47a1-ac12-49c8199fddfa",
         "service": {
           "api_contract_version": 1,
           "build": "bokkie/0.1.0",
-          "process_id": 2876864,
+          "process_id": 3150874,
           "schema_version": 9,
-          "session_id": "1161e70d-af52-422b-9268-d562feeb750b"
+          "session_id": "01c92d47-d518-4b44-86cd-ff310ca568ab"
         },
         "variant": "large"
       },
@@ -175,7 +175,7 @@
         "snapshot_page_requests": 50
       }
     },
-    "disconnected_request": "network: GET http://127.0.0.1:45981/operator/snapshot net::ERR_CONNECTION_REFUSED",
+    "disconnected_request": "network: GET http://127.0.0.1:40451/operator/snapshot net::ERR_CONNECTION_REFUSED",
     "disconnected_console": "console: Failed to load resource: net::ERR_CONNECTION_REFUSED",
     "disconnected": {
       "network_disconnected": true,
@@ -244,7 +244,7 @@
   ],
   "errors": [],
   "last_operator_response": {
-    "url": "http://127.0.0.1:45981/operator/obligations/large%2D00000/topic",
+    "url": "http://127.0.0.1:40451/operator/obligations/large%2D00000/topic",
     "status": 200
   }
 }

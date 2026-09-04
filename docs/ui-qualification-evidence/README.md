@@ -1,7 +1,7 @@
 # Bokkie attention UI qualification evidence
 
 This retained set qualifies the exact Bokkie application and harness revision
-`14db6a5bcab9065f8b1c8579540439d088c01e8d`, consuming Polyorama
+`4744b85f794a5d6df135afbc7c35c0d552cbe2f2`, consuming Polyorama
 `0e725f5a97a6d99a6bc4c961dfc05b4e9252ba1d`.
 The fixture input is created by `bokkie-ui-fixture` with its fixed Unix time
 `1788381000`; every run creates a new database beneath an owned
