@@ -6,7 +6,7 @@ use serde_json::Value;
 /// Version of the HTTP contract consumed by the bundled operator UI.
 pub const API_CONTRACT_VERSION: u32 = 1;
 /// Exact SQLite migration version understood by this build of the UI.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 8;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 9;
 /// Stable package identity; the per-process session ID distinguishes restarts.
 pub const BOKKIE_BUILD_ID: &str = concat!("bokkie/", env!("CARGO_PKG_VERSION"));
 
@@ -216,12 +216,27 @@ pub struct OperatorObligation {
     pub capabilities: OperatorCapabilities,
 }
 
+/// A single affected-obligation projection tied to both the serving process
+/// and the exact durable global event-envelope revision used for the read.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OperatorObligationProjection {
+    pub service: ServiceIdentity,
+    pub watermark: i64,
+    pub obligation: OperatorObligation,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OperatorSnapshot {
     pub captured_at: i64,
     /// HTTP handlers populate this process identity; Store-only projections omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service: Option<ServiceIdentity>,
+    /// Opaque continuation identity, bound to this projection and watermark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    /// Exact durable global event-envelope sequence for this snapshot walk.
+    #[serde(default)]
+    pub watermark: i64,
     /// Genuine exceptions first, followed by operational state, wake/update and ID.
     pub obligations: Vec<OperatorObligation>,
 }
@@ -258,12 +273,75 @@ pub struct TopicItem {
 pub struct ObligationTopic {
     pub captured_at: i64,
     pub obligation_id: String,
+    /// HTTP handlers populate this process identity; Store-only projections omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<ServiceIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(default)]
+    pub watermark: i64,
     pub items: Vec<TopicItem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionEventProvenance {
+    LegacyNonCausal,
+    LiveAppend,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProjectionEventSource {
+    AuditEvent { sequence: i64 },
+    GardenerEvent { sequence: i64 },
+    GardenerRunEvent { sequence: i64 },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectionChange {
+    pub revision: i64,
+    pub provenance: ProjectionEventProvenance,
+    pub source: ProjectionEventSource,
+    pub event_type: String,
+    pub occurred_at: i64,
+    pub obligation_id: Option<String>,
+    pub occurrence: Option<u32>,
+    pub repository: Option<String>,
+    pub inspection_id: Option<String>,
+    pub proposal_fingerprint: Option<String>,
+    pub proposal_instance_id: Option<String>,
+    pub run_id: Option<String>,
+}
+
+/// Incremental invalidations use durable envelope revisions, independently of
+/// process identity and mutation state revisions.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectionChangePage {
+    pub service: ServiceIdentity,
+    pub requested_after: i64,
+    pub requested_through: Option<i64>,
+    pub next_after: Option<i64>,
+    pub watermark: i64,
+    pub changes: Vec<ProjectionChange>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_topic_without_service_identity_remains_deserialisable() {
+        let topic: ObligationTopic = serde_json::from_value(serde_json::json!({
+            "captured_at": 100,
+            "obligation_id": "obligation-1",
+            "items": []
+        }))
+        .unwrap();
+
+        assert!(topic.service.is_none());
+        assert_eq!(topic.watermark, 0);
+    }
 
     #[test]
     fn legacy_gardener_wire_shapes_remain_deserialisable() {

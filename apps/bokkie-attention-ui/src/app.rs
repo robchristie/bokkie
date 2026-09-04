@@ -1,5 +1,8 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     cell::RefCell,
+    collections::{BTreeSet, VecDeque},
     rc::Rc,
     sync::mpsc::{self, Receiver, Sender},
     time::Duration,
@@ -8,7 +11,7 @@ use web_time::Instant;
 
 use bokkie_operator_api::{
     ApprovalSubject, AttentionCause, DurableLiveness, ExceptionReason, ObligationTopic,
-    OperatorObligation, TopicItem, TopicSource,
+    OperatorObligation, OperatorSnapshot, TopicItem, TopicSource,
 };
 use eframe::egui;
 use polyorama_core::{DockNodeId, PaneId, Workspace, virtual_rows};
@@ -27,9 +30,10 @@ use serde_json::Value;
 use crate::{
     APPLICATION_NAME,
     model::{
-        AppModel, Confirmation, ConnectionState, GardenerConfirmation, INBOX_PANE_ID,
-        LifecycleAction, OBLIGATIONS_PANE_ID, OperatorStateLabel, StateFilter, TIMELINE_PANE_ID,
-        consequence_label, operator_workspace,
+        AppModel, ChangeAssembly, ChangeProgress, Confirmation, ConnectionState,
+        GardenerConfirmation, INBOX_PANE_ID, LifecycleAction, OBLIGATIONS_PANE_ID,
+        OperatorStateLabel, PageProgress, SnapshotAssembly, StateFilter, TIMELINE_PANE_ID,
+        TopicAssembly, consequence_label, operator_workspace,
     },
     transport::{
         ActionRequest, ApiFailure, ApiMessage, ApiPayload, ApiRequest, ApiSession, Transport,
@@ -165,40 +169,13 @@ enum OperatorIntent {
 }
 
 #[derive(Debug)]
-struct TopicRequestGate {
-    next_generation: u64,
-    latest: Option<(String, u64)>,
-    pending: usize,
-}
-
-impl Default for TopicRequestGate {
-    fn default() -> Self {
-        Self {
-            next_generation: 1,
-            latest: None,
-            pending: 0,
-        }
-    }
-}
-
-impl TopicRequestGate {
-    fn begin(&mut self, obligation_id: String) -> u64 {
-        let generation = self.next_generation;
-        self.next_generation = self
-            .next_generation
-            .checked_add(1)
-            .expect("topic request generation exhausted");
-        self.latest = Some((obligation_id, generation));
-        self.pending = self.pending.saturating_add(1);
-        generation
-    }
-
-    fn finish(&mut self, obligation_id: &str, generation: u64) -> bool {
-        self.pending = self.pending.saturating_sub(1);
-        self.latest
-            .as_ref()
-            .is_some_and(|(latest_id, latest)| latest_id == obligation_id && *latest == generation)
-    }
+struct AffectedRefresh {
+    generation: u64,
+    watermark: i64,
+    affected: BTreeSet<String>,
+    pending: VecDeque<String>,
+    projections: Vec<OperatorObligation>,
+    waiting_for_topic: bool,
 }
 
 pub struct AttentionApp {
@@ -211,7 +188,14 @@ pub struct AttentionApp {
     receiver: Receiver<ApiMessage>,
     preferences: UiPreferences,
     next_poll_at: Option<Instant>,
-    topic_requests: TopicRequestGate,
+    deadline_obligations: BTreeSet<String>,
+    next_generation: u64,
+    snapshot_assembly: Option<SnapshotAssembly>,
+    topic_assembly: Option<TopicAssembly>,
+    change_assembly: Option<ChangeAssembly>,
+    change_extra_affected: BTreeSet<String>,
+    affected_refresh: Option<AffectedRefresh>,
+    projection_recovery: bool,
     frame_number: u64,
     last_test_snapshot: TestSnapshot,
     test_observer: Option<Rc<RefCell<TestSnapshot>>>,
@@ -253,7 +237,14 @@ impl AttentionApp {
             receiver,
             preferences,
             next_poll_at: None,
-            topic_requests: TopicRequestGate::default(),
+            deadline_obligations: BTreeSet::new(),
+            next_generation: 1,
+            snapshot_assembly: None,
+            topic_assembly: None,
+            change_assembly: None,
+            change_extra_affected: BTreeSet::new(),
+            affected_refresh: None,
+            projection_recovery: false,
             frame_number: 0,
             last_test_snapshot: TestSnapshot::default(),
             test_observer,
@@ -286,8 +277,10 @@ impl AttentionApp {
         };
         match &request {
             ApiRequest::Bootstrap => self.model.snapshot_busy = true,
-            ApiRequest::Snapshot => self.model.snapshot_busy = true,
-            ApiRequest::Topic { .. } => self.model.topic_busy = true,
+            ApiRequest::SnapshotPage { .. }
+            | ApiRequest::Changes { .. }
+            | ApiRequest::Obligation { .. } => self.model.snapshot_busy = true,
+            ApiRequest::TopicPage { .. } => self.model.topic_busy = true,
             ApiRequest::Act(_) => self.model.action_busy = true,
         }
         transport.send(
@@ -303,44 +296,50 @@ impl AttentionApp {
             match (message.request, message.result) {
                 (ApiRequest::Bootstrap, Ok(ApiPayload::Bootstrap(session))) => {
                     self.session = Some(session);
-                    self.dispatch(ApiRequest::Snapshot, context);
-                }
-                (ApiRequest::Snapshot, Ok(ApiPayload::Snapshot(snapshot))) => {
-                    let poll = poll_delay(&snapshot);
-                    self.model.apply_snapshot(snapshot);
-                    self.next_poll_at = Some(Instant::now() + poll);
-                    if let Some(obligation_id) = self.model.selected_obligation.clone() {
-                        self.request_topic(obligation_id, context);
-                    }
+                    self.begin_full_rebuild(false, context);
                 }
                 (
-                    ApiRequest::Topic {
+                    ApiRequest::SnapshotPage { generation, .. },
+                    Ok(ApiPayload::SnapshotPage(page)),
+                ) => self.accept_snapshot_page(generation, page, context),
+                (
+                    ApiRequest::TopicPage {
+                        obligation_id,
+                        generation,
+                        ..
+                    },
+                    Ok(ApiPayload::TopicPage(page)),
+                ) => self.accept_topic_page(generation, &obligation_id, page, context),
+                (ApiRequest::Changes { generation, .. }, Ok(ApiPayload::Changes(page))) => {
+                    self.accept_change_page(generation, page, context)
+                }
+                (
+                    ApiRequest::Obligation {
                         obligation_id,
                         generation,
                     },
-                    Ok(ApiPayload::Topic(topic)),
-                ) => {
-                    let current = self.finish_topic_request(&obligation_id, generation);
-                    if current && self.model.selected_obligation.as_deref() == Some(&obligation_id)
-                    {
-                        self.model.topic = Some(topic);
-                        self.model.topic_error = None;
-                    }
-                }
+                    Ok(ApiPayload::Obligation(projection)),
+                ) => self.accept_obligation_projection(
+                    generation,
+                    &obligation_id,
+                    *projection,
+                    context,
+                ),
                 (ApiRequest::Act(action), Ok(ApiPayload::ActionAccepted)) => {
+                    let affected = BTreeSet::from([action.obligation_id.clone()]);
                     self.model
                         .record_action_accepted(action.action.specification().label);
-                    self.dispatch(ApiRequest::Snapshot, context);
+                    self.begin_changes(affected, context);
                 }
                 (ApiRequest::Act(_), Err(ApiFailure::Conflict(message))) => {
+                    let affected = self.model.selected_obligation.clone().into_iter().collect();
                     self.model.record_transition_conflict(&message);
-                    self.dispatch(ApiRequest::Snapshot, context);
+                    self.begin_changes(affected, context);
                 }
+                (request, Err(ApiFailure::SessionChanged(_)))
+                    if !self.request_is_current(&request) => {}
                 (_, Err(ApiFailure::SessionChanged(message))) => {
-                    self.session = None;
-                    self.model.record_session_change(&message);
-                    self.next_poll_at = None;
-                    self.dispatch(ApiRequest::Bootstrap, context);
+                    self.restart_session(&message, context);
                 }
                 (ApiRequest::Bootstrap, Err(error)) => {
                     self.session = None;
@@ -348,25 +347,49 @@ impl AttentionApp {
                         .mark_stale(format!("Session bootstrap failed: {error}"));
                     self.next_poll_at = Some(Instant::now() + RECONNECT_DELAY);
                 }
-                (ApiRequest::Snapshot, Err(error)) => {
-                    self.model
-                        .mark_stale(format!("Snapshot refresh failed: {error}"));
-                    self.next_poll_at = Some(Instant::now() + RECONNECT_DELAY);
+                (
+                    request @ (ApiRequest::SnapshotPage { .. }
+                    | ApiRequest::TopicPage { .. }
+                    | ApiRequest::Changes { .. }
+                    | ApiRequest::Obligation { .. }),
+                    Err(ApiFailure::ProjectionGap(message) | ApiFailure::InvalidCursor(message)),
+                ) => {
+                    if self.request_is_current(&request) {
+                        self.recover_projection(&message, context);
+                    }
                 }
                 (
-                    ApiRequest::Topic {
+                    ApiRequest::TopicPage {
                         obligation_id,
                         generation,
+                        ..
                     },
                     Err(error),
                 ) => {
-                    let current = self.finish_topic_request(&obligation_id, generation);
-                    if current && self.model.selected_obligation.as_deref() == Some(&obligation_id)
+                    if self
+                        .topic_assembly
+                        .as_ref()
+                        .is_some_and(|walk| walk.generation == generation)
+                        && self.model.selected_obligation.as_deref() == Some(&obligation_id)
                     {
                         self.model.topic_error = Some(format!("Topic refresh failed: {error}"));
-                        self.model
-                            .mark_stale(format!("Selected topic could not be refreshed: {error}"));
-                        self.next_poll_at = Some(Instant::now() + RECONNECT_DELAY);
+                        self.fail_or_recover_projection(
+                            format!("Selected topic could not be refreshed: {error}"),
+                            context,
+                        );
+                    }
+                }
+                (
+                    request @ (ApiRequest::SnapshotPage { .. }
+                    | ApiRequest::Changes { .. }
+                    | ApiRequest::Obligation { .. }),
+                    Err(error),
+                ) => {
+                    if self.request_is_current(&request) {
+                        self.fail_or_recover_projection(
+                            format!("Projection refresh failed: {error}"),
+                            context,
+                        );
                     }
                 }
                 (ApiRequest::Act(_), Err(error)) => {
@@ -388,34 +411,405 @@ impl AttentionApp {
             return;
         };
         let now = Instant::now();
-        if now >= deadline && !self.model.snapshot_busy && !self.model.action_busy {
+        if now >= deadline
+            && !self.model.snapshot_busy
+            && !self.model.topic_busy
+            && !self.model.action_busy
+        {
             self.next_poll_at = None;
-            let request = if self.session.is_some() {
-                ApiRequest::Snapshot
+            if self.session.is_some() {
+                if self.model.snapshot.is_some()
+                    && matches!(self.model.connection, ConnectionState::Current)
+                {
+                    let affected = std::mem::take(&mut self.deadline_obligations);
+                    self.begin_changes(affected, context);
+                } else {
+                    self.begin_full_rebuild(true, context);
+                }
             } else {
-                ApiRequest::Bootstrap
-            };
-            self.dispatch(request, context);
+                self.dispatch(ApiRequest::Bootstrap, context);
+            }
         } else if deadline > now {
             context.request_repaint_after(deadline.duration_since(now));
         }
     }
 
     fn request_topic(&mut self, obligation_id: String, context: &egui::Context) {
-        let generation = self.topic_requests.begin(obligation_id.clone());
+        let generation = self.fresh_generation();
+        self.topic_assembly = Some(TopicAssembly::new(generation, obligation_id.clone()));
+        self.model.topic_busy = true;
         self.dispatch(
-            ApiRequest::Topic {
+            ApiRequest::TopicPage {
                 obligation_id,
                 generation,
+                cursor: None,
+                watermark: None,
             },
             context,
         );
     }
 
-    fn finish_topic_request(&mut self, obligation_id: &str, generation: u64) -> bool {
-        let current = self.topic_requests.finish(obligation_id, generation);
-        self.model.topic_busy = self.topic_requests.pending > 0;
-        current
+    fn fresh_generation(&mut self) -> u64 {
+        let generation = self.next_generation;
+        self.next_generation = self
+            .next_generation
+            .checked_add(1)
+            .expect("projection request generation exhausted");
+        generation
+    }
+
+    fn request_is_current(&self, request: &ApiRequest) -> bool {
+        match request {
+            ApiRequest::Bootstrap | ApiRequest::Act(_) => true,
+            ApiRequest::SnapshotPage { generation, .. } => self
+                .snapshot_assembly
+                .as_ref()
+                .is_some_and(|assembly| assembly.generation == *generation),
+            ApiRequest::TopicPage { generation, .. } => self
+                .topic_assembly
+                .as_ref()
+                .is_some_and(|assembly| assembly.generation == *generation),
+            ApiRequest::Changes { generation, .. } => self
+                .change_assembly
+                .as_ref()
+                .is_some_and(|assembly| assembly.generation == *generation),
+            ApiRequest::Obligation { generation, .. } => self
+                .affected_refresh
+                .as_ref()
+                .is_some_and(|refresh| refresh.generation == *generation),
+        }
+    }
+
+    fn begin_full_rebuild(&mut self, recovering: bool, context: &egui::Context) {
+        let generation = self.fresh_generation();
+        self.snapshot_assembly = Some(SnapshotAssembly::new(generation));
+        self.topic_assembly = None;
+        self.change_assembly = None;
+        self.change_extra_affected.clear();
+        self.affected_refresh = None;
+        self.deadline_obligations.clear();
+        self.next_poll_at = None;
+        self.projection_recovery = recovering;
+        self.model.snapshot_busy = true;
+        self.model.topic_busy = false;
+        self.dispatch(
+            ApiRequest::SnapshotPage {
+                generation,
+                cursor: None,
+                watermark: None,
+            },
+            context,
+        );
+    }
+
+    fn accept_snapshot_page(
+        &mut self,
+        generation: u64,
+        page: OperatorSnapshot,
+        context: &egui::Context,
+    ) {
+        let Some(assembly) = self.snapshot_assembly.as_mut() else {
+            return;
+        };
+        if assembly.generation != generation {
+            return;
+        }
+        match assembly.push(page) {
+            Ok(PageProgress::Continue { cursor, watermark }) => self.dispatch(
+                ApiRequest::SnapshotPage {
+                    generation,
+                    cursor: Some(cursor),
+                    watermark: Some(watermark),
+                },
+                context,
+            ),
+            Ok(PageProgress::Complete(snapshot)) => {
+                self.snapshot_assembly = None;
+                self.projection_recovery = false;
+                self.model.apply_snapshot(snapshot);
+                if let Some(obligation_id) = self.model.selected_obligation.clone() {
+                    self.request_topic(obligation_id, context);
+                } else {
+                    self.schedule_poll();
+                }
+            }
+            Err(error) => self.recover_projection(&error, context),
+        }
+    }
+
+    fn accept_topic_page(
+        &mut self,
+        generation: u64,
+        obligation_id: &str,
+        page: ObligationTopic,
+        context: &egui::Context,
+    ) {
+        let Some(assembly) = self.topic_assembly.as_mut() else {
+            return;
+        };
+        if assembly.generation != generation
+            || self.model.selected_obligation.as_deref() != Some(obligation_id)
+        {
+            return;
+        }
+        match assembly.push(page) {
+            Ok(PageProgress::Continue { cursor, watermark }) => self.dispatch(
+                ApiRequest::TopicPage {
+                    obligation_id: obligation_id.to_owned(),
+                    generation,
+                    cursor: Some(cursor),
+                    watermark: Some(watermark),
+                },
+                context,
+            ),
+            Ok(PageProgress::Complete(topic)) => {
+                if self.affected_refresh.as_ref().is_some_and(|refresh| {
+                    refresh.waiting_for_topic && topic.watermark < refresh.watermark
+                }) {
+                    self.recover_projection(
+                        "Selected topic watermark did not cover the affected refresh",
+                        context,
+                    );
+                    return;
+                }
+                self.topic_assembly = None;
+                self.model.topic = Some(topic);
+                self.model.topic_error = None;
+                self.model.topic_busy = false;
+                if self
+                    .affected_refresh
+                    .as_ref()
+                    .is_some_and(|refresh| refresh.waiting_for_topic)
+                {
+                    self.finish_affected_refresh(context);
+                } else if !self.model.snapshot_busy {
+                    self.schedule_poll();
+                }
+            }
+            Err(error) => self.recover_projection(&error, context),
+        }
+    }
+
+    fn begin_changes(&mut self, extra_affected: BTreeSet<String>, context: &egui::Context) {
+        let Some(after) = self.model.applied_watermark() else {
+            self.begin_full_rebuild(false, context);
+            return;
+        };
+        let generation = self.fresh_generation();
+        self.change_assembly = Some(ChangeAssembly::new(generation, after));
+        self.change_extra_affected = extra_affected;
+        self.affected_refresh = None;
+        self.model.snapshot_busy = true;
+        self.next_poll_at = None;
+        self.dispatch(
+            ApiRequest::Changes {
+                generation,
+                after,
+                through: None,
+            },
+            context,
+        );
+    }
+
+    fn accept_change_page(
+        &mut self,
+        generation: u64,
+        page: bokkie_operator_api::ProjectionChangePage,
+        context: &egui::Context,
+    ) {
+        let Some(assembly) = self.change_assembly.as_mut() else {
+            return;
+        };
+        if assembly.generation != generation {
+            return;
+        }
+        match assembly.push(page) {
+            Ok(ChangeProgress::Continue { after, through }) => self.dispatch(
+                ApiRequest::Changes {
+                    generation,
+                    after,
+                    through: Some(through),
+                },
+                context,
+            ),
+            Ok(ChangeProgress::Complete {
+                watermark,
+                mut affected,
+                ambiguous,
+            }) => {
+                self.change_assembly = None;
+                if ambiguous {
+                    self.recover_projection(
+                        "A global projection change did not identify an obligation",
+                        context,
+                    );
+                    return;
+                }
+                affected.append(&mut self.change_extra_affected);
+                if affected.is_empty() {
+                    if let Err(error) =
+                        self.model
+                            .apply_incremental(watermark, current_unix_seconds(), Vec::new())
+                    {
+                        self.recover_projection(&error, context);
+                    } else {
+                        self.schedule_poll();
+                    }
+                } else {
+                    self.begin_affected_refresh(generation, watermark, affected, context);
+                }
+            }
+            Err(error) => self.recover_projection(&error, context),
+        }
+    }
+
+    fn begin_affected_refresh(
+        &mut self,
+        generation: u64,
+        watermark: i64,
+        affected: BTreeSet<String>,
+        context: &egui::Context,
+    ) {
+        let pending = affected.iter().cloned().collect();
+        self.affected_refresh = Some(AffectedRefresh {
+            generation,
+            watermark,
+            affected,
+            pending,
+            projections: Vec::new(),
+            waiting_for_topic: false,
+        });
+        self.dispatch_next_affected(context);
+    }
+
+    fn dispatch_next_affected(&mut self, context: &egui::Context) {
+        let next = self.affected_refresh.as_mut().and_then(|refresh| {
+            refresh
+                .pending
+                .pop_front()
+                .map(|id| (refresh.generation, id))
+        });
+        if let Some((generation, obligation_id)) = next {
+            self.dispatch(
+                ApiRequest::Obligation {
+                    obligation_id,
+                    generation,
+                },
+                context,
+            );
+            return;
+        }
+        let selected_affected = self.affected_refresh.as_ref().is_some_and(|refresh| {
+            self.model
+                .selected_obligation
+                .as_ref()
+                .is_some_and(|selected| refresh.affected.contains(selected))
+        });
+        if selected_affected {
+            if let Some(refresh) = self.affected_refresh.as_mut() {
+                refresh.waiting_for_topic = true;
+            }
+            if let Some(obligation_id) = self.model.selected_obligation.clone() {
+                self.request_topic(obligation_id, context);
+            }
+        } else {
+            self.finish_affected_refresh(context);
+        }
+    }
+
+    fn accept_obligation_projection(
+        &mut self,
+        generation: u64,
+        obligation_id: &str,
+        projection: bokkie_operator_api::OperatorObligationProjection,
+        context: &egui::Context,
+    ) {
+        let Some(refresh) = self.affected_refresh.as_mut() else {
+            return;
+        };
+        if refresh.generation != generation {
+            return;
+        }
+        if projection.obligation.id != obligation_id || projection.watermark < refresh.watermark {
+            self.recover_projection(
+                "Affected obligation projection did not match its request watermark or identity",
+                context,
+            );
+            return;
+        }
+        refresh.projections.push(projection.obligation);
+        self.dispatch_next_affected(context);
+    }
+
+    fn finish_affected_refresh(&mut self, context: &egui::Context) {
+        let Some(refresh) = self.affected_refresh.take() else {
+            return;
+        };
+        match self.model.apply_incremental(
+            refresh.watermark,
+            current_unix_seconds(),
+            refresh.projections,
+        ) {
+            Ok(()) => self.schedule_poll(),
+            Err(error) => self.recover_projection(&error, context),
+        }
+    }
+
+    fn recover_projection(&mut self, reason: &str, context: &egui::Context) {
+        self.model.mark_stale(format!(
+            "Projection state changed: {reason}; rebuilding current state"
+        ));
+        if self.projection_recovery && self.snapshot_assembly.is_some() {
+            self.snapshot_assembly = None;
+            self.topic_assembly = None;
+            self.change_assembly = None;
+            self.affected_refresh = None;
+            self.model.snapshot_busy = false;
+            self.model.topic_busy = false;
+            self.next_poll_at = Some(Instant::now() + RECONNECT_DELAY);
+        } else {
+            self.begin_full_rebuild(true, context);
+        }
+    }
+
+    fn fail_or_recover_projection(&mut self, reason: String, context: &egui::Context) {
+        self.model.mark_stale(reason);
+        if self.projection_recovery || self.snapshot_assembly.is_some() {
+            self.snapshot_assembly = None;
+            self.topic_assembly = None;
+            self.change_assembly = None;
+            self.affected_refresh = None;
+            self.model.snapshot_busy = false;
+            self.model.topic_busy = false;
+            self.next_poll_at = Some(Instant::now() + RECONNECT_DELAY);
+        } else {
+            self.begin_full_rebuild(true, context);
+        }
+    }
+
+    fn restart_session(&mut self, message: &str, context: &egui::Context) {
+        self.session = None;
+        self.model.record_session_change(message);
+        self.model.topic_busy = false;
+        self.snapshot_assembly = None;
+        self.topic_assembly = None;
+        self.change_assembly = None;
+        self.affected_refresh = None;
+        self.change_extra_affected.clear();
+        self.deadline_obligations.clear();
+        self.next_poll_at = None;
+        self.projection_recovery = true;
+        self.dispatch(ApiRequest::Bootstrap, context);
+    }
+
+    fn schedule_poll(&mut self) {
+        let Some(snapshot) = self.model.snapshot.as_ref() else {
+            self.next_poll_at = Some(Instant::now() + RECONNECT_DELAY);
+            return;
+        };
+        let (delay, obligations) = poll_plan(snapshot);
+        self.deadline_obligations = obligations;
+        self.next_poll_at = Some(Instant::now() + delay);
     }
 
     fn apply_intents(&mut self, intents: Vec<OperatorIntent>, context: &egui::Context) {
@@ -423,18 +817,43 @@ impl AttentionApp {
             match intent {
                 OperatorIntent::Refresh => {
                     self.next_poll_at = None;
-                    let request = if self.session.is_some() {
-                        ApiRequest::Snapshot
+                    if self.session.is_some() {
+                        if self.model.snapshot.is_some()
+                            && matches!(self.model.connection, ConnectionState::Current)
+                        {
+                            self.begin_changes(BTreeSet::new(), context);
+                        } else {
+                            self.begin_full_rebuild(true, context);
+                        }
                     } else {
-                        ApiRequest::Bootstrap
-                    };
-                    self.dispatch(request, context);
+                        self.dispatch(ApiRequest::Bootstrap, context);
+                    }
                 }
                 OperatorIntent::Select {
                     obligation_id,
                     destination,
                 } => {
-                    if self.model.select(obligation_id.clone()) || self.model.topic.is_none() {
+                    let changed = self.model.select(obligation_id.clone());
+                    let waiting_for_affected_topic = self
+                        .affected_refresh
+                        .as_ref()
+                        .is_some_and(|refresh| refresh.waiting_for_topic);
+                    let selected_is_affected = self
+                        .affected_refresh
+                        .as_ref()
+                        .is_some_and(|refresh| refresh.affected.contains(&obligation_id));
+                    if changed && waiting_for_affected_topic && !selected_is_affected {
+                        if let Some(refresh) = self.affected_refresh.as_mut() {
+                            refresh.waiting_for_topic = false;
+                        }
+                        self.finish_affected_refresh(context);
+                    }
+                    if changed || self.model.topic.is_none() {
+                        if selected_is_affected
+                            && let Some(refresh) = self.affected_refresh.as_mut()
+                        {
+                            refresh.waiting_for_topic = true;
+                        }
                         self.request_topic(obligation_id, context);
                     }
                     if let Some(destination) = destination {
@@ -2168,23 +2587,58 @@ fn value_text(value: &Value) -> String {
     )
 }
 
-fn poll_delay(snapshot: &bokkie_operator_api::OperatorSnapshot) -> Duration {
-    let until_wake = snapshot
-        .obligations
-        .iter()
-        .filter_map(|obligation| obligation.next_wake_at)
-        .map(|wake| wake.saturating_sub(snapshot.captured_at).max(1) as u64)
-        .min()
-        .map(Duration::from_secs)
-        .unwrap_or(POLL_MAX);
-    until_wake.min(POLL_MAX)
+fn poll_plan(snapshot: &bokkie_operator_api::OperatorSnapshot) -> (Duration, BTreeSet<String>) {
+    let deadlines = snapshot.obligations.iter().filter_map(|obligation| {
+        let lease_expiry = match obligation.liveness.as_ref() {
+            Some(DurableLiveness::ActiveLease { expires_at, .. }) => Some(*expires_at),
+            _ => None,
+        };
+        obligation
+            .next_wake_at
+            .into_iter()
+            .chain(lease_expiry)
+            .min()
+            .map(|deadline| {
+                (
+                    deadline.saturating_sub(snapshot.captured_at).max(1) as u64,
+                    obligation.id.clone(),
+                )
+            })
+    });
+    let Some((earliest, _)) = deadlines.clone().min_by_key(|(seconds, _)| *seconds) else {
+        return (POLL_MAX, BTreeSet::new());
+    };
+    let delay = Duration::from_secs(earliest).min(POLL_MAX);
+    let affected = if delay < POLL_MAX || earliest == POLL_MAX.as_secs() {
+        deadlines
+            .filter_map(|(seconds, id)| (seconds == earliest).then_some(id))
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    (delay, affected)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn current_unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+        .unwrap_or(0)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn current_unix_seconds() -> i64 {
+    (js_sys::Date::now() / 1_000.0) as i64
 }
 
 #[cfg(test)]
 mod tests {
     use bokkie_operator_api::{
-        ActionCapability, ActionConsequence, ActionPrecondition, DisabledReason,
-        OperatorCapabilities, OperatorObligationState, OperatorSnapshot,
+        API_CONTRACT_VERSION, ActionCapability, ActionConsequence, ActionPrecondition,
+        BOKKIE_BUILD_ID, DisabledReason, OperatorCapabilities, OperatorObligationState,
+        OperatorSnapshot, SUPPORTED_SCHEMA_VERSION, ServiceIdentity, SessionBootstrap,
     };
 
     use super::*;
@@ -2247,6 +2701,101 @@ mod tests {
         }
     }
 
+    fn session(session_id: &str) -> ApiSession {
+        ApiSession::from_bootstrap(SessionBootstrap {
+            service: ServiceIdentity {
+                build: BOKKIE_BUILD_ID.to_owned(),
+                api_contract_version: API_CONTRACT_VERSION,
+                schema_version: SUPPORTED_SCHEMA_VERSION,
+                process_id: 42,
+                session_id: session_id.to_owned(),
+            },
+            mutation_token: "a".repeat(64),
+        })
+        .unwrap()
+    }
+
+    fn test_app() -> AttentionApp {
+        let (sender, receiver) = mpsc::channel();
+        AttentionApp {
+            workspace: operator_workspace(),
+            dock: DockBehaviour::default(),
+            model: AppModel::default(),
+            transport: None,
+            session: None,
+            sender,
+            receiver,
+            preferences: UiPreferences::default(),
+            next_poll_at: None,
+            deadline_obligations: BTreeSet::new(),
+            next_generation: 1,
+            snapshot_assembly: None,
+            topic_assembly: None,
+            change_assembly: None,
+            change_extra_affected: BTreeSet::new(),
+            affected_refresh: None,
+            projection_recovery: false,
+            frame_number: 0,
+            last_test_snapshot: TestSnapshot::default(),
+            test_observer: None,
+        }
+    }
+
+    #[test]
+    fn cursor_gap_enters_same_session_full_recovery_with_retained_state_stale() {
+        let mut app = test_app();
+        app.model.apply_snapshot(OperatorSnapshot {
+            captured_at: 100,
+            service: None,
+            next_cursor: None,
+            watermark: 9,
+            obligations: vec![fixture(1)],
+        });
+        app.recover_projection("event envelope cursor 9", &egui::Context::default());
+        assert!(app.snapshot_assembly.is_some());
+        assert!(app.projection_recovery);
+        assert!(matches!(
+            app.model.connection,
+            ConnectionState::Stale { .. }
+        ));
+        assert_eq!(app.model.obligations().len(), 1);
+    }
+
+    #[test]
+    fn session_rotation_clears_token_and_confirmation_then_bootstraps_a_rebuild() {
+        let mut app = test_app();
+        app.model.apply_snapshot(OperatorSnapshot {
+            captured_at: 100,
+            service: None,
+            next_cursor: None,
+            watermark: 9,
+            obligations: vec![fixture(1)],
+        });
+        app.model
+            .begin_confirmation(LifecycleAction::Cancel)
+            .unwrap();
+        app.session = Some(session("old-session"));
+
+        let context = egui::Context::default();
+        app.restart_session("service restarted", &context);
+        assert!(app.session.is_none());
+        assert!(app.model.confirmation.is_none());
+        assert!(matches!(
+            app.model.connection,
+            ConnectionState::Stale { .. }
+        ));
+
+        app.sender
+            .send(ApiMessage {
+                request: ApiRequest::Bootstrap,
+                result: Ok(ApiPayload::Bootstrap(session("new-session"))),
+            })
+            .unwrap();
+        app.poll_transport(&context);
+        assert!(app.session.is_some());
+        assert!(app.snapshot_assembly.is_some());
+    }
+
     #[test]
     fn large_fixture_uses_a_bounded_materialised_range() {
         let obligations = (0..50_000).map(fixture).collect::<Vec<_>>();
@@ -2262,30 +2811,57 @@ mod tests {
         early.next_wake_at = Some(103);
         let mut late = fixture(2);
         late.next_wake_at = Some(500);
+        let (delay, affected) = poll_plan(&OperatorSnapshot {
+            captured_at: 100,
+            service: None,
+            next_cursor: None,
+            watermark: 7,
+            obligations: vec![late, early],
+        });
+        assert_eq!(delay, Duration::from_secs(3));
+        assert_eq!(affected, BTreeSet::from(["obligation-000001".to_owned()]));
         assert_eq!(
-            poll_delay(&OperatorSnapshot {
+            poll_plan(&OperatorSnapshot {
                 captured_at: 100,
                 service: None,
-                obligations: vec![late, early]
-            }),
-            Duration::from_secs(3)
-        );
-        assert_eq!(
-            poll_delay(&OperatorSnapshot {
-                captured_at: 100,
-                service: None,
+                next_cursor: None,
+                watermark: 7,
                 obligations: vec![fixture(3)]
-            }),
-            Duration::from_secs(10)
+            })
+            .0,
+            Duration::from_secs(10),
         );
         assert_eq!(
-            poll_delay(&OperatorSnapshot {
+            poll_plan(&OperatorSnapshot {
                 captured_at: 100,
                 service: None,
+                next_cursor: None,
+                watermark: 7,
                 obligations: Vec::new()
-            }),
-            POLL_MAX
+            })
+            .0,
+            POLL_MAX,
         );
+    }
+
+    #[test]
+    fn active_lease_expiry_is_a_projection_refresh_deadline() {
+        let mut leased = fixture(4);
+        leased.next_wake_at = None;
+        leased.liveness = Some(DurableLiveness::ActiveLease {
+            token: "lease-token".to_owned(),
+            generation: 3,
+            expires_at: 106,
+        });
+        let (delay, affected) = poll_plan(&OperatorSnapshot {
+            captured_at: 100,
+            service: None,
+            next_cursor: None,
+            watermark: 7,
+            obligations: vec![leased],
+        });
+        assert_eq!(delay, Duration::from_secs(6));
+        assert_eq!(affected, BTreeSet::from(["obligation-000004".to_owned()]));
     }
 
     #[test]
@@ -2365,26 +2941,6 @@ mod tests {
             assert!(target.semantic_id().ends_with(".pane.3"));
             assert_eq!(action.specification().scope, ActionScope::Pane);
         }
-    }
-
-    #[test]
-    fn out_of_order_same_obligation_topic_responses_apply_only_the_latest_generation() {
-        let mut gate = TopicRequestGate::default();
-        let older = gate.begin("same-obligation".to_owned());
-        let newer = gate.begin("same-obligation".to_owned());
-        assert!(newer > older);
-        assert_eq!(gate.pending, 2);
-
-        assert!(!gate.finish("same-obligation", older));
-        assert_eq!(gate.pending, 1);
-        assert!(gate.finish("same-obligation", newer));
-        assert_eq!(gate.pending, 0);
-
-        let newest = gate.begin("same-obligation".to_owned());
-        let stale = gate.begin("same-obligation".to_owned());
-        assert!(gate.finish("same-obligation", stale));
-        assert!(!gate.finish("same-obligation", newest));
-        assert_eq!(gate.pending, 0);
     }
 
     #[test]

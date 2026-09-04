@@ -1,7 +1,7 @@
 {
-  "frame_number": "29",
+  "frame_number": "31",
   "ui_snapshot": {
-    "frame": "29",
+    "frame": "31",
     "pixels_per_point": 1,
     "root": "application",
     "nodes": [
@@ -2932,7 +2932,7 @@
       {
         "component_id": {
           "kind": "section_heading",
-          "instance": "2959122709790785137"
+          "instance": "2866318514267894748"
         },
         "role": "section_heading",
         "horizontal_alignment": "start",
@@ -2946,7 +2946,7 @@
         "painted_rect": {
           "min_x": 895,
           "min_y": 665.0625,
-          "max_x": 1128.5625,
+          "max_x": 1091,
           "max_y": 679.0625
         },
         "clip_rect": {
@@ -2964,11 +2964,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": "5918243220558313852"
+          "instance": "5732639227559045918"
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": "2959121610279156926"
+          "instance": "2866319613779522959"
         },
         "role": "secondary",
         "horizontal_alignment": "start",
@@ -3000,11 +3000,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": "5918243220558313853"
+          "instance": "5732639227559045919"
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": "2959121610279156926"
+          "instance": "2866319613779522959"
         },
         "role": "body",
         "horizontal_alignment": "start",
@@ -3036,11 +3036,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": "5918241021535057430"
+          "instance": "5732641426582302340"
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": "2959120510767528715"
+          "instance": "2866320713291151170"
         },
         "role": "secondary",
         "horizontal_alignment": "start",
@@ -3072,11 +3072,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": "5918241021535057431"
+          "instance": "5732641426582302341"
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": "2959120510767528715"
+          "instance": "2866320713291151170"
         },
         "role": "body",
         "horizontal_alignment": "start",
@@ -3090,7 +3090,7 @@
         "painted_rect": {
           "min_x": 1087.300048828125,
           "min_y": 738.140625,
-          "max_x": 1341.800048828125,
+          "max_x": 1158.643798828125,
           "max_y": 753.140625
         },
         "clip_rect": {
@@ -3108,11 +3108,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": "5918238822511801008"
+          "instance": "5732643625605558762"
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": "2959119411255900504"
+          "instance": "2866321812802779381"
         },
         "role": "secondary",
         "horizontal_alignment": "start",
@@ -3144,11 +3144,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": "5918238822511801009"
+          "instance": "5732643625605558763"
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": "2959119411255900504"
+          "instance": "2866321812802779381"
         },
         "role": "body",
         "horizontal_alignment": "start",
@@ -3162,7 +3162,7 @@
         "painted_rect": {
           "min_x": 1087.300048828125,
           "min_y": 778.234375,
-          "max_x": 1222.393798828125,
+          "max_x": 1101.956298828125,
           "max_y": 793.234375
         },
         "clip_rect": {
@@ -3180,11 +3180,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": "5918254215674595962"
+          "instance": "5723713407582381850"
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": "2959127107837297981"
+          "instance": "2861856703791190925"
         },
         "role": "secondary",
         "horizontal_alignment": "start",
@@ -3198,7 +3198,7 @@
         "painted_rect": {
           "min_x": 895,
           "min_y": 818.328125,
-          "max_x": 961.78125,
+          "max_x": 970.25,
           "max_y": 833.328125
         },
         "clip_rect": {
@@ -3216,11 +3216,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": "5918254215674595963"
+          "instance": "5723713407582381851"
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": "2959127107837297981"
+          "instance": "2861856703791190925"
         },
         "role": "body",
         "horizontal_alignment": "start",
@@ -3234,7 +3234,7 @@
         "painted_rect": {
           "min_x": 1087.300048828125,
           "min_y": 818.328125,
-          "max_x": 1094.643798828125,
+          "max_x": 1222.393798828125,
           "max_y": 833.328125
         },
         "clip_rect": {
@@ -3252,11 +3252,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": "5580633952224168596"
+          "instance": "5723711208559125428"
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": "2790316976112084298"
+          "instance": "2861855604279562714"
         },
         "role": "secondary",
         "horizontal_alignment": "start",
@@ -3270,7 +3270,7 @@
         "painted_rect": {
           "min_x": 895,
           "min_y": 858.421875,
-          "max_x": 961.875,
+          "max_x": 994.5625,
           "max_y": 873.421875
         },
         "clip_rect": {
@@ -3288,11 +3288,11 @@
       {
         "component_id": {
           "kind": "property_row",
-          "instance": "5580633952224168597"
+          "instance": "5723711208559125429"
         },
         "parent_id": {
           "kind": "property_row",
-          "instance": "2790316976112084298"
+          "instance": "2861855604279562714"
         },
         "role": "body",
         "horizontal_alignment": "start",
@@ -3306,7 +3306,7 @@
         "painted_rect": {
           "min_x": 1087.300048828125,
           "min_y": 858.421875,
-          "max_x": 1222.393798828125,
+          "max_x": 1094.643798828125,
           "max_y": 873.421875
         },
         "clip_rect": {

@@ -4,8 +4,8 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use axum::{
     Json, Router,
-    extract::{Path as AxumPath, State, rejection::JsonRejection},
-    http::StatusCode,
+    extract::{Path as AxumPath, Query, State, rejection::JsonRejection},
+    http::{HeaderName, HeaderValue, StatusCode},
     middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -45,6 +45,16 @@ pub struct CreateRequest {
     pub retry_base_seconds: Option<i64>,
     pub retry_max_seconds: Option<i64>,
 }
+
+#[derive(Debug, Default, Deserialize)]
+struct PageQuery {
+    cursor: Option<String>,
+    watermark: Option<i64>,
+    limit: Option<usize>,
+}
+
+const NEXT_CURSOR_HEADER: HeaderName = HeaderName::from_static("x-bokkie-next-cursor");
+const WATERMARK_HEADER: HeaderName = HeaderName::from_static("x-bokkie-watermark");
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DecisionRequest {
@@ -124,6 +134,7 @@ impl From<StoreError> for ApiError {
             StoreError::Conflict(_) | StoreError::Fenced => {
                 (StatusCode::CONFLICT, "transition_conflict")
             }
+            StoreError::ProjectionGap(_) => (StatusCode::CONFLICT, "projection_gap"),
             StoreError::Sql(rusqlite::Error::SqliteFailure(sqlite, _))
                 if sqlite.code == rusqlite::ErrorCode::ConstraintViolation =>
             {
@@ -184,6 +195,8 @@ fn router_core(executor: DbExecutor, runtime: ApiRuntime) -> Router {
         .route("/bootstrap", get(bootstrap))
         .route("/health", get(health))
         .route("/operator/snapshot", get(operator_snapshot))
+        .route("/operator/changes", get(operator_changes))
+        .route("/operator/obligations/{id}", get(operator_obligation))
         .route("/operator/obligations/{id}/topic", get(operator_topic))
         .route("/operator/obligations/{id}/approve", post(operator_approve))
         .route("/operator/obligations/{id}/reject", post(operator_reject))
@@ -317,7 +330,7 @@ pub fn validate_loopback(address: SocketAddr) -> Result<(), String> {
 async fn health(State(state): State<ApiState>) -> Result<Response, ApiError> {
     let identity = state.runtime.identity();
     with_store(&state, move |store, _| {
-        store.list()?;
+        store.check_readable()?;
         Ok(HealthResponse {
             status: "ok",
             service: identity,
@@ -344,18 +357,115 @@ async fn create(
     .map(|body| (StatusCode::CREATED, Json(body)).into_response())
 }
 
-async fn list(State(state): State<ApiState>) -> Result<Response, ApiError> {
-    with_store(&state, move |store, _| store.list())
-        .await
-        .map(|body| (StatusCode::OK, Json(body)).into_response())
+async fn list(
+    State(state): State<ApiState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Response, ApiError> {
+    with_store(&state, move |store, _| {
+        store.obligation_page(query.cursor.as_deref(), query.watermark, query.limit)
+    })
+    .await
+    .and_then(page_response)
 }
 
-async fn operator_snapshot(State(state): State<ApiState>) -> Result<Response, ApiError> {
+async fn operator_snapshot(
+    State(state): State<ApiState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Response, ApiError> {
     let identity = state.runtime.identity();
     with_store(&state, move |store, now| {
-        let mut snapshot = store.operator_snapshot(now)?;
+        let mut snapshot = store.operator_snapshot_page(
+            now,
+            query.cursor.as_deref(),
+            query.watermark,
+            query.limit,
+        )?;
         snapshot.service = Some(identity);
         Ok(snapshot)
+    })
+    .await
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn operator_obligation(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Response, ApiError> {
+    let identity = state.runtime.identity();
+    with_store(&state, move |store, now| {
+        let (watermark, obligation) = store.operator_obligation_with_watermark(&id, now)?;
+        Ok(bokkie_operator_api::OperatorObligationProjection {
+            service: identity,
+            watermark,
+            obligation,
+        })
+    })
+    .await
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct ChangeQuery {
+    #[serde(default)]
+    after: i64,
+    through: Option<i64>,
+    limit: Option<usize>,
+}
+
+async fn operator_changes(
+    State(state): State<ApiState>,
+    Query(query): Query<ChangeQuery>,
+) -> Result<Response, ApiError> {
+    let identity = state.runtime.identity();
+    let limit = crate::page_limit(query.limit)?;
+    with_store(&state, move |store, _| {
+        let page = store.change_page(query.after, query.through, limit)?;
+        let changes = page
+            .items
+            .into_iter()
+            .map(|item| {
+                let source = match item.envelope.source {
+                    crate::EventSource::AuditEvent { sequence } => {
+                        bokkie_operator_api::ProjectionEventSource::AuditEvent { sequence }
+                    }
+                    crate::EventSource::GardenerEvent { sequence } => {
+                        bokkie_operator_api::ProjectionEventSource::GardenerEvent { sequence }
+                    }
+                    crate::EventSource::GardenerRunEvent { sequence } => {
+                        bokkie_operator_api::ProjectionEventSource::GardenerRunEvent { sequence }
+                    }
+                };
+                bokkie_operator_api::ProjectionChange {
+                    revision: item.envelope.sequence,
+                    provenance: match item.envelope.provenance {
+                        crate::EventProvenance::LegacyNonCausal => {
+                            bokkie_operator_api::ProjectionEventProvenance::LegacyNonCausal
+                        }
+                        crate::EventProvenance::LiveAppend => {
+                            bokkie_operator_api::ProjectionEventProvenance::LiveAppend
+                        }
+                    },
+                    source,
+                    event_type: item.event_type,
+                    occurred_at: item.occurred_at,
+                    obligation_id: item.obligation_id,
+                    occurrence: item.occurrence,
+                    repository: item.repository,
+                    inspection_id: item.inspection_id,
+                    proposal_fingerprint: item.proposal_fingerprint,
+                    proposal_instance_id: item.proposal_instance_id,
+                    run_id: item.run_id,
+                }
+            })
+            .collect();
+        Ok(bokkie_operator_api::ProjectionChangePage {
+            service: identity,
+            requested_after: page.after,
+            requested_through: query.through,
+            next_after: page.next_after,
+            watermark: page.through,
+            changes,
+        })
     })
     .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
@@ -364,10 +474,22 @@ async fn operator_snapshot(State(state): State<ApiState>) -> Result<Response, Ap
 async fn operator_topic(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Response, ApiError> {
-    with_store(&state, move |store, now| store.operator_topic(&id, now))
-        .await
-        .map(|body| (StatusCode::OK, Json(body)).into_response())
+    let identity = state.runtime.identity();
+    with_store(&state, move |store, now| {
+        let mut topic = store.operator_topic_page(
+            &id,
+            now,
+            query.cursor.as_deref(),
+            query.watermark,
+            query.limit,
+        )?;
+        topic.service = Some(identity);
+        Ok(topic)
+    })
+    .await
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
 async fn show(
@@ -505,25 +627,27 @@ async fn operator_cancel(
 async fn events(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Response, ApiError> {
     with_store(&state, move |store, _| {
         require_obligation(store, &id)?;
-        store.events(&id)
+        store.audit_event_page(&id, query.cursor.as_deref(), query.watermark, query.limit)
     })
     .await
-    .map(|body| (StatusCode::OK, Json(body)).into_response())
+    .and_then(page_response)
 }
 
 async fn attempts(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Response, ApiError> {
     with_store(&state, move |store, _| {
         require_obligation(store, &id)?;
-        store.attempts(&id)
+        store.attempt_page(&id, query.cursor.as_deref(), query.watermark, query.limit)
     })
     .await
-    .map(|body| (StatusCode::OK, Json(body)).into_response())
+    .and_then(page_response)
 }
 
 async fn register_gardener_repository(
@@ -554,10 +678,15 @@ async fn show_gardener_repository(State(state): State<ApiState>) -> Result<Respo
         .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
-async fn list_gardener_inspections(State(state): State<ApiState>) -> Result<Response, ApiError> {
-    with_store(&state, move |store, _| store.gardener_inspections())
-        .await
-        .map(|body| (StatusCode::OK, Json(body)).into_response())
+async fn list_gardener_inspections(
+    State(state): State<ApiState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Response, ApiError> {
+    with_store(&state, move |store, _| {
+        store.gardener_inspection_page(query.cursor.as_deref(), query.watermark, query.limit)
+    })
+    .await
+    .and_then(page_response)
 }
 
 async fn show_gardener_inspection(
@@ -571,10 +700,15 @@ async fn show_gardener_inspection(
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
-async fn list_gardener_proposals(State(state): State<ApiState>) -> Result<Response, ApiError> {
-    with_store(&state, move |store, _| store.gardener_proposals())
-        .await
-        .map(|body| (StatusCode::OK, Json(body)).into_response())
+async fn list_gardener_proposals(
+    State(state): State<ApiState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Response, ApiError> {
+    with_store(&state, move |store, _| {
+        store.gardener_proposal_page(query.cursor.as_deref(), query.watermark, query.limit)
+    })
+    .await
+    .and_then(page_response)
 }
 
 async fn show_gardener_proposal(
@@ -591,23 +725,35 @@ async fn show_gardener_proposal(
 async fn gardener_proposal_observations(
     State(state): State<ApiState>,
     AxumPath(fingerprint): AxumPath<String>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Response, ApiError> {
     with_store(&state, move |store, _| {
         require_gardener_proposal(store, &fingerprint)?;
-        store.proposal_observations(&fingerprint)
+        store.proposal_observation_page(
+            &fingerprint,
+            query.cursor.as_deref(),
+            query.watermark,
+            query.limit,
+        )
     })
     .await
-    .map(|body| (StatusCode::OK, Json(body)).into_response())
+    .and_then(page_response)
 }
 
 async fn list_gardener_proposal_instances(
     State(state): State<ApiState>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Response, ApiError> {
     with_store(&state, move |store, _| {
-        store.gardener_proposal_instances_all()
+        store.gardener_proposal_instance_page(
+            None,
+            query.cursor.as_deref(),
+            query.watermark,
+            query.limit,
+        )
     })
     .await
-    .map(|body| (StatusCode::OK, Json(body)).into_response())
+    .and_then(page_response)
 }
 
 async fn show_gardener_proposal_instance(
@@ -624,13 +770,19 @@ async fn show_gardener_proposal_instance(
 async fn gardener_proposal_instance_observations(
     State(state): State<ApiState>,
     AxumPath(instance_id): AxumPath<String>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Response, ApiError> {
     with_store(&state, move |store, _| {
         require_gardener_proposal_instance(store, &instance_id)?;
-        store.proposal_instance_observations(&instance_id)
+        store.proposal_instance_observation_page(
+            &instance_id,
+            query.cursor.as_deref(),
+            query.watermark,
+            query.limit,
+        )
     })
     .await
-    .map(|body| (StatusCode::OK, Json(body)).into_response())
+    .and_then(page_response)
 }
 
 async fn approve_gardener_proposal(
@@ -795,10 +947,19 @@ async fn operator_decide_gardener_proposal_instance(
     .map(|body| (StatusCode::OK, Json(body)).into_response())
 }
 
-async fn list_gardener_runs(State(state): State<ApiState>) -> Result<Response, ApiError> {
-    with_store(&state, move |store, _| store.gardener_implementation_runs())
-        .await
-        .map(|body| (StatusCode::OK, Json(body)).into_response())
+async fn list_gardener_runs(
+    State(state): State<ApiState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Response, ApiError> {
+    with_store(&state, move |store, _| {
+        store.gardener_implementation_run_page(
+            query.cursor.as_deref(),
+            query.watermark,
+            query.limit,
+        )
+    })
+    .await
+    .and_then(page_response)
 }
 
 async fn show_gardener_run(
@@ -813,13 +974,33 @@ async fn show_gardener_run(
 async fn gardener_run_events(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Response, ApiError> {
     with_store(&state, move |store, _| {
         require_gardener_run(store, &id)?;
-        store.gardener_run_events(&id)
+        store.gardener_run_event_page(&id, query.cursor.as_deref(), query.watermark, query.limit)
     })
     .await
-    .map(|body| (StatusCode::OK, Json(body)).into_response())
+    .and_then(page_response)
+}
+
+fn page_response<T: Serialize>(page: crate::ReadPage<T>) -> Result<Response, ApiError> {
+    let mut response = (StatusCode::OK, Json(page.items)).into_response();
+    response.headers_mut().insert(
+        WATERMARK_HEADER,
+        HeaderValue::from_str(&page.watermark.to_string()).expect("numeric watermark header"),
+    );
+    if let Some(cursor) = page.next_cursor {
+        response.headers_mut().insert(
+            NEXT_CURSOR_HEADER,
+            HeaderValue::from_str(&cursor).map_err(|_| ApiError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "cursor_encoding_error",
+                message: "generated cursor is not a valid HTTP header".to_owned(),
+            })?,
+        );
+    }
+    Ok(response)
 }
 
 async fn with_store<T>(
@@ -1006,7 +1187,7 @@ mod tests {
         let (_, bootstrap) = response_json(bootstrap).await;
         assert_eq!(bootstrap["mutation_token"], TEST_TOKEN);
         assert_eq!(bootstrap["service"]["api_contract_version"], 1);
-        assert_eq!(bootstrap["service"]["schema_version"], 8);
+        assert_eq!(bootstrap["service"]["schema_version"], 9);
         assert_eq!(bootstrap["service"]["session_id"], "test-session");
 
         for path in ["/health", "/operator/snapshot"] {
@@ -1686,5 +1867,188 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let error: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(error["error"]["code"], "storage_executor_unavailable");
+    }
+
+    #[tokio::test]
+    async fn read_routes_are_bounded_and_publish_durable_continuation_headers() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("page-http.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        for id in ["a", "b", "c"] {
+            store
+                .create(
+                    NewObligation {
+                        id: id.to_owned(),
+                        description: id.to_owned(),
+                        scheduled_at: 100,
+                        recurrence: None,
+                        approval_required: false,
+                        retry: RetryPolicy::default(),
+                    },
+                    100,
+                )
+                .unwrap();
+        }
+        drop(store);
+        let router = test_router(database);
+        let first = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/obligations?limit=2")
+                    .header("host", TEST_AUTHORITY)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let cursor = first.headers()[&NEXT_CURSOR_HEADER]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let watermark = first.headers()[&WATERMARK_HEADER]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let body = to_bytes(first.into_body(), usize::MAX).await.unwrap();
+        let items: Vec<Obligation> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+
+        let second = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/obligations?limit=2&watermark={watermark}&cursor={cursor}"
+                    ))
+                    .header("host", TEST_AUTHORITY)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        assert!(second.headers().get(&NEXT_CURSOR_HEADER).is_none());
+        let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+        let items: Vec<Obligation> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["c"]
+        );
+    }
+
+    #[tokio::test]
+    async fn incremental_changes_are_typed_bounded_and_do_not_require_mutation_token() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("changes-http.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        for id in ["a", "b"] {
+            store
+                .create(
+                    NewObligation {
+                        id: id.to_owned(),
+                        description: id.to_owned(),
+                        scheduled_at: 100,
+                        recurrence: None,
+                        approval_required: false,
+                        retry: RetryPolicy::default(),
+                    },
+                    100,
+                )
+                .unwrap();
+        }
+        drop(store);
+        let response = test_router(database)
+            .oneshot(
+                Request::builder()
+                    .uri("/operator/changes?after=0&limit=1")
+                    .header("host", TEST_AUTHORITY)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let page: bokkie_operator_api::ProjectionChangePage =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(page.changes.len(), 1);
+        assert_eq!(page.requested_after, 0);
+        assert!(page.next_after.is_some());
+        assert_eq!(page.service.schema_version, 9);
+    }
+
+    #[tokio::test]
+    async fn operator_obligation_and_topic_reads_expose_identity_and_watermark() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("operator-read-identity-http.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        store
+            .create(
+                NewObligation {
+                    id: "affected".to_owned(),
+                    description: "Affected obligation".to_owned(),
+                    scheduled_at: 100,
+                    recurrence: None,
+                    approval_required: false,
+                    retry: RetryPolicy::default(),
+                },
+                100,
+            )
+            .unwrap();
+        drop(store);
+        let application = test_router(database);
+
+        let affected = application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/operator/obligations/affected")
+                    .header("host", TEST_AUTHORITY)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(affected.status(), StatusCode::OK);
+        let body = to_bytes(affected.into_body(), usize::MAX).await.unwrap();
+        let affected: bokkie_operator_api::OperatorObligationProjection =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(affected.service.session_id, "test-session");
+        assert_eq!(affected.service.schema_version, 9);
+        assert!(affected.watermark > 0);
+        assert_eq!(affected.obligation.id, "affected");
+
+        let topic = application
+            .oneshot(
+                Request::builder()
+                    .uri("/operator/obligations/affected/topic")
+                    .header("host", TEST_AUTHORITY)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(topic.status(), StatusCode::OK);
+        let body = to_bytes(topic.into_body(), usize::MAX).await.unwrap();
+        let topic: bokkie_operator_api::ObligationTopic = serde_json::from_slice(&body).unwrap();
+        assert_eq!(topic.service.as_ref(), Some(&affected.service));
+        assert_eq!(topic.watermark, affected.watermark);
+        assert!(!topic.items.is_empty());
+        assert!(
+            topic
+                .items
+                .iter()
+                .all(|item| item.evidence.get("envelope_sequence").is_none())
+        );
     }
 }

@@ -74,6 +74,37 @@ fn cli_lifecycle_operations_return_structured_json_and_exit_statuses() {
 }
 
 #[test]
+fn cli_lists_emit_bounded_page_envelopes_and_accept_continuations() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("cli-pages.sqlite");
+    for id in ["page-a", "page-b"] {
+        cli_json(&database, &["create", "--id", id, "--description", id]);
+    }
+    let first = run_cli(&database, &["list", "--limit", "1"]);
+    assert_success(&first);
+    let first: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first["items"].as_array().unwrap().len(), 1);
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let watermark = first["watermark"].as_i64().unwrap().to_string();
+    let second = run_cli(
+        &database,
+        &[
+            "list",
+            "--limit",
+            "1",
+            "--cursor",
+            cursor,
+            "--watermark",
+            &watermark,
+        ],
+    );
+    assert_success(&second);
+    let second: Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(second["items"].as_array().unwrap().len(), 1);
+    assert!(second["next_cursor"].is_null());
+}
+
+#[test]
 fn doctor_cli_reports_clean_state_without_mutating_or_creating_a_database() {
     let temporary = TempDir::new().unwrap();
     let database = temporary.path().join("doctor.sqlite");
@@ -1267,7 +1298,8 @@ fn create_seeded_run(database: &Path, approved_fingerprint: &str) {
 fn cli_json(database: &Path, arguments: &[&str]) -> Value {
     let output = run_cli(database, arguments);
     assert_success(&output);
-    serde_json::from_slice(&output.stdout).unwrap()
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    value.get("items").cloned().unwrap_or(value)
 }
 
 fn try_cli_json(database: &Path, arguments: &[&str]) -> Option<Value> {

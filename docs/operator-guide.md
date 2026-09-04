@@ -124,6 +124,44 @@ evidence, but cannot retroactively prove which SQL bytes originally created a
 pre-digest database. Gaps, renamed or digest-mismatched migrations, and schemas
 newer than the executable fail closed without repair.
 
+## Bounded reads and incremental projections
+
+Every list and history command returns one JSON page. The default page size is
+100 and the server-enforced maximum is 500. Pass its opaque `next_cursor` back
+as `--cursor`, together with the returned `watermark` as `--watermark`; use
+`--limit` only to request a size within `1..=500`. This applies to obligations,
+attempts, audit events, inspections, proposals, proposal instances and their
+observations, implementation runs and run events. A cursor is valid only for
+its exact read scope and captured revision. It is not a process session, lane
+identity, failure disposition, mutation token or action precondition.
+
+The corresponding HTTP list routes preserve their API v1 array bodies. They
+accept additive `cursor`, `watermark` and `limit` query fields and return
+`X-Bokkie-Watermark` and, when another page exists,
+`X-Bokkie-Next-Cursor`. Operator snapshot and selected-topic responses carry
+the same watermark and continuation in their typed bodies. Page walks use
+stable keyset ordering and bounded `LIMIT n+1` queries; mutable pages fail with
+`projection_gap` if a write makes their captured projection unreconstructable.
+Restart that read from its first page instead of combining revisions.
+
+`GET /operator/changes?after=REVISION&limit=LIMIT` is the durable incremental
+refresh surface. Its first response captures a global `watermark`; while
+`next_after` is present, request the next page with that value as `after` and
+the captured value as `through`. Once drained, resume polling with `after` set
+to the watermark. Each record carries its authoritative global envelope
+revision, source event identity and any affected obligation, proposal or run
+identities. Limits are within `1..=1000`; gaps, invalid negative positions and
+positions beyond the watermark fail closed.
+
+Schema v9 adds only this append-only envelope over the existing audit,
+gardener and run-event tables; those domain tables remain authoritative and
+Bokkie does not claim full event sourcing. New source events receive their
+envelope in the same SQLite transaction. Pre-v9 rows receive a deterministic
+timestamp/source/sequence replay order explicitly labelled
+`legacy_non_causal`, because their historical cross-stream transaction order
+cannot be reconstructed. `live_append` alone is authoritative cross-stream
+insertion order.
+
 ## Attention UI
 
 The optional attention workspace is a local view over Bokkie's HTTP
@@ -149,8 +187,12 @@ the prior snapshot, selected obligation and context visible during refresh; a
 transport failure, stale selected evidence or `409` transition conflict marks
 that retained view stale and disables decisions. A conflict keeps the actor and
 note draft, refreshes Bokkie's state, and requires a new review. A successful
-action is not proof of completion: it triggers refresh so the durable event and
-new server-authorised capabilities are observed.
+action is not proof of completion: it drains changes from the last fully
+applied global watermark, refetches only affected obligations and the selected
+topic when necessary, and advances the watermark only after those projections
+are current. Unrelated changes retain selection and context. A cursor gap or
+session rotation retains the prior view as stale, disables decisions and
+rebuilds bounded pages under one fresh process identity.
 
 Every lifecycle action has a separate confirmation. The UI cannot invent an
 approve, reject, retry or cancel transition absent from Bokkie's capabilities.

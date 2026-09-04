@@ -1,8 +1,9 @@
 use std::{sync::mpsc::Sender, time::Duration};
 
 use bokkie_operator_api::{
-    API_CONTRACT_VERSION, ActionPrecondition, BOKKIE_BUILD_ID, ObligationTopic, OperatorSnapshot,
-    SUPPORTED_SCHEMA_VERSION, ServiceIdentity, SessionBootstrap,
+    API_CONTRACT_VERSION, ActionPrecondition, BOKKIE_BUILD_ID, ObligationTopic,
+    OperatorObligationProjection, OperatorSnapshot, ProjectionChangePage, SUPPORTED_SCHEMA_VERSION,
+    ServiceIdentity, SessionBootstrap,
 };
 use eframe::egui;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -24,8 +25,23 @@ pub struct ActionRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApiRequest {
     Bootstrap,
-    Snapshot,
-    Topic {
+    SnapshotPage {
+        generation: u64,
+        cursor: Option<String>,
+        watermark: Option<i64>,
+    },
+    TopicPage {
+        obligation_id: String,
+        generation: u64,
+        cursor: Option<String>,
+        watermark: Option<i64>,
+    },
+    Changes {
+        generation: u64,
+        after: i64,
+        through: Option<i64>,
+    },
+    Obligation {
         obligation_id: String,
         generation: u64,
     },
@@ -35,14 +51,18 @@ pub enum ApiRequest {
 #[derive(Debug)]
 pub enum ApiPayload {
     Bootstrap(ApiSession),
-    Snapshot(OperatorSnapshot),
-    Topic(ObligationTopic),
+    SnapshotPage(OperatorSnapshot),
+    TopicPage(ObligationTopic),
+    Changes(ProjectionChangePage),
+    Obligation(Box<OperatorObligationProjection>),
     ActionAccepted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApiFailure {
     Conflict(String),
+    ProjectionGap(String),
+    InvalidCursor(String),
     SessionChanged(String),
     Other(String),
 }
@@ -50,9 +70,11 @@ pub enum ApiFailure {
 impl std::fmt::Display for ApiFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Conflict(message) | Self::SessionChanged(message) | Self::Other(message) => {
-                formatter.write_str(message)
-            }
+            Self::Conflict(message)
+            | Self::ProjectionGap(message)
+            | Self::InvalidCursor(message)
+            | Self::SessionChanged(message)
+            | Self::Other(message) => formatter.write_str(message),
         }
     }
 }
@@ -74,7 +96,7 @@ impl std::fmt::Debug for ApiSession {
 }
 
 impl ApiSession {
-    fn from_bootstrap(bootstrap: SessionBootstrap) -> Result<Self, ApiFailure> {
+    pub(crate) fn from_bootstrap(bootstrap: SessionBootstrap) -> Result<Self, ApiFailure> {
         validate_compatibility(&bootstrap.service)?;
         if bootstrap.mutation_token.len() != 64
             || !bootstrap
@@ -174,9 +196,11 @@ impl Transport {
     ) -> Result<ehttp::Request, ApiFailure> {
         let endpoint = self.endpoint(request);
         match request {
-            ApiRequest::Bootstrap | ApiRequest::Snapshot | ApiRequest::Topic { .. } => {
-                Ok(ehttp::Request::get(endpoint))
-            }
+            ApiRequest::Bootstrap
+            | ApiRequest::SnapshotPage { .. }
+            | ApiRequest::TopicPage { .. }
+            | ApiRequest::Changes { .. }
+            | ApiRequest::Obligation { .. } => Ok(ehttp::Request::get(endpoint)),
             ApiRequest::Act(action) => {
                 let session = session.ok_or_else(|| {
                     ApiFailure::SessionChanged(
@@ -201,9 +225,31 @@ impl Transport {
     fn endpoint(&self, request: &ApiRequest) -> String {
         let path = match request {
             ApiRequest::Bootstrap => "/bootstrap".to_owned(),
-            ApiRequest::Snapshot => "/operator/snapshot".to_owned(),
-            ApiRequest::Topic { obligation_id, .. } => format!(
-                "/operator/obligations/{}/topic",
+            ApiRequest::SnapshotPage {
+                cursor, watermark, ..
+            } => page_endpoint("/operator/snapshot", cursor.as_deref(), *watermark),
+            ApiRequest::TopicPage {
+                obligation_id,
+                cursor,
+                watermark,
+                ..
+            } => page_endpoint(
+                &format!(
+                    "/operator/obligations/{}/topic",
+                    encode_path_segment(obligation_id)
+                ),
+                cursor.as_deref(),
+                *watermark,
+            ),
+            ApiRequest::Changes { after, through, .. } => {
+                let mut path = format!("/operator/changes?after={after}");
+                if let Some(through) = through {
+                    path.push_str(&format!("&through={through}"));
+                }
+                path
+            }
+            ApiRequest::Obligation { obligation_id, .. } => format!(
+                "/operator/obligations/{}",
                 encode_path_segment(obligation_id)
             ),
             ApiRequest::Act(action) => action_endpoint(action),
@@ -212,6 +258,21 @@ impl Transport {
         return format!("{}{path}", self.base);
         #[cfg(target_arch = "wasm32")]
         path
+    }
+}
+
+fn page_endpoint(path: &str, cursor: Option<&str>, watermark: Option<i64>) -> String {
+    let mut parameters = Vec::new();
+    if let Some(watermark) = watermark {
+        parameters.push(format!("watermark={watermark}"));
+    }
+    if let Some(cursor) = cursor {
+        parameters.push(format!("cursor={}", encode_query_value(cursor)));
+    }
+    if parameters.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{path}?{}", parameters.join("&"))
     }
 }
 
@@ -278,6 +339,10 @@ fn decode(
                 )
             });
         return match (response.status, code.as_deref()) {
+            (409, Some("projection_gap")) => Err(ApiFailure::ProjectionGap(message)),
+            (_, Some("invalid_request")) if request.is_projection_read() => {
+                Err(ApiFailure::InvalidCursor(message))
+            }
             (409, _) => Err(ApiFailure::Conflict(message)),
             (403, Some("mutation_token_required" | "mutation_token_invalid")) => {
                 Err(ApiFailure::SessionChanged(message))
@@ -289,27 +354,82 @@ fn decode(
         ApiRequest::Bootstrap => decode_json::<SessionBootstrap>(&response)
             .and_then(ApiSession::from_bootstrap)
             .map(ApiPayload::Bootstrap),
-        ApiRequest::Snapshot => decode_json::<OperatorSnapshot>(&response).and_then(|snapshot| {
-            let service = snapshot.service.as_ref().ok_or_else(|| {
-                ApiFailure::SessionChanged(
-                    "Bokkie operator snapshot omitted its process identity".to_owned(),
-                )
-            })?;
-            let session = expected_session.ok_or_else(|| {
-                ApiFailure::SessionChanged(
-                    "Bokkie operator snapshot arrived without a bootstrap session".to_owned(),
-                )
-            })?;
-            if !session.matches(service) {
-                return Err(ApiFailure::SessionChanged(
-                    "Bokkie restarted or changed its API session".to_owned(),
-                ));
-            }
-            Ok(ApiPayload::Snapshot(snapshot))
-        }),
-        ApiRequest::Topic { .. } => decode_json(&response).map(ApiPayload::Topic),
+        ApiRequest::SnapshotPage { .. } => {
+            decode_json::<OperatorSnapshot>(&response).and_then(|snapshot| {
+                validate_response_identity(
+                    snapshot.service.as_ref(),
+                    expected_session,
+                    "operator snapshot page",
+                )?;
+                Ok(ApiPayload::SnapshotPage(snapshot))
+            })
+        }
+        ApiRequest::TopicPage { .. } => {
+            decode_json::<ObligationTopic>(&response).and_then(|topic| {
+                validate_response_identity(
+                    topic.service.as_ref(),
+                    expected_session,
+                    "operator topic page",
+                )?;
+                Ok(ApiPayload::TopicPage(topic))
+            })
+        }
+        ApiRequest::Changes { .. } => {
+            decode_json::<ProjectionChangePage>(&response).and_then(|page| {
+                validate_response_identity(
+                    Some(&page.service),
+                    expected_session,
+                    "operator change page",
+                )?;
+                Ok(ApiPayload::Changes(page))
+            })
+        }
+        ApiRequest::Obligation { .. } => decode_json::<OperatorObligationProjection>(&response)
+            .and_then(|projection| {
+                validate_response_identity(
+                    Some(&projection.service),
+                    expected_session,
+                    "operator obligation projection",
+                )?;
+                Ok(ApiPayload::Obligation(Box::new(projection)))
+            }),
         ApiRequest::Act(_) => Ok(ApiPayload::ActionAccepted),
     }
+}
+
+impl ApiRequest {
+    fn is_projection_read(&self) -> bool {
+        matches!(
+            self,
+            Self::SnapshotPage { .. }
+                | Self::TopicPage { .. }
+                | Self::Changes { .. }
+                | Self::Obligation { .. }
+        )
+    }
+}
+
+fn validate_response_identity(
+    service: Option<&ServiceIdentity>,
+    expected_session: Option<&ApiSession>,
+    response_name: &str,
+) -> Result<(), ApiFailure> {
+    let service = service.ok_or_else(|| {
+        ApiFailure::SessionChanged(format!(
+            "Bokkie {response_name} omitted its process identity"
+        ))
+    })?;
+    let session = expected_session.ok_or_else(|| {
+        ApiFailure::SessionChanged(format!(
+            "Bokkie {response_name} arrived without a bootstrap session"
+        ))
+    })?;
+    if !session.matches(service) {
+        return Err(ApiFailure::SessionChanged(
+            "Bokkie restarted or changed its API session".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn decode_json<T: DeserializeOwned>(response: &ehttp::Response) -> Result<T, ApiFailure> {
@@ -319,6 +439,10 @@ fn decode_json<T: DeserializeOwned>(response: &ehttp::Response) -> Result<T, Api
 }
 
 fn encode_path_segment(value: &str) -> String {
+    percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
+}
+
+fn encode_query_value(value: &str) -> String {
     percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
 
@@ -425,15 +549,36 @@ mod tests {
             "http://127.0.0.1:7744/bootstrap"
         );
         assert_eq!(
-            transport.endpoint(&ApiRequest::Snapshot),
+            transport.endpoint(&ApiRequest::SnapshotPage {
+                generation: 1,
+                cursor: None,
+                watermark: None,
+            }),
             "http://127.0.0.1:7744/operator/snapshot"
         );
         assert_eq!(
-            transport.endpoint(&ApiRequest::Topic {
+            transport.endpoint(&ApiRequest::TopicPage {
                 obligation_id: "obligation/1".to_owned(),
                 generation: 7,
+                cursor: Some("opaque+/=".to_owned()),
+                watermark: Some(41),
             }),
-            "http://127.0.0.1:7744/operator/obligations/obligation%2F1/topic"
+            "http://127.0.0.1:7744/operator/obligations/obligation%2F1/topic?watermark=41&cursor=opaque%2B%2F%3D"
+        );
+        assert_eq!(
+            transport.endpoint(&ApiRequest::Changes {
+                generation: 8,
+                after: 41,
+                through: Some(73),
+            }),
+            "http://127.0.0.1:7744/operator/changes?after=41&through=73"
+        );
+        assert_eq!(
+            transport.endpoint(&ApiRequest::Obligation {
+                obligation_id: "obligation/1".to_owned(),
+                generation: 8,
+            }),
+            "http://127.0.0.1:7744/operator/obligations/obligation%2F1"
         );
         let expected_paths = [
             "/operator/obligations/obligation%2F1/approve",
@@ -513,13 +658,88 @@ mod tests {
             bytes: serde_json::to_vec(&OperatorSnapshot {
                 captured_at: 100,
                 service: Some(service("session-two")),
+                next_cursor: None,
+                watermark: 17,
                 obligations: Vec::new(),
             })
             .unwrap(),
         };
         assert!(matches!(
-            decode(&ApiRequest::Snapshot, response, Some(&old_session)),
+            decode(
+                &ApiRequest::SnapshotPage {
+                    generation: 1,
+                    cursor: None,
+                    watermark: None,
+                },
+                response,
+                Some(&old_session)
+            ),
             Err(ApiFailure::SessionChanged(message)) if message.contains("restarted")
+        ));
+    }
+
+    #[test]
+    fn every_projection_response_requires_the_exact_bootstrap_identity() {
+        let current = session("session-one", &"a".repeat(64));
+        assert!(
+            validate_response_identity(
+                Some(&service("session-one")),
+                Some(&current),
+                "projection",
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_response_identity(
+                Some(&service("session-two")),
+                Some(&current),
+                "projection",
+            ),
+            Err(ApiFailure::SessionChanged(message)) if message.contains("restarted")
+        ));
+        assert!(matches!(
+            validate_response_identity(None, Some(&current), "projection"),
+            Err(ApiFailure::SessionChanged(message)) if message.contains("omitted")
+        ));
+        assert!(matches!(
+            validate_response_identity(Some(&service("session-one")), None, "projection"),
+            Err(ApiFailure::SessionChanged(message)) if message.contains("without a bootstrap")
+        ));
+    }
+
+    #[test]
+    fn projection_gap_and_invalid_cursor_are_recovery_failures() {
+        let request = ApiRequest::Changes {
+            generation: 1,
+            after: 7,
+            through: None,
+        };
+        let response = |status, code: &str, message: &str| ehttp::Response {
+            url: "http://127.0.0.1:7744/operator/changes".to_owned(),
+            ok: false,
+            status,
+            status_text: "failure".to_owned(),
+            headers: ehttp::Headers::default(),
+            bytes: serde_json::to_vec(&serde_json::json!({
+                "error": {"code": code, "message": message}
+            }))
+            .unwrap(),
+        };
+        assert!(matches!(
+            decode(
+                &request,
+                response(409, "projection_gap", "cursor was pruned"),
+                None
+            ),
+            Err(ApiFailure::ProjectionGap(message)) if message == "cursor was pruned"
+        ));
+        assert!(matches!(
+            decode(
+                &request,
+                response(400, "invalid_request", "cursor is malformed"),
+                None
+            ),
+            Err(ApiFailure::InvalidCursor(message)) if message == "cursor is malformed"
         ));
     }
 

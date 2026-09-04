@@ -42,8 +42,25 @@ non-loopback listener or second database path.
 The workspace reads Bokkie's projected HTTP state; it never reads SQLite. On
 start it acquires the same-origin `/bootstrap` session, validates the Bokkie
 build/API/schema identity, retains the mutation token only in memory and then
-requests a current snapshot. Manual refresh and bounded wake-ups reuse that
+walks the current snapshot in server-bounded pages. Every continuation retains
+the first page's capture time and durable global watermark; duplicate rows,
+repeated cursors or a changed capture, watermark or service identity fail
+closed. The selected evidence topic is assembled through the same bounded,
+identity-checked page contract. Manual refresh and bounded wake-ups reuse that
 session.
+
+After the initial snapshot, ordinary refreshes poll `/operator/changes` from
+the last completely applied global watermark. A multi-page change walk pins
+its first returned watermark as `through`, rejects duplicate or out-of-order
+event revisions, and aggregates affected obligation identities before applying
+anything. The workspace then refetches only those obligation projections,
+restores the backend's semantic ledger ordering, and refetches the selected
+topic only when the selected obligation was affected. An unrelated change
+therefore preserves the topic, selection and open confirmation. A change that
+does affect an open confirmation retains its actor and note, but the changed
+backend precondition disables submission until the operator reviews again.
+The applied global watermark advances only after every affected projection and
+any required selected topic have succeeded.
 While refreshing it retains the last snapshot and a surviving selection and
 scroll position. A failed snapshot or selected-topic request marks retained
 data **Stale** and disables lifecycle decisions until a current snapshot is
@@ -75,6 +92,23 @@ evidence but is not authentication. The mutation token protects the local
 loopback adapter against CSRF, DNS rebinding and stale sessions; it is not a
 user-authentication or authorisation system and does not protect against a
 malicious same-user process.
+
+Cursor gaps, invalid continuations, page-watermark mismatches and failed
+projection reads leave retained data visibly **Stale** with decisions disabled.
+The UI attempts one same-session full paginated rebuild where safe, then uses a
+bounded reconnect delay rather than looping on a failing service. A change
+without an obligation identity is deliberately treated as ambiguous and also
+forces a rebuild. Process identity, the durable global projection watermark
+and an action's obligation-local `state_revision` are separate conditions and
+are never substituted for one another.
+
+Polling remains event- or deadline-driven. In addition to `next_wake_at`, the
+earliest active-lease expiry is a refresh deadline because elapsed time alone
+can change the operator projection. Deadline refreshes add only the known due
+obligations to the affected set while still draining the global change page;
+decisions remain disabled until the complete incremental result is applied.
+Successful lifecycle actions likewise flow through the change feed and a
+bounded affected-obligation refresh rather than an unbounded snapshot read.
 
 The browser module deliberately has no configurable API origin. Serve it only
 from Bokkie's loopback `/ui/` route, using the same origin as its relative API

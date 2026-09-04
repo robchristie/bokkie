@@ -9,6 +9,7 @@ pub mod app_server;
 pub mod db_executor;
 pub mod doctor;
 pub mod domain;
+pub mod events;
 pub mod execution_lane;
 pub mod gardener;
 pub mod gardener_runner;
@@ -17,6 +18,7 @@ pub mod http;
 pub mod http_security;
 pub mod migrations;
 pub mod operator;
+pub mod pagination;
 pub mod process;
 pub mod recurrence;
 pub mod runner;
@@ -37,6 +39,9 @@ pub use domain::{
     MAX_OBLIGATION_DESCRIPTION_CHARS, MAX_OBLIGATION_ID_CHARS, MAX_RECURRENCE_EXPRESSION_CHARS,
     MAX_RECURRENCE_TIMEZONE_CHARS, NewObligation, Obligation, ObligationState, RetryPolicy,
 };
+pub use events::{
+    ChangeRecord, EventEnvelope, EventProvenance, EventSource, MAX_CHANGE_PAGE_SIZE, Page,
+};
 pub use execution_lane::ExecutionLane;
 pub use gardener::{
     CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, GardenerCandidateQualification, GardenerEvent,
@@ -49,6 +54,7 @@ pub use gardener::{
 };
 pub use gardener_runner::{GardenerRunner, GardenerRunnerError, GardenerRuntimeConfig};
 pub use migrations::{MigrationManifestEntry, migration_manifest};
+pub use pagination::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, ReadPage, page_limit};
 pub use recurrence::Recurrence;
 pub use runner::{FakeOutcome, FakeRunner, RunResult, Runner, run_one};
 pub use runtime_trust::{

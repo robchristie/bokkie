@@ -1,8 +1,11 @@
-use std::collections::BTreeSet;
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use bokkie_operator_api::{
     ActionCapability, ActionPrecondition, ApprovalSubject, ObligationTopic, OperatorObligation,
-    OperatorObligationState, OperatorSnapshot,
+    OperatorObligationState, OperatorSnapshot, ProjectionChangePage,
 };
 use polyorama_core::{DockNode, DockNodeId, LAYOUT_SCHEMA_VERSION, PaneId, SplitAxis, Workspace};
 use serde::Serialize;
@@ -10,6 +13,278 @@ use serde::Serialize;
 pub const INBOX_PANE_ID: PaneId = PaneId(1);
 pub const OBLIGATIONS_PANE_ID: PaneId = PaneId(2);
 pub const TIMELINE_PANE_ID: PaneId = PaneId(3);
+
+#[derive(Debug)]
+pub(crate) struct SnapshotAssembly {
+    pub generation: u64,
+    captured_at: Option<i64>,
+    watermark: Option<i64>,
+    service: Option<bokkie_operator_api::ServiceIdentity>,
+    seen_cursors: BTreeSet<String>,
+    seen_obligations: BTreeSet<String>,
+    obligations: Vec<OperatorObligation>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum PageProgress<T> {
+    Continue { cursor: String, watermark: i64 },
+    Complete(T),
+}
+
+impl SnapshotAssembly {
+    pub fn new(generation: u64) -> Self {
+        Self {
+            generation,
+            captured_at: None,
+            watermark: None,
+            service: None,
+            seen_cursors: BTreeSet::new(),
+            seen_obligations: BTreeSet::new(),
+            obligations: Vec::new(),
+        }
+    }
+
+    pub fn push(
+        &mut self,
+        mut page: OperatorSnapshot,
+    ) -> Result<PageProgress<OperatorSnapshot>, String> {
+        if page.watermark < 0 {
+            return Err("Snapshot page returned a negative global watermark".to_owned());
+        }
+        let service = page
+            .service
+            .clone()
+            .ok_or_else(|| "Snapshot page omitted its service identity".to_owned())?;
+        match (self.captured_at, self.watermark, self.service.as_ref()) {
+            (None, None, None) => {
+                self.captured_at = Some(page.captured_at);
+                self.watermark = Some(page.watermark);
+                self.service = Some(service);
+            }
+            (Some(captured_at), Some(watermark), Some(expected_service))
+                if captured_at == page.captured_at
+                    && watermark == page.watermark
+                    && expected_service == &service => {}
+            _ => {
+                return Err(
+                    "Snapshot continuation changed its capture, watermark, or service identity"
+                        .to_owned(),
+                );
+            }
+        }
+        for obligation in page.obligations.drain(..) {
+            if !self.seen_obligations.insert(obligation.id.clone()) {
+                return Err(format!(
+                    "Snapshot continuation duplicated obligation {}",
+                    obligation.id
+                ));
+            }
+            self.obligations.push(obligation);
+        }
+        if let Some(cursor) = page.next_cursor {
+            if !self.seen_cursors.insert(cursor.clone()) {
+                return Err("Snapshot continuation repeated a cursor".to_owned());
+            }
+            return Ok(PageProgress::Continue {
+                cursor,
+                watermark: self.watermark.expect("initialised snapshot watermark"),
+            });
+        }
+        Ok(PageProgress::Complete(OperatorSnapshot {
+            captured_at: self.captured_at.expect("initialised snapshot capture"),
+            service: self.service.clone(),
+            next_cursor: None,
+            watermark: self.watermark.expect("initialised snapshot watermark"),
+            obligations: std::mem::take(&mut self.obligations),
+        }))
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct TopicAssembly {
+    pub generation: u64,
+    obligation_id: String,
+    captured_at: Option<i64>,
+    watermark: Option<i64>,
+    service: Option<bokkie_operator_api::ServiceIdentity>,
+    seen_cursors: BTreeSet<String>,
+    seen_items: BTreeSet<String>,
+    items: Vec<bokkie_operator_api::TopicItem>,
+}
+
+impl TopicAssembly {
+    pub fn new(generation: u64, obligation_id: String) -> Self {
+        Self {
+            generation,
+            obligation_id,
+            captured_at: None,
+            watermark: None,
+            service: None,
+            seen_cursors: BTreeSet::new(),
+            seen_items: BTreeSet::new(),
+            items: Vec::new(),
+        }
+    }
+
+    pub fn push(
+        &mut self,
+        mut page: ObligationTopic,
+    ) -> Result<PageProgress<ObligationTopic>, String> {
+        if page.obligation_id != self.obligation_id {
+            return Err("Topic continuation returned a different obligation".to_owned());
+        }
+        if page.watermark < 0 {
+            return Err("Topic page returned a negative global watermark".to_owned());
+        }
+        let service = page
+            .service
+            .clone()
+            .ok_or_else(|| "Topic page omitted its service identity".to_owned())?;
+        match (self.captured_at, self.watermark, self.service.as_ref()) {
+            (None, None, None) => {
+                self.captured_at = Some(page.captured_at);
+                self.watermark = Some(page.watermark);
+                self.service = Some(service);
+            }
+            (Some(captured_at), Some(watermark), Some(expected_service))
+                if captured_at == page.captured_at
+                    && watermark == page.watermark
+                    && expected_service == &service => {}
+            _ => {
+                return Err(
+                    "Topic continuation changed its capture, watermark, or service identity"
+                        .to_owned(),
+                );
+            }
+        }
+        for item in page.items.drain(..) {
+            if !self.seen_items.insert(item.stable_id.clone()) {
+                return Err(format!(
+                    "Topic continuation duplicated item {}",
+                    item.stable_id
+                ));
+            }
+            self.items.push(item);
+        }
+        if let Some(cursor) = page.next_cursor {
+            if !self.seen_cursors.insert(cursor.clone()) {
+                return Err("Topic continuation repeated a cursor".to_owned());
+            }
+            return Ok(PageProgress::Continue {
+                cursor,
+                watermark: self.watermark.expect("initialised topic watermark"),
+            });
+        }
+        Ok(PageProgress::Complete(ObligationTopic {
+            captured_at: self.captured_at.expect("initialised topic capture"),
+            obligation_id: self.obligation_id.clone(),
+            service: self.service.clone(),
+            next_cursor: None,
+            watermark: self.watermark.expect("initialised topic watermark"),
+            items: std::mem::take(&mut self.items),
+        }))
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ChangeAssembly {
+    pub generation: u64,
+    base_after: i64,
+    request_after: i64,
+    watermark: Option<i64>,
+    affected: BTreeSet<String>,
+    ambiguous: bool,
+    seen_revisions: BTreeSet<i64>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ChangeProgress {
+    Continue {
+        after: i64,
+        through: i64,
+    },
+    Complete {
+        watermark: i64,
+        affected: BTreeSet<String>,
+        ambiguous: bool,
+    },
+}
+
+impl ChangeAssembly {
+    pub fn new(generation: u64, after: i64) -> Self {
+        Self {
+            generation,
+            base_after: after,
+            request_after: after,
+            watermark: None,
+            affected: BTreeSet::new(),
+            ambiguous: false,
+            seen_revisions: BTreeSet::new(),
+        }
+    }
+
+    pub fn push(&mut self, page: ProjectionChangePage) -> Result<ChangeProgress, String> {
+        if page.requested_after != self.request_after {
+            return Err("Change page did not echo the requested cursor".to_owned());
+        }
+        if page.watermark < self.base_after {
+            return Err("Change page watermark moved behind applied state".to_owned());
+        }
+        match self.watermark {
+            None => {
+                if page.requested_through.is_some() {
+                    return Err(
+                        "Initial change page unexpectedly reported a pinned walk".to_owned()
+                    );
+                }
+                self.watermark = Some(page.watermark);
+            }
+            Some(watermark) => {
+                if page.requested_through != Some(watermark) || page.watermark != watermark {
+                    return Err("Change continuation changed its pinned watermark".to_owned());
+                }
+            }
+        }
+        let watermark = self.watermark.expect("initialised change watermark");
+        let mut previous = self.request_after;
+        for change in page.changes {
+            if change.revision <= previous || change.revision > watermark {
+                return Err(
+                    "Change page revisions were not strictly ordered within the pinned watermark"
+                        .to_owned(),
+                );
+            }
+            if !self.seen_revisions.insert(change.revision) {
+                return Err(format!(
+                    "Change page duplicated revision {}",
+                    change.revision
+                ));
+            }
+            previous = change.revision;
+            if let Some(obligation_id) = change.obligation_id {
+                self.affected.insert(obligation_id);
+            } else {
+                self.ambiguous = true;
+            }
+        }
+        if let Some(next_after) = page.next_after {
+            if next_after != previous || next_after <= self.request_after {
+                return Err("Change continuation returned an invalid next cursor".to_owned());
+            }
+            self.request_after = next_after;
+            Ok(ChangeProgress::Continue {
+                after: next_after,
+                through: watermark,
+            })
+        } else {
+            Ok(ChangeProgress::Complete {
+                watermark,
+                affected: std::mem::take(&mut self.affected),
+                ambiguous: self.ambiguous,
+            })
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum LifecycleAction {
@@ -233,6 +508,53 @@ impl AppModel {
         self.snapshot_busy = false;
     }
 
+    pub fn applied_watermark(&self) -> Option<i64> {
+        self.snapshot.as_ref().map(|snapshot| snapshot.watermark)
+    }
+
+    /// Apply only the projections invalidated by a completed change walk.
+    ///
+    /// The durable watermark advances after every supplied projection has been
+    /// collected by the caller. Backend semantic ordering is restored after
+    /// each batch, while selection and any operator draft remain untouched.
+    pub fn apply_incremental(
+        &mut self,
+        watermark: i64,
+        refreshed_at: i64,
+        projections: Vec<OperatorObligation>,
+    ) -> Result<(), String> {
+        let snapshot = self
+            .snapshot
+            .as_mut()
+            .ok_or_else(|| "Incremental state requires a completed snapshot".to_owned())?;
+        if watermark < snapshot.watermark {
+            return Err("Incremental watermark moved behind applied state".to_owned());
+        }
+        let mut replacements = BTreeMap::new();
+        for obligation in projections {
+            if replacements
+                .insert(obligation.id.clone(), obligation)
+                .is_some()
+            {
+                return Err("Incremental refresh duplicated an obligation".to_owned());
+            }
+        }
+        for obligation in &mut snapshot.obligations {
+            if let Some(replacement) = replacements.remove(&obligation.id) {
+                *obligation = replacement;
+            }
+        }
+        snapshot.obligations.extend(replacements.into_values());
+        snapshot.obligations.sort_by(operator_semantic_order);
+        snapshot.watermark = watermark;
+        snapshot.captured_at = refreshed_at.max(snapshot.captured_at);
+        self.last_successful_refresh = Some(snapshot.captured_at);
+        self.connection = ConnectionState::Current;
+        self.status = "Current operator state".to_owned();
+        self.snapshot_busy = false;
+        Ok(())
+    }
+
     pub fn mark_stale(&mut self, reason: impl Into<String>) {
         let reason = reason.into();
         self.connection = ConnectionState::Stale {
@@ -376,6 +698,30 @@ impl AppModel {
     }
 }
 
+fn operator_semantic_order(left: &OperatorObligation, right: &OperatorObligation) -> Ordering {
+    operator_order_key(left).cmp(&operator_order_key(right))
+}
+
+fn operator_order_key(obligation: &OperatorObligation) -> (i64, i64, i64, i64, &str) {
+    let exception_rank = if obligation.exception.is_some() { 0 } else { 1 };
+    let state_rank = match obligation.state {
+        OperatorObligationState::AwaitingApproval => 0,
+        OperatorObligationState::Attention => 1,
+        OperatorObligationState::Running => 2,
+        OperatorObligationState::RetryScheduled => 3,
+        OperatorObligationState::Pending => 4,
+        OperatorObligationState::Completed => 5,
+        OperatorObligationState::Cancelled => 6,
+    };
+    (
+        exception_rank,
+        state_rank,
+        obligation.next_wake_at.unwrap_or(i64::MAX),
+        obligation.updated_at,
+        obligation.id.as_str(),
+    )
+}
+
 pub fn operator_workspace() -> Workspace {
     Workspace {
         schema_version: LAYOUT_SCHEMA_VERSION,
@@ -465,7 +811,8 @@ impl OperatorStateLabel for OperatorObligationState {
 mod tests {
     use bokkie_operator_api::{
         ActionConsequence, ActionPrecondition, DisabledReason, DurableLiveness, ExceptionReason,
-        OperatorCapabilities,
+        OperatorCapabilities, ProjectionChange, ProjectionChangePage, ProjectionEventProvenance,
+        ProjectionEventSource, ServiceIdentity, TopicItem, TopicSource,
     };
 
     use super::*;
@@ -529,6 +876,232 @@ mod tests {
         }
     }
 
+    fn service(session_id: &str) -> ServiceIdentity {
+        ServiceIdentity {
+            build: bokkie_operator_api::BOKKIE_BUILD_ID.to_owned(),
+            api_contract_version: bokkie_operator_api::API_CONTRACT_VERSION,
+            schema_version: bokkie_operator_api::SUPPORTED_SCHEMA_VERSION,
+            process_id: 42,
+            session_id: session_id.to_owned(),
+        }
+    }
+
+    fn snapshot_page(
+        obligations: Vec<OperatorObligation>,
+        next_cursor: Option<&str>,
+        watermark: i64,
+    ) -> OperatorSnapshot {
+        OperatorSnapshot {
+            captured_at: 120,
+            service: Some(service("session-one")),
+            next_cursor: next_cursor.map(ToOwned::to_owned),
+            watermark,
+            obligations,
+        }
+    }
+
+    fn topic_page(items: Vec<TopicItem>, next_cursor: Option<&str>) -> ObligationTopic {
+        ObligationTopic {
+            captured_at: 120,
+            obligation_id: "selected".to_owned(),
+            service: Some(service("session-one")),
+            next_cursor: next_cursor.map(ToOwned::to_owned),
+            watermark: 21,
+            items,
+        }
+    }
+
+    fn topic_item(revision: i64) -> TopicItem {
+        TopicItem {
+            occurred_at: 100 + revision,
+            source: TopicSource::AuditEvent,
+            source_sequence: revision.to_string(),
+            stable_id: format!("envelope:{revision}"),
+            occurrence: Some(1),
+            event_type: "updated".to_owned(),
+            evidence: serde_json::json!({"revision": revision}),
+        }
+    }
+
+    fn change(revision: i64, obligation_id: Option<&str>) -> ProjectionChange {
+        ProjectionChange {
+            revision,
+            provenance: ProjectionEventProvenance::LiveAppend,
+            source: ProjectionEventSource::AuditEvent { sequence: revision },
+            event_type: "updated".to_owned(),
+            occurred_at: 100 + revision,
+            obligation_id: obligation_id.map(ToOwned::to_owned),
+            occurrence: Some(1),
+            repository: None,
+            inspection_id: None,
+            proposal_fingerprint: None,
+            proposal_instance_id: None,
+            run_id: None,
+        }
+    }
+
+    #[test]
+    fn snapshot_and_topic_pages_assemble_at_one_stable_capture_and_watermark() {
+        let mut snapshots = SnapshotAssembly::new(7);
+        assert_eq!(
+            snapshots
+                .push(snapshot_page(
+                    vec![obligation("first", OperatorObligationState::Pending)],
+                    Some("snapshot-next"),
+                    20,
+                ))
+                .unwrap(),
+            PageProgress::Continue {
+                cursor: "snapshot-next".to_owned(),
+                watermark: 20,
+            }
+        );
+        let PageProgress::Complete(snapshot) = snapshots
+            .push(snapshot_page(
+                vec![obligation("second", OperatorObligationState::Running)],
+                None,
+                20,
+            ))
+            .unwrap()
+        else {
+            panic!("snapshot should be complete")
+        };
+        assert_eq!(snapshot.captured_at, 120);
+        assert_eq!(snapshot.watermark, 20);
+        assert_eq!(snapshot.obligations.len(), 2);
+
+        let mut topics = TopicAssembly::new(8, "selected".to_owned());
+        assert!(matches!(
+            topics
+                .push(topic_page(vec![topic_item(1)], Some("topic-next")))
+                .unwrap(),
+            PageProgress::Continue { watermark: 21, .. }
+        ));
+        let PageProgress::Complete(topic) =
+            topics.push(topic_page(vec![topic_item(2)], None)).unwrap()
+        else {
+            panic!("topic should be complete")
+        };
+        assert_eq!(topic.items.len(), 2);
+        assert_eq!(topic.watermark, 21);
+    }
+
+    #[test]
+    fn page_assembly_rejects_duplicates_and_capture_or_watermark_mismatch() {
+        let first = obligation("first", OperatorObligationState::Pending);
+        let mut duplicate = SnapshotAssembly::new(1);
+        duplicate
+            .push(snapshot_page(vec![first.clone()], Some("next"), 20))
+            .unwrap();
+        assert!(
+            duplicate
+                .push(snapshot_page(vec![first], None, 20))
+                .unwrap_err()
+                .contains("duplicated obligation")
+        );
+
+        let mut mismatch = SnapshotAssembly::new(2);
+        mismatch
+            .push(snapshot_page(Vec::new(), Some("next"), 20))
+            .unwrap();
+        let mut changed = snapshot_page(Vec::new(), None, 21);
+        changed.captured_at = 121;
+        assert!(mismatch.push(changed).unwrap_err().contains("changed"));
+
+        let mut topic = TopicAssembly::new(3, "selected".to_owned());
+        topic
+            .push(topic_page(vec![topic_item(1)], Some("next")))
+            .unwrap();
+        assert!(
+            topic
+                .push(topic_page(vec![topic_item(1)], None))
+                .unwrap_err()
+                .contains("duplicated item")
+        );
+    }
+
+    #[test]
+    fn change_walk_drains_one_pinned_watermark_without_misses_or_duplicates() {
+        let mut walk = ChangeAssembly::new(4, 10);
+        assert_eq!(
+            walk.push(ProjectionChangePage {
+                service: service("session-one"),
+                requested_after: 10,
+                requested_through: None,
+                next_after: Some(13),
+                watermark: 15,
+                changes: vec![change(11, Some("first")), change(13, Some("first"))],
+            })
+            .unwrap(),
+            ChangeProgress::Continue {
+                after: 13,
+                through: 15,
+            }
+        );
+        assert_eq!(
+            walk.push(ProjectionChangePage {
+                service: service("session-one"),
+                requested_after: 13,
+                requested_through: Some(15),
+                next_after: None,
+                watermark: 15,
+                changes: vec![change(15, Some("second"))],
+            })
+            .unwrap(),
+            ChangeProgress::Complete {
+                watermark: 15,
+                affected: BTreeSet::from(["first".to_owned(), "second".to_owned()]),
+                ambiguous: false,
+            }
+        );
+    }
+
+    #[test]
+    fn change_walk_rejects_repeated_or_mismatched_continuations_and_marks_ambiguity() {
+        let mut duplicate = ChangeAssembly::new(1, 10);
+        duplicate
+            .push(ProjectionChangePage {
+                service: service("session-one"),
+                requested_after: 10,
+                requested_through: None,
+                next_after: Some(11),
+                watermark: 12,
+                changes: vec![change(11, Some("first"))],
+            })
+            .unwrap();
+        assert!(
+            duplicate
+                .push(ProjectionChangePage {
+                    service: service("session-one"),
+                    requested_after: 11,
+                    requested_through: Some(12),
+                    next_after: None,
+                    watermark: 12,
+                    changes: vec![change(11, Some("first"))],
+                })
+                .unwrap_err()
+                .contains("strictly ordered")
+        );
+
+        let mut ambiguous = ChangeAssembly::new(2, 12);
+        assert!(matches!(
+            ambiguous
+                .push(ProjectionChangePage {
+                    service: service("session-one"),
+                    requested_after: 12,
+                    requested_through: None,
+                    next_after: None,
+                    watermark: 13,
+                    changes: vec![change(13, None)],
+                })
+                .unwrap(),
+            ChangeProgress::Complete {
+                ambiguous: true,
+                ..
+            }
+        ));
+    }
+
     #[test]
     fn workspace_has_three_stable_valid_panes() {
         let workspace = operator_workspace();
@@ -550,6 +1123,8 @@ mod tests {
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
             service: None,
+            next_cursor: None,
+            watermark: 10,
             obligations: vec![
                 obligation("first", OperatorObligationState::Pending),
                 obligation("second", OperatorObligationState::Running),
@@ -567,6 +1142,8 @@ mod tests {
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
             service: None,
+            next_cursor: None,
+            watermark: 10,
             obligations: vec![obligation("kept", OperatorObligationState::Pending)],
         });
         model.mark_stale("service disconnected");
@@ -615,6 +1192,8 @@ mod tests {
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
             service: None,
+            next_cursor: None,
+            watermark: 10,
             obligations: vec![proposal],
         });
         model
@@ -678,6 +1257,8 @@ mod tests {
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
             service: None,
+            next_cursor: None,
+            watermark: 10,
             obligations: vec![proposal.clone()],
         });
         model
@@ -717,6 +1298,8 @@ mod tests {
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 121,
             service: None,
+            next_cursor: None,
+            watermark: 11,
             obligations: vec![proposal],
         });
 
@@ -742,6 +1325,8 @@ mod tests {
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
             service: None,
+            next_cursor: None,
+            watermark: 10,
             obligations: states
                 .into_iter()
                 .enumerate()
@@ -766,6 +1351,8 @@ mod tests {
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
             service: None,
+            next_cursor: None,
+            watermark: 10,
             obligations: vec![approval],
         });
         model.begin_confirmation(LifecycleAction::Approve).unwrap();
@@ -787,6 +1374,8 @@ mod tests {
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
             service: None,
+            next_cursor: None,
+            watermark: 10,
             obligations: vec![approval],
         });
         model.begin_confirmation(LifecycleAction::Approve).unwrap();
@@ -810,6 +1399,8 @@ mod tests {
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 121,
             service: None,
+            next_cursor: None,
+            watermark: 11,
             obligations: vec![refreshed],
         });
         let confirmation = model.confirmation.as_ref().unwrap();
@@ -835,6 +1426,8 @@ mod tests {
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
             service: None,
+            next_cursor: None,
+            watermark: 10,
             obligations: vec![approval],
         });
         model.begin_confirmation(LifecycleAction::Approve).unwrap();
@@ -850,11 +1443,102 @@ mod tests {
     }
 
     #[test]
+    fn five_thousand_row_snapshot_applies_bounded_incremental_upserts_and_reorders() {
+        let obligations = (0..5_000)
+            .map(|index| {
+                obligation(
+                    &format!("obligation-{index:04}"),
+                    OperatorObligationState::Pending,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut model = AppModel {
+            selected_obligation: Some("obligation-2500".to_owned()),
+            ..AppModel::default()
+        };
+        model.apply_snapshot(OperatorSnapshot {
+            captured_at: 120,
+            service: Some(service("session-one")),
+            next_cursor: None,
+            watermark: 100,
+            obligations,
+        });
+        model.begin_confirmation(LifecycleAction::Cancel).unwrap();
+        let retained_confirmation = model.confirmation.clone().unwrap();
+        let retained_topic = topic_page(vec![topic_item(99)], None);
+        model.topic = Some(retained_topic.clone());
+
+        let mut unrelated = model.obligations()[4_000].clone();
+        unrelated.description = "Incrementally refreshed unrelated row".to_owned();
+        model.apply_incremental(101, 121, vec![unrelated]).unwrap();
+        assert_eq!(model.obligations().len(), 5_000);
+        assert_eq!(
+            model.selected_obligation.as_deref(),
+            Some("obligation-2500")
+        );
+        assert_eq!(model.topic.as_ref(), Some(&retained_topic));
+        assert_eq!(model.confirmation.as_ref(), Some(&retained_confirmation));
+        assert_eq!(model.applied_watermark(), Some(101));
+
+        let mut selected = model.selected().unwrap().clone();
+        selected.state = OperatorObligationState::Attention;
+        selected.exception = Some(ExceptionReason::Attention {
+            cause: bokkie_operator_api::AttentionCause::PersistedFailure,
+            error: Some("new durable failure".to_owned()),
+            evidence: None,
+        });
+        selected
+            .capabilities
+            .cancel
+            .precondition
+            .as_mut()
+            .unwrap()
+            .state_revision += 1;
+        model.apply_incremental(102, 122, vec![selected]).unwrap();
+        assert_eq!(model.obligations()[0].id, "obligation-2500");
+        assert_eq!(
+            model.selected_obligation.as_deref(),
+            Some("obligation-2500")
+        );
+        assert!(!model.confirmation_matches_current_state(model.confirmation.as_ref().unwrap()));
+        assert_eq!(model.applied_watermark(), Some(102));
+    }
+
+    #[test]
+    fn global_watermark_and_action_state_revision_remain_independent() {
+        let mut model = AppModel::default();
+        model.apply_snapshot(OperatorSnapshot {
+            captured_at: 120,
+            service: Some(service("process-session")),
+            next_cursor: None,
+            watermark: 8_000,
+            obligations: vec![obligation("selected", OperatorObligationState::Pending)],
+        });
+        model.begin_confirmation(LifecycleAction::Cancel).unwrap();
+        let confirmation = model.confirmation.as_ref().unwrap();
+        assert_eq!(confirmation.precondition.state_revision, 1);
+        assert_eq!(model.applied_watermark(), Some(8_000));
+        assert_eq!(
+            model
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .service
+                .as_ref()
+                .unwrap()
+                .session_id,
+            "process-session"
+        );
+    }
+
+    #[test]
     fn empty_database_becomes_current_and_disabled_reasons_are_observable() {
         let mut model = AppModel::default();
         model.apply_snapshot(OperatorSnapshot {
             captured_at: 120,
             service: None,
+            next_cursor: None,
+            watermark: 10,
             obligations: Vec::new(),
         });
         assert!(model.obligations().is_empty());

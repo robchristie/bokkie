@@ -21,7 +21,7 @@ use bokkie::{
 };
 #[cfg(test)]
 use clap::CommandFactory;
-use clap::{Parser, Subcommand, ValueEnum, error::ErrorKind};
+use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use serde::Serialize;
 use serde_json::json;
 use thiserror::Error;
@@ -73,8 +73,11 @@ enum Command {
         #[arg(long, default_value_t = 3_600)]
         retry_max_seconds: i64,
     },
-    /// List all obligations.
-    List,
+    /// List one bounded page of obligations.
+    List {
+        #[command(flatten)]
+        page: PageOptions,
+    },
     /// Show one obligation.
     Show { id: String },
     /// Approve the current occurrence.
@@ -98,9 +101,17 @@ enum Command {
     /// Cancel a non-terminal, non-running obligation.
     Cancel { id: String },
     /// List append-only audit events for an obligation.
-    Events { id: String },
+    Events {
+        id: String,
+        #[command(flatten)]
+        page: PageOptions,
+    },
     /// List execution attempts for an obligation.
-    Attempts { id: String },
+    Attempts {
+        id: String,
+        #[command(flatten)]
+        page: PageOptions,
+    },
     /// Diagnose database integrity and reconcile observable gardener resources without repair.
     Doctor {
         /// Absolute Git executable used only for read-only local and remote observations.
@@ -221,18 +232,28 @@ enum GardenerCommand {
 
 #[derive(Debug, Subcommand)]
 enum GardenerInspectionCommand {
-    List,
-    Show { id: String },
+    List {
+        #[command(flatten)]
+        page: PageOptions,
+    },
+    Show {
+        id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 enum GardenerProposalCommand {
-    List,
+    List {
+        #[command(flatten)]
+        page: PageOptions,
+    },
     Show {
         fingerprint: String,
     },
     Observations {
         fingerprint: String,
+        #[command(flatten)]
+        page: PageOptions,
     },
     Approve {
         fingerprint: String,
@@ -252,12 +273,17 @@ enum GardenerProposalCommand {
 
 #[derive(Debug, Subcommand)]
 enum GardenerProposalInstanceCommand {
-    List,
+    List {
+        #[command(flatten)]
+        page: PageOptions,
+    },
     Show {
         instance_id: String,
     },
     Observations {
         instance_id: String,
+        #[command(flatten)]
+        page: PageOptions,
     },
     Approve {
         instance_id: String,
@@ -277,9 +303,31 @@ enum GardenerProposalInstanceCommand {
 
 #[derive(Debug, Subcommand)]
 enum GardenerRunCommand {
-    List,
-    Show { id: String },
-    Events { id: String },
+    List {
+        #[command(flatten)]
+        page: PageOptions,
+    },
+    Show {
+        id: String,
+    },
+    Events {
+        id: String,
+        #[command(flatten)]
+        page: PageOptions,
+    },
+}
+
+#[derive(Debug, Default, Args)]
+struct PageOptions {
+    /// Opaque cursor from the preceding page.
+    #[arg(long)]
+    cursor: Option<String>,
+    /// Exact global projection watermark returned with the cursor.
+    #[arg(long)]
+    watermark: Option<i64>,
+    /// Page size in 1..=500 (default 100).
+    #[arg(long)]
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -347,6 +395,7 @@ impl AppError {
             | Self::Configuration(_) => "invalid_request",
             Self::Scheduler(error) if error.is_configuration() => "invalid_request",
             Self::Store(StoreError::Conflict(_) | StoreError::Fenced) => "transition_conflict",
+            Self::Store(StoreError::ProjectionGap(_)) => "projection_gap",
             Self::Store(StoreError::Sql(_)) => "storage_error",
             Self::DatabaseExecutor(_) => "storage_executor_error",
             Self::Doctor(_) => "diagnostic_error",
@@ -359,6 +408,7 @@ impl AppError {
         match self {
             Self::Store(StoreError::NotFound(_)) => 3,
             Self::Store(StoreError::Conflict(_) | StoreError::Fenced) => 4,
+            Self::Store(StoreError::ProjectionGap(_)) => 4,
             Self::Store(StoreError::Invalid(_) | StoreError::Recurrence(_))
             | Self::Configuration(_) => 2,
             Self::Scheduler(error) if error.is_configuration() => 2,
@@ -516,7 +566,11 @@ fn run_store_command(database: PathBuf, command: Command) -> Result<(), AppError
                 now,
             )?);
         }
-        Command::List => print_json(&store.list()?),
+        Command::List { page } => print_json(&store.obligation_page(
+            page.cursor.as_deref(),
+            page.watermark,
+            page.limit,
+        )?),
         Command::Show { id } => print_json(&require_obligation(&store, &id)?),
         Command::Approve { id, actor, note } => {
             decide_and_print(
@@ -546,13 +600,23 @@ fn run_store_command(database: PathBuf, command: Command) -> Result<(), AppError
             store.cancel(&id, now)?;
             print_json(&require_obligation(&store, &id)?);
         }
-        Command::Events { id } => {
+        Command::Events { id, page } => {
             require_obligation(&store, &id)?;
-            print_json(&store.events(&id)?);
+            print_json(&store.audit_event_page(
+                &id,
+                page.cursor.as_deref(),
+                page.watermark,
+                page.limit,
+            )?);
         }
-        Command::Attempts { id } => {
+        Command::Attempts { id, page } => {
             require_obligation(&store, &id)?;
-            print_json(&store.attempts(&id)?);
+            print_json(&store.attempt_page(
+                &id,
+                page.cursor.as_deref(),
+                page.watermark,
+                page.limit,
+            )?);
         }
         Command::Gardener { command } => run_gardener_command(&mut store, command, now)?,
         Command::Doctor { .. } => unreachable!("doctor was handled through its read-only path"),
@@ -586,19 +650,34 @@ fn run_gardener_command(
         )?),
         GardenerCommand::Repository => print_json(&require_gardener_repository(store)?),
         GardenerCommand::Inspections { command } => match command {
-            GardenerInspectionCommand::List => print_json(&store.gardener_inspections()?),
+            GardenerInspectionCommand::List { page } => {
+                print_json(&store.gardener_inspection_page(
+                    page.cursor.as_deref(),
+                    page.watermark,
+                    page.limit,
+                )?)
+            }
             GardenerInspectionCommand::Show { id } => {
                 print_json(&require_gardener_inspection(store, &id)?)
             }
         },
         GardenerCommand::Proposals { command } => match command {
-            GardenerProposalCommand::List => print_json(&store.gardener_proposals()?),
+            GardenerProposalCommand::List { page } => print_json(&store.gardener_proposal_page(
+                page.cursor.as_deref(),
+                page.watermark,
+                page.limit,
+            )?),
             GardenerProposalCommand::Show { fingerprint } => {
                 print_json(&require_gardener_proposal(store, &fingerprint)?)
             }
-            GardenerProposalCommand::Observations { fingerprint } => {
+            GardenerProposalCommand::Observations { fingerprint, page } => {
                 require_gardener_proposal(store, &fingerprint)?;
-                print_json(&store.proposal_observations(&fingerprint)?);
+                print_json(&store.proposal_observation_page(
+                    &fingerprint,
+                    page.cursor.as_deref(),
+                    page.watermark,
+                    page.limit,
+                )?);
             }
             GardenerProposalCommand::Approve {
                 fingerprint,
@@ -624,15 +703,25 @@ fn run_gardener_command(
             )?),
         },
         GardenerCommand::ProposalInstances { command } => match command {
-            GardenerProposalInstanceCommand::List => {
-                print_json(&all_gardener_proposal_instances(store)?)
+            GardenerProposalInstanceCommand::List { page } => {
+                print_json(&store.gardener_proposal_instance_page(
+                    None,
+                    page.cursor.as_deref(),
+                    page.watermark,
+                    page.limit,
+                )?)
             }
             GardenerProposalInstanceCommand::Show { instance_id } => {
                 print_json(&require_gardener_proposal_instance(store, &instance_id)?)
             }
-            GardenerProposalInstanceCommand::Observations { instance_id } => {
+            GardenerProposalInstanceCommand::Observations { instance_id, page } => {
                 require_gardener_proposal_instance(store, &instance_id)?;
-                print_json(&store.proposal_instance_observations(&instance_id)?);
+                print_json(&store.proposal_instance_observation_page(
+                    &instance_id,
+                    page.cursor.as_deref(),
+                    page.watermark,
+                    page.limit,
+                )?);
             }
             GardenerProposalInstanceCommand::Approve {
                 instance_id,
@@ -658,11 +747,22 @@ fn run_gardener_command(
             )?),
         },
         GardenerCommand::Runs { command } => match command {
-            GardenerRunCommand::List => print_json(&store.gardener_implementation_runs()?),
+            GardenerRunCommand::List { page } => {
+                print_json(&store.gardener_implementation_run_page(
+                    page.cursor.as_deref(),
+                    page.watermark,
+                    page.limit,
+                )?)
+            }
             GardenerRunCommand::Show { id } => print_json(&require_gardener_run(store, &id)?),
-            GardenerRunCommand::Events { id } => {
+            GardenerRunCommand::Events { id, page } => {
                 require_gardener_run(store, &id)?;
-                print_json(&store.gardener_run_events(&id)?);
+                print_json(&store.gardener_run_event_page(
+                    &id,
+                    page.cursor.as_deref(),
+                    page.watermark,
+                    page.limit,
+                )?);
             }
         },
     }
@@ -702,16 +802,6 @@ fn require_gardener_proposal_instance(
     store
         .gardener_proposal_instance(instance_id)?
         .ok_or_else(|| StoreError::NotFound(instance_id.to_owned()))
-}
-
-fn all_gardener_proposal_instances(
-    store: &Store,
-) -> Result<Vec<bokkie::gardener::ProposalInstance>, StoreError> {
-    let mut instances = Vec::new();
-    for proposal in store.gardener_proposals()? {
-        instances.extend(store.gardener_proposal_instances(&proposal.fingerprint)?);
-    }
-    Ok(instances)
 }
 
 fn require_gardener_run(

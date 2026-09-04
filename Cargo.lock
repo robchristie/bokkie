@@ -337,6 +337,7 @@ dependencies = [
  "console_error_panic_hook",
  "eframe",
  "ehttp",
+ "js-sys",
  "log",
  "percent-encoding",
  "polyorama-core",
