@@ -520,9 +520,11 @@ fn capabilities(
     state_revision: i64,
 ) -> OperatorCapabilities {
     let is_proposal = proposal.is_some();
+    let is_current_proposal = proposal.is_some_and(|proposal| proposal.superseded_by.is_none());
     let approval_legal = approval_transition_is_legal(obligation);
     let generic_approval_legal = generic_approval_transition_is_legal(obligation, is_proposal);
-    let proposal_approval_legal = gardener_proposal_transition_is_legal(obligation, is_proposal);
+    let proposal_approval_legal =
+        gardener_proposal_transition_is_legal(obligation, is_current_proposal);
     let approve_reason = if is_proposal && approval_legal {
         Some(DisabledReason::GardenerProposalRequiresExactDecision)
     } else if generic_approval_legal {
@@ -537,8 +539,9 @@ fn capabilities(
     } else {
         Some(state_disabled_reason(obligation))
     };
-    let retry_reason =
-        (!retry_transition_is_legal(obligation)).then(|| state_disabled_reason(obligation));
+    let retry_reason = (!retry_transition_is_legal(obligation)
+        || (is_proposal && !is_current_proposal))
+        .then(|| state_disabled_reason(obligation));
     let cancel_reason =
         (!cancel_transition_is_legal(obligation)).then(|| state_disabled_reason(obligation));
     let ordinary_precondition = ActionPrecondition {

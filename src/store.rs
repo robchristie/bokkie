@@ -2174,6 +2174,13 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if proposal_instance_for_obligation(&transaction, id)?
+            .is_some_and(|instance| instance.superseded_by.is_some())
+        {
+            return Err(StoreError::Conflict(format!(
+                "superseded gardener proposal instance obligation {id:?} cannot be retried"
+            )));
+        }
         if let Some(precondition) = precondition {
             validate_action_precondition(&transaction, id, precondition, None, None)?;
         }
@@ -5276,6 +5283,47 @@ mod tests {
                 .gardener_reproducibility_manifest("continuing-run")
                 .unwrap()
                 .is_none()
+        );
+        store
+            .complete(
+                &claim,
+                Completion::Failed {
+                    retryable: false,
+                    error: "superseded heartbeat was fenced".to_owned(),
+                    evidence: None,
+                },
+                1_101,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .get(&first_instance.implementation_obligation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            ObligationState::Attention
+        );
+        let projected = store
+            .operator_snapshot(1_102)
+            .unwrap()
+            .obligations
+            .into_iter()
+            .find(|item| item.id == first_instance.implementation_obligation_id)
+            .unwrap();
+        assert!(!projected.capabilities.retry.available);
+        assert!(!projected.capabilities.approve_gardener_proposal.available);
+        assert!(!projected.capabilities.reject_gardener_proposal.available);
+        assert!(matches!(
+            store.retry_attention(&first_instance.implementation_obligation_id, 1_102),
+            Err(StoreError::Conflict(_))
+        ));
+        assert_eq!(
+            store
+                .get(&first_instance.implementation_obligation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            ObligationState::Attention
         );
     }
 

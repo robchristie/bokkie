@@ -133,6 +133,9 @@ observations. Repeated observations at the same source deduplicate; a new source
 creates a fresh awaiting-decision instance and supersedes the earlier actionable
 instance without inheriting approval. Supersession also fences further
 persisted run progress and lease renewal for already-claimed older work.
+If stale work reconciles into attention, retry remains unavailable because a
+superseded source instance can never become actionable again; the newer
+generation is the only decision surface.
 Approval is occurrence- and
 instance-bound and must exist before implementation can be claimed. Rejection
 moves that instance's implementation obligation to visible attention. To
