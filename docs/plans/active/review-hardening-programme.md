@@ -38,8 +38,8 @@ is not silently interpreted as permission to grant rights.
 
 | Row | Required observable outcome | Baseline disposition | Package |
 |---|---|---|---|
-| R1 | Renewal targets at most one lease duration after the latest heartbeat; same-time renewal is a no-op; expired running work is not projected as active | Satisfied by P1 candidate `0c91f9a0482df8c40bb6ae444193366ac5c7dde1`; terminal landing pending | P1 |
-| R2 | Codex, Git, GitHub and future child processes share heartbeat, deadline, cancellation, process-tree termination, bounded output and typed outcomes; shutdown is bounded | Satisfied by P1 candidate `0c91f9a0482df8c40bb6ae444193366ac5c7dde1`; terminal landing pending | P1 |
+| R1 | Renewal targets at most one lease duration after the latest heartbeat; same-time renewal is a no-op; expired running work is not projected as active | Satisfied by P1 candidate `666eef8f66fc1738e55d0994cef63828ecf44cd4`; terminal landing pending | P1 |
+| R2 | Codex, Git, GitHub and future child processes share heartbeat, deadline, cancellation, process-tree termination, bounded output and typed outcomes; shutdown is bounded | Satisfied by P1 candidate `666eef8f66fc1738e55d0994cef63828ecf44cd4`; terminal landing pending | P1 |
 | R3 | Child environments, executables, Git configuration, hooks and credentials are explicit and least-authority; exact Git metadata is revalidated before credential-bearing work | Open in part: canonical effective origins and exact remote heads are already rechecked | P2 |
 | R4 | Candidate checks and evidence precede draft-to-ready promotion; exact PR heads remain authoritative; CI protects candidate code without secrets or privilege | Open in part: exact-head verification exists, but PRs are created ready and no CI exists | P2 |
 | R5 | Approval selects an exact proposal generation and source observation; later source commits stale or supersede earlier instances; terminal goals may recur in later generations | Open: content fingerprint is reused forever and dispatch selects the latest observation | P3 |
@@ -64,7 +64,7 @@ Only the next unblocked package is refined after each landing.
 | Package | Outcome | Dependencies | State and terminal evidence |
 |---|---|---|---|
 | P0 | Land this re-baselined programme checkpoint | `main` baseline above | Landed as [PR #5](https://github.com/robchristie/bokkie/pull/5) at `e8d3218433f97c8dfc542c80d0ac813d283d86b5` |
-| P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Terminal candidate at `0c91f9a0482df8c40bb6ae444193366ac5c7dde1`; review and landing pending |
+| P1 | Bounded leases and one supervised execution boundary, including typed failure/output evidence and focused module split | P0 | Repaired terminal candidate at `666eef8f66fc1738e55d0994cef63828ecf44cd4`; re-review and landing pending |
 | P2 | Gardener launcher/environment trust, reproducibility and draft/check/ready publication controls, threat model, worker profile, pinned CI | P1 | Candidate |
 | P3 | Source-bound proposal generations and approval lifecycle with migration and temporal tests | P2 identity vocabulary | Candidate |
 | P4 | Startup-only migration, manifest verification, DB executor/transactions, read-only doctor and reviewed local mutation protection | P3 schema | Candidate; security portion needs human review |
@@ -102,7 +102,8 @@ must consume the P1 supervisor rather than introduce another process boundary.
 | Checkpoint | Owner revision | Consumer revision | Result | Evidence |
 |---|---|---|---|---|
 | Review re-baseline | `12f5c65901d07248d152ebf80548116cf0c7b040` | same | Open rows and preserved guarantees mapped; working tree initially clean | This plan and source paths in the review objective |
-| P1 bounded leases and supervised execution | `0c91f9a0482df8c40bb6ae444193366ac5c7dde1` | `b46788020a6b3953ac6f3dc20fef2e529d0d9d02` | 81 library, 1 CLI, 10 adapter and 21 attention-UI tests passed; Clippy and rustfmt passed; deterministic fixtures cover renewal/projection boundaries, never-exit, descendant termination, output overflow, deadline race, heartbeats, Store heartbeat failure, app-server/Git shutdown and ambiguous `gh` mutation | `src/process.rs`, Store/operator tests, and the P1 terminal pull request |
+| Initial P1 candidate | `0c91f9a0482df8c40bb6ae444193366ac5c7dde1` | `b46788020a6b3953ac6f3dc20fef2e529d0d9d02` | Exact-head review blocked: app-server stdin writes could stall supervision; programme dispositions were stale | [PR #6 review trajectory](https://github.com/robchristie/bokkie/pull/6#issuecomment-5534515269) |
+| P1 supervised-input repair | `666eef8f66fc1738e55d0994cef63828ecf44cd4` | `P1_REPAIR_CONSUMER` | 84 library, 1 CLI, 10 adapter and 21 attention-UI tests passed; Clippy and rustfmt passed; deterministic fixtures also prove bounded stopped-reader input deadline, heartbeat and shutdown | `src/process.rs`, app-server fake-process tests, Store/operator tests, and [PR #6](https://github.com/robchristie/bokkie/pull/6) |
 
 ## Residual questions
 
