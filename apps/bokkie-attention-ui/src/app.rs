@@ -2225,6 +2225,7 @@ mod tests {
             retry_max_seconds: 60,
             last_error: Some("retry attention".to_owned()),
             last_evidence: Some("evidence".repeat(30)),
+            failure_disposition: None,
             created_at: 80,
             updated_at: 101,
             exception: None,

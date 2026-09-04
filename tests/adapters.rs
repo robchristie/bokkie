@@ -981,7 +981,7 @@ fn exhausted_finite_recurrence_completes_without_stopping_unrelated_work() {
 
 #[cfg(unix)]
 #[test]
-fn graceful_shutdown_finishes_an_observed_in_flight_claim() {
+fn graceful_shutdown_cancels_and_reconciles_an_observed_in_flight_claim() {
     let temporary = TempDir::new().unwrap();
     let database = temporary.path().join("graceful.sqlite");
     let create = run_cli(
@@ -1017,10 +1017,40 @@ fn graceful_shutdown_finishes_an_observed_in_flight_claim() {
     assert!(status.success(), "daemon exited unsuccessfully: {status}");
 
     let obligation = cli_json(&database, &["show", "graceful-one"]);
-    assert_eq!(obligation["state"], "completed");
+    assert_eq!(obligation["state"], "attention");
+    assert_eq!(obligation["failure_disposition"], "cancelled");
     let attempts = cli_json(&database, &["attempts", "graceful-one"]);
     assert_eq!(attempts.as_array().unwrap().len(), 1);
-    assert_eq!(attempts[0]["outcome"], "succeeded");
+    assert_eq!(attempts[0]["outcome"], "failed");
+    assert_eq!(attempts[0]["failure_disposition"], "cancelled");
+}
+
+#[test]
+fn ordinary_concurrency_is_validated_before_scheduler_claims() {
+    let temporary = TempDir::new().unwrap();
+    for (value, name) in [("0", "zero.sqlite"), ("33", "above-max.sqlite")] {
+        let database = temporary.path().join(name);
+        let address = unused_loopback_address();
+        let output = run_cli(
+            &database,
+            &[
+                "serve",
+                "--bind",
+                &address.to_string(),
+                "--ordinary-concurrency",
+                value,
+            ],
+        );
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("ordinary-concurrency must be between 1 and 32")
+        );
+        assert!(
+            !database.exists(),
+            "invalid capacity must not open the database"
+        );
+    }
 }
 
 #[test]

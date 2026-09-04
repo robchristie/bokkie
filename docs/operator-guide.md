@@ -35,24 +35,50 @@ The remaining lifecycle commands are `show`, `reject`, `retry`, and `cancel`.
 Use `bokkie COMMAND --help` for their arguments. Recurrence requires both
 `--recurrence-cron` and `--recurrence-timezone`; the timezone is an IANA name.
 
+Lifecycle text is bounded at the Store boundary, so CLI and HTTP callers receive
+the same validation. Obligation IDs are limited to 256 Unicode characters and
+descriptions to 16,384; approval actors to 256 and notes to 4,096; cron text to
+512 and time-zone names to 128. NUL is rejected. Completion errors are limited
+to 16,384 characters and evidence to 65,536. Audit event types are limited to
+128 characters and their serialised metadata to 524,288 bytes. Adapter-created
+diagnostics are Unicode-safely bounded before persistence; existing immutable
+identifiers and historical evidence are not rewritten to apply new limits.
+
 Start the combined API and scheduler with:
 
 ```sh
 bokkie --database ./bokkie.sqlite serve --bind 127.0.0.1:7744
 ```
 
-The scheduler claims one obligation at a time. Each claim and lease is durable
-before the fake runner starts. While delayed fake work is in flight, the
-scheduler renews its lease. `--fake-delay-ms` creates a deterministic window
-for shutdown and crash-recovery qualification. `--fake-outcome` accepts
-`succeed`, `fail-retryable`, or `fail-terminal`. The service lease must be at
-least two seconds because durable timestamps have one-second resolution.
+The scheduler runs ordinary work and the optional coding gardener in separate,
+failure-isolated lanes. Ordinary fake work defaults to four concurrent slots;
+`--ordinary-concurrency` configures between 1 and the hard maximum of 32.
+The gardener remains exactly one slot when enabled. Each worker owns its SQLite
+connection and every claim and lease is durable before execution starts. While
+delayed fake work is in flight, its worker renews the lease. `--fake-delay-ms`
+creates a deterministic window for shutdown and crash-recovery qualification.
+`--fake-outcome` accepts `succeed`, `fail-retryable`, or `fail-terminal`. The
+service lease must be at least two seconds because durable timestamps have
+one-second resolution.
 
-On `SIGTERM` or `SIGINT`, the service stops claiming, drains HTTP requests, lets
-an in-flight fake invocation reconcile, and exits. Keep `--fake-delay-ms` below
-systemd's `TimeoutStopSec` with enough margin for SQLite reconciliation. An
-abrupt kill leaves the claim running only until its lease expires; a restarted
-scheduler records the expired attempt and applies the persisted retry policy.
+On `SIGTERM` or `SIGINT`, one shared admission gate serialises closure against
+the Store claim check across all lanes, stops new claims, and cancels active
+work. An interrupted fake invocation records a typed
+cancelled result while its lease remains valid; an active gardener child gets
+the same supervised cancellation signal. Lane joins are bounded to five
+seconds; Rust threads that fail to cooperate are detached and their claims
+remain recoverable through lease expiry. A lane store failure or panic stops
+admission, cancels the other lanes, begins HTTP graceful shutdown, and exits
+non-zero with the lane identity and cause. An abrupt kill leaves a claim running
+only until its lease expires; a restarted scheduler records the expired attempt
+and applies the persisted retry policy.
+
+Failed attempts persist a typed disposition as well as the legacy `retryable`
+projection. Only `retry_safe` permits automatic backoff. `needs_reconciliation`,
+`human_decision`, `terminal`, and runner `cancelled` outcomes enter visible
+attention; an explicit operator cancellation remains an obligation-terminal
+action. This prevents an ambiguous external effect from being mistaken for safe
+retry work.
 
 ## Read-only diagnostics
 
@@ -437,7 +463,7 @@ fails closed if its identity or version cannot be obtained. Do not remove the
 unit's user, mount or PID namespace allowance: it is required for the private
 Codex PID boundary as well as candidate checks.
 
-Current limitations include one scheduler worker, no user authentication, no remote
-exposure, no notification delivery, no automatic merge or deployment, and a
-coding-gardener runtime restricted to the canonical repository and explicit
+Current limitations include no user authentication, no remote exposure, no
+notification delivery or outbox worker, no automatic merge or deployment, and
+a coding-gardener runtime restricted to the canonical repository and explicit
 service opt-in. There is no supported destructive migration or downgrade path.

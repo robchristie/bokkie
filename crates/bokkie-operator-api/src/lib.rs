@@ -6,7 +6,7 @@ use serde_json::Value;
 /// Version of the HTTP contract consumed by the bundled operator UI.
 pub const API_CONTRACT_VERSION: u32 = 1;
 /// Exact SQLite migration version understood by this build of the UI.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 7;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 8;
 /// Stable package identity; the per-process session ID distinguishes restarts.
 pub const BOKKIE_BUILD_ID: &str = concat!("bokkie/", env!("CARGO_PKG_VERSION"));
 
@@ -44,6 +44,16 @@ pub enum OperatorObligationState {
     RetryScheduled,
     Attention,
     Completed,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperatorFailureDisposition {
+    RetrySafe,
+    NeedsReconciliation,
+    HumanDecision,
+    Terminal,
     Cancelled,
 }
 
@@ -197,6 +207,8 @@ pub struct OperatorObligation {
     pub retry_max_seconds: i64,
     pub last_error: Option<String>,
     pub last_evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_disposition: Option<OperatorFailureDisposition>,
     pub created_at: i64,
     pub updated_at: i64,
     pub exception: Option<ExceptionReason>,

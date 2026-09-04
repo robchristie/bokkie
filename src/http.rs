@@ -1006,7 +1006,7 @@ mod tests {
         let (_, bootstrap) = response_json(bootstrap).await;
         assert_eq!(bootstrap["mutation_token"], TEST_TOKEN);
         assert_eq!(bootstrap["service"]["api_contract_version"], 1);
-        assert_eq!(bootstrap["service"]["schema_version"], 7);
+        assert_eq!(bootstrap["service"]["schema_version"], 8);
         assert_eq!(bootstrap["service"]["session_id"], "test-session");
 
         for path in ["/health", "/operator/snapshot"] {

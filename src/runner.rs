@@ -1,6 +1,9 @@
 use std::collections::VecDeque;
 
-use crate::{Claim, Completion, Store, StoreError, UnixClock};
+use crate::{
+    Claim, Completion, FailureDisposition, MAX_COMPLETION_ERROR_CHARS,
+    MAX_COMPLETION_EVIDENCE_CHARS, Store, StoreError, UnixClock,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunResult {
@@ -18,7 +21,7 @@ pub enum FakeOutcome {
         evidence: Option<String>,
     },
     Fail {
-        retryable: bool,
+        disposition: FailureDisposition,
         error: String,
         evidence: Option<String>,
     },
@@ -52,19 +55,40 @@ impl Runner for FakeRunner {
         });
         RunResult {
             completion: match outcome {
-                FakeOutcome::Succeed { evidence } => Completion::Succeeded { evidence },
+                FakeOutcome::Succeed { evidence } => Completion::Succeeded {
+                    evidence: evidence
+                        .map(|value| bounded_runtime_text(value, MAX_COMPLETION_EVIDENCE_CHARS)),
+                },
                 FakeOutcome::Fail {
-                    retryable,
+                    disposition,
                     error,
                     evidence,
                 } => Completion::Failed {
-                    retryable,
-                    error,
-                    evidence,
+                    disposition,
+                    error: bounded_runtime_text(error, MAX_COMPLETION_ERROR_CHARS),
+                    evidence: evidence
+                        .map(|value| bounded_runtime_text(value, MAX_COMPLETION_EVIDENCE_CHARS)),
                 },
             },
         }
     }
+}
+
+/// Bound adapter-created diagnostic text before it reaches the authoritative
+/// Store boundary. Invalid NUL is replaced visibly and Unicode is truncated by
+/// scalar value, never through the middle of an encoded character.
+pub(crate) fn bounded_runtime_text(value: String, max_chars: usize) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character == '\0' {
+                '\u{fffd}'
+            } else {
+                character
+            }
+        })
+        .take(max_chars)
+        .collect()
 }
 
 /// Execute one already-durable claim, then reconcile its result transactionally.
@@ -76,4 +100,45 @@ pub fn run_one(
 ) -> Result<(), StoreError> {
     let result = runner.execute(claim);
     store.complete(claim, result.completion, clock.now())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_evidence_is_unicode_safe_bounded_and_nul_free() {
+        let claim = Claim {
+            obligation_id: "bounded".to_owned(),
+            occurrence: 1,
+            attempt_number: 1,
+            lease_token: "lease".to_owned(),
+            lease_generation: 1,
+            lease_expires_at: 100,
+            description: "bounded runtime evidence".to_owned(),
+        };
+        let mut runner = FakeRunner::new([FakeOutcome::Fail {
+            disposition: FailureDisposition::NeedsReconciliation,
+            error: format!("\0{}", "界".repeat(MAX_COMPLETION_ERROR_CHARS + 20)),
+            evidence: Some(format!(
+                "\0{}",
+                "証".repeat(MAX_COMPLETION_EVIDENCE_CHARS + 20)
+            )),
+        }]);
+        let result = runner.execute(&claim);
+        let Completion::Failed {
+            disposition,
+            error,
+            evidence,
+        } = result.completion
+        else {
+            panic!("fake failure returned success");
+        };
+        assert_eq!(disposition, FailureDisposition::NeedsReconciliation);
+        assert_eq!(error.chars().count(), MAX_COMPLETION_ERROR_CHARS);
+        assert!(!error.contains('\0'));
+        let evidence = evidence.unwrap();
+        assert_eq!(evidence.chars().count(), MAX_COMPLETION_EVIDENCE_CHARS);
+        assert!(!evidence.contains('\0'));
+    }
 }

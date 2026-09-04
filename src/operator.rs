@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use bokkie_operator_api::{
     ActionCapability, ActionConsequence, ActionPrecondition, ApprovalSubject, AttentionCause,
     DisabledReason, DurableLiveness, ExceptionReason, ObligationTopic, OperatorCapabilities,
-    OperatorObligation, OperatorObligationState, OperatorSnapshot, TopicItem, TopicSource,
+    OperatorFailureDisposition, OperatorObligation, OperatorObligationState, OperatorSnapshot,
+    TopicItem, TopicSource,
 };
 use rusqlite::params;
 use serde::Serialize;
@@ -372,6 +373,7 @@ impl Store {
             retry_max_seconds: obligation.retry_max_seconds,
             last_error: obligation.last_error.clone(),
             last_evidence: obligation.last_evidence.clone(),
+            failure_disposition: obligation.failure_disposition.map(Into::into),
             created_at: obligation.created_at,
             updated_at: obligation.updated_at,
             exception,
@@ -502,6 +504,18 @@ impl Store {
         })?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StoreError::from)
+    }
+}
+
+impl From<crate::FailureDisposition> for OperatorFailureDisposition {
+    fn from(value: crate::FailureDisposition) -> Self {
+        match value {
+            crate::FailureDisposition::RetrySafe => Self::RetrySafe,
+            crate::FailureDisposition::NeedsReconciliation => Self::NeedsReconciliation,
+            crate::FailureDisposition::HumanDecision => Self::HumanDecision,
+            crate::FailureDisposition::Terminal => Self::Terminal,
+            crate::FailureDisposition::Cancelled => Self::Cancelled,
+        }
     }
 }
 
@@ -914,7 +928,7 @@ mod tests {
             .complete(
                 &retry,
                 Completion::Failed {
-                    retryable: true,
+                    disposition: crate::FailureDisposition::RetrySafe,
                     error: "temporary".to_owned(),
                     evidence: Some("retry evidence".to_owned()),
                 },
@@ -1334,7 +1348,7 @@ mod tests {
             .complete(
                 &claim,
                 Completion::Failed {
-                    retryable: false,
+                    disposition: crate::FailureDisposition::Terminal,
                     error: "independent verification returned blocking".to_owned(),
                     evidence: Some("ready PR retained".to_owned()),
                 },
@@ -1405,7 +1419,7 @@ mod tests {
             .complete(
                 &second_claim,
                 Completion::Failed {
-                    retryable: false,
+                    disposition: crate::FailureDisposition::Terminal,
                     error: "independent verification returned inconclusive".to_owned(),
                     evidence: Some("second ready PR retained".to_owned()),
                 },

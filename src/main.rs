@@ -3,23 +3,21 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     process::ExitCode,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
     time::Duration,
 };
 
 use bokkie::{
     ApprovalDecision, CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, CommandExternalObserver,
-    DbExecutor, DbExecutorError, DoctorError, DoctorOptions, GardenerRunnerError,
-    GardenerRuntimeConfig, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
-    Store, StoreError, SystemClock, UnixClock,
+    DbExecutor, DbExecutorError, DoctorError, DoctorOptions, GardenerRuntimeConfig, NewObligation,
+    NewRepositoryRegistration, Recurrence, RetryPolicy, Store, StoreError, SystemClock, UnixClock,
     http::{error_json, router_with_executor, router_with_ui_executor, validate_loopback},
     http_security::ApiRuntime,
     migration_manifest, run_doctor,
     runtime_trust::{ChildEnvironment, GitHubCredential},
-    service::{Scheduler, SchedulerConfig, SchedulerError, ServiceFakeOutcome},
+    service::{
+        ClaimAdmission, DEFAULT_ORDINARY_CONCURRENCY, MAX_ORDINARY_CONCURRENCY, Scheduler,
+        SchedulerConfig, SchedulerError, ServiceFakeOutcome,
+    },
 };
 #[cfg(test)]
 use clap::CommandFactory;
@@ -128,6 +126,9 @@ enum Command {
         poll_ms: u64,
         #[arg(long, default_value_t = 30)]
         lease_seconds: i64,
+        /// Parallel capacity for ordinary short-running work.
+        #[arg(long, default_value_t = DEFAULT_ORDINARY_CONCURRENCY)]
+        ordinary_concurrency: usize,
         #[arg(long, default_value_t = 0)]
         fake_delay_ms: u64,
         #[arg(long, value_enum, default_value_t = FakeOutcomeArg::Succeed)]
@@ -292,6 +293,7 @@ struct ServeOptions {
     bind: SocketAddr,
     poll_ms: u64,
     lease_seconds: i64,
+    ordinary_concurrency: usize,
     fake_delay_ms: u64,
     fake_outcome: ServiceFakeOutcome,
     enable_coding_gardener: bool,
@@ -342,8 +344,8 @@ impl AppError {
         match self {
             Self::Store(StoreError::NotFound(_)) => "not_found",
             Self::Store(StoreError::Invalid(_) | StoreError::Recurrence(_))
-            | Self::Scheduler(SchedulerError::Gardener(GardenerRunnerError::Configuration(_)))
             | Self::Configuration(_) => "invalid_request",
+            Self::Scheduler(error) if error.is_configuration() => "invalid_request",
             Self::Store(StoreError::Conflict(_) | StoreError::Fenced) => "transition_conflict",
             Self::Store(StoreError::Sql(_)) => "storage_error",
             Self::DatabaseExecutor(_) => "storage_executor_error",
@@ -358,8 +360,8 @@ impl AppError {
             Self::Store(StoreError::NotFound(_)) => 3,
             Self::Store(StoreError::Conflict(_) | StoreError::Fenced) => 4,
             Self::Store(StoreError::Invalid(_) | StoreError::Recurrence(_))
-            | Self::Scheduler(SchedulerError::Gardener(GardenerRunnerError::Configuration(_)))
             | Self::Configuration(_) => 2,
+            Self::Scheduler(error) if error.is_configuration() => 2,
             _ => 1,
         }
     }
@@ -400,6 +402,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             bind,
             poll_ms,
             lease_seconds,
+            ordinary_concurrency,
             fake_delay_ms,
             fake_outcome,
             enable_coding_gardener,
@@ -424,6 +427,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                     bind,
                     poll_ms,
                     lease_seconds,
+                    ordinary_concurrency,
                     fake_delay_ms,
                     fake_outcome: fake_outcome.into(),
                     enable_coding_gardener,
@@ -750,6 +754,11 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
             "lease-seconds must be at least 2 for second-resolution lease renewal".to_owned(),
         ));
     }
+    if !(1..=MAX_ORDINARY_CONCURRENCY).contains(&options.ordinary_concurrency) {
+        return Err(AppError::Configuration(format!(
+            "ordinary-concurrency must be between 1 and {MAX_ORDINARY_CONCURRENCY}"
+        )));
+    }
     if let Some(ui_dir) = &options.ui_dir {
         if !ui_dir.is_dir() {
             return Err(AppError::Configuration(format!(
@@ -778,6 +787,7 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         database: database.clone(),
         poll_interval: Duration::from_millis(options.poll_ms),
         lease_seconds: options.lease_seconds,
+        ordinary_concurrency: options.ordinary_concurrency,
         fake_delay: Duration::from_millis(options.fake_delay_ms),
         fake_outcome: options.fake_outcome,
     };
@@ -856,7 +866,7 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
     } else {
         Scheduler::start(scheduler_config)?
     };
-    let stop = scheduler.stop_flag();
+    let admission = scheduler.admission();
     let scheduler_exit = scheduler.take_exit_signal();
     eprintln!(
         "{}",
@@ -870,7 +880,7 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         None => router_with_executor(database_executor.clone(), api_runtime),
     };
     let server_result = axum::serve(listener, application)
-        .with_graceful_shutdown(shutdown_signal(stop, scheduler_exit))
+        .with_graceful_shutdown(shutdown_signal(admission, scheduler_exit))
         .await;
     let scheduler_result = scheduler.shutdown();
     let database_result = database_executor.shutdown();
@@ -945,7 +955,7 @@ fn protect_process_credentials() -> Result<(), AppError> {
 }
 
 async fn shutdown_signal(
-    stop: Arc<AtomicBool>,
+    admission: ClaimAdmission,
     scheduler_exit: tokio::sync::oneshot::Receiver<()>,
 ) {
     tokio::select! {
@@ -955,7 +965,7 @@ async fn shutdown_signal(
 
     // This is set as soon as either shutdown source resolves, before HTTP draining
     // and scheduler joining.
-    stop.store(true, Ordering::SeqCst);
+    admission.close();
 }
 
 async fn operating_system_shutdown_signal() {

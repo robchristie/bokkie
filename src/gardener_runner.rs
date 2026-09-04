@@ -17,9 +17,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    Claim, Completion, GardenerCandidateQualification, GardenerImplementationResult,
-    GardenerObligationKind, GardenerReproducibilityManifest, GardenerVerificationResult,
-    GardenerVerificationVerdict, InspectionResult, NewGardenerImplementationRun,
+    Claim, Completion, FailureDisposition, GardenerCandidateQualification,
+    GardenerImplementationResult, GardenerObligationKind, GardenerReproducibilityManifest,
+    GardenerVerificationResult, GardenerVerificationVerdict, InspectionResult,
+    MAX_COMPLETION_ERROR_CHARS, MAX_COMPLETION_EVIDENCE_CHARS, NewGardenerImplementationRun,
     NewGardenerInspection, RunResult, Store, StoreError, UnixClock,
     app_server::{AppServerClient, AppServerError, AppServerObserver, TurnKind, TurnRequest},
     gardener::{
@@ -31,8 +32,10 @@ use crate::{
         RegisteredWorktree,
     },
     process::{
-        CancellationToken, NoopHeartbeat, ProcessHeartbeat, ProcessLimits, ProcessSupervisor,
+        CancellationToken, NoopHeartbeat, ProcessHeartbeat, ProcessLimits, ProcessOutcome,
+        ProcessSupervisor,
     },
+    runner::bounded_runtime_text,
     runtime_trust::{
         ChildEnvironment, ExecutableIdentity, ExecutableRole, GardenerExecutableIdentities,
         GardenerExecutablePaths, GitHubCredential, ProcessPolicy, RuntimeTrustError,
@@ -340,19 +343,60 @@ pub enum GardenerRunnerError {
     #[error("candidate checks did not pass: {0}")]
     CandidateChecks(String),
     #[error("worktree cleanup failed after {context}: {cleanup}")]
-    Cleanup { context: String, cleanup: String },
+    Cleanup {
+        context: String,
+        cleanup: String,
+        disposition: FailureDisposition,
+    },
 }
 
 impl GardenerRunnerError {
-    fn is_ambiguous_external_state(&self) -> bool {
+    fn failure_disposition(&self, kind: GardenerObligationKind) -> FailureDisposition {
         match self {
-            Self::Git(error) => error.is_ambiguous_external_state(),
-            Self::Cleanup { context, cleanup } => {
-                context.contains("external state is ambiguous")
-                    || cleanup.contains("external state is ambiguous")
+            Self::Cleanup { disposition, .. } => *disposition,
+            Self::Git(error) if error.is_ambiguous_external_state() => {
+                FailureDisposition::NeedsReconciliation
             }
-            _ => false,
+            Self::Git(crate::git_workspace::GitWorkspaceError::Supervision { outcome, .. })
+                if matches!(outcome.as_ref(), ProcessOutcome::Cancelled(_)) =>
+            {
+                FailureDisposition::Cancelled
+            }
+            Self::AppServer(error)
+                if matches!(
+                    error.as_ref(),
+                    AppServerError::Supervision { outcome }
+                        if matches!(outcome.as_ref(), ProcessOutcome::AmbiguousExternalState { .. })
+                ) =>
+            {
+                FailureDisposition::NeedsReconciliation
+            }
+            Self::AppServer(error)
+                if matches!(
+                    error.as_ref(),
+                    AppServerError::Supervision { outcome }
+                        if matches!(outcome.as_ref(), ProcessOutcome::Cancelled(_))
+                ) =>
+            {
+                FailureDisposition::Cancelled
+            }
+            _ if kind == GardenerObligationKind::Inspection => FailureDisposition::RetrySafe,
+            _ => FailureDisposition::Terminal,
         }
+    }
+}
+
+fn combine_dispositions(
+    first: FailureDisposition,
+    second: FailureDisposition,
+) -> FailureDisposition {
+    use FailureDisposition::{Cancelled, HumanDecision, NeedsReconciliation, RetrySafe, Terminal};
+    match (first, second) {
+        (NeedsReconciliation, _) | (_, NeedsReconciliation) => NeedsReconciliation,
+        (HumanDecision, _) | (_, HumanDecision) => HumanDecision,
+        (Cancelled, _) | (_, Cancelled) => Cancelled,
+        (Terminal, _) | (_, Terminal) => Terminal,
+        (RetrySafe, RetrySafe) => RetrySafe,
     }
 }
 
@@ -382,7 +426,11 @@ impl<'a> GardenerRunner<'a> {
 
     pub fn execute(&self, store: &mut Store, claim: &Claim) -> RunResult {
         let kind = store.gardener_obligation_kind(&claim.obligation_id);
-        let retryable = matches!(&kind, Ok(Some(GardenerObligationKind::Inspection)));
+        let failure_kind = kind
+            .as_ref()
+            .ok()
+            .and_then(|kind| *kind)
+            .unwrap_or(GardenerObligationKind::Implementation);
         let result = match kind {
             Ok(Some(GardenerObligationKind::Inspection)) => self.run_inspection(store, claim),
             Ok(Some(GardenerObligationKind::Implementation)) => {
@@ -399,25 +447,37 @@ impl<'a> GardenerRunner<'a> {
             completion: match result {
                 Ok(Success::Inspection(evidence)) | Ok(Success::Implementation(evidence)) => {
                     Completion::Succeeded {
-                        evidence: Some(evidence),
+                        evidence: Some(bounded_runtime_text(
+                            evidence,
+                            MAX_COMPLETION_EVIDENCE_CHARS,
+                        )),
                     }
                 }
                 Ok(Success::NeedsAttention { error, evidence }) => Completion::Failed {
-                    retryable: false,
-                    error,
-                    evidence: Some(evidence),
-                },
-                Err(error) => Completion::Failed {
-                    retryable: retryable && !error.is_ambiguous_external_state(),
-                    error: error.to_string(),
-                    evidence: Some(format!(
-                        "coding gardener failed for obligation {:?}, occurrence {}, attempt {}, lease generation {}: {error}",
-                        claim.obligation_id,
-                        claim.occurrence,
-                        claim.attempt_number,
-                        claim.lease_generation
+                    disposition: FailureDisposition::HumanDecision,
+                    error: bounded_runtime_text(error, MAX_COMPLETION_ERROR_CHARS),
+                    evidence: Some(bounded_runtime_text(
+                        evidence,
+                        MAX_COMPLETION_EVIDENCE_CHARS,
                     )),
                 },
+                Err(error) => {
+                    let disposition = error.failure_disposition(failure_kind);
+                    Completion::Failed {
+                        disposition,
+                        error: bounded_runtime_text(error.to_string(), MAX_COMPLETION_ERROR_CHARS),
+                        evidence: Some(bounded_runtime_text(
+                            format!(
+                                "coding gardener failed for obligation {:?}, occurrence {}, attempt {}, lease generation {}: {error}",
+                                claim.obligation_id,
+                                claim.occurrence,
+                                claim.attempt_number,
+                                claim.lease_generation
+                            ),
+                            MAX_COMPLETION_EVIDENCE_CHARS,
+                        )),
+                    }
+                }
             },
         }
     }
@@ -521,11 +581,21 @@ impl<'a> GardenerRunner<'a> {
             (Ok(_), Err(cleanup)) => Err(GardenerRunnerError::Cleanup {
                 context: format!("completed inspection {inspection_id} at {source}"),
                 cleanup: cleanup.to_string(),
+                disposition: cleanup.failure_disposition(GardenerObligationKind::Inspection),
             }),
-            (Err(error), Err(cleanup)) => Err(GardenerRunnerError::Cleanup {
-                context: error.to_string(),
-                cleanup: cleanup.to_string(),
-            }),
+            (Err(error), Err(cleanup)) => {
+                let cleanup_disposition =
+                    cleanup.failure_disposition(GardenerObligationKind::Inspection);
+                let disposition = combine_dispositions(
+                    error.failure_disposition(GardenerObligationKind::Inspection),
+                    cleanup_disposition,
+                );
+                Err(GardenerRunnerError::Cleanup {
+                    context: error.to_string(),
+                    cleanup: cleanup.to_string(),
+                    disposition,
+                })
+            }
         }
     }
 
@@ -845,11 +915,21 @@ impl<'a> GardenerRunner<'a> {
                     pull_request.url
                 ),
                 cleanup: cleanup.to_string(),
+                disposition: FailureDisposition::NeedsReconciliation,
             }),
-            (Err(error), Err(cleanup)) => Err(GardenerRunnerError::Cleanup {
-                context: error.to_string(),
-                cleanup: cleanup.to_string(),
-            }),
+            (Err(error), Err(cleanup)) => {
+                let cleanup_disposition =
+                    cleanup.failure_disposition(GardenerObligationKind::Implementation);
+                let disposition = combine_dispositions(
+                    error.failure_disposition(GardenerObligationKind::Implementation),
+                    cleanup_disposition,
+                );
+                Err(GardenerRunnerError::Cleanup {
+                    context: error.to_string(),
+                    cleanup: cleanup.to_string(),
+                    disposition,
+                })
+            }
         }
     }
 

@@ -507,6 +507,7 @@ mod tests {
             retry_max_seconds: 30,
             last_error: None,
             last_evidence: Some("retained evidence".to_owned()),
+            failure_disposition: None,
             created_at: 80,
             updated_at: 100,
             exception: None,

@@ -234,7 +234,11 @@ fn seed_failure(
     store.complete(
         &claim,
         Completion::Failed {
-            retryable,
+            disposition: if retryable {
+                bokkie::FailureDisposition::RetrySafe
+            } else {
+                bokkie::FailureDisposition::Terminal
+            },
             error: format!(
                 "Deterministic {id} failure with long diagnostic {}",
                 "e".repeat(72)
@@ -414,7 +418,7 @@ fn seed_verification(
     store.complete(
         claim,
         Completion::Failed {
-            retryable: false,
+            disposition: bokkie::FailureDisposition::Terminal,
             error: summary.to_owned(),
             evidence: Some(format!("reported_head={head}; tool=inert-fixture")),
         },
