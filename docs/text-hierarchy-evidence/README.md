@@ -36,8 +36,10 @@ numbered evidence paragraphs. See [the visible tail screenshot](browser-evidence
 [its current-frame snapshot](browser-evidence-reader-tail.json), and
 [the interaction report](browser-interactions.json).
 
-Native qualification exercised the real application and a temporary backend,
-confirmed an action and observed its durable result. See
+Native qualification exercised physical selection, confirmation inspection and
+keyboard focus in the real application. Its durable-result probe submits a
+conditional harness HTTP request to the temporary backend; it does not prove
+native UI submission. Browser qualification separately proves UI submission. See
 [native interaction](native-interaction.json), [durable result](native-durable-result.json)
 and [native capture](native-1440x900.png). Artefact digests are in [SHA256SUMS](SHA256SUMS).
 
