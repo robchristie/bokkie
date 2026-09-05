@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "qualified_source_revision": "a2416f812bfb66f9d7585d7e4269388aeb279f1e",
+  "polyorama_revision": "d10b6864ef278fe98fa927111f97d6d142344aab",
+  "source_sha256": {
+    "apps/bokkie-attention-ui/src/app.rs": "805f03d82f4f41ec9acd818eaff95eea0d9275361dd6a28c776bb500c1e9342b",
+    "apps/bokkie-attention-ui/src/ui_observation.rs": "7618f963dcda95e4e4d956e61fecf62e7cf69231ceb08dd0a8aaa5233429dbb8",
+    "apps/bokkie-attention-ui/Cargo.toml": "a2579a46b8fb02392e0e9d984772d31623c18228c15f6b4c63cdc31549d351c9",
+    "Cargo.lock": "829ae8adf3c26e4faa267e9c6ed6ee490357ea822d6c5b0353db01a13115b9d9",
+    "src/bin/bokkie-ui-fixture.rs": "719bb469b0537bdf8348987e68e7920139c095d0b60be5530b5501cbf2436588",
+    "tools/ui-browser-smoke.mjs": "ea0b32434fe91f815fe64ef05911d7b2dcd39c02cb63218bd609b3b44ef3cee1"
+  }
+}
