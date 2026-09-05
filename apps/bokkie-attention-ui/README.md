@@ -77,6 +77,21 @@ never automatically retries a mutation. Every action supplies the token only
 in `X-Bokkie-Mutation-Token`; the Store precondition remains a separate,
 additive concurrent-state check.
 
+The workspace uses Polyorama's reading typography profile: 21-point detail
+headings, 15-point section headings, 14-point reading text and 12.5-point
+secondary metadata at normal scale, with bundled regular and semibold faces.
+Rows reserve explicit typography-derived slots; their height follows font scale
+and density. The detail surface presents the reason for attention, next step
+and currently legal actions first. Technical identities and event sequences
+remain in disclosures, and exact decision provenance remains in confirmations.
+Routine approval requests use ordinary text emphasis; failures use error emphasis.
+
+Raw durable evidence opens in a selectable, wrapped reader with its own vertical
+scroll. It has no status-label line limit. Browser qualification opens a long
+synthetic event, scrolls the reader and requires its unique tail marker among
+complete visible lines from the actual painted galley. Failed measured-text
+attempts remain in the audit even when their fallback is outside the viewport.
+
 Buttons reflect backend capabilities rather than UI-invented transitions. Each
 approve, reject, retry or cancel action opens a separate confirmation with its
 target occurrence and consequence. The confirmation also carries the

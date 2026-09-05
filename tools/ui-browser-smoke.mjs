@@ -15,6 +15,7 @@ const { chromium } = await import(moduleSpecifier);
 let fixture;
 let fixtureRoot;
 let browser;
+let diagnosticPage;
 let expectingDisconnect = false;
 const unexpected = [];
 const operatorRequests = [];
@@ -170,6 +171,7 @@ try {
     source_revision: process.env.BOKKIE_SOURCE_REVISION ?? 'working-tree',
   };
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  diagnosticPage = page;
   page.on('pageerror', error => unexpected.push(`pageerror: ${error.stack ?? error}`));
   page.on('console', message => {
     if (message.type() !== 'error') return;
@@ -227,6 +229,76 @@ try {
     semantic_audit: state.ui_snapshot.semantic_audit,
     text_audit: state.ui_snapshot.text_audit,
   };
+
+  // Locate the seeded immutable event through the API, then prove its text is
+  // painted through the real selectable reader after physical pointer/wheel input.
+  const tailMarker = 'BOKKIE_EVIDENCE_TAIL_7F39';
+  const evidenceEvent = await page.evaluate(async marker => {
+    const topic = await (await fetch('/operator/obligations/completed-with-long-evidence/topic')).json();
+    return topic.items.find(item => JSON.stringify(item.evidence).includes(marker))?.stable_id;
+  }, tailMarker);
+  if (!evidenceEvent) throw new Error('long evidence fixture has no unique tail event');
+  // Completed obligations sort after scheduled work; reach the fixture using
+  // the real virtual ledger's wheel path without relying on native text-agent timing.
+  const completedRowId = 'bokkie.obligation-row.completed-with-long-evidence';
+  const ledgerPoint = await pointFor(page, 'pane.2');
+  await page.mouse.move(ledgerPoint.x, ledgerPoint.y);
+  await page.mouse.wheel(0, 100_000);
+  await page.waitForTimeout(200);
+  for (let attempt = 0; attempt < 40 && !node(await snapshot(page), completedRowId); attempt += 1) {
+    await page.mouse.wheel(0, -200);
+    await page.waitForTimeout(100);
+  }
+  await clickId(page, 'bokkie.obligation-row.completed-with-long-evidence');
+  await page.waitForFunction(() => {
+    const state = window.__BOKKIE_ATTENTION_HANDLE.test_snapshot();
+    return state.interaction.selected_obligation === 'completed-with-long-evidence'
+      && !state.interaction.topic_busy;
+  });
+  const disclosureId = `bokkie.raw-evidence.${evidenceEvent}`;
+  for (let attempt = 0; attempt < 40 && !node(await snapshot(page), disclosureId); attempt += 1) {
+    const point = await pointFor(page, 'pane.3');
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.wheel(0, 280);
+    await page.waitForTimeout(100);
+  }
+  await clickId(page, disclosureId);
+  const readerId = `bokkie.evidence-reader.${evidenceEvent}`;
+  await page.waitForFunction(id => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().ui_snapshot.nodes
+    .some(candidate => candidate.id === id && candidate.text_selectable), readerId);
+  const beforeReader = node(await snapshot(page), readerId);
+  if (beforeReader.name.includes(tailMarker)) throw new Error('long fixture tail was already visible before scrolling');
+  let reader;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const point = await pointFor(page, readerId);
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.wheel(0, 120);
+    await page.waitForTimeout(100);
+    reader = node(await snapshot(page), readerId);
+    if (reader?.name.replaceAll('\n', '').includes(tailMarker)) break;
+  }
+  if (!reader?.name.replaceAll('\n', '').includes(tailMarker)) {
+    throw new Error(`long evidence tail was not painted in the reader: ${json(reader)}`);
+  }
+  state = audit(await snapshot(page), 'long evidence reader tail');
+  await page.screenshot({ path: join(evidence, 'browser-evidence-reader-tail.png') });
+  observations.journeys.push({
+    name: 'long evidence reader paints its tail after scrolling',
+    classification: 'physical disclosure and inner wheel; complete visible rows from the painted selectable galley',
+    fixture_obligation: 'completed-with-long-evidence',
+    event: evidenceEvent,
+    marker: tailMarker,
+    before_visible_text: beforeReader.name,
+    after_visible_text: reader.name,
+    reader_bounds: reader.rect,
+    text_selectable: reader.text_selectable,
+    screenshot: 'browser-evidence-reader-tail.png',
+  });
+  await writeFile(join(evidence, 'browser-evidence-reader-tail.json'), `${json(state)}\n`);
+  // Reset only UI state before the established lifecycle journeys.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitCurrent(page);
+  state = audit(await snapshot(page), 'full ready after reader');
 
   await clickId(page, 'bokkie.inbox-row.gardener:implement:'
     + state.ui_snapshot.nodes.find(candidate => candidate.id.startsWith('bokkie.inbox-row.gardener:implement:'))
@@ -551,6 +623,10 @@ try {
   await writeFile(join(evidence, 'browser-interactions.json'), `${json(observations)}\n`);
   console.log('browser UI smoke passed');
 } catch (error) {
+  if (diagnosticPage) {
+    await diagnosticPage.screenshot({ path: join(evidence, 'browser-failure.png') }).catch(() => {});
+    await writeFile(join(evidence, 'browser-failure.json'), `${json(await snapshot(diagnosticPage).catch(() => null))}\n`);
+  }
   console.error(error.stack ?? error);
   process.exitCode = 1;
 } finally {

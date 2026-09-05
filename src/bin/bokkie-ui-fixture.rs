@@ -6,6 +6,7 @@
 
 use std::{
     error::Error,
+    fmt::Write as _,
     fs,
     io::{self, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -174,15 +175,23 @@ fn seed_full(store: &mut Store, root: &Path) -> Result<(), Box<dyn Error>> {
         ),
         NOW - 10,
     )?;
+    let mut long_evidence = String::new();
+    for line in 0..120 {
+        write!(
+            long_evidence,
+            "Evidence paragraph {line:03}: the deterministic check passed with retained source and input identities. "
+        )?;
+    }
     let claim = store.claim_due(NOW, 60, 1)?.remove(0);
     store.complete(
         &claim,
         Completion::Succeeded {
             evidence: Some(format!(
-                "source={} input={} result={} retained evidence remains selectable",
+                "source={} input={} result={} retained evidence remains selectable {} BOKKIE_EVIDENCE_TAIL_7F39",
                 "c".repeat(40),
                 "fixture-input-".to_owned() + &"x".repeat(80),
-                "pass"
+                "pass",
+                long_evidence
             )),
         },
         NOW + 1,
