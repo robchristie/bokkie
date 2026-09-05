@@ -63,6 +63,9 @@ pub fn finish_snapshot(
     // complete current-frame text observations; partially or wholly clipped
     // rows remain represented by the explicit virtualisation range.
     text.retain(|item| {
+        if item.layout_error.is_some() {
+            return true;
+        }
         let allocation = item.allocated_rect;
         let clip = item.clip_rect;
         allocation.max_x > allocation.min_x
@@ -98,6 +101,42 @@ pub fn finish_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_text_attempts_survive_offscreen_filtering() {
+        use polyorama_ui_egui::{
+            TextInteraction, TextOverflow, TextRole, UiPreferences, measured_content_label,
+        };
+        let context = egui::Context::default();
+        let mut observations = Vec::new();
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            measured_content_label(
+                ui,
+                99,
+                "invalid evidence request",
+                TextRole::Body,
+                TextOverflow::Wrap,
+                24,
+                TextInteraction::Inert,
+                &UiPreferences::default().tokens(false),
+                1.0,
+                &mut observations,
+            );
+        });
+        output.textures_delta.clear();
+        assert_eq!(observations.len(), 1);
+        observations[0].clip_rect = egui::Rect::NOTHING.into();
+        let snapshot = finish_snapshot(
+            &context,
+            1,
+            Vec::new(),
+            observations,
+            VirtualisationObservation::default(),
+            InteractionObservation::default(),
+        );
+        assert_eq!(snapshot.ui_snapshot.text.len(), 1);
+        assert!(!snapshot.ui_snapshot.text_audit.is_empty());
+    }
 
     #[test]
     fn current_frame_snapshot_excludes_offscreen_nodes_and_audits_cleanly() {
