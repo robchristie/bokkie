@@ -1,0 +1,14 @@
+{
+  "runtime_revision": "ed7dd60b3df28945735e53a88b0049a8e2c5f6fc",
+  "decision": "retain",
+  "source_and_build_sha256": {
+    "apps/bokkie-attention-ui/src/app.rs": "89d80afe17814acb2fdf9d93fa70db5adf5845c97bf6a3a36e78dd8e6ab2dab3",
+    "tools/ui-browser-smoke.mjs": "a21debf09b5f6b8bd5bb523390f4e48b76010bb6ac967738cffc643d711dab7a",
+    "tools/ui-native-smoke.sh": "0f02f5139aab825b99e701a6654dc2e815a04f3b475bb73ad89dbe68e6688c81",
+    "src/bin/bokkie-ui-fixture.rs": "719bb469b0537bdf8348987e68e7920139c095d0b60be5530b5501cbf2436588",
+    "Cargo.lock": "829ae8adf3c26e4faa267e9c6ed6ee490357ea822d6c5b0353db01a13115b9d9",
+    "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "d903ee95bd49a6f2e4a51538e10653ac31dfe3b86bf65c03159fa6d4a2b79e6b"
+  },
+  "lantern_binary": "/home/rob/.cargo/bin/lantern",
+  "qualification": "tools/qualify-ui.sh; fixture-owned temporary databases only"
+}

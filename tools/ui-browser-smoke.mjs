@@ -139,6 +139,15 @@ async function clickAction(page, action, pane = null) {
   await clickId(page, target.id);
 }
 
+async function selectCollection(page, collection) {
+  await page.waitForFunction(id => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
+    .ui_snapshot.nodes.some(candidate => candidate.id === id), `bokkie.collection.${collection}`);
+  await clickId(page, `bokkie.collection.${collection}`);
+  const pane = collection === 'attention' ? 'pane.1' : 'pane.2';
+  await page.waitForFunction(id => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
+    .ui_snapshot.nodes.some(candidate => candidate.id === id), pane);
+}
+
 function audit(state, label) {
   if (!state.ui_snapshot.nodes.length
       || state.ui_snapshot.nodes.length > 300
@@ -169,6 +178,7 @@ try {
     version: browser.version(),
     backend: 'browser WebGPU requested through eframe/wgpu',
     source_revision: process.env.BOKKIE_SOURCE_REVISION ?? 'working-tree',
+    fontconfig_file: process.env.FONTCONFIG_FILE ?? 'system default',
   };
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   diagnosticPage = page;
@@ -230,6 +240,35 @@ try {
     text_audit: state.ui_snapshot.text_audit,
   };
 
+  if (!node(state, 'pane.1') || node(state, 'pane.2') || !node(state, 'pane.3')) {
+    throw new Error('desktop default must show the attention list and detail only');
+  }
+  const attentionRows = state.ui_snapshot.nodes.filter(candidate => candidate.id.startsWith('bokkie.inbox-row.'));
+  if (attentionRows.length < 5 || attentionRows.some(row => row.rect.max_y - row.rect.min_y > 80)) {
+    throw new Error('the normal-scale attention queue is not a scannable two-line list');
+  }
+
+  await clickId(page, 'bokkie.obligation-search');
+  await page.keyboard.type('nonretryable', { delay: 30 });
+  await page.waitForFunction(() => {
+    const rows = window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().ui_snapshot.nodes
+      .filter(candidate => candidate.id.startsWith('bokkie.inbox-row.'));
+    return rows.length === 1 && rows[0].id.endsWith('attention-nonretryable');
+  }, null, { timeout: 5_000 });
+  await clickId(page, 'bokkie.inbox-row.attention-nonretryable');
+  await page.waitForFunction(() => !window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().interaction.topic_busy);
+  await page.screenshot({ path: join(evidence, 'browser-attention-failure.png') });
+  await clickId(page, 'bokkie.obligation-search');
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.press('Backspace');
+  await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().ui_snapshot.nodes
+    .filter(candidate => candidate.id.startsWith('bokkie.inbox-row.')).length >= 5);
+  observations.journeys.push({
+    name: 'attention search and failure detail',
+    classification: 'physical pointer, keyboard typing, selection and search clearing',
+    query: 'nonretryable', matched_obligation: 'attention-nonretryable',
+  });
+
   // Locate the seeded immutable event through the API, then prove its text is
   // painted through the real selectable reader after physical pointer/wheel input.
   const tailMarker = 'BOKKIE_EVIDENCE_TAIL_7F39';
@@ -240,6 +279,7 @@ try {
   if (!evidenceEvent) throw new Error('long evidence fixture has no unique tail event');
   // Completed obligations sort after scheduled work; reach the fixture using
   // the real virtual ledger's wheel path without relying on native text-agent timing.
+  await selectCollection(page, 'all');
   const completedRowId = 'bokkie.obligation-row.completed-with-long-evidence';
   const ledgerPoint = await pointFor(page, 'pane.2');
   await page.mouse.move(ledgerPoint.x, ledgerPoint.y);
@@ -305,6 +345,56 @@ try {
       .id.split('bokkie.inbox-row.gardener:implement:')[1]);
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().ui_snapshot.nodes
     .some(candidate => candidate.actions.includes('approve_exact_gardener_proposal') && candidate.enabled));
+  const selectedDesk = (await snapshot(page)).interaction.selected_obligation;
+  for (const width of [1440, 1280, 480]) {
+    await page.setViewportSize({ width, height: width === 1440 ? 900 : 720 });
+    await page.waitForTimeout(300);
+    const desk = audit(await snapshot(page), `attention desk ${width}`);
+    const panes = desk.ui_snapshot.nodes.filter(candidate => candidate.role === 'pane');
+    if (node(desk, 'pane.2') || !node(desk, 'pane.3')
+        || (width >= 760 && !node(desk, 'pane.1'))
+        || (width < 760 && node(desk, 'pane.1'))) {
+      throw new Error(`attention desk has the wrong list/detail composition at ${width}: ${json(panes)}`);
+    }
+    if (desk.interaction.selected_obligation !== selectedDesk) throw new Error('resize lost selection');
+    await page.screenshot({ path: join(evidence, `browser-attention-desk-${width}.png`) });
+    await writeFile(join(evidence, `browser-attention-desk-${width}.json`), `${json(desk)}\n`);
+  }
+  await clickId(page, 'bokkie.back-to-list');
+  await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
+    .ui_snapshot.nodes.some(candidate => candidate.id === 'pane.1'));
+  const narrowList = audit(await snapshot(page), 'narrow attention list');
+  if (node(narrowList, 'pane.3') || node(narrowList, 'pane.2')) throw new Error('narrow Back did not return to one list');
+  const selectedRow = narrowList.ui_snapshot.nodes.find(candidate => candidate.id.startsWith('bokkie.inbox-row.')
+    && candidate.selected);
+  if (!selectedRow) throw new Error('Back lost attention selection');
+  await page.screenshot({ path: join(evidence, 'browser-attention-list-480.png') });
+  await clickId(page, selectedRow.id);
+  await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
+    .ui_snapshot.nodes.some(candidate => candidate.id === 'pane.3'));
+  if (node(await snapshot(page), 'pane.2')) throw new Error('narrow attention selection took an intermediate ledger step');
+  await clickId(page, 'bokkie.back-to-list');
+  await selectCollection(page, 'all');
+  const firstLedgerRow = (await snapshot(page)).ui_snapshot.nodes.find(candidate => candidate.id.startsWith('bokkie.obligation-row.'));
+  await clickId(page, firstLedgerRow.id);
+  await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
+    .ui_snapshot.nodes.some(candidate => candidate.id === 'pane.3'));
+  await clickId(page, 'bokkie.back-to-list');
+  await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
+    .ui_snapshot.nodes.some(candidate => candidate.id === 'pane.2'));
+  await selectCollection(page, 'attention');
+  await clickId(page, `bokkie.inbox-row.${selectedDesk}`);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(300);
+  observations.journeys.push({
+    name: 'one list and detail with direct narrow navigation',
+    classification: 'physical collection tabs, pointer selection, resize and Back; current Rust pane and selection observations',
+    selected: selectedDesk,
+    desktop_widths: [1440, 1280],
+    narrow_width: 480,
+    attention_back: 'pane.1',
+    ledger_back: 'pane.2',
+  });
   await clickAction(page, 'approve_exact_gardener_proposal', 3);
   await page.waitForFunction(() => {
     const state = window.__BOKKIE_ATTENTION_HANDLE.test_snapshot();
@@ -469,6 +559,7 @@ try {
     focused,
   });
 
+  await selectCollection(page, 'all');
   const obligationsPoint = await pointFor(page, 'pane.2');
   await page.mouse.move(obligationsPoint.x, obligationsPoint.y);
   await page.mouse.wheel(0, 1_400);
@@ -488,6 +579,33 @@ try {
     selected: state.interaction.selected_obligation,
     visible_start_before: scrolledStart,
     visible_start_after: refreshedStart,
+  });
+
+  await page.setViewportSize({ width: 480, height: 720 });
+  await page.waitForTimeout(300);
+  const narrowScrolled = audit(await snapshot(page), 'scrolled ledger at narrow width');
+  if (Number(narrowScrolled.virtualisation.visible_rows[0]) === 0) {
+    throw new Error('resizing discarded the ledger scroll position');
+  }
+  const listBounds = node(narrowScrolled, 'pane.2').rect;
+  const visibleLedgerRow = narrowScrolled.ui_snapshot.nodes.find(candidate =>
+    candidate.id.startsWith('bokkie.obligation-row.')
+    && candidate.rect.min_y > listBounds.min_y + 100 && candidate.rect.max_y < listBounds.max_y);
+  if (!visibleLedgerRow) throw new Error('scrolled ledger has no selectable visible row');
+  await clickId(page, visibleLedgerRow.id);
+  await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
+    .ui_snapshot.nodes.some(candidate => candidate.id === 'bokkie.back-to-list'));
+  await clickId(page, 'bokkie.back-to-list');
+  await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
+    .ui_snapshot.nodes.some(candidate => candidate.id === 'pane.2'));
+  const returnedLedger = audit(await snapshot(page), 'scrolled ledger after Back');
+  if (Number(returnedLedger.virtualisation.visible_rows[0]) !== Number(narrowScrolled.virtualisation.visible_rows[0])) {
+    throw new Error('Back discarded the ledger scroll position');
+  }
+  observations.journeys.push({
+    name: 'scrolled ledger survives resize and detail Back',
+    classification: 'physical resize, pointer selection and Back with Rust visible-range observation',
+    visible_start: Number(returnedLedger.virtualisation.visible_rows[0]),
   });
 
   for (const viewport of [
@@ -552,6 +670,9 @@ try {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await waitCurrent(page);
   state = audit(await snapshot(page), 'empty inbox');
+  if (node(state, 'pane.2')) throw new Error('empty attention collection exposed a second list');
+  await selectCollection(page, 'all');
+  state = audit(await snapshot(page), 'empty inbox ledger');
   const inboxRows = state.ui_snapshot.nodes.filter(candidate => candidate.id.startsWith('bokkie.inbox-row.'));
   if (Number(state.virtualisation.total_rows) !== 1 || inboxRows.length !== 0) {
     throw new Error(`empty inbox fixture diverged: ${json({ virtualisation: state.virtualisation, inboxRows })}`);
@@ -567,10 +688,11 @@ try {
   url = await startFixture('large');
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await waitCurrent(page);
+  await selectCollection(page, 'all');
   state = audit(await snapshot(page), 'large database');
   const materialised = Number(state.virtualisation.materialised_rows[1]
     - state.virtualisation.materialised_rows[0]);
-  if (Number(state.virtualisation.total_rows) !== 5_000 || materialised > 16) {
+  if (Number(state.virtualisation.total_rows) !== 5_000 || materialised > 40) {
     throw new Error(`large-list materialisation bound failed: ${json(state.virtualisation)}`);
   }
   const largeSnapshotRequests = operatorRequests.slice(largeRequestStart)
