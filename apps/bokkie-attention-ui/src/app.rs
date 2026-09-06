@@ -1098,6 +1098,7 @@ impl eframe::App for AttentionApp {
                 }
                 let selected = self.model.selected_obligation.as_deref();
                 let inbox = InboxReadModel {
+                    search: &self.model.search,
                     obligations: self
                         .model
                         .exceptions()
@@ -1229,6 +1230,7 @@ impl eframe::App for AttentionApp {
 }
 
 struct InboxReadModel<'a> {
+    search: &'a str,
     obligations: Vec<&'a OperatorObligation>,
     selected: Option<&'a str>,
     captured_at: Option<i64>,
@@ -1493,7 +1495,11 @@ fn show_inbox(
             } else if read.obligations.is_empty() {
                 empty_message(
                     ui,
-                    "Nothing needs your attention in this collection",
+                    if read.search.trim().is_empty() {
+                        "Nothing needs your attention"
+                    } else {
+                        "No attention items match this search"
+                    },
                     tokens,
                     font_scale,
                     text,
