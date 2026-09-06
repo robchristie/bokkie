@@ -182,6 +182,12 @@ For browser use, build the Wasm assets, then start the existing service with
 `--ui-dir apps/bokkie-attention-ui/web` and open `/ui/` on that listener. Do
 not add a proxy, port forwarding, CORS policy or a non-loopback bind.
 
+The default desk pairs **Needs attention** or **All obligations** with one
+selected detail. Search narrows the current collection. On a narrow screen,
+selecting a row opens detail directly; **Back** returns to that collection.
+Read **What happens next** and **Activity and evidence** first, and expand
+**Technical provenance** when exact diagnostic identities are useful.
+
 Both UI builds first read `GET /bootstrap`. They retain its mutation token only
 in process memory and attach it as `X-Bokkie-Mutation-Token` on each action.
 The bootstrap, health and operator snapshot responses identify the Bokkie

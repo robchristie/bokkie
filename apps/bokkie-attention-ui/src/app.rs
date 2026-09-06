@@ -10,18 +10,17 @@ use std::{
 use web_time::Instant;
 
 use bokkie_operator_api::{
-    ApprovalSubject, AttentionCause, DurableLiveness, ExceptionReason, ObligationTopic,
-    OperatorObligation, OperatorSnapshot, TopicItem, TopicSource,
+    ApprovalSubject, AttentionCause, DisabledReason, DurableLiveness, ExceptionReason,
+    ObligationTopic, OperatorObligation, OperatorSnapshot, TopicItem, TopicSource,
 };
 use eframe::egui;
 use polyorama_core::{DockNodeId, PaneId, Workspace, virtual_rows};
 use polyorama_ui_egui::{
     ActionButtonSpec, ActionButtonState, ActionEmphasis, ActionKey, ActionScope, ActionSpec,
-    ActionTarget, Availability, DesignTokens, DockBehaviour, DockTextContext,
-    NativeTextControlKind, PanePresenter, SemanticUiId, StatusTone, TextInteraction,
-    TextLayoutObservation, TextOverflow, TextRole, TypographyProfile, UiNode, UiPreferences,
-    UiRole, action_button, action_semantic_node, application_bar_frame, application_bar_height,
-    apply_design_system_with_typography, dock_workspace, measured_content_label,
+    ActionTarget, Availability, DesignTokens, NativeTextControlKind, PanePresenter, SemanticUiId,
+    StatusTone, TextInteraction, TextLayoutObservation, TextOverflow, TextRole, TypographyProfile,
+    UiNode, UiPreferences, UiRole, action_button, action_semantic_node, application_bar_frame,
+    application_bar_height, apply_design_system_with_typography, measured_content_label,
     measured_fixed_slot_label, property_row, record_native_text_control, section_heading,
     status_badge,
 };
@@ -204,7 +203,7 @@ fn projection_refresh_plan(
 
 pub struct AttentionApp {
     workspace: Workspace,
-    dock: DockBehaviour,
+    collection: PaneId,
     model: AppModel,
     transport: Option<Transport>,
     session: Option<ApiSession>,
@@ -257,7 +256,7 @@ impl AttentionApp {
         }
         let mut app = Self {
             workspace: operator_workspace(),
-            dock: DockBehaviour::default(),
+            collection: INBOX_PANE_ID,
             model,
             transport,
             session: None,
@@ -889,7 +888,10 @@ impl AttentionApp {
                         self.workspace.activate(destination);
                     }
                 }
-                OperatorIntent::Navigate(pane) => self.workspace.activate(pane),
+                OperatorIntent::Navigate(pane) => {
+                    self.collection = pane;
+                    self.workspace.activate(pane);
+                }
                 OperatorIntent::Search(search) => self.model.search = search,
                 OperatorIntent::Filter(filter) => self.model.state_filter = filter,
                 OperatorIntent::BeginAction(action) => {
@@ -1014,16 +1016,17 @@ impl eframe::App for AttentionApp {
             .exact_size(application_bar_height(&tokens, self.preferences.font_scale))
             .show(root_ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.heading(APPLICATION_NAME);
+                    ui.heading("Bokkie");
                     ui.separator();
-                    let connection = connection_label(&self.model);
-                    let compact_connection = compact_connection_label(&self.model);
-                    ui.label(if ui.available_width() < 700.0 {
-                        &compact_connection
-                    } else {
-                        &connection
-                    })
-                    .on_hover_text(&connection);
+                    if ui.max_rect().width() - 32.0 >= NARROW_WORKSPACE_WIDTH {
+                        show_collection_tabs(
+                            ui,
+                            self.collection,
+                            self.model.exceptions().count(),
+                            &mut intents,
+                            &mut semantic_nodes,
+                        );
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let availability = if self.model.action_busy {
                             Availability::Disabled {
@@ -1060,6 +1063,8 @@ impl eframe::App for AttentionApp {
                         if response.clicked() {
                             intents.push(OperatorIntent::Refresh);
                         }
+                        ui.label(compact_connection_label(&self.model))
+                            .on_hover_text(connection_label(&self.model));
                     });
                 });
             });
@@ -1073,15 +1078,31 @@ impl eframe::App for AttentionApp {
         semantic_nodes.push(bar_node);
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
+            .frame(
+                egui::Frame::NONE
+                    .fill(tokens.colours.surface_canvas.into())
+                    .inner_margin(16.0),
+            )
             .show(root_ui, |ui| {
                 let narrow = ui.available_width() < NARROW_WORKSPACE_WIDTH;
                 if narrow {
-                    show_narrow_navigation(ui, self.workspace.active_pane, &tokens, &mut intents);
+                    show_collection_navigation(
+                        ui,
+                        self.collection,
+                        self.workspace.active_pane,
+                        true,
+                        self.model.exceptions().count(),
+                        &mut intents,
+                        &mut semantic_nodes,
+                    );
                 }
                 let selected = self.model.selected_obligation.as_deref();
                 let inbox = InboxReadModel {
-                    obligations: self.model.exceptions().collect(),
+                    obligations: self
+                        .model
+                        .exceptions()
+                        .filter(|item| matches_search(item, &self.model.search))
+                        .collect(),
                     selected,
                     captured_at: self
                         .model
@@ -1090,17 +1111,12 @@ impl eframe::App for AttentionApp {
                         .map(|snapshot| snapshot.captured_at),
                     connection: &self.model.connection,
                     loading: self.model.snapshot.is_none() && self.model.snapshot_busy,
-                    selection_destination: Some(if narrow {
-                        OBLIGATIONS_PANE_ID
-                    } else {
-                        TIMELINE_PANE_ID
-                    }),
+                    selection_destination: Some(TIMELINE_PANE_ID),
                 };
                 let obligations = ObligationsReadModel {
                     obligations: self.model.filtered_obligations(),
                     total: self.model.obligations().len(),
                     selected,
-                    search: &self.model.search,
                     filter: self.model.state_filter,
                     captured_at: self
                         .model
@@ -1108,7 +1124,7 @@ impl eframe::App for AttentionApp {
                         .as_ref()
                         .map(|snapshot| snapshot.captured_at),
                     loading: self.model.snapshot.is_none() && self.model.snapshot_busy,
-                    selection_destination: narrow.then_some(TIMELINE_PANE_ID),
+                    selection_destination: Some(TIMELINE_PANE_ID),
                 };
                 let timeline = TimelineReadModel {
                     obligation: self.model.selected(),
@@ -1120,6 +1136,7 @@ impl eframe::App for AttentionApp {
                     snapshot_busy: self.model.snapshot_busy,
                 };
                 let mut presenter = OperatorPanePresenter {
+                    search: &self.model.search,
                     inbox,
                     obligations,
                     timeline,
@@ -1133,16 +1150,27 @@ impl eframe::App for AttentionApp {
                 if narrow {
                     presenter.pane_ui(ui, self.workspace.active_pane, ui.max_rect());
                 } else {
-                    let _ = dock_workspace(
-                        ui,
-                        &mut self.workspace,
-                        &mut self.dock,
-                        &mut presenter,
-                        DockTextContext {
-                            tokens,
-                            font_scale: self.preferences.font_scale,
-                        },
+                    let available = ui.available_rect_before_wrap();
+                    let list_width = (available.width() * 0.43).clamp(320.0, 500.0);
+                    let list_rect = egui::Rect::from_min_max(
+                        available.min,
+                        egui::pos2(available.left() + list_width, available.bottom()),
                     );
+                    let detail_rect = egui::Rect::from_min_max(
+                        egui::pos2(list_rect.right() + 24.0, available.top()),
+                        available.max,
+                    );
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(list_rect), |ui| {
+                        presenter.pane_ui(ui, self.collection, list_rect);
+                    });
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(detail_rect), |ui| {
+                        egui::Frame::NONE
+                            .fill(tokens.colours.surface_panel.into())
+                            .inner_margin(20.0)
+                            .show(ui, |ui| {
+                                presenter.pane_ui(ui, TIMELINE_PANE_ID, ui.max_rect());
+                            });
+                    });
                 }
                 text_observations.extend(presenter.text);
                 semantic_nodes.extend(presenter.semantic_nodes);
@@ -1213,7 +1241,6 @@ struct ObligationsReadModel<'a> {
     obligations: Vec<&'a OperatorObligation>,
     total: usize,
     selected: Option<&'a str>,
-    search: &'a str,
     filter: StateFilter,
     captured_at: Option<i64>,
     loading: bool,
@@ -1231,6 +1258,7 @@ struct TimelineReadModel<'a> {
 }
 
 struct OperatorPanePresenter<'a> {
+    search: &'a str,
     inbox: InboxReadModel<'a>,
     obligations: ObligationsReadModel<'a>,
     timeline: TimelineReadModel<'a>,
@@ -1245,14 +1273,22 @@ struct OperatorPanePresenter<'a> {
 impl PanePresenter for OperatorPanePresenter<'_> {
     fn title(&self, pane: PaneId) -> &'static str {
         match pane {
-            INBOX_PANE_ID => "Inbox",
-            OBLIGATIONS_PANE_ID => "Obligations",
-            TIMELINE_PANE_ID => "Timeline",
+            INBOX_PANE_ID => "Needs attention",
+            OBLIGATIONS_PANE_ID => "All obligations",
+            TIMELINE_PANE_ID => "Detail",
             _ => "Unknown pane",
         }
     }
 
     fn pane_ui(&mut self, ui: &mut egui::Ui, pane: PaneId, pane_rect: egui::Rect) {
+        // Pane identity survives moving between the split shell and narrow navigation.
+        let mut content_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .id(egui::Id::new(("bokkie-pane", pane.0)))
+                .max_rect(ui.available_rect_before_wrap())
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        let ui = &mut content_ui;
         let mut pane_node = UiNode::container(
             SemanticUiId::pane(pane),
             Some(SemanticUiId::root()),
@@ -1262,6 +1298,15 @@ impl PanePresenter for OperatorPanePresenter<'_> {
         pane_node.name = self.title(pane).to_owned();
         pane_node.pane = Some(pane);
         self.semantic_nodes.push(pane_node);
+        if pane != TIMELINE_PANE_ID {
+            show_search(
+                ui,
+                self.search,
+                pane,
+                self.intents,
+                &mut self.semantic_nodes,
+            );
+        }
         match pane {
             INBOX_PANE_ID => show_inbox(
                 ui,
@@ -1309,29 +1354,126 @@ impl PanePresenter for OperatorPanePresenter<'_> {
     }
 }
 
-fn show_narrow_navigation(
+fn show_collection_navigation(
     ui: &mut egui::Ui,
+    collection: PaneId,
     active: PaneId,
-    tokens: &DesignTokens,
+    narrow: bool,
+    attention_count: usize,
     intents: &mut Vec<OperatorIntent>,
+    nodes: &mut Vec<UiNode>,
 ) {
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = tokens.spacing.unit.0;
-        for (pane, label) in [
-            (INBOX_PANE_ID, "Inbox"),
-            (OBLIGATIONS_PANE_ID, "Obligations"),
-            (TIMELINE_PANE_ID, "Timeline"),
-        ] {
-            ui.push_id(("narrow-pane-navigation", pane.0), |ui| {
-                let response = ui.selectable_label(active == pane, label);
-                record_native_text_control(&response, NativeTextControlKind::Selectable);
-                if response.clicked() {
-                    intents.push(OperatorIntent::Navigate(pane));
-                }
-            });
+        if narrow && active == TIMELINE_PANE_ID {
+            let response = ui.button("← Back");
+            record_navigation(
+                &response,
+                "bokkie.back-to-list",
+                "Back to collection",
+                false,
+                nodes,
+            );
+            if response.clicked() {
+                intents.push(OperatorIntent::Navigate(collection));
+            }
+        } else {
+            show_collection_tabs(ui, collection, attention_count, intents, nodes);
         }
     });
-    ui.separator();
+    ui.add_space(8.0);
+}
+
+fn show_collection_tabs(
+    ui: &mut egui::Ui,
+    collection: PaneId,
+    attention_count: usize,
+    intents: &mut Vec<OperatorIntent>,
+    nodes: &mut Vec<UiNode>,
+) {
+    for (pane, id, label) in [
+        (
+            INBOX_PANE_ID,
+            "bokkie.collection.attention",
+            format!("Needs attention · {attention_count}"),
+        ),
+        (
+            OBLIGATIONS_PANE_ID,
+            "bokkie.collection.all",
+            "All obligations".to_owned(),
+        ),
+    ] {
+        let response = ui.selectable_label(collection == pane, &label);
+        record_navigation(&response, id, &label, collection == pane, nodes);
+        if response.clicked() {
+            intents.push(OperatorIntent::Navigate(pane));
+        }
+    }
+}
+
+fn record_navigation(
+    response: &egui::Response,
+    id: &str,
+    label: &str,
+    selected: bool,
+    nodes: &mut Vec<UiNode>,
+) {
+    record_native_text_control(response, NativeTextControlKind::Selectable);
+    let mut node = UiNode::container(
+        SemanticUiId::new(id),
+        Some(SemanticUiId::root()),
+        UiRole::Section,
+        response.rect.into(),
+    );
+    node.name = label.to_owned();
+    node.selected = selected;
+    node.focused = response.has_focus();
+    nodes.push(node);
+}
+
+fn matches_search(obligation: &OperatorObligation, search: &str) -> bool {
+    let query = search.trim().to_lowercase();
+    query.is_empty()
+        || obligation.state.label().to_lowercase().contains(&query)
+        || obligation.id.to_lowercase().contains(&query)
+        || obligation.description.to_lowercase().contains(&query)
+        || obligation
+            .last_error
+            .as_deref()
+            .is_some_and(|value| value.to_lowercase().contains(&query))
+        || obligation
+            .exception
+            .as_ref()
+            .is_some_and(|reason| exception_label(reason).to_lowercase().contains(&query))
+}
+
+fn show_search(
+    ui: &mut egui::Ui,
+    search: &str,
+    pane: PaneId,
+    intents: &mut Vec<OperatorIntent>,
+    nodes: &mut Vec<UiNode>,
+) {
+    let mut value = search.to_owned();
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut value)
+            .id_salt("obligation-search")
+            .hint_text("Search obligations")
+            .desired_width(f32::INFINITY),
+    );
+    record_native_text_control(&response, NativeTextControlKind::Selectable);
+    let mut node = UiNode::container(
+        SemanticUiId::new("bokkie.obligation-search"),
+        Some(SemanticUiId::pane(pane)),
+        UiRole::Section,
+        response.rect.into(),
+    );
+    node.name = "Search obligations".to_owned();
+    node.focused = response.has_focus();
+    nodes.push(node);
+    if response.changed() {
+        intents.push(OperatorIntent::Search(value));
+    }
+    ui.add_space(12.0);
 }
 
 fn show_inbox(
@@ -1346,27 +1488,12 @@ fn show_inbox(
     egui::ScrollArea::vertical()
         .id_salt("bokkie-inbox-scroll")
         .show(ui, |ui| {
-            section_heading(ui, 1_001, "Genuine exceptions", tokens, font_scale, text);
-            status_badge(
-                ui,
-                1_002,
-                &format!(
-                    "{} exception{} · {}",
-                    read.obligations.len(),
-                    if read.obligations.len() == 1 { "" } else { "s" },
-                    freshness_state(read.connection)
-                ),
-                connection_tone(read.connection),
-                tokens,
-                font_scale,
-                text,
-            );
             if read.loading {
                 empty_message(ui, "Loading operator exceptions…", tokens, font_scale, text);
             } else if read.obligations.is_empty() {
                 empty_message(
                     ui,
-                    "Inbox clear — no backend-projected exceptions",
+                    "Nothing needs your attention in this collection",
                     tokens,
                     font_scale,
                     text,
@@ -1395,60 +1522,35 @@ fn show_inbox(
                     "inbox",
                     &obligation.id,
                     read.selected == Some(obligation.id.as_str()),
-                    row_height(tokens, font_scale, &INBOX_ROW),
+                    attention_row_height(tokens, font_scale),
                     &semantic_label,
                     tokens,
                     INBOX_PANE_ID,
                     semantic_nodes,
                     |ui| {
-                        measured_fixed_slot_label(
+                        attention_row_line(
                             ui,
-                            row_text_instance("inbox", &obligation.id, 1),
-                            &obligation.description,
-                            TextRole::Body,
-                            TextOverflow::Wrap,
-                            2,
-                            TextInteraction::Inert,
-                            tokens,
-                            font_scale,
-                            text,
-                        );
-                        measured_fixed_slot_label(
-                            ui,
-                            row_text_instance("inbox", &obligation.id, 2),
-                            &why,
-                            exception_text_role(obligation.exception.as_ref()),
-                            TextOverflow::Wrap,
-                            2,
-                            TextInteraction::Inert,
-                            tokens,
-                            font_scale,
-                            text,
-                        );
-                        measured_fixed_slot_label(
-                            ui,
-                            row_text_instance("inbox", &obligation.id, 3),
-                            &format!(
-                                "{} · {}",
-                                relative_time(obligation.updated_at, read.captured_at),
-                                freshness_state(read.connection)
-                            ),
-                            TextRole::Secondary,
-                            TextOverflow::Ellipsis,
+                            obligation,
                             1,
-                            TextInteraction::Inert,
+                            attention_title(obligation),
+                            &relative_time(obligation.updated_at, read.captured_at),
+                            TextRole::Body,
                             tokens,
                             font_scale,
                             text,
                         );
-                        measured_fixed_slot_label(
+                        attention_row_line(
                             ui,
-                            row_text_instance("inbox", &obligation.id, 4),
-                            &consequence,
-                            TextRole::Secondary,
-                            TextOverflow::Wrap,
+                            obligation,
                             2,
-                            TextInteraction::Inert,
+                            &why,
+                            obligation_source(obligation),
+                            if exception_text_role(obligation.exception.as_ref()) == TextRole::Error
+                            {
+                                TextRole::Error
+                            } else {
+                                TextRole::Secondary
+                            },
                             tokens,
                             font_scale,
                             text,
@@ -1476,34 +1578,6 @@ fn show_obligations(
     semantic_nodes: &mut Vec<UiNode>,
     virtualisation: &mut VirtualisationObservation,
 ) {
-    section_heading(
-        ui,
-        2_001,
-        &format!("All obligations · {}", read.total),
-        tokens,
-        font_scale,
-        text,
-    );
-    let mut search = read.search.to_owned();
-    let search_response = ui.add(
-        egui::TextEdit::singleline(&mut search)
-            .id_salt("obligation-search")
-            .hint_text("Search identity, description or error")
-            .desired_width(f32::INFINITY),
-    );
-    record_native_text_control(&search_response, NativeTextControlKind::Selectable);
-    let mut search_node = UiNode::container(
-        SemanticUiId::new("bokkie.obligation-search"),
-        Some(SemanticUiId::pane(OBLIGATIONS_PANE_ID)),
-        UiRole::Section,
-        search_response.rect.into(),
-    );
-    search_node.name = "Search obligations".to_owned();
-    semantic_nodes.push(search_node);
-
-    if search_response.changed() {
-        intents.push(OperatorIntent::Search(search));
-    }
     let mut filter = read.filter;
     let combo = egui::ComboBox::from_id_salt("obligation-state-filter")
         .selected_text(
@@ -1581,22 +1655,6 @@ fn show_obligations(
                                 row_text_instance("obligation", &obligation.id, 1),
                                 &obligation.description,
                                 TextRole::Body,
-                                TextOverflow::Wrap,
-                                2,
-                                TextInteraction::Inert,
-                                tokens,
-                                font_scale,
-                                text,
-                            );
-                            measured_fixed_slot_label(
-                                ui,
-                                row_text_instance("obligation", &obligation.id, 2),
-                                &format!(
-                                    "{} · updated {}",
-                                    obligation.state.label(),
-                                    relative_time(obligation.updated_at, read.captured_at)
-                                ),
-                                TextRole::Secondary,
                                 TextOverflow::Ellipsis,
                                 1,
                                 TextInteraction::Inert,
@@ -1606,8 +1664,8 @@ fn show_obligations(
                             );
                             measured_fixed_slot_label(
                                 ui,
-                                row_text_instance("obligation", &obligation.id, 3),
-                                &next_step_label(obligation),
+                                row_text_instance("obligation", &obligation.id, 2),
+                                &ledger_status(obligation, read.captured_at),
                                 TextRole::Secondary,
                                 TextOverflow::Ellipsis,
                                 1,
@@ -1639,13 +1697,16 @@ fn show_timeline(
     semantic_nodes: &mut Vec<UiNode>,
 ) {
     egui::ScrollArea::vertical()
-        .id_salt("bokkie-timeline-scroll")
+        .id_salt((
+            "bokkie-timeline-scroll",
+            read.obligation.map(|item| item.id.as_str()),
+        ))
         .show(ui, |ui| {
             let Some(obligation) = read.obligation else {
-                section_heading(ui, 3_001, "Evidence timeline", tokens, font_scale, text);
+                section_heading(ui, 3_001, "Activity and evidence", tokens, font_scale, text);
                 empty_message(
                     ui,
-                    "Select an exception or obligation to inspect its durable topic",
+                    "Select an item to understand what happens next and review its evidence",
                     tokens,
                     font_scale,
                     text,
@@ -1655,7 +1716,7 @@ fn show_timeline(
             measured_content_label(
                 ui,
                 3_001,
-                &obligation.description,
+                attention_title(obligation),
                 TextRole::ApplicationTitle,
                 TextOverflow::Wrap,
                 3,
@@ -1668,10 +1729,9 @@ fn show_timeline(
                 ui,
                 3_002,
                 &format!(
-                    "{} · occurrence {} · {}",
+                    "{} · {}",
                     obligation.state.label(),
-                    obligation.occurrence,
-                    freshness_state(read.connection)
+                    obligation_source(obligation)
                 ),
                 state_tone(obligation),
                 tokens,
@@ -1692,10 +1752,29 @@ fn show_timeline(
                     text,
                 );
             }
+            if let Some(subject) = exact_gardener_subject(obligation) {
+                section_heading(ui, 3_005, "Proposal", tokens, font_scale, text);
+                egui::ScrollArea::vertical()
+                    .id_salt(("proposal-reader", &obligation.id))
+                    .max_height(TextRole::Body.style(tokens, font_scale).line_height * 8.0)
+                    .show(ui, |ui| {
+                        let response = ui.add(
+                            egui::Label::new(
+                                TextRole::Body
+                                    .style(tokens, font_scale)
+                                    .rich_text(subject.prompt),
+                            )
+                            .wrap()
+                            .selectable(true),
+                        );
+                        record_native_text_control(&response, NativeTextControlKind::Selectable);
+                    });
+            }
+            section_heading(ui, 3_006, "What happens next", tokens, font_scale, text);
             measured_content_label(
                 ui,
                 3_004,
-                &next_step_label(obligation),
+                &next_step_label(obligation, read.topic.map(|topic| topic.captured_at)),
                 TextRole::Body,
                 TextOverflow::Wrap,
                 3,
@@ -1704,92 +1783,17 @@ fn show_timeline(
                 font_scale,
                 text,
             );
-            section_heading(ui, 3_020, "Current actions", tokens, font_scale, text);
-            ui.horizontal_wrapped(|ui| {
-                for action in LifecycleAction::ALL
-                    .into_iter()
-                    .filter(|action| action.capability(obligation).available)
-                {
-                    let availability = read
-                        .obligation
-                        .map(|obligation| {
-                            let capability = action.capability(obligation);
-                            if read.action_busy {
-                                Availability::Disabled {
-                                    reason: "Another lifecycle request is in progress".into(),
-                                }
-                            } else if read.snapshot_busy {
-                                Availability::Disabled {
-                                    reason: "A current-state refresh is in progress".into(),
-                                }
-                            } else if read.loading {
-                                Availability::Disabled {
-                                    reason: "The selected evidence topic is still refreshing"
-                                        .into(),
-                                }
-                            } else if !read.connection.decisions_safe() {
-                                Availability::Disabled {
-                                    reason: "Retained data may be stale; refresh before deciding"
-                                        .into(),
-                                }
-                            } else if capability.available {
-                                Availability::Enabled
-                            } else {
-                                Availability::Disabled {
-                                    reason: crate::model::disabled_reason(capability).into(),
-                                }
-                            }
-                        })
-                        .unwrap_or_else(|| Availability::Disabled {
-                            reason: "Select an obligation first".into(),
-                        });
-                    let enabled = availability.enabled();
-                    let target = ActionTarget::pane(action, TIMELINE_PANE_ID);
-                    let response = action_button(
-                        ui,
-                        ActionButtonSpec {
-                            target,
-                            availability: availability.clone(),
-                            state: ActionButtonState::Momentary,
-                            emphasis: if matches!(
-                                action,
-                                LifecycleAction::Approve | LifecycleAction::ApproveGardenerProposal
-                            ) {
-                                ActionEmphasis::Primary
-                            } else {
-                                ActionEmphasis::Quiet
-                            },
-                            compact: false,
-                        },
-                        tokens,
-                        font_scale,
-                        text,
-                    );
-                    semantic_nodes.push(action_semantic_node(
-                        &response,
-                        target,
-                        &availability,
-                        ActionButtonState::Momentary,
-                        SemanticUiId::pane(TIMELINE_PANE_ID),
-                    ));
-                    if response.clicked() && enabled {
-                        intents.push(OperatorIntent::BeginAction(action));
-                    }
-                }
-            });
-            if !LifecycleAction::ALL
-                .into_iter()
-                .any(|action| action.capability(obligation).available)
-            {
-                empty_message(
-                    ui,
-                    "No action needed in this state",
-                    tokens,
-                    font_scale,
-                    text,
-                );
-            }
-            egui::CollapsingHeader::new("Technical details")
+            show_detail_actions(
+                ui,
+                read,
+                obligation,
+                intents,
+                tokens,
+                font_scale,
+                text,
+                semantic_nodes,
+            );
+            egui::CollapsingHeader::new("Technical provenance")
                 .id_salt(("obligation-technical-details", &obligation.id))
                 .show(ui, |ui| {
                     property_row(
@@ -1797,6 +1801,15 @@ fn show_timeline(
                         3_010,
                         "Obligation",
                         &obligation.id,
+                        tokens,
+                        font_scale,
+                        text,
+                    );
+                    property_row(
+                        ui,
+                        3_022,
+                        "Description",
+                        &obligation.description,
                         tokens,
                         font_scale,
                         text,
@@ -1825,18 +1838,6 @@ fn show_timeline(
                             3_013,
                             "Goal fingerprint",
                             subject.fingerprint,
-                            tokens,
-                            font_scale,
-                            text,
-                        );
-                        measured_content_label(
-                            ui,
-                            3_014,
-                            subject.prompt,
-                            TextRole::Body,
-                            TextOverflow::Wrap,
-                            3,
-                            TextInteraction::Selectable,
                             tokens,
                             font_scale,
                             text,
@@ -1909,7 +1910,7 @@ fn show_timeline(
                 );
             }
             ui.separator();
-            section_heading(ui, 3_040, "Evidence and history", tokens, font_scale, text);
+            section_heading(ui, 3_040, "Activity and evidence", tokens, font_scale, text);
             if read.loading && read.topic.is_none() {
                 empty_message(ui, "Loading durable evidence…", tokens, font_scale, text);
             } else if let Some(topic) = read.topic {
@@ -1922,7 +1923,7 @@ fn show_timeline(
                         text,
                     );
                 }
-                for item in &topic.items {
+                for item in topic.items.iter().rev() {
                     show_topic_item(
                         ui,
                         item,
@@ -1935,6 +1936,137 @@ fn show_timeline(
                 }
             }
         });
+}
+
+fn action_is_relevant(action: LifecycleAction, obligation: &OperatorObligation) -> bool {
+    let capability = action.capability(obligation);
+    capability.available
+        || matches!(
+            capability.disabled_reason,
+            Some(DisabledReason::RunningClaimOwnsObligation)
+        )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn show_detail_actions(
+    ui: &mut egui::Ui,
+    read: &TimelineReadModel<'_>,
+    obligation: &OperatorObligation,
+    intents: &mut Vec<OperatorIntent>,
+    tokens: &DesignTokens,
+    font_scale: f32,
+    text: &mut Vec<TextLayoutObservation>,
+    semantic_nodes: &mut Vec<UiNode>,
+) {
+    let mut disabled_explanations = BTreeSet::new();
+    ui.horizontal_wrapped(|ui| {
+        for action in [
+            LifecycleAction::Approve,
+            LifecycleAction::ApproveGardenerProposal,
+            LifecycleAction::Retry,
+            LifecycleAction::Reject,
+            LifecycleAction::RejectGardenerProposal,
+            LifecycleAction::Cancel,
+        ]
+        .into_iter()
+        .filter(|action| action_is_relevant(*action, obligation))
+        {
+            let availability = read
+                .obligation
+                .map(|obligation| {
+                    let capability = action.capability(obligation);
+                    if read.action_busy {
+                        Availability::Disabled {
+                            reason: "Another lifecycle request is in progress".into(),
+                        }
+                    } else if read.snapshot_busy {
+                        Availability::Disabled {
+                            reason: "A current-state refresh is in progress".into(),
+                        }
+                    } else if read.loading {
+                        Availability::Disabled {
+                            reason: "The selected evidence topic is still refreshing".into(),
+                        }
+                    } else if !read.connection.decisions_safe() {
+                        Availability::Disabled {
+                            reason: "Retained data may be stale; refresh before deciding".into(),
+                        }
+                    } else if capability.available {
+                        Availability::Enabled
+                    } else {
+                        Availability::Disabled {
+                            reason: crate::model::disabled_reason(capability).into(),
+                        }
+                    }
+                })
+                .unwrap_or_else(|| Availability::Disabled {
+                    reason: "Select an obligation first".into(),
+                });
+            if let Availability::Disabled { reason } = &availability {
+                disabled_explanations.insert(reason.to_string());
+            }
+            let enabled = availability.enabled();
+            let target = ActionTarget::pane(action, TIMELINE_PANE_ID);
+            let response = action_button(
+                ui,
+                ActionButtonSpec {
+                    target,
+                    availability: availability.clone(),
+                    state: ActionButtonState::Momentary,
+                    emphasis: if matches!(
+                        action,
+                        LifecycleAction::Approve
+                            | LifecycleAction::ApproveGardenerProposal
+                            | LifecycleAction::Retry
+                    ) {
+                        ActionEmphasis::Primary
+                    } else {
+                        ActionEmphasis::Quiet
+                    },
+                    compact: false,
+                },
+                tokens,
+                font_scale,
+                text,
+            );
+            semantic_nodes.push(action_semantic_node(
+                &response,
+                target,
+                &availability,
+                ActionButtonState::Momentary,
+                SemanticUiId::pane(TIMELINE_PANE_ID),
+            ));
+            if response.clicked() && enabled {
+                intents.push(OperatorIntent::BeginAction(action));
+            }
+        }
+    });
+    if !LifecycleAction::ALL
+        .into_iter()
+        .any(|action| action_is_relevant(action, obligation))
+    {
+        empty_message(
+            ui,
+            "No action needed in this state",
+            tokens,
+            font_scale,
+            text,
+        );
+    }
+    for reason in disabled_explanations {
+        measured_content_label(
+            ui,
+            stable_text_instance(&reason),
+            &reason,
+            TextRole::Secondary,
+            TextOverflow::Wrap,
+            3,
+            TextInteraction::Selectable,
+            tokens,
+            font_scale,
+            text,
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1964,11 +2096,7 @@ fn show_topic_item(
         ui,
         topic_text_instance(&item.stable_id, 1),
         "When",
-        &format!(
-            "{} · Unix {}",
-            relative_time(item.occurred_at, Some(captured_at)),
-            item.occurred_at
-        ),
+        &relative_time(item.occurred_at, Some(captured_at)),
         tokens,
         font_scale,
         text,
@@ -1992,6 +2120,15 @@ fn show_topic_item(
     egui::CollapsingHeader::new("Event technical details")
         .id_salt(("event-technical-details", &item.stable_id))
         .show(ui, |ui| {
+            property_row(
+                ui,
+                topic_text_instance(&item.stable_id, 5),
+                "Unix time",
+                &item.occurred_at.to_string(),
+                tokens,
+                font_scale,
+                text,
+            );
             for (field_index, (label, value)) in fields
                 .iter()
                 .enumerate()
@@ -2255,17 +2392,101 @@ fn gardener_confirmation_provenance(gardener: &GardenerConfirmation) -> [String;
     ]
 }
 
-const INBOX_ROW: [(TextRole, u8); 4] = [
-    (TextRole::Body, 2),
-    (TextRole::Body, 2),
-    (TextRole::Secondary, 1),
-    (TextRole::Secondary, 2),
-];
-const OBLIGATION_ROW: [(TextRole, u8); 3] = [
-    (TextRole::Body, 2),
-    (TextRole::Secondary, 1),
-    (TextRole::Secondary, 1),
-];
+const INBOX_ROW: [(TextRole, u8); 2] = [(TextRole::Body, 1), (TextRole::Secondary, 1)];
+const OBLIGATION_ROW: [(TextRole, u8); 2] = INBOX_ROW;
+
+#[allow(clippy::too_many_arguments)]
+fn attention_row_line(
+    ui: &mut egui::Ui,
+    obligation: &OperatorObligation,
+    field: u8,
+    primary: &str,
+    metadata: &str,
+    role: TextRole,
+    tokens: &DesignTokens,
+    font_scale: f32,
+    text: &mut Vec<TextLayoutObservation>,
+) {
+    let width = ui.available_width();
+    let height = role.style(tokens, font_scale).line_height;
+    let metadata_width = (width * 0.29).clamp(64.0, 130.0);
+    let (_, rect) = ui.allocate_space(egui::vec2(width, height));
+    let main_rect = egui::Rect::from_min_max(
+        rect.min,
+        egui::pos2(
+            rect.right() - metadata_width - tokens.spacing.inline.0,
+            rect.bottom(),
+        ),
+    );
+    let metadata_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.right() - metadata_width, rect.top()),
+        rect.max,
+    );
+    for (slot, value, slot_role, instance) in [
+        (main_rect, primary, role, field),
+        (metadata_rect, metadata, TextRole::Secondary, field + 2),
+    ] {
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(slot)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        measured_fixed_slot_label(
+            &mut child,
+            row_text_instance("inbox", &obligation.id, instance),
+            value,
+            slot_role,
+            TextOverflow::Ellipsis,
+            1,
+            TextInteraction::Inert,
+            tokens,
+            font_scale,
+            text,
+        );
+    }
+}
+
+fn attention_title(obligation: &OperatorObligation) -> &str {
+    if let Some(subject) = exact_gardener_subject(obligation)
+        && obligation.description
+            == format!(
+                "Implement approved gardener proposal {}",
+                subject.fingerprint
+            )
+    {
+        "Review proposed code change"
+    } else {
+        &obligation.description
+    }
+}
+
+fn obligation_source(obligation: &OperatorObligation) -> &str {
+    exact_gardener_subject(obligation)
+        .map(|subject| subject.repository)
+        .unwrap_or(if obligation.id.starts_with("gardener:") {
+            "Coding gardener"
+        } else {
+            "Bokkie"
+        })
+}
+
+fn ledger_status(obligation: &OperatorObligation, captured_at: Option<i64>) -> String {
+    let wake = obligation
+        .next_wake_at
+        .map(|at| format!("wake {}", relative_time(at, captured_at)))
+        .unwrap_or_else(|| "no wake".to_owned());
+    format!(
+        "{} · {} · attempts {}/{}",
+        obligation.state.label(),
+        wake,
+        obligation.attempts_made,
+        obligation.max_attempts
+    )
+}
+
+fn attention_row_height(tokens: &DesignTokens, font_scale: f32) -> f32 {
+    row_height(tokens, font_scale, &INBOX_ROW) + tokens.spacing.unit.0
+}
 
 fn row_height(tokens: &DesignTokens, font_scale: f32, recipe: &[(TextRole, u8)]) -> f32 {
     recipe
@@ -2292,15 +2513,34 @@ fn exception_text_role(reason: Option<&ExceptionReason>) -> TextRole {
     }
 }
 
-fn next_step_label(obligation: &OperatorObligation) -> String {
+fn next_step_label(obligation: &OperatorObligation, captured_at: Option<i64>) -> String {
     match obligation.liveness.as_ref() {
         Some(DurableLiveness::FutureWake { wake_at }) => {
-            format!("Scheduled to wake at Unix {wake_at}")
+            format!(
+                "Next scheduled wake {}",
+                relative_time(*wake_at, captured_at)
+            )
         }
         Some(DurableLiveness::ActiveLease { expires_at, .. }) => {
-            format!("Work is running; lease expires at Unix {expires_at}")
+            format!(
+                "Work is running; lease expires {}",
+                relative_time(*expires_at, captured_at)
+            )
         }
-        Some(DurableLiveness::HumanAttention { .. }) => available_consequences(obligation),
+        Some(DurableLiveness::HumanAttention { .. }) => [
+            LifecycleAction::ApproveGardenerProposal,
+            LifecycleAction::Approve,
+            LifecycleAction::Retry,
+            LifecycleAction::Cancel,
+        ]
+        .into_iter()
+        .find_map(|action| {
+            let capability = action.capability(obligation);
+            capability
+                .available
+                .then(|| consequence_label(capability).to_owned())
+        })
+        .unwrap_or_else(|| "Review the activity and evidence before deciding".to_owned()),
         None => "No further work is scheduled".to_owned(),
     }
 }
@@ -2374,16 +2614,14 @@ fn ledger_row(
         );
     }
     let content_rect = rect.shrink(tokens.spacing.inline.0);
-    ui.scope_builder(
+    let mut child = ui.new_child(
         egui::UiBuilder::new()
             .id_salt(("bokkie-ledger-row-content", scope, stable_id))
             .max_rect(content_rect)
             .layout(egui::Layout::top_down(egui::Align::Min)),
-        |ui| {
-            ui.set_clip_rect(ui.clip_rect().intersect(content_rect));
-            content(ui);
-        },
     );
+    child.set_clip_rect(ui.clip_rect().intersect(content_rect));
+    content(&mut child);
     response
 }
 
@@ -2445,12 +2683,10 @@ fn compact_connection_label(model: &AppModel) -> String {
     let state = match &model.connection {
         ConnectionState::Loading => "Loading",
         ConnectionState::Current if model.snapshot_busy => "Refreshing",
-        ConnectionState::Current => "Current",
+        ConnectionState::Current => "Connected",
         ConnectionState::Stale { .. } => "Stale",
     };
-    model
-        .last_successful_refresh
-        .map_or_else(|| state.to_owned(), |at| format!("{state} · Unix {at}"))
+    state.to_owned()
 }
 
 fn freshness_state(connection: &ConnectionState) -> &'static str {
@@ -2461,19 +2697,14 @@ fn freshness_state(connection: &ConnectionState) -> &'static str {
     }
 }
 
-fn connection_tone(connection: &ConnectionState) -> StatusTone {
-    match connection {
-        ConnectionState::Loading => StatusTone::Neutral,
-        ConnectionState::Current => StatusTone::Success,
-        ConnectionState::Stale { .. } => StatusTone::Warning,
-    }
-}
-
 fn state_tone(obligation: &OperatorObligation) -> StatusTone {
     match obligation.state {
-        bokkie_operator_api::OperatorObligationState::Attention => StatusTone::Error,
-        bokkie_operator_api::OperatorObligationState::AwaitingApproval
-        | bokkie_operator_api::OperatorObligationState::RetryScheduled => StatusTone::Warning,
+        bokkie_operator_api::OperatorObligationState::Attention
+            if exception_text_role(obligation.exception.as_ref()) == TextRole::Error =>
+        {
+            StatusTone::Error
+        }
+        bokkie_operator_api::OperatorObligationState::AwaitingApproval => StatusTone::Neutral,
         bokkie_operator_api::OperatorObligationState::Completed => StatusTone::Success,
         _ => StatusTone::Neutral,
     }
@@ -2485,7 +2716,16 @@ fn relative_time(then: i64, captured_at: Option<i64>) -> String {
     };
     let delta = now.saturating_sub(then);
     if delta < 0 {
-        format!("in {}s", delta.unsigned_abs())
+        let seconds = delta.unsigned_abs();
+        if seconds < 60 {
+            format!("in {seconds}s")
+        } else if seconds < 3_600 {
+            format!("in {}m", seconds / 60)
+        } else if seconds < 86_400 {
+            format!("in {}h", seconds / 3_600)
+        } else {
+            format!("in {}d", seconds / 86_400)
+        }
     } else if delta < 60 {
         format!("{delta}s ago")
     } else if delta < 3_600 {
@@ -2500,7 +2740,7 @@ fn relative_time(then: i64, captured_at: Option<i64>) -> String {
 fn exception_label(reason: &ExceptionReason) -> String {
     match reason {
         ExceptionReason::AwaitingApproval { subject } => match subject {
-            ApprovalSubject::Generic => "Awaiting a generic operator decision".to_owned(),
+            ApprovalSubject::Generic => "Awaiting your approval".to_owned(),
             ApprovalSubject::GardenerProposal { .. } => {
                 "Review the proposed code change before implementation".to_owned()
             }
@@ -2574,7 +2814,7 @@ fn obligation_row_text(obligation: &OperatorObligation, captured_at: Option<i64>
             obligation.attempts_made,
             obligation.max_attempts
         ),
-        next_step_label(obligation),
+        next_step_label(obligation, captured_at),
         format!(
             "{} · updated {}",
             recurrence_label(obligation),
@@ -2911,6 +3151,188 @@ mod tests {
     }
 
     #[test]
+    fn detail_navigation_retains_collection_search_and_filter() {
+        let mut app = test_app();
+        let context = egui::Context::default();
+        app.model.apply_snapshot(OperatorSnapshot {
+            captured_at: 100,
+            service: None,
+            next_cursor: None,
+            watermark: 9,
+            obligations: vec![fixture(1)],
+        });
+        for collection in [INBOX_PANE_ID, OBLIGATIONS_PANE_ID] {
+            app.apply_intents(
+                vec![
+                    OperatorIntent::Navigate(collection),
+                    OperatorIntent::Search("deterministic".into()),
+                ],
+                &context,
+            );
+            let filter = app.model.state_filter;
+            app.apply_intents(
+                vec![OperatorIntent::Select {
+                    obligation_id: fixture(1).id,
+                    destination: Some(TIMELINE_PANE_ID),
+                }],
+                &context,
+            );
+            assert_eq!(app.workspace.active_pane, TIMELINE_PANE_ID);
+            assert_eq!(app.collection, collection);
+            app.apply_intents(vec![OperatorIntent::Navigate(app.collection)], &context);
+            assert_eq!(app.workspace.active_pane, collection);
+            assert_eq!(app.model.search, "deterministic");
+            assert_eq!(app.model.state_filter, filter);
+        }
+    }
+
+    #[test]
+    fn attention_search_matches_projected_reason_and_scheduling_stays_neutral() {
+        let mut obligation = fixture(1);
+        assert_eq!(state_tone(&obligation), StatusTone::Neutral);
+        obligation.state = OperatorObligationState::AwaitingApproval;
+        obligation.exception = Some(ExceptionReason::AwaitingApproval {
+            subject: ApprovalSubject::Generic,
+        });
+        assert!(matches_search(&obligation, "APPROVAL"));
+        assert_eq!(state_tone(&obligation), StatusTone::Neutral);
+        assert!(!matches_search(&obligation, "absent phrase"));
+        let summary = ledger_status(&obligation, Some(100));
+        assert!(summary.contains("wake"));
+        assert!(summary.contains("attempts 1/3"));
+        assert!(summary.contains(obligation.state.label()));
+    }
+
+    #[test]
+    fn action_area_keeps_relevant_stale_actions_with_visible_explanation() {
+        let context = egui::Context::default();
+        let preferences = UiPreferences::default();
+        apply_design_system_with_typography(&context, preferences, TypographyProfile::Reading);
+        let tokens = preferences
+            .tokens(false)
+            .with_typography_profile(TypographyProfile::Reading);
+        let obligation = fixture(1);
+        assert!(action_is_relevant(LifecycleAction::Cancel, &obligation));
+        assert!(!action_is_relevant(LifecycleAction::Approve, &obligation));
+        assert!(!action_is_relevant(
+            LifecycleAction::ApproveGardenerProposal,
+            &obligation
+        ));
+        let stale = ConnectionState::Stale {
+            reason: "lost connection".to_owned(),
+        };
+        let read = TimelineReadModel {
+            obligation: Some(&obligation),
+            topic: None,
+            topic_error: None,
+            loading: false,
+            connection: &stale,
+            action_busy: false,
+            snapshot_busy: false,
+        };
+        let mut nodes = Vec::new();
+        let mut text = Vec::new();
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            show_detail_actions(
+                ui,
+                &read,
+                &obligation,
+                &mut Vec::new(),
+                &tokens,
+                1.0,
+                &mut text,
+                &mut nodes,
+            );
+        });
+        output.textures_delta.clear();
+        assert_eq!(nodes.len(), 1);
+        assert!(!nodes[0].enabled);
+        assert!(nodes[0].disabled_reason.as_ref().unwrap().contains("stale"));
+        // The explanation receives its own measured, selectable painted text slot.
+        assert!(
+            text.iter()
+                .any(|item| item.interaction == TextInteraction::Selectable)
+        );
+    }
+
+    #[test]
+    fn attention_rows_have_two_lines_and_visible_metadata_at_both_widths() {
+        use polyorama_ui_egui::audit_text_layouts;
+        let preferences = UiPreferences::default();
+        let tokens = preferences
+            .tokens(false)
+            .with_typography_profile(TypographyProfile::Reading);
+        let height = attention_row_height(&tokens, 1.0);
+        assert!(
+            (56.0..=72.0).contains(&height),
+            "default attention row height: {height}"
+        );
+        for width in [340.0, 480.0] {
+            let context = egui::Context::default();
+            apply_design_system_with_typography(&context, preferences, TypographyProfile::Reading);
+            let obligation = fixture(1);
+            let mut observations = Vec::new();
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    ledger_row(
+                        ui,
+                        "inbox",
+                        &obligation.id,
+                        false,
+                        height,
+                        "Test row",
+                        &tokens,
+                        INBOX_PANE_ID,
+                        &mut Vec::new(),
+                        |ui| {
+                            attention_row_line(
+                                ui,
+                                &obligation,
+                                1,
+                                &obligation.description,
+                                "2m ago",
+                                TextRole::Body,
+                                &tokens,
+                                1.0,
+                                &mut observations,
+                            );
+                            attention_row_line(
+                                ui,
+                                &obligation,
+                                2,
+                                "Approval needed",
+                                "Bokkie",
+                                TextRole::Secondary,
+                                &tokens,
+                                1.0,
+                                &mut observations,
+                            );
+                        },
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            assert_eq!(observations.len(), 4);
+            assert!(
+                audit_text_layouts(&observations).is_empty(),
+                "{:?}",
+                audit_text_layouts(&observations)
+            );
+            for item in observations {
+                assert_eq!(item.declared_max_lines, 1);
+                assert!(item.allocated_rect.max_y <= item.clip_rect.max_y + 1.0);
+            }
+        }
+    }
+
+    #[test]
     fn reader_tail_is_observed_only_when_its_painted_rows_are_visible() {
         let context = egui::Context::default();
         let mut checked = false;
@@ -3038,7 +3460,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         AttentionApp {
             workspace: operator_workspace(),
-            dock: DockBehaviour::default(),
+            collection: INBOX_PANE_ID,
             model: AppModel::default(),
             transport: None,
             session: None,

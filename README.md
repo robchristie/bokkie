@@ -118,8 +118,11 @@ separate, non-installed example and does not replace the kernel service.
 
 The first operator workspace is a separate Rust application that reads Bokkie's
 HTTP projections; it never opens SQLite directly and cannot create a second
-state path. It shows the exception inbox, obligation ledger and selected
-evidence timeline, while offering only actions that the backend declares legal.
+state path. Its default attention desk pairs one collection list with one detail
+surface.
+Needs attention and All obligations select the existing backend projections;
+on a narrow screen a row opens its detail directly, with Back returning to the
+same collection. It offers only actions that the backend declares legal.
 Native builds use a literal loopback HTTP base. Browser builds use relative API
 paths and must be served by this same loopback Bokkie origin at `/ui/`.
 Browser and native transports bootstrap a process session in memory, attach its

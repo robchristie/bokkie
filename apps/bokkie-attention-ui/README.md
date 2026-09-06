@@ -1,9 +1,11 @@
-# Bokkie Operator workspace
+# Bokkie attention desk
 
-This application presents Bokkie's backend-projected exception inbox, ordered
-obligation ledger and selected-obligation evidence timeline through one Rust
-application model on native desktop and WebAssembly/WebGPU. Lifecycle controls
-use the backend's typed capabilities and always require a separate confirmation.
+This application presents Bokkie's backend-projected attention queue, ordered
+obligation ledger and selected evidence through one Rust application model on
+native desktop and WebAssembly/WebGPU. Needs attention and All obligations
+share one list surface beside the selected detail. Narrow screens open detail
+directly from either list; Back preserves the collection and selection. Lifecycle
+controls use the backend's typed capabilities and always require a separate confirmation.
 
 Native builds accept only an HTTP base with a literal loopback address. Browser
 builds call relative API paths, so the UI must be served by the same loopback
@@ -80,11 +82,19 @@ additive concurrent-state check.
 The workspace uses Polyorama's reading typography profile: 21-point detail
 headings, 15-point section headings, 14-point reading text and 12.5-point
 secondary metadata at normal scale, with bundled regular and semibold faces.
-Rows reserve explicit typography-derived slots; their height follows font scale
-and density. The detail surface presents the reason for attention, next step
-and currently legal actions first. Technical identities and event sequences
-remain in disclosures, and exact decision provenance remains in confirmations.
-Routine approval requests use ordinary text emphasis; failures use error emphasis.
+Attention rows use two typography-derived lines: a title with quiet timing
+metadata, then the reason for attention. Their height follows font scale and
+density. Search applies to the active collection; the full ledger also offers
+a state filter and denser state, wake-up and attempt metadata. The detail
+surface presents the reason for attention, what happens next and currently
+legal actions first. Activity and evidence remains readable below the decision
+area, with technical provenance in disclosures. Exact decision provenance
+remains in confirmations. Routine scheduling is neutral; actual failures use
+error emphasis. Relevant actions remain visible with an explanation when stale
+data or an in-progress request temporarily prevents a decision.
+
+The application compositions and their acceptance criteria are documented in
+[the attention desk design](../../docs/attention-desk.md).
 
 Raw durable evidence opens in a selectable, wrapped reader with its own vertical
 scroll. It has no status-label line limit. Browser qualification opens a long
@@ -173,3 +183,9 @@ deployment, screen-reader certification or physical-GPU performance. In
 particular, native AccessKit adapters are outside this slice and the browser
 disconnected-state surface is an explicitly labelled approximation; see the
 evidence index before relying on either claim.
+
+Chromium also needs a working system font configuration for its hidden native
+text input. On minimal Linux hosts, set `FONTCONFIG_FILE` to a configuration
+that resolves installed fonts before running qualification; verify an ordinary
+browser text field if search receives focus but no text. The browser evidence
+records the font configuration used and exercises physical search entry.
