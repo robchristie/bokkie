@@ -176,7 +176,7 @@ script builds native and Wasm assets, creates only fixture-owned temporary
 SQLite databases, runs real browser and Xvfb native interaction smokes, and
 removes its explicit runtime root. It never accepts an operator database path
 or enables the coding-gardener runtime. Retained results and their limitations
-are indexed in [the qualification evidence](../../docs/ui-qualification-evidence/README.md).
+are indexed in [the attention desk qualification evidence](../../docs/attention-desk-evidence/README.md).
 
 The retained result qualifies functional native and browser journeys, not a
 deployment, screen-reader certification or physical-GPU performance. In

@@ -54,3 +54,6 @@ Canonical checks are `tools/check.sh` and `tools/check-ui.sh`. Run
 Record the exact runtime revision, fixture identities, observed results and
 retain/reject decision with the new evidence; the owning pull request records
 the final reviewed head and landing result.
+
+The retained candidate and observed acceptance results are indexed in
+[attention desk qualification](attention-desk-evidence/README.md).
