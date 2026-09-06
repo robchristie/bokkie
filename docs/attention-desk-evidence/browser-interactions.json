@@ -2,7 +2,7 @@
   "browser": {
     "version": "151.0.7922.34",
     "backend": "browser WebGPU requested through eframe/wgpu",
-    "source_revision": "2807be105bb3f6d4aa9e663d2d99d45204b9ae74",
+    "source_revision": "ed7dd60b3df28945735e53a88b0049a8e2c5f6fc",
     "fontconfig_file": "/home/rob/pixi/.pixi/envs/default/etc/fonts/fonts.conf",
     "webgpu": {
       "navigator_gpu": true,
@@ -32,7 +32,7 @@
       "after_visible_text": "retained source and input identities. Evidence paragraph 119: the deterministic check passed with \nretained source and input identities.  BOKKIE_EVIDENCE_TAIL_7F39\",\n  \"failure_disposition\": null,\n  \"id\": 5,\n  \"lease_generation\": 1,",
       "reader_bounds": {
         "min_x": 578,
-        "min_y": 742.5,
+        "min_y": 744.5,
         "max_x": 1404,
         "max_y": 864
       },
@@ -72,8 +72,8 @@
     {
       "name": "process restart invalidates mutation session",
       "classification": "direct rejected old-token submission followed by same-origin bootstrap and fresh snapshot",
-      "old_session": "e77f3843-4702-419f-8a58-23a31a9db66b",
-      "new_session": "a926a069-9d07-40b0-8e24-c11e37774389",
+      "old_session": "22d332ee-572f-4f7a-9229-6684f1616704",
+      "new_session": "322b05da-4110-4872-9adb-6566b7822c2b",
       "confirmation_cleared": true,
       "connection": "current"
     },
@@ -85,10 +85,10 @@
         "last_event": "cancelled"
       },
       "incremental_requests": [
-        "http://127.0.0.1:46507/operator/obligations/approval%2Dsafe%2Dcancel/cancel",
-        "http://127.0.0.1:46507/operator/changes?after=250",
-        "http://127.0.0.1:46507/operator/obligations/approval%2Dsafe%2Dcancel",
-        "http://127.0.0.1:46507/operator/obligations/approval%2Dsafe%2Dcancel/topic"
+        "http://127.0.0.1:34183/operator/obligations/approval%2Dsafe%2Dcancel/cancel",
+        "http://127.0.0.1:34183/operator/changes?after=250",
+        "http://127.0.0.1:34183/operator/obligations/approval%2Dsafe%2Dcancel",
+        "http://127.0.0.1:34183/operator/obligations/approval%2Dsafe%2Dcancel/topic"
       ]
     },
     {
@@ -121,22 +121,22 @@
   "states": {
     "full": {
       "fixture": {
-        "address": "127.0.0.1:46507",
+        "address": "127.0.0.1:34183",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-7a5d44aa-3f7e-421f-b863-1d9d4205de2e",
+        "root": "/tmp/bokkie-ui-qualification-9da2fac8-5f9f-4706-9d71-44632d7c4d7c",
         "service": {
           "api_contract_version": 1,
           "build": "bokkie/0.1.0",
-          "process_id": 3715443,
+          "process_id": 3776505,
           "schema_version": 9,
-          "session_id": "a926a069-9d07-40b0-8e24-c11e37774389"
+          "session_id": "322b05da-4110-4872-9adb-6566b7822c2b"
         },
         "variant": "full"
       },
       "warmed_idle": {
-        "before": "240",
-        "after": "240",
+        "before": "238",
+        "after": "238",
         "stable": true,
         "interval_ms": 1000
       }
@@ -147,16 +147,16 @@
     },
     "empty": {
       "fixture": {
-        "address": "127.0.0.1:39393",
+        "address": "127.0.0.1:38835",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-be385ad8-4b52-474e-b8d5-ac3994e57c2a",
+        "root": "/tmp/bokkie-ui-qualification-23e8588d-d99c-4835-8e6a-9cd0f0f3c0c7",
         "service": {
           "api_contract_version": 1,
           "build": "bokkie/0.1.0",
-          "process_id": 3715925,
+          "process_id": 3776990,
           "schema_version": 9,
-          "session_id": "af7c66d5-7127-44fe-9690-885d2ddd2d9f"
+          "session_id": "397a98eb-0743-466c-ab03-5b7c3b3dc998"
         },
         "variant": "empty"
       },
@@ -167,16 +167,16 @@
     },
     "empty-inbox": {
       "fixture": {
-        "address": "127.0.0.1:37467",
+        "address": "127.0.0.1:33625",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-1bcc40de-cd58-4a81-a7c6-4b797c3d6365",
+        "root": "/tmp/bokkie-ui-qualification-21893b31-b7dd-495d-8544-5cf677e66e2d",
         "service": {
           "api_contract_version": 1,
           "build": "bokkie/0.1.0",
-          "process_id": 3715969,
+          "process_id": 3777581,
           "schema_version": 9,
-          "session_id": "3fb05b07-a155-44b8-9630-7bbcbbba5e01"
+          "session_id": "b7810ff0-2eec-4f3a-af58-38fcfecaec4e"
         },
         "variant": "empty-inbox"
       }
@@ -188,16 +188,16 @@
     },
     "large": {
       "fixture": {
-        "address": "127.0.0.1:41317",
+        "address": "127.0.0.1:35045",
         "database_kind": "new_temporary_fixture",
         "gardener_runtime": false,
-        "root": "/tmp/bokkie-ui-qualification-7a8aee90-45c1-4d49-bbbf-a1d68ad3a061",
+        "root": "/tmp/bokkie-ui-qualification-6f52017c-68bb-42e9-b10b-e9ddf95ff369",
         "service": {
           "api_contract_version": 1,
           "build": "bokkie/0.1.0",
-          "process_id": 3716011,
+          "process_id": 3777636,
           "schema_version": 9,
-          "session_id": "b483a23f-b95f-42a6-9f5b-70aa10b536d0"
+          "session_id": "d1396d8d-92dc-45fa-9293-b28d42869a69"
         },
         "variant": "large"
       },
@@ -216,7 +216,7 @@
         "snapshot_page_requests": 50
       }
     },
-    "disconnected_request": "network: GET http://127.0.0.1:41317/operator/snapshot net::ERR_CONNECTION_REFUSED",
+    "disconnected_request": "network: GET http://127.0.0.1:35045/operator/snapshot net::ERR_CONNECTION_REFUSED",
     "disconnected_console": "console: Failed to load resource: net::ERR_CONNECTION_REFUSED",
     "disconnected": {
       "network_disconnected": true,
@@ -285,7 +285,7 @@
   ],
   "errors": [],
   "last_operator_response": {
-    "url": "http://127.0.0.1:41317/operator/obligations/large%2D00000/topic",
+    "url": "http://127.0.0.1:35045/operator/obligations/large%2D00000/topic",
     "status": 200
   }
 }

@@ -1,7 +1,7 @@
 # Attention desk qualification
 
 Retain the application composition at runtime revision
-`2807be105bb3f6d4aa9e663d2d99d45204b9ae74`. The source/build identities are in
+`ed7dd60b3df28945735e53a88b0049a8e2c5f6fc`. The source/build identities are in
 [source-identity.json](source-identity.json); fixture identities and actual
 journeys are in [browser-interactions.json](browser-interactions.json).
 Subsequent evidence-only changes retain the same application and harness.
