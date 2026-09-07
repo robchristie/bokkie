@@ -24,7 +24,7 @@ is included.
 
 ## Current phase
 
-Polyorama #34 landed at `3c1c51f873de70162629a7fc4c17896f89bf7125` after
+The framework landed at `3c1c51f873de70162629a7fc4c17896f89bf7125` after
 canonical verification, independent review and CI, with identical reviewed and
 landed trees. Bokkie's complete migration passes 55 focused tests and all ten
 appearance captures are byte-identical to accepted evidence. Final verification
