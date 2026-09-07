@@ -531,6 +531,8 @@ try {
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
     .interaction.confirmation_conflict != null, null, { timeout: 15_000 });
   state = audit(await snapshot(page), 'conflict');
+  await page.screenshot({ path: join(evidence, 'browser-stale-confirmation.png') });
+  await writeFile(join(evidence, 'browser-stale-confirmation.json'), `${json(state)}\n`);
   observations.journeys.push({
     name: 'stale confirmation conflict',
     classification: 'direct physical confirmation against externally advanced temporary store state',
