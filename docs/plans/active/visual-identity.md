@@ -1,9 +1,10 @@
 # Application-owned visual identity
 
 - Status: active
-- Reorientation budget: 160 lines
+- Reorientation budget: 160
 - Owner: Bokkie (product and integration); Polyorama (framework)
 - Landed pull requests: none
+- Next action: Stabilise framework theme API and foreground proof.
 
 ## Outcome and boundary
 
@@ -52,8 +53,8 @@ and the selected candidate passes interaction, text and contrast verification.
 - Polyorama start: `d469d74a14f0bc4494fdfc44504f12462ee50841`.
 - Bokkie start: `3ec38f6b19dec2ef1db6cd39b9c92899d75d2ecb`.
 - Task branches: `codex/visual-identity` in each repository.
-- Task worktrees: `/nvme/development/polyorama-worktrees/visual-identity`
-  and `/nvme/development/bokkie-worktrees/visual-identity`.
+Task checkouts use the `visual-identity` child of each sibling worktree
+directory; Git worktree registration owns their current absolute paths.
 - Generated task outputs: each worktree's ignored `.tools/runtime/visual-identity/`.
 - Polyorama gate: `cargo xtask verify`; Bokkie gates: `tools/check.sh`,
   `tools/check-ui.sh`, `tools/qualify-ui.sh` and controlled candidate captures.
@@ -64,16 +65,16 @@ and the selected candidate passes interaction, text and contrast verification.
 
 ## Acceptance
 
-- [ ] Actual button painting covers primary, pressed and disabled foregrounds.
-- [ ] Validated app theme drives both egui styling and custom component tokens.
-- [ ] Analytical reference remains compatible and universal rules are neutral.
-- [ ] Gallery can switch/adjust/export a bounded set of complete appearances.
-- [ ] Identical Bokkie fixture has three controlled colour captures.
-- [ ] Source Sans 3 versus Inter comparison has retained evidence and decision.
-- [ ] Graphite composition reduces outlines and compacts status/activity metadata.
-- [ ] Light/high-contrast, focus, selection, long text, narrow width, larger text,
+- Unproved: Actual button painting covers primary, pressed and disabled foregrounds.
+- Unproved: Validated app theme drives both egui styling and custom component tokens.
+- Unproved: Analytical reference remains compatible and universal rules are neutral.
+- Unproved: Gallery can switch/adjust/export a bounded set of complete appearances.
+- Unproved: Identical Bokkie fixture has three controlled colour captures.
+- Unproved: Source Sans 3 versus Inter comparison has retained evidence and decision.
+- Unproved: Graphite composition reduces outlines and compacts status/activity metadata.
+- Unproved: Light/high-contrast, focus, selection, long text, narrow width, larger text,
   stale states and confirmations have executable and rendered evidence.
-- [ ] Canonical checks, independent review, CI and owner-before-consumer landing.
+- Unproved: Canonical checks, independent review, CI and owner-before-consumer landing.
 
 ## Next action
 
