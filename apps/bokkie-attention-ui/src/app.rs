@@ -19,12 +19,12 @@ use polyorama_core::{DockNodeId, PaneId, Workspace, virtual_rows};
 use polyorama_ui_egui::apply_design_system_with_typography;
 use polyorama_ui_egui::{
     ActionButtonSpec, ActionButtonState, ActionEmphasis, ActionKey, ActionScope, ActionSpec,
-    ActionTarget, ApplicationTheme, Availability, DesignTokens, NativeTextControlKind,
-    PanePresenter, SemanticUiId, StatusTone, TextInteraction, TextLayoutObservation, TextOverflow,
-    TextRole, TypographyProfile, UiNode, UiPreferences, UiRole, action_button,
-    action_semantic_node, application_bar_frame, application_bar_height, measured_content_label,
-    measured_fixed_slot_label, property_row, record_native_text_control, section_heading,
-    status_badge,
+    ActionTarget, ApplicationTheme, Availability, ContentTextSpec, DesignTokens, DomainReference,
+    NativeTextControlKind, PanePresenter, PresentationContext, PresentationScope, SemanticUiId,
+    StatusTone, TextInteraction, TextLayoutObservation, TextOverflow, TextRole, TypographyProfile,
+    UiNode, UiPreferences, UiRole, action_button, action_semantic_node, application_bar_frame,
+    application_bar_height, measured_content_label, measured_fixed_slot_label, property_row,
+    record_native_text_control, section_heading, status_badge,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -1748,93 +1748,86 @@ fn show_timeline(
                 );
                 return;
             };
-            measured_content_label(
+            let mut presentation = detail_presentation(ui, obligation, *tokens, font_scale);
+            presentation.content(
                 ui,
-                3_001,
+                "title",
                 attention_title(obligation),
-                TextRole::ApplicationTitle,
-                TextOverflow::Wrap,
-                3,
-                TextInteraction::Selectable,
-                tokens,
-                font_scale,
-                text,
+                ContentTextSpec {
+                    role: TextRole::ApplicationTitle,
+                    overflow: TextOverflow::Wrap,
+                    max_lines: 3,
+                    interaction: TextInteraction::Selectable,
+                },
             );
-            measured_content_label(
+            presentation.content(
                 ui,
-                3_002,
+                "state",
                 &format!(
                     "{} · {}",
                     obligation.state.label(),
                     obligation_source(obligation)
                 ),
-                if state_tone(obligation) == StatusTone::Error {
-                    TextRole::Error
-                } else {
-                    TextRole::Secondary
+                ContentTextSpec {
+                    role: if state_tone(obligation) == StatusTone::Error {
+                        TextRole::Error
+                    } else {
+                        TextRole::Secondary
+                    },
+                    overflow: TextOverflow::Wrap,
+                    max_lines: 2,
+                    interaction: TextInteraction::Inert,
                 },
-                TextOverflow::Wrap,
-                2,
-                TextInteraction::Inert,
-                tokens,
-                font_scale,
-                text,
             );
             if let Some(reason) = &obligation.exception {
-                measured_content_label(
+                presentation.content(
                     ui,
-                    3_003,
+                    "exception",
                     &exception_label(reason),
-                    TextRole::Body,
-                    TextOverflow::Wrap,
-                    3,
-                    TextInteraction::Selectable,
-                    tokens,
-                    font_scale,
-                    text,
+                    ContentTextSpec {
+                        role: TextRole::Body,
+                        overflow: TextOverflow::Wrap,
+                        max_lines: 3,
+                        interaction: TextInteraction::Selectable,
+                    },
                 );
             }
             if let Some(subject) = exact_gardener_subject(obligation) {
-                section_heading(ui, 3_005, "Proposal", tokens, font_scale, text);
+                presentation.heading(ui, "proposal-heading", "Proposal");
                 egui::ScrollArea::vertical()
                     .id_salt(("proposal-reader", &obligation.id))
                     .max_height(TextRole::Body.style(tokens, font_scale).line_height * 8.0)
                     .show(ui, |ui| {
-                        let response = ui.add(
-                            egui::Label::new(
-                                TextRole::Body
-                                    .style(tokens, font_scale)
-                                    .rich_text(subject.prompt),
-                            )
-                            .wrap()
-                            .selectable(true),
-                        );
-                        record_native_text_control(&response, NativeTextControlKind::Selectable);
+                        presentation.native(ui, NativeTextControlKind::Selectable, |ui| {
+                            let response = ui.add(
+                                egui::Label::new(
+                                    TextRole::Body
+                                        .style(tokens, font_scale)
+                                        .rich_text(subject.prompt),
+                                )
+                                .wrap()
+                                .selectable(true),
+                            );
+                            (response, ())
+                        });
                     });
             }
-            section_heading(ui, 3_006, "What happens next", tokens, font_scale, text);
-            measured_content_label(
+            presentation.heading(ui, "next-step-heading", "What happens next");
+            presentation.content(
                 ui,
-                3_004,
+                "next-step",
                 &next_step_label(obligation, read.topic.map(|topic| topic.captured_at)),
-                TextRole::Body,
-                TextOverflow::Wrap,
-                3,
-                TextInteraction::Selectable,
-                tokens,
-                font_scale,
-                text,
+                ContentTextSpec {
+                    role: TextRole::Body,
+                    overflow: TextOverflow::Wrap,
+                    max_lines: 3,
+                    interaction: TextInteraction::Selectable,
+                },
             );
-            show_detail_actions(
-                ui,
-                read,
-                obligation,
-                intents,
-                tokens,
-                font_scale,
-                text,
-                semantic_nodes,
-            );
+            show_detail_actions(ui, read, obligation, intents, &mut presentation);
+            let observed = presentation.finish(ui);
+            text.extend(observed.text_layouts);
+            semantic_nodes.extend(observed.semantic_nodes);
             egui::CollapsingHeader::new("Technical provenance")
                 .id_salt(("obligation-technical-details", &obligation.id))
                 .show(ui, |ui| {
@@ -1989,16 +1982,31 @@ fn action_is_relevant(action: LifecycleAction, obligation: &OperatorObligation) 
         )
 }
 
-#[allow(clippy::too_many_arguments)]
+fn detail_presentation(
+    ui: &mut egui::Ui,
+    obligation: &OperatorObligation,
+    tokens: DesignTokens,
+    font_scale: f32,
+) -> PresentationContext {
+    PresentationContext::new(
+        ui,
+        tokens,
+        font_scale,
+        PresentationScope::new("bokkie.detail").child(&obligation.id),
+        SemanticUiId::pane(TIMELINE_PANE_ID),
+    )
+    .with_domain_reference(DomainReference::External {
+        namespace: "bokkie.obligation".to_owned(),
+        id: obligation.id.clone(),
+    })
+}
+
 fn show_detail_actions(
     ui: &mut egui::Ui,
     read: &TimelineReadModel<'_>,
     obligation: &OperatorObligation,
     intents: &mut Vec<OperatorIntent>,
-    tokens: &DesignTokens,
-    font_scale: f32,
-    text: &mut Vec<TextLayoutObservation>,
-    semantic_nodes: &mut Vec<UiNode>,
+    presentation: &mut PresentationContext,
 ) {
     let mut disabled_explanations = BTreeSet::new();
     ui.horizontal_wrapped(|ui| {
@@ -2045,15 +2053,36 @@ fn show_detail_actions(
                     reason: "Select an obligation first".into(),
                 });
             if let Availability::Disabled { reason } = &availability {
-                disabled_explanations.insert(reason.to_string());
+                let key = if read.action_busy {
+                    "action-busy"
+                } else if read.snapshot_busy {
+                    "snapshot-busy"
+                } else if read.loading {
+                    "topic-loading"
+                } else if !read.connection.decisions_safe() {
+                    "stale"
+                } else {
+                    match action.capability(obligation).disabled_reason {
+                        Some(DisabledReason::StateDoesNotPermit) => "state-does-not-permit",
+                        Some(DisabledReason::RunningClaimOwnsObligation) => "running-claim",
+                        Some(DisabledReason::TerminalObligation) => "terminal",
+                        Some(DisabledReason::GardenerProposalRequiresExactDecision) => {
+                            "exact-decision"
+                        }
+                        Some(DisabledReason::NotGardenerProposal) => "not-gardener-proposal",
+                        None => "unavailable",
+                    }
+                };
+                disabled_explanations.insert((reason.to_string(), key));
             }
             let enabled = availability.enabled();
             let target = ActionTarget::pane(action, TIMELINE_PANE_ID);
-            let response = action_button(
+            let response = presentation.action(
                 ui,
+                ("action", action.stable_id()),
                 ActionButtonSpec {
                     target,
-                    availability: availability.clone(),
+                    availability,
                     state: ActionButtonState::Momentary,
                     emphasis: if matches!(
                         action,
@@ -2067,17 +2096,7 @@ fn show_detail_actions(
                     },
                     compact: false,
                 },
-                tokens,
-                font_scale,
-                text,
             );
-            semantic_nodes.push(action_semantic_node(
-                &response,
-                target,
-                &availability,
-                ActionButtonState::Momentary,
-                SemanticUiId::pane(TIMELINE_PANE_ID),
-            ));
             if response.clicked() && enabled {
                 intents.push(OperatorIntent::BeginAction(action));
             }
@@ -2087,26 +2106,29 @@ fn show_detail_actions(
         .into_iter()
         .any(|action| action_is_relevant(action, obligation))
     {
-        empty_message(
+        presentation.content(
             ui,
+            "no-actions",
             "No action needed in this state",
-            tokens,
-            font_scale,
-            text,
+            ContentTextSpec {
+                role: TextRole::Secondary,
+                overflow: TextOverflow::Wrap,
+                max_lines: 3,
+                interaction: TextInteraction::Selectable,
+            },
         );
     }
-    for reason in disabled_explanations {
-        measured_content_label(
+    for (reason, key) in disabled_explanations {
+        presentation.content(
             ui,
-            stable_text_instance(&reason),
+            ("disabled-reason", key),
             &reason,
-            TextRole::Secondary,
-            TextOverflow::Wrap,
-            3,
-            TextInteraction::Selectable,
-            tokens,
-            font_scale,
-            text,
+            ContentTextSpec {
+                role: TextRole::Secondary,
+                overflow: TextOverflow::Wrap,
+                max_lines: 3,
+                interaction: TextInteraction::Selectable,
+            },
         );
     }
 }
@@ -3454,16 +3476,11 @@ mod tests {
         let mut nodes = Vec::new();
         let mut text = Vec::new();
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-            show_detail_actions(
-                ui,
-                &read,
-                &obligation,
-                &mut Vec::new(),
-                &tokens,
-                1.0,
-                &mut text,
-                &mut nodes,
-            );
+            let mut presentation = detail_presentation(ui, &obligation, tokens, 1.0);
+            show_detail_actions(ui, &read, &obligation, &mut Vec::new(), &mut presentation);
+            let observed = presentation.finish(ui);
+            text.extend(observed.text_layouts);
+            nodes.extend(observed.semantic_nodes);
         });
         output.textures_delta.clear();
         assert_eq!(nodes.len(), 1);
@@ -3474,6 +3491,130 @@ mod tests {
             text.iter()
                 .any(|item| item.interaction == TextInteraction::Selectable)
         );
+    }
+
+    #[test]
+    fn repeated_detail_actions_keep_domain_identity_when_reordered() {
+        let context = egui::Context::default();
+        let preferences = UiPreferences::default();
+        apply_design_system_with_typography(&context, preferences, TypographyProfile::Reading);
+        let tokens = preferences
+            .tokens(false)
+            .with_typography_profile(TypographyProfile::Reading);
+        let obligations = [fixture(1), fixture(2)];
+        let render = |order: [usize; 2]| {
+            let mut nodes = Vec::new();
+            context
+                .run_ui(egui::RawInput::default(), |ui| {
+                    for index in order {
+                        let obligation = &obligations[index];
+                        let read = TimelineReadModel {
+                            obligation: Some(obligation),
+                            topic: None,
+                            topic_error: None,
+                            loading: false,
+                            connection: &ConnectionState::Current,
+                            action_busy: false,
+                            snapshot_busy: false,
+                        };
+                        let mut presentation = detail_presentation(ui, obligation, tokens, 1.0);
+                        show_detail_actions(
+                            ui,
+                            &read,
+                            obligation,
+                            &mut Vec::new(),
+                            &mut presentation,
+                        );
+                        nodes.extend(presentation.finish(ui).semantic_nodes);
+                    }
+                })
+                .textures_delta
+                .clear();
+            nodes
+        };
+        let original = render([0, 1]);
+        let reordered = render([1, 0]);
+        assert_eq!(original.len(), 2);
+        assert_ne!(original[0].id, original[1].id);
+        assert_eq!(
+            original[0].actions, original[1].actions,
+            "capability is independent of instance"
+        );
+        for (node, obligation) in original.iter().zip(&obligations) {
+            assert_eq!(
+                node.domain_reference,
+                Some(DomainReference::External {
+                    namespace: "bokkie.obligation".to_owned(),
+                    id: obligation.id.clone(),
+                })
+            );
+            let moved = reordered
+                .iter()
+                .find(|candidate| candidate.domain_reference == node.domain_reference)
+                .unwrap();
+            assert_eq!(node.id, moved.id, "reordering retains the logical control");
+        }
+    }
+
+    #[test]
+    fn detail_presentation_identity_survives_desktop_and_narrow_navigation() {
+        use eframe::App;
+
+        let context = egui::Context::default();
+        Appearance::default().apply(&context);
+        let mut app = test_app();
+        app.model.apply_snapshot(OperatorSnapshot {
+            captured_at: 100,
+            service: None,
+            next_cursor: None,
+            watermark: 9,
+            obligations: vec![fixture(1)],
+        });
+        app.model.selected_obligation = Some(fixture(1).id);
+        app.workspace.active_pane = TIMELINE_PANE_ID;
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut identities = Vec::new();
+        for width in [1440.0, 420.0, 1440.0] {
+            for _ in 0..2 {
+                context
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 900.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.ui(ui, &mut frame),
+                    )
+                    .textures_delta
+                    .clear();
+            }
+            let snapshot = app.test_snapshot().ui_snapshot;
+            assert!(
+                snapshot.text_audit.is_empty(),
+                "width {width}: {:?}",
+                snapshot.text_audit
+            );
+            assert!(snapshot.semantic_audit.is_empty());
+            let action = snapshot
+                .nodes
+                .iter()
+                .find(|node| {
+                    node.actions
+                        .iter()
+                        .any(|action| action.0 == LifecycleAction::Cancel.stable_id())
+                })
+                .unwrap();
+            assert!(action.enabled);
+            let title = snapshot
+                .text
+                .iter()
+                .find(|text| text.role == TextRole::ApplicationTitle)
+                .unwrap();
+            identities.push((action.id.clone(), title.component_id));
+        }
+        assert!(identities.windows(2).all(|pair| pair[0] == pair[1]));
     }
 
     #[test]
