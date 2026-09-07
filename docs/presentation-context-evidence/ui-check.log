@@ -1,0 +1,75 @@
+toolchain contract passed: backend 1.85.0/MSRV 1.85; UI 1.97.1/MSRV 1.97
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/bokkie_attention_ui-c99d76c5c97018ee)
+
+running 56 tests
+test app::tests::active_lease_expiry_is_a_projection_refresh_deadline ... ok
+test app::tests::attention_search_matches_projected_reason_and_scheduling_stays_neutral ... ok
+test app::tests::confirmation_actions_have_unique_stable_application_targets ... ok
+test app::tests::exact_gardener_decisions_route_to_affected_only_refresh ... ok
+test app::tests::evidence_properties_keep_source_paths_when_fields_are_added_or_labels_repeat ... ok
+test app::tests::exception_language_covers_retry_and_verification_attention ... ok
+test app::tests::cursor_gap_enters_same_session_full_recovery_with_retained_state_stale ... ok
+test app::tests::detail_navigation_retains_collection_search_and_filter ... ok
+test app::tests::gardener_confirmation_renders_exact_source_bound_provenance ... ok
+test app::tests::polling_is_bounded_and_uses_the_earliest_durable_wake ... ok
+test app::tests::lifecycle_actions_have_unique_stable_semantic_targets ... ok
+test app::tests::retry_and_cancel_consequences_are_backend_capability_driven ... ok
+test app::tests::routine_decisions_do_not_use_failure_emphasis_or_absent_metadata ... ok
+test appearance::tests::collection_metadata_and_meaningful_control_edges_keep_contrast_in_every_mode ... ok
+test app::tests::topic_language_exposes_provenance_without_making_json_primary ... ok
+test app::tests::session_rotation_clears_token_and_confirmation_then_bootstraps_a_rebuild ... ok
+test model::tests::empty_database_becomes_current_and_disabled_reasons_are_observable ... ok
+test model::tests::change_walk_rejects_repeated_or_mismatched_continuations_and_marks_ambiguity ... ok
+test model::tests::change_walk_drains_one_pinned_watermark_without_misses_or_duplicates ... ok
+test appearance::tests::every_identity_validates_all_four_modes ... ok
+test model::tests::global_watermark_and_action_state_revision_remain_independent ... ok
+test model::tests::exact_gardener_confirmation_carries_immutable_identity_and_draft_survives_conflict ... ok
+test model::tests::later_proposal_generation_stales_an_open_confirmation ... ok
+test model::tests::process_session_change_invalidates_confirmation_and_retains_snapshot_stale ... ok
+test model::tests::stale_retained_state_disables_actions_without_dropping_data ... ok
+test model::tests::snapshot_preserves_selection_and_backend_order ... ok
+test model::tests::snapshot_and_topic_pages_assemble_at_one_stable_capture_and_watermark ... ok
+test appearance::tests::shared_style_and_custom_tokens_resolve_identical_app_colours ... ok
+test transport::tests::native_transport_accepts_only_literal_http_loopback_bases ... ok
+test transport::tests::every_projection_response_requires_the_exact_bootstrap_identity ... ok
+test transport::tests::projection_gap_and_invalid_cursor_are_recovery_failures ... ok
+test transport::tests::stale_token_error_is_classified_as_a_session_change ... ok
+test transport::tests::mutations_require_a_memory_only_session_and_submit_its_header ... ok
+test transport::tests::every_lifecycle_action_body_carries_the_reviewed_precondition ... ok
+test transport::tests::incompatible_bootstrap_and_restarted_snapshot_fail_closed ... ok
+test model::tests::generic_approval_confirmation_and_post_action_refresh_state_are_explicit ... ok
+test model::tests::workspace_has_three_stable_valid_panes ... ok
+test model::tests::page_assembly_rejects_duplicates_and_capture_or_watermark_mismatch ... ok
+test model::tests::transition_conflict_keeps_the_operator_draft_and_retained_snapshot ... ok
+test model::tests::fixture_covers_all_lifecycle_states_and_empty_filtering ... ok
+test ui_observation::tests::current_frame_snapshot_excludes_offscreen_nodes_and_audits_cleanly ... ok
+test transport::tests::transition_conflict_is_classified_separately_from_transport_failure ... ok
+test transport::tests::endpoints_use_operator_reads_and_exact_lifecycle_paths ... ok
+test model::tests::five_thousand_row_snapshot_applies_bounded_incremental_upserts_and_reorders ... ok
+test app::tests::repeated_detail_actions_keep_domain_identity_when_reordered ... ok
+test ui_observation::tests::failed_text_attempts_survive_offscreen_filtering ... ok
+test app::tests::reader_tail_is_observed_only_when_its_painted_rows_are_visible ... ok
+test app::tests::action_area_keeps_relevant_stale_actions_with_visible_explanation ... ok
+test app::tests::large_fixture_uses_a_bounded_materialised_range ... ok
+test app::tests::attention_rows_have_two_lines_and_visible_metadata_at_both_widths ... ok
+test app::tests::actual_evidence_reader_scrolls_to_long_tail_without_claiming_measurement ... ok
+test app::tests::collection_row_identity_survives_reordering_and_narrow_layout ... ok
+test app::tests::detail_presentation_identity_survives_desktop_and_narrow_navigation ... ok
+test app::tests::confirmation_transition_observations_match_each_render_pass ... ok
+test app::tests::row_recipes_contain_painted_text_at_normal_and_enlarged_scales ... ok
+test app::tests::physical_search_input_filters_collections_through_repeated_layout ... ok
+
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+     Running unittests src/main.rs (target/debug/deps/bokkie_attention_ui-903d045139280391)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+   Compiling bokkie-attention-ui v0.1.0 (/nvme/development/bokkie-worktrees/presentation-context/apps/bokkie-attention-ui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.76s
+   Compiling bokkie-attention-ui v0.1.0 (/nvme/development/bokkie-worktrees/presentation-context/apps/bokkie-attention-ui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.85s

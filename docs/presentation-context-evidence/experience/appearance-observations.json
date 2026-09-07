@@ -1,0 +1,66 @@
+{
+  "browser": {
+    "version": "151.0.7922.34",
+    "fontconfig_file": "/nvme/development/floatingpie/.pixi/envs/default/etc/fonts/fonts.conf"
+  },
+  "journeys": [],
+  "states": {
+    "experience": {
+      "fixture": {
+        "address": "127.0.0.1:42275",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-2b43177d-5bf8-4e61-bd47-c10c4adf2004",
+        "service": {
+          "api_contract_version": 1,
+          "build": "bokkie/0.1.0",
+          "process_id": 4108508,
+          "schema_version": 9,
+          "session_id": "11e13890-97f6-42e2-ac2f-ab86fae96f79"
+        },
+        "variant": "experience"
+      }
+    }
+  },
+  "viewports": [],
+  "errors": [],
+  "source": {
+    "revision": "83f508066d556e09edd4037214ab0eb949396440",
+    "polyorama_revision": "3c1c51f873de70162629a7fc4c17896f89bf7125",
+    "polyorama_tree": "cc5904b04ddc338abb77c650f6398c7e257d3d72",
+    "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "wasm_sha256": "eda57eb19a8663fb5a87f813961b25ba9fad51a5dc36c40570c9f24eb87a7a27",
+    "appearance_source_sha256": "f698e6189ed5cb412e2c25604574008908c1e2f22b83f42be97812af3a44e485",
+    "fixture_binary_sha256": "3f9b3f3b324b857664e1803eaf03729fda6d08bbb603b9da0524b12677a29dc6",
+    "inter_regular_sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+    "inter_semibold_sha256": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3"
+  },
+  "captures": [
+    {
+      "name": "experience",
+      "appearance": {},
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "check-import-warning",
+      "focused": [
+        "bokkie.inbox-row.check-import-warning"
+      ],
+      "keyboard_focus": false,
+      "confirmation": false,
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 367,
+        "frame": "23",
+        "png_sha256": "6533bc3cbeb9df2f544fb3ba215ba64617cab0fb93833e490866707fb852a7b0",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "screenshot": "experience.png",
+      "semantic": "experience.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    }
+  ]
+}

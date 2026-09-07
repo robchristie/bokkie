@@ -1,0 +1,1953 @@
+{
+  "frame_number": "26",
+  "ui_snapshot": {
+    "frame": "26",
+    "pixels_per_point": 1,
+    "root": "application",
+    "nodes": [
+      {
+        "id": "application",
+        "role": "application",
+        "name": "",
+        "rect": {
+          "min_x": 0,
+          "min_y": 0,
+          "max_x": 1440,
+          "max_y": 900
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "actions": []
+      },
+      {
+        "id": "bokkie.collection.attention",
+        "parent": "application",
+        "role": "section",
+        "name": "Needs attention · 7",
+        "rect": {
+          "min_x": 75.90625,
+          "min_y": 5.5,
+          "max_x": 218.46875,
+          "max_y": 39.5
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": true,
+        "actions": []
+      },
+      {
+        "id": "bokkie.collection.all",
+        "parent": "application",
+        "role": "section",
+        "name": "All obligations",
+        "rect": {
+          "min_x": 225.46875,
+          "min_y": 5.5,
+          "max_x": 334.0625,
+          "max_y": 39.5
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "actions": []
+      },
+      {
+        "id": "action.refresh_operator_state",
+        "parent": "application",
+        "role": "button",
+        "name": "Refresh",
+        "description": "Read a current snapshot and selected obligation topic",
+        "rect": {
+          "min_x": 1367.15625,
+          "min_y": 5.5,
+          "max_x": 1432,
+          "max_y": 39.5
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "actions": [
+          "refresh_operator_state"
+        ]
+      },
+      {
+        "id": "bokkie.application-bar",
+        "parent": "application",
+        "role": "application_bar",
+        "name": "Bokkie Operator",
+        "rect": {
+          "min_x": 0,
+          "min_y": 0,
+          "max_x": 1440,
+          "max_y": 46
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "actions": []
+      },
+      {
+        "id": "pane.1",
+        "parent": "application",
+        "role": "pane",
+        "name": "Needs attention",
+        "rect": {
+          "min_x": 16,
+          "min_y": 62,
+          "max_x": 516,
+          "max_y": 884
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 1,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-search",
+        "parent": "pane.1",
+        "role": "section",
+        "name": "Search obligations",
+        "rect": {
+          "min_x": 16,
+          "min_y": 62,
+          "max_x": 516,
+          "max_y": 83
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "actions": []
+      },
+      {
+        "id": "bokkie.inbox-row.approval-safe-cancel",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Safe temporary approval-bound lifecycle action\nAwaiting your approval\napproval-safe-cancel · occurrence 1 · 4d ago\nSchedule the current occurrence or Move the current occurrence to attention or Permanently cancel this obligation · current",
+        "rect": {
+          "min_x": 16,
+          "min_y": 104,
+          "max_x": 516,
+          "max_y": 162.78125
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 1,
+        "domain_reference": {
+          "kind": "external",
+          "value": {
+            "namespace": "bokkie.obligation",
+            "id": "approval-safe-cancel"
+          }
+        },
+        "actions": []
+      },
+      {
+        "id": "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nReview the proposed code change before implementation\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · occurrence 1 · 4d ago\nPermanently cancel this obligation or Schedule implementation of this exact immutable proposal or Reject this exact immutable proposal into attention · current",
+        "rect": {
+          "min_x": 16,
+          "min_y": 171.78125,
+          "max_x": 516,
+          "max_y": 230.5625
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 1,
+        "domain_reference": {
+          "kind": "external",
+          "value": {
+            "namespace": "bokkie.obligation",
+            "id": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f"
+          }
+        },
+        "actions": []
+      },
+      {
+        "id": "bokkie.inbox-row.attention-exhausted",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Representative attention-exhausted state\nRetry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-exhausted · occurrence 1 · 4d ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "rect": {
+          "min_x": 16,
+          "min_y": 239.5625,
+          "max_x": 516,
+          "max_y": 298.34375
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 1,
+        "domain_reference": {
+          "kind": "external",
+          "value": {
+            "namespace": "bokkie.obligation",
+            "id": "attention-exhausted"
+          }
+        },
+        "actions": []
+      },
+      {
+        "id": "bokkie.inbox-row.attention-nonretryable",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Representative attention-nonretryable state\nNon-retryable failure · Deterministic attention-nonretryable failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-nonretryable · occurrence 1 · 4d ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "rect": {
+          "min_x": 16,
+          "min_y": 307.34375,
+          "max_x": 516,
+          "max_y": 366.125
+        },
+        "enabled": true,
+        "focused": true,
+        "selected": true,
+        "pane": 1,
+        "domain_reference": {
+          "kind": "external",
+          "value": {
+            "namespace": "bokkie.obligation",
+            "id": "attention-nonretryable"
+          }
+        },
+        "actions": []
+      },
+      {
+        "id": "bokkie.inbox-row.generic-rejected",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Rejected generic approval with exact actor and note provenance\nRejected by qualification-operator: Deliberately rejected fixture decision\ngeneric-rejected · occurrence 1 · 4d ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "rect": {
+          "min_x": 16,
+          "min_y": 375.125,
+          "max_x": 516,
+          "max_y": 433.90625
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 1,
+        "domain_reference": {
+          "kind": "external",
+          "value": {
+            "namespace": "bokkie.obligation",
+            "id": "generic-rejected"
+          }
+        },
+        "actions": []
+      },
+      {
+        "id": "bokkie.inbox-row.gardener:implement:1bbc0bb203cb1621115c04928b12d00cd11ab4c13586d41e17f7b97e5307c692",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Implement approved gardener proposal 1bbc0bb203cb1621115c04928b12d00cd11ab4c13586d41e17f7b97e5307c692\nBlocking verification: Blocking finding retained against the exact inert head · Blocking finding retained against the exact inert head\ngardener:implement:1bbc0bb203cb1621115c04928b12d00cd11ab4c13586d41e17f7b97e5307c692 · occurrence 1 · 4d ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "rect": {
+          "min_x": 16,
+          "min_y": 442.90625,
+          "max_x": 516,
+          "max_y": 501.6875
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 1,
+        "domain_reference": {
+          "kind": "external",
+          "value": {
+            "namespace": "bokkie.obligation",
+            "id": "gardener:implement:1bbc0bb203cb1621115c04928b12d00cd11ab4c13586d41e17f7b97e5307c692"
+          }
+        },
+        "actions": []
+      },
+      {
+        "id": "bokkie.inbox-row.gardener:implement:8235a8df3151bc5053bfc362ff69c6639999e65e95b196c40548d5d4da77673b",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Implement approved gardener proposal 8235a8df3151bc5053bfc362ff69c6639999e65e95b196c40548d5d4da77673b\nInconclusive verification: Inconclusive verification retained against the exact inert head · Inconclusive verification retained against the exact inert head\ngardener:implement:8235a8df3151bc5053bfc362ff69c6639999e65e95b196c40548d5d4da77673b · occurrence 1 · 4d ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "rect": {
+          "min_x": 16,
+          "min_y": 510.6875,
+          "max_x": 516,
+          "max_y": 569.46875
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 1,
+        "domain_reference": {
+          "kind": "external",
+          "value": {
+            "namespace": "bokkie.obligation",
+            "id": "gardener:implement:8235a8df3151bc5053bfc362ff69c6639999e65e95b196c40548d5d4da77673b"
+          }
+        },
+        "actions": []
+      },
+      {
+        "id": "pane.3",
+        "parent": "application",
+        "role": "pane",
+        "name": "Detail",
+        "rect": {
+          "min_x": 560,
+          "min_y": 82,
+          "max_x": 1404,
+          "max_y": 864
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 3,
+        "actions": []
+      },
+      {
+        "id": "presentation.8c242e18b49f2a16",
+        "parent": "pane.3",
+        "role": "button",
+        "name": "Retry",
+        "description": "Reopen eligible attention work for retry",
+        "rect": {
+          "min_x": 560,
+          "min_y": 232.75,
+          "max_x": 610.3125,
+          "max_y": 266.75
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 3,
+        "domain_reference": {
+          "kind": "external",
+          "value": {
+            "namespace": "bokkie.obligation",
+            "id": "attention-nonretryable"
+          }
+        },
+        "actions": [
+          "retry_obligation"
+        ]
+      },
+      {
+        "id": "presentation.a6b6723336d5683e",
+        "parent": "pane.3",
+        "role": "button",
+        "name": "Cancel",
+        "description": "Cancel eligible non-terminal work",
+        "rect": {
+          "min_x": 617.3125,
+          "min_y": 232.75,
+          "max_x": 677.28125,
+          "max_y": 266.75
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 3,
+        "domain_reference": {
+          "kind": "external",
+          "value": {
+            "namespace": "bokkie.obligation",
+            "id": "attention-nonretryable"
+          }
+        },
+        "actions": [
+          "cancel_obligation"
+        ]
+      },
+      {
+        "id": "bokkie.raw-evidence.audit:10",
+        "parent": "pane.3",
+        "role": "section",
+        "name": "Raw durable evidence",
+        "rect": {
+          "min_x": 560,
+          "min_y": 474.125,
+          "max_x": 720.28125,
+          "max_y": 508.125
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "expanded": false,
+        "actions": []
+      },
+      {
+        "id": "bokkie.raw-evidence.attempt:3",
+        "parent": "pane.3",
+        "role": "section",
+        "name": "Raw durable evidence",
+        "rect": {
+          "min_x": 560,
+          "min_y": 636.75,
+          "max_x": 720.28125,
+          "max_y": 670.75
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "expanded": false,
+        "actions": []
+      },
+      {
+        "id": "bokkie.raw-evidence.audit:9",
+        "parent": "pane.3",
+        "role": "section",
+        "name": "Raw durable evidence",
+        "rect": {
+          "min_x": 560,
+          "min_y": 799.375,
+          "max_x": 720.28125,
+          "max_y": 833.375
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "expanded": false,
+        "actions": []
+      }
+    ],
+    "text": [
+      {
+        "component_id": {
+          "kind": "action_button",
+          "instance": "2825315403889173"
+        },
+        "role": "button_label",
+        "horizontal_alignment": "centre",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 1376.15625,
+          "min_y": 5.5,
+          "max_x": 1423,
+          "max_y": 39.5
+        },
+        "painted_rect": {
+          "min_x": 1376.15625,
+          "min_y": 14,
+          "max_x": 1423,
+          "max_y": 31
+        },
+        "clip_rect": {
+          "min_x": 1376.15625,
+          "min_y": 5.5,
+          "max_x": 1423,
+          "max_y": 39.5
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "7523650199642063"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 111,
+          "max_x": 372,
+          "max_y": 129.90625
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 111,
+          "max_x": 337.6875,
+          "max_y": 130
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 111,
+          "max_x": 372,
+          "max_y": 129.90625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "504537090909781"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 111,
+          "max_x": 509,
+          "max_y": 127.875
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 111,
+          "max_x": 420.4375,
+          "max_y": 128
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 111,
+          "max_x": 509,
+          "max_y": 127.875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "4886262326260305"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 134.90625,
+          "max_x": 372,
+          "max_y": 151.78125
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 134.90625,
+          "max_x": 157.71875,
+          "max_y": 151.90625
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 134.90625,
+          "max_x": 372,
+          "max_y": 151.78125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "773295230380581"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 134.90625,
+          "max_x": 509,
+          "max_y": 151.78125
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 134.90625,
+          "max_x": 418.71875,
+          "max_y": 151.90625
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 134.90625,
+          "max_x": 509,
+          "max_y": 151.78125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "5148802816828499"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 178.78125,
+          "max_x": 372,
+          "max_y": 197.6875
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 178.78125,
+          "max_x": 227.5,
+          "max_y": 197.78125
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 178.78125,
+          "max_x": 372,
+          "max_y": 197.6875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1241842870160973"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 178.78125,
+          "max_x": 509,
+          "max_y": 195.65625
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 178.78125,
+          "max_x": 420.4375,
+          "max_y": 195.78125
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 178.78125,
+          "max_x": 509,
+          "max_y": 195.65625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2877599275087971"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 202.6875,
+          "max_x": 372,
+          "max_y": 219.5625
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 202.6875,
+          "max_x": 364.125,
+          "max_y": 219.6875
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 202.6875,
+          "max_x": 372,
+          "max_y": 219.5625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2371638575404950"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 202.6875,
+          "max_x": 509,
+          "max_y": 219.5625
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 202.6875,
+          "max_x": 485.71875,
+          "max_y": 219.6875
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 202.6875,
+          "max_x": 509,
+          "max_y": 219.5625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "6934778333999774"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 246.5625,
+          "max_x": 372,
+          "max_y": 265.46875
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 246.5625,
+          "max_x": 295.0625,
+          "max_y": 265.5625
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 246.5625,
+          "max_x": 372,
+          "max_y": 265.46875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "5228961798237748"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 246.5625,
+          "max_x": 509,
+          "max_y": 263.4375
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 246.5625,
+          "max_x": 420.4375,
+          "max_y": 263.5625
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 246.5625,
+          "max_x": 509,
+          "max_y": 263.4375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "982848266667871"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 270.46875,
+          "max_x": 372,
+          "max_y": 287.34375
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 270.46875,
+          "max_x": 368.8125,
+          "max_y": 287.46875
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 270.46875,
+          "max_x": 372,
+          "max_y": 287.34375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "8859491225221636"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 270.46875,
+          "max_x": 509,
+          "max_y": 287.34375
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 270.46875,
+          "max_x": 418.71875,
+          "max_y": 287.46875
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 270.46875,
+          "max_x": 509,
+          "max_y": 287.34375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "8663821245060096"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 314.34375,
+          "max_x": 372,
+          "max_y": 333.25
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 314.34375,
+          "max_x": 310.5625,
+          "max_y": 333.34375
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 314.34375,
+          "max_x": 372,
+          "max_y": 333.25
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1772983844908096"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 314.34375,
+          "max_x": 509,
+          "max_y": 331.21875
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 314.34375,
+          "max_x": 420.4375,
+          "max_y": 331.34375
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 314.34375,
+          "max_x": 509,
+          "max_y": 331.21875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "7245669647076585"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 338.25,
+          "max_x": 372,
+          "max_y": 355.125
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 338.25,
+          "max_x": 369.8125,
+          "max_y": 355.25
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 338.25,
+          "max_x": 372,
+          "max_y": 355.125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "6779551647832169"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 338.25,
+          "max_x": 509,
+          "max_y": 355.125
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 338.25,
+          "max_x": 418.71875,
+          "max_y": 355.25
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 338.25,
+          "max_x": 509,
+          "max_y": 355.125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "3312828137641522"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 382.125,
+          "max_x": 372,
+          "max_y": 401.03125
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 382.125,
+          "max_x": 370.09375,
+          "max_y": 401.125
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 382.125,
+          "max_x": 372,
+          "max_y": 401.03125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "3763460150705890"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 382.125,
+          "max_x": 509,
+          "max_y": 399
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 382.125,
+          "max_x": 420.4375,
+          "max_y": 399.125
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 382.125,
+          "max_x": 509,
+          "max_y": 399
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "3787576992113383"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 406.03125,
+          "max_x": 372,
+          "max_y": 422.90625
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 406.03125,
+          "max_x": 370.8125,
+          "max_y": 423.03125
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 406.03125,
+          "max_x": 372,
+          "max_y": 422.90625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "4332044278062776"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 406.03125,
+          "max_x": 509,
+          "max_y": 422.90625
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 406.03125,
+          "max_x": 418.71875,
+          "max_y": 423.03125
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 406.03125,
+          "max_x": 509,
+          "max_y": 422.90625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1160714862285137"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 449.90625,
+          "max_x": 372,
+          "max_y": 468.8125
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 449.90625,
+          "max_x": 365.09375,
+          "max_y": 468.90625
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 449.90625,
+          "max_x": 372,
+          "max_y": 468.8125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1118599407787766"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 449.90625,
+          "max_x": 509,
+          "max_y": 466.78125
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 449.90625,
+          "max_x": 420.4375,
+          "max_y": 466.90625
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 449.90625,
+          "max_x": 509,
+          "max_y": 466.78125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1564254917385234"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 473.8125,
+          "max_x": 372,
+          "max_y": 490.6875
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 473.8125,
+          "max_x": 368.8125,
+          "max_y": 490.8125
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 473.8125,
+          "max_x": 372,
+          "max_y": 490.6875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2976758770952786"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 473.8125,
+          "max_x": 509,
+          "max_y": 490.6875
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 473.8125,
+          "max_x": 478.375,
+          "max_y": 490.8125
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 473.8125,
+          "max_x": 509,
+          "max_y": 490.6875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "817450094548835"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 517.6875,
+          "max_x": 372,
+          "max_y": 536.59375
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 517.6875,
+          "max_x": 364.09375,
+          "max_y": 536.6875
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 517.6875,
+          "max_x": 372,
+          "max_y": 536.59375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "6926664372710125"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 517.6875,
+          "max_x": 509,
+          "max_y": 534.5625
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 517.6875,
+          "max_x": 420.4375,
+          "max_y": 534.6875
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 517.6875,
+          "max_x": 509,
+          "max_y": 534.5625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "4358753212908077"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 541.59375,
+          "max_x": 372,
+          "max_y": 558.46875
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 541.59375,
+          "max_x": 370.8125,
+          "max_y": 558.59375
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 541.59375,
+          "max_x": 372,
+          "max_y": 558.46875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "7237219759978854"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379,
+          "min_y": 541.59375,
+          "max_x": 509,
+          "max_y": 558.46875
+        },
+        "painted_rect": {
+          "min_x": 379,
+          "min_y": 541.59375,
+          "max_x": 478.375,
+          "max_y": 558.59375
+        },
+        "clip_rect": {
+          "min_x": 379,
+          "min_y": 541.59375,
+          "max_x": 509,
+          "max_y": 558.46875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2291699687302750"
+        },
+        "role": "application_title",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 82,
+          "max_x": 1404,
+          "max_y": 108
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 82,
+          "max_x": 1004.4375,
+          "max_y": 108
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 82,
+          "max_x": 1404,
+          "max_y": 108
+        },
+        "overflow": "wrap",
+        "interaction": "selectable",
+        "declared_max_lines": 3,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2015664882329021"
+        },
+        "role": "error",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 113,
+          "max_x": 1404,
+          "max_y": 132
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 113,
+          "max_x": 675.875,
+          "max_y": 132
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 113,
+          "max_x": 1404,
+          "max_y": 132
+        },
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "6314052022590212"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 137,
+          "max_x": 1404,
+          "max_y": 175
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 137,
+          "max_x": 1148.15625,
+          "max_y": 175
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 137,
+          "max_x": 1404,
+          "max_y": 175
+        },
+        "overflow": "wrap",
+        "interaction": "selectable",
+        "declared_max_lines": 3,
+        "line_count": 2,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": "1300187704077397"
+        },
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 180,
+          "max_x": 1404,
+          "max_y": 203.75
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 182.375,
+          "max_x": 700.5625,
+          "max_y": 201.375
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 180,
+          "max_x": 1404,
+          "max_y": 203.75
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1565980145122485"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 208.75,
+          "max_x": 1404,
+          "max_y": 227.75
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 208.75,
+          "max_x": 764.15625,
+          "max_y": 227.75
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 208.75,
+          "max_x": 1404,
+          "max_y": 227.75
+        },
+        "overflow": "wrap",
+        "interaction": "selectable",
+        "declared_max_lines": 3,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "action_button",
+          "instance": "1176583551265302"
+        },
+        "role": "button_label",
+        "horizontal_alignment": "centre",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 569,
+          "min_y": 232.75,
+          "max_x": 601.3125,
+          "max_y": 266.75
+        },
+        "painted_rect": {
+          "min_x": 569.15625,
+          "min_y": 241.25,
+          "max_x": 601.15625,
+          "max_y": 258.25
+        },
+        "clip_rect": {
+          "min_x": 569,
+          "min_y": 232.75,
+          "max_x": 601.3125,
+          "max_y": 266.75
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "action_button",
+          "instance": "6318013776488510"
+        },
+        "role": "button_label",
+        "horizontal_alignment": "centre",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 626.3125,
+          "min_y": 232.75,
+          "max_x": 668.28125,
+          "max_y": 266.75
+        },
+        "painted_rect": {
+          "min_x": 626.3125,
+          "min_y": 241.25,
+          "max_x": 668.28125,
+          "max_y": 258.25
+        },
+        "clip_rect": {
+          "min_x": 626.3125,
+          "min_y": 232.75,
+          "max_x": 668.28125,
+          "max_y": 266.75
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": "2181539009652098"
+        },
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 321.75,
+          "max_x": 1404,
+          "max_y": 345.5
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 324.125,
+          "max_x": 716.875,
+          "max_y": 343.125
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 321.75,
+          "max_x": 1404,
+          "max_y": 345.5
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": "5484492017751373"
+        },
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 362.5,
+          "max_x": 1404,
+          "max_y": 386.25
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 364.875,
+          "max_x": 798.3125,
+          "max_y": 383.875
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 362.5,
+          "max_x": 1404,
+          "max_y": 386.25
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "7072141498933404"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 391.25,
+          "max_x": 1404,
+          "max_y": 408.25
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 391.25,
+          "max_x": 601.4375,
+          "max_y": 408.25
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 391.25,
+          "max_x": 1404,
+          "max_y": 408.25
+        },
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "5442417449593063"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 413.25,
+          "max_x": 1404,
+          "max_y": 430.125
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 413.25,
+          "max_x": 791.1875,
+          "max_y": 430.25
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 413.25,
+          "max_x": 1404,
+          "max_y": 430.125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": "7191629302873266"
+        },
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 525.125,
+          "max_x": 1404,
+          "max_y": 548.875
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 527.5,
+          "max_x": 805.6875,
+          "max_y": 546.5
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 525.125,
+          "max_x": 1404,
+          "max_y": 548.875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1784423744401086"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 553.875,
+          "max_x": 1404,
+          "max_y": 570.875
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 553.875,
+          "max_x": 601.4375,
+          "max_y": 570.875
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 553.875,
+          "max_x": 1404,
+          "max_y": 570.875
+        },
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2749356048202151"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 575.875,
+          "max_x": 1404,
+          "max_y": 592.75
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 575.875,
+          "max_x": 819.375,
+          "max_y": 592.875
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 575.875,
+          "max_x": 1404,
+          "max_y": 592.75
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": "3793758738334343"
+        },
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 687.75,
+          "max_x": 1404,
+          "max_y": 711.5
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 690.125,
+          "max_x": 746.03125,
+          "max_y": 709.125
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 687.75,
+          "max_x": 1404,
+          "max_y": 711.5
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "4503206306480578"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 716.5,
+          "max_x": 1404,
+          "max_y": 733.5
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 716.5,
+          "max_x": 601.4375,
+          "max_y": 733.5
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 716.5,
+          "max_x": 1404,
+          "max_y": 733.5
+        },
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "833306416712963"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 738.5,
+          "max_x": 1404,
+          "max_y": 755.375
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 738.5,
+          "max_x": 787.5,
+          "max_y": 755.5
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 738.5,
+          "max_x": 1404,
+          "max_y": 755.375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      }
+    ],
+    "text_audit": [],
+    "text_audit_coverage": {
+      "measured_components": "46",
+      "attempted_components": "49",
+      "successful_components": "49",
+      "failed_components": "0",
+      "native_text_controls": "3",
+      "observed_native_controls": "0",
+      "excluded_categories": [
+        "ordinary_egui_labels",
+        "native_selectable_text"
+      ]
+    },
+    "semantic_audit": []
+  },
+  "raw_presentations": [
+    {
+      "id": "presentation.81ff2e366d2a8f17",
+      "reason": "Application-owned collection selection marker, hover surface and keyboard focus ring"
+    },
+    {
+      "id": "presentation.96258933bbdfadef",
+      "reason": "Application-owned collection selection marker, hover surface and keyboard focus ring"
+    },
+    {
+      "id": "presentation.87c4274ce31139e8",
+      "reason": "Application-owned collection selection marker, hover surface and keyboard focus ring"
+    },
+    {
+      "id": "presentation.ed4fef6aadf6e46e",
+      "reason": "Application-owned collection selection marker, hover surface and keyboard focus ring"
+    },
+    {
+      "id": "presentation.c52cb0f1bd14d614",
+      "reason": "Application-owned collection selection marker, hover surface and keyboard focus ring"
+    },
+    {
+      "id": "presentation.861640e250803ae5",
+      "reason": "Application-owned collection selection marker, hover surface and keyboard focus ring"
+    },
+    {
+      "id": "presentation.cbf165fce8d51489",
+      "reason": "Application-owned collection selection marker, hover surface and keyboard focus ring"
+    }
+  ],
+  "virtualisation": {
+    "total_rows": "0",
+    "visible_rows": [
+      "0",
+      "0"
+    ],
+    "materialised_rows": [
+      "0",
+      "0"
+    ]
+  },
+  "interaction": {
+    "selected_obligation": "attention-nonretryable",
+    "active_pane": 3,
+    "connection": "current",
+    "status": "Current operator state",
+    "snapshot_busy": false,
+    "topic_busy": false,
+    "action_busy": false
+  }
+}
