@@ -4,7 +4,7 @@
 - Reorientation budget: 180
 - Owner: Bokkie product/integration; Polyorama components and review conventions
 - Landed pull requests: none
-- Next action: Prove the scoped pilot, then extend rows and evidence.
+- Next action: Complete row/evidence migration, then run canonical and runtime qualification.
 
 ## Outcome and design contract
 
@@ -24,22 +24,21 @@ is included.
 
 ## Current phase
 
-Observation/workflow housekeeping and scoped API investigation. The pilot asks
-whether existing component recipes can jointly paint and record observations
-with stable logical identity, without owning application state or intents. The
-smallest probe is two same-capability actions plus heading/content text in one
-gallery story and Bokkie's detail header/actions. Polyorama tests own API evidence;
-Bokkie tests and runtime captures own integration evidence. Exit when identity,
-pass handling and rendered equivalence are proved; extend to rows/evidence only
-when the pilot removes real repetition.
+The scoped pilot is selected: Bokkie's detail header/actions pass 52 UI tests
+and all ten captured appearance cases have zero changed pixels against the
+rebuilt pre-refactor reference. Polyorama's pilot verifies stable action/text
+identities, AccessKit parity, reordering, discarded passes, viewport isolation,
+failed attempts and recipe shape equivalence. Extend the same adapter to rows
+and evidence, then qualify the complete candidate. The appearance remains the
+accepted direction; this is a mechanical-equivalence decision.
 
 ## Delivery graph
 
 | Increment | Owner revision | Consumer revision | Result/status | Evidence |
 | --- | --- | --- | --- | --- |
-| Rendered snapshot phase, safe captures, three judgements | pending | pending | implementing | transition tests and review guide |
-| Scoped presentation pilot | pending | pending | investigating | component/gallery and detail integration tests |
-| Rows/evidence and strict theme state pairs | pending | pending | follows pilot | integration qualification and contrast tests |
+| Rendered snapshot phase, safe captures, three judgements | `2a1abf0` | `98d0f58` | focused tests pass | transition tests and review guide |
+| Scoped presentation pilot | `df7cfa1` | `e809a63` | pilot retained; ten captures pixel-identical | component/gallery and detail integration tests |
+| Rows/evidence and strict theme state pairs | `2a1abf0` (theme) | pending | strict tests pass; row/evidence migration active | integration qualification and contrast tests |
 
 Polyorama owns scoped low-level component identities, pass/viewport observation
 collection, the adapter, gallery proof, review guide and theme validation.
@@ -80,5 +79,5 @@ configured for this pair of public repositories.
 
 ## Next action
 
-Complete the housekeeping tests and select the smallest scoped component API,
-then implement and verify the pilot before extending it.
+Complete the row/evidence extension, verify the integrated candidate, obtain
+independent review and land Polyorama before final Bokkie pin and qualification.
