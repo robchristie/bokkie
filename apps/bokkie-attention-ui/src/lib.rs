@@ -27,6 +27,7 @@ use wasm_bindgen::prelude::*;
 pub struct WebHandle {
     runner: eframe::WebRunner,
     observer: Rc<RefCell<TestSnapshot>>,
+    context: Rc<RefCell<Option<eframe::egui::Context>>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -39,6 +40,7 @@ impl WebHandle {
         Self {
             runner: eframe::WebRunner::new(),
             observer: Rc::new(RefCell::new(TestSnapshot::default())),
+            context: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -54,11 +56,13 @@ impl WebHandle {
         let appearance: Appearance = serde_json::from_str(appearance)
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         let observer = self.observer.clone();
+        let context = self.context.clone();
         self.runner
             .start(
                 canvas,
                 eframe::WebOptions::default(),
                 Box::new(move |creation| {
+                    *context.borrow_mut() = Some(creation.egui_ctx.clone());
                     Ok(Box::new(AttentionApp::new_observed_with_appearance(
                         creation,
                         Some(observer),
@@ -71,6 +75,17 @@ impl WebHandle {
 
     pub fn destroy(&self) {
         self.runner.destroy();
+        self.context.borrow_mut().take();
+    }
+
+    /// Request a real paint for bounded screenshot settling without changing state.
+    pub fn request_repaint(&self) -> Result<(), JsValue> {
+        let context = self.context.borrow();
+        let context = context
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("Bokkie has not started"))?;
+        context.request_repaint();
+        Ok(())
     }
 
     pub fn test_snapshot(&self) -> Result<JsValue, JsValue> {

@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { createHash } from 'node:crypto';
+import { captureSettled } from './ui-capture-settling.mjs';
 
 const root = process.cwd();
 const evidence = resolve(process.env.BOKKIE_UI_EVIDENCE_DIR ?? join(root, 'docs/appearance-evidence/comparison'));
@@ -218,13 +219,14 @@ try {
       await clickAction(page, 'approve_exact_gardener_proposal', 3);
       await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().interaction.confirmation_action === 'approve_exact_gardener_proposal');
     }
-    state = audit(await snapshot(page), name);
+    const capture = await captureSettled(page, snapshot);
+    state = audit(capture.state, name);
     const focused = state.ui_snapshot.nodes.filter(item => item.focused).map(item => item.id);
     if (keyboard_focus && !focused.length) throw new Error(`${name}: keyboard focus was not observed`);
-    await page.screenshot({ path: join(evidence, `${name}.png`) });
+    await writeFile(join(evidence, `${name}.png`), capture.png);
     await writeFile(join(evidence, `${name}.json`), `${json(state)}\n`);
     observations.captures.push({ name, appearance, viewport: { width, height }, selected: state.interaction.selected_obligation,
-      focused, keyboard_focus, confirmation, screenshot: `${name}.png`, semantic: `${name}.json`, text_audit: state.ui_snapshot.text_audit,
+      focused, keyboard_focus, confirmation, settling: capture.settling, screenshot: `${name}.png`, semantic: `${name}.json`, text_audit: state.ui_snapshot.text_audit,
       semantic_audit: state.ui_snapshot.semantic_audit, classification: 'real Rust egui/wgpu application; candidate, not an approved replacement baseline' });
     await page.close();
   }
