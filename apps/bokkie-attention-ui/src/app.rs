@@ -20,11 +20,11 @@ use polyorama_ui_egui::apply_design_system_with_typography;
 use polyorama_ui_egui::{
     ActionButtonSpec, ActionButtonState, ActionEmphasis, ActionKey, ActionScope, ActionSpec,
     ActionTarget, ApplicationTheme, Availability, ContentTextSpec, DesignTokens, DomainReference,
-    NativeTextControlKind, PanePresenter, PresentationContext, PresentationScope, SemanticUiId,
-    StatusTone, TextInteraction, TextLayoutObservation, TextOverflow, TextRole, TypographyProfile,
-    UiNode, UiPreferences, UiRole, action_button, action_semantic_node, application_bar_frame,
-    application_bar_height, measured_content_label, measured_fixed_slot_label, property_row,
-    record_native_text_control, section_heading, status_badge,
+    NativeTextControlKind, PanePresenter, PresentationContext, PresentationObservations,
+    PresentationScope, SemanticUiId, StatusTone, TextInteraction, TextLayoutObservation,
+    TextOverflow, TextRole, TypographyProfile, UiNode, UiPreferences, UiRole, action_button,
+    action_semantic_node, application_bar_frame, application_bar_height,
+    record_native_text_control,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -42,7 +42,8 @@ use crate::{
         ActionRequest, ApiFailure, ApiMessage, ApiPayload, ApiRequest, ApiSession, Transport,
     },
     ui_observation::{
-        InteractionObservation, TestSnapshot, VirtualisationObservation, finish_snapshot, root_node,
+        InteractionObservation, RawPresentationObservation, TestSnapshot,
+        VirtualisationObservation, finish_snapshot, root_node,
     },
 };
 
@@ -1028,6 +1029,7 @@ impl eframe::App for AttentionApp {
         let mut intents = Vec::new();
         let mut semantic_nodes = vec![root_node(root_ui.max_rect())];
         let mut text_observations = Vec::new();
+        let mut raw_presentations = Vec::new();
         let mut virtualisation = VirtualisationObservation::default();
         let bar = egui::Panel::top("bokkie-application-bar")
             .frame(application_bar_frame(&tokens))
@@ -1172,6 +1174,7 @@ impl eframe::App for AttentionApp {
                     tokens,
                     font_scale: self.preferences.font_scale,
                     text: Vec::new(),
+                    raw_presentations: Vec::new(),
                     semantic_nodes: Vec::new(),
                     virtualisation: VirtualisationObservation::default(),
                 };
@@ -1206,6 +1209,7 @@ impl eframe::App for AttentionApp {
                     });
                 }
                 text_observations.extend(presenter.text);
+                raw_presentations.extend(presenter.raw_presentations);
                 semantic_nodes.extend(presenter.semantic_nodes);
                 virtualisation = presenter.virtualisation;
             });
@@ -1232,6 +1236,7 @@ impl eframe::App for AttentionApp {
             self.frame_number,
             semantic_nodes,
             text_observations,
+            raw_presentations,
             virtualisation,
             InteractionObservation {
                 selected_obligation: self.model.selected_obligation.clone(),
@@ -1302,6 +1307,7 @@ struct OperatorPanePresenter<'a> {
     tokens: DesignTokens,
     font_scale: f32,
     text: Vec<TextLayoutObservation>,
+    raw_presentations: Vec<RawPresentationObservation>,
     semantic_nodes: Vec<UiNode>,
     virtualisation: VirtualisationObservation,
 }
@@ -1343,37 +1349,39 @@ impl PanePresenter for OperatorPanePresenter<'_> {
                 &mut self.semantic_nodes,
             );
         }
-        match pane {
-            INBOX_PANE_ID => show_inbox(
-                ui,
-                &self.inbox,
-                self.intents,
-                &self.tokens,
-                self.font_scale,
-                &mut self.text,
-                &mut self.semantic_nodes,
-            ),
-            OBLIGATIONS_PANE_ID => show_obligations(
-                ui,
-                &self.obligations,
-                self.intents,
-                &self.tokens,
-                self.font_scale,
-                &mut self.text,
-                &mut self.semantic_nodes,
-                &mut self.virtualisation,
-            ),
-            TIMELINE_PANE_ID => show_timeline(
+        let observed = if pane == TIMELINE_PANE_ID {
+            show_timeline(
                 ui,
                 &self.timeline,
                 self.intents,
                 &self.tokens,
                 self.font_scale,
-                &mut self.text,
-                &mut self.semantic_nodes,
-            ),
-            _ => {}
-        }
+            )
+        } else {
+            let mut presentation = PresentationContext::new(
+                ui,
+                self.tokens,
+                self.font_scale,
+                PresentationScope::new(("bokkie.collection", pane.0)),
+                SemanticUiId::pane(pane),
+            );
+            match pane {
+                INBOX_PANE_ID => show_inbox(ui, &self.inbox, self.intents, &mut presentation),
+                OBLIGATIONS_PANE_ID => show_obligations(
+                    ui,
+                    &self.obligations,
+                    self.intents,
+                    &mut presentation,
+                    &mut self.virtualisation,
+                ),
+                _ => {}
+            }
+            presentation.finish(ui)
+        };
+        self.text.extend(observed.text_layouts);
+        self.semantic_nodes.extend(observed.semantic_nodes);
+        self.raw_presentations
+            .extend(observed.raw_presentations.into_iter().map(Into::into));
     }
 
     fn record_text_layout(&mut self, observation: TextLayoutObservation) {
@@ -1516,31 +1524,27 @@ fn show_inbox(
     ui: &mut egui::Ui,
     read: &InboxReadModel<'_>,
     intents: &mut Vec<OperatorIntent>,
-    tokens: &DesignTokens,
-    font_scale: f32,
-    text: &mut Vec<TextLayoutObservation>,
-    semantic_nodes: &mut Vec<UiNode>,
+    presentation: &mut PresentationContext,
 ) {
     egui::ScrollArea::vertical()
         .id_salt("bokkie-inbox-scroll")
         .show(ui, |ui| {
             if read.loading {
-                empty_message(ui, "Loading operator exceptions…", tokens, font_scale, text);
+                empty_message(ui, "loading", "Loading operator exceptions…", presentation);
             } else if read.obligations.is_empty() {
                 empty_message(
                     ui,
+                    "empty",
                     if read.search.trim().is_empty() {
                         "Nothing needs your attention"
                     } else {
                         "No attention items match this search"
                     },
-                    tokens,
-                    font_scale,
-                    text,
+                    presentation,
                 );
             }
             for obligation in &read.obligations {
-                ui.add_space(tokens.spacing.unit.0);
+                ui.add_space(presentation.tokens().spacing.unit.0);
                 let why = obligation
                     .exception
                     .as_ref()
@@ -1557,38 +1561,32 @@ fn show_inbox(
                     consequence,
                     freshness_state(read.connection),
                 );
+                let height = attention_row_height(presentation.tokens(), presentation.font_scale());
                 let response = ledger_row(
                     ui,
                     "inbox",
                     &obligation.id,
                     read.selected == Some(obligation.id.as_str()),
-                    attention_row_height(tokens, font_scale),
+                    height,
                     &semantic_label,
-                    tokens,
                     INBOX_PANE_ID,
-                    semantic_nodes,
-                    |ui| {
+                    presentation,
+                    |ui, presentation| {
                         attention_row_line(
                             ui,
-                            obligation,
-                            1,
+                            "title",
                             attention_title(obligation),
                             &relative_time(obligation.updated_at, read.captured_at),
                             TextRole::Body,
-                            tokens,
-                            font_scale,
-                            text,
+                            presentation,
                         );
                         attention_row_line(
                             ui,
-                            obligation,
-                            2,
+                            "reason",
                             &why,
                             obligation_source(obligation),
                             TextRole::Secondary,
-                            tokens,
-                            font_scale,
-                            text,
+                            presentation,
                         );
                     },
                 );
@@ -1602,54 +1600,63 @@ fn show_inbox(
         });
 }
 
-#[allow(clippy::too_many_arguments)]
 fn show_obligations(
     ui: &mut egui::Ui,
     read: &ObligationsReadModel<'_>,
     intents: &mut Vec<OperatorIntent>,
-    tokens: &DesignTokens,
-    font_scale: f32,
-    text: &mut Vec<TextLayoutObservation>,
-    semantic_nodes: &mut Vec<UiNode>,
+    presentation: &mut PresentationContext,
     virtualisation: &mut VirtualisationObservation,
 ) {
     let mut filter = read.filter;
-    let combo = egui::ComboBox::from_id_salt("obligation-state-filter")
-        .selected_text(
-            StateFilter::OPTIONS
-                .iter()
-                .find_map(|(value, label)| (*value == filter).then_some(*label))
-                .unwrap_or("All states"),
-        )
-        .show_ui(ui, |ui| {
-            for (value, label) in StateFilter::OPTIONS {
-                ui.selectable_value(&mut filter, value, label);
-            }
-        });
-    record_native_text_control(&combo.response, NativeTextControlKind::ComboBox);
+    presentation.native(ui, NativeTextControlKind::ComboBox, |ui| {
+        let combo = egui::ComboBox::from_id_salt("obligation-state-filter")
+            .selected_text(
+                StateFilter::OPTIONS
+                    .iter()
+                    .find_map(|(value, label)| (*value == filter).then_some(*label))
+                    .unwrap_or("All states"),
+            )
+            .show_ui(ui, |ui| {
+                for (value, label) in StateFilter::OPTIONS {
+                    ui.selectable_value(&mut filter, value, label);
+                }
+            });
+        (combo.response, ())
+    });
     if filter != read.filter {
         intents.push(OperatorIntent::Filter(filter));
     }
-    ui.label(format!("{} matching", read.obligations.len()));
+    // Retain the native matching-count label and its existing layout.
+    presentation.raw(
+        ui,
+        "matching-count",
+        "Native collection metadata label",
+        |ui| {
+            ui.label(format!("{} matching", read.obligations.len()));
+        },
+    );
     if read.loading {
-        empty_message(ui, "Loading obligations…", tokens, font_scale, text);
+        empty_message(ui, "loading", "Loading obligations…", presentation);
         return;
     }
     if read.obligations.is_empty() {
         empty_message(
             ui,
+            "empty",
             if read.total == 0 {
                 "This database contains no obligations"
             } else {
                 "No obligations match the current search and state filter"
             },
-            tokens,
-            font_scale,
-            text,
+            presentation,
         );
         return;
     }
-    let row_height = row_height(tokens, font_scale, &OBLIGATION_ROW);
+    let row_height = row_height(
+        presentation.tokens(),
+        presentation.font_scale(),
+        &OBLIGATION_ROW,
+    );
     const OVERSCAN: usize = 4;
     egui::ScrollArea::vertical()
         .id_salt("bokkie-obligations-scroll")
@@ -1681,33 +1688,22 @@ fn show_obligations(
                         read.selected == Some(obligation.id.as_str()),
                         row_height,
                         &semantic_label,
-                        tokens,
                         OBLIGATIONS_PANE_ID,
-                        semantic_nodes,
-                        |ui| {
-                            measured_fixed_slot_label(
+                        presentation,
+                        |ui, presentation| {
+                            row_line(
                                 ui,
-                                row_text_instance("obligation", &obligation.id, 1),
+                                "title",
                                 &obligation.description,
                                 TextRole::Body,
-                                TextOverflow::Ellipsis,
-                                1,
-                                TextInteraction::Inert,
-                                tokens,
-                                font_scale,
-                                text,
+                                presentation,
                             );
-                            measured_fixed_slot_label(
+                            row_line(
                                 ui,
-                                row_text_instance("obligation", &obligation.id, 2),
+                                "status",
                                 &ledger_status(obligation, read.captured_at),
                                 TextRole::Secondary,
-                                TextOverflow::Ellipsis,
-                                1,
-                                TextInteraction::Inert,
-                                tokens,
-                                font_scale,
-                                text,
+                                presentation,
                             );
                         },
                     );
@@ -1728,9 +1724,7 @@ fn show_timeline(
     intents: &mut Vec<OperatorIntent>,
     tokens: &DesignTokens,
     font_scale: f32,
-    text: &mut Vec<TextLayoutObservation>,
-    semantic_nodes: &mut Vec<UiNode>,
-) {
+) -> PresentationObservations {
     egui::ScrollArea::vertical()
         .id_salt((
             "bokkie-timeline-scroll",
@@ -1738,15 +1732,21 @@ fn show_timeline(
         ))
         .show(ui, |ui| {
             let Some(obligation) = read.obligation else {
-                section_heading(ui, 3_001, "Activity and evidence", tokens, font_scale, text);
+                let mut presentation = PresentationContext::new(
+                    ui,
+                    *tokens,
+                    font_scale,
+                    PresentationScope::new("bokkie.detail.empty"),
+                    SemanticUiId::pane(TIMELINE_PANE_ID),
+                );
+                presentation.heading(ui, "activity-heading", "Activity and evidence");
                 empty_message(
                     ui,
+                    "empty",
                     "Select an item to understand what happens next and review its evidence",
-                    tokens,
-                    font_scale,
-                    text,
+                    &mut presentation,
                 );
-                return;
+                return presentation.finish(ui);
             };
             let mut presentation = detail_presentation(ui, obligation, *tokens, font_scale);
             presentation.content(
@@ -1825,152 +1825,106 @@ fn show_timeline(
                 },
             );
             show_detail_actions(ui, read, obligation, intents, &mut presentation);
-            let observed = presentation.finish(ui);
-            text.extend(observed.text_layouts);
-            semantic_nodes.extend(observed.semantic_nodes);
             egui::CollapsingHeader::new("Technical provenance")
                 .id_salt(("obligation-technical-details", &obligation.id))
                 .show(ui, |ui| {
-                    property_row(
+                    presentation.property_row(
                         ui,
-                        3_010,
+                        "technical-obligation",
                         "Obligation",
                         &obligation.id,
-                        tokens,
-                        font_scale,
-                        text,
                     );
-                    property_row(
+                    presentation.property_row(
                         ui,
-                        3_022,
+                        "technical-description",
                         "Description",
                         &obligation.description,
-                        tokens,
-                        font_scale,
-                        text,
                     );
-                    property_row(
+                    presentation.property_row(
                         ui,
-                        3_011,
+                        "technical-durable-liveness",
                         "Durable liveness",
                         &liveness_label(obligation.liveness.as_ref()),
-                        tokens,
-                        font_scale,
-                        text,
                     );
                     if let Some(subject) = exact_gardener_subject(obligation) {
-                        property_row(
+                        presentation.property_row(
                             ui,
-                            3_012,
+                            "technical-repository",
                             "Repository",
                             subject.repository,
-                            tokens,
-                            font_scale,
-                            text,
                         );
-                        property_row(
+                        presentation.property_row(
                             ui,
-                            3_013,
+                            "technical-goal-fingerprint",
                             "Goal fingerprint",
                             subject.fingerprint,
-                            tokens,
-                            font_scale,
-                            text,
                         );
-                        property_row(
+                        presentation.property_row(
                             ui,
-                            3_015,
+                            "technical-proposal-instance",
                             "Proposal instance",
                             subject.instance_id,
-                            tokens,
-                            font_scale,
-                            text,
                         );
-                        property_row(
+                        presentation.property_row(
                             ui,
-                            3_016,
+                            "technical-generation",
                             "Generation",
                             &subject.generation.to_string(),
-                            tokens,
-                            font_scale,
-                            text,
                         );
-                        property_row(
+                        presentation.property_row(
                             ui,
-                            3_017,
+                            "technical-source-commit",
                             "Source commit",
                             subject.source_commit,
-                            tokens,
-                            font_scale,
-                            text,
                         );
-                        property_row(
+                        presentation.property_row(
                             ui,
-                            3_018,
+                            "technical-source-observation",
                             "Source observation",
                             &subject.source_observation_id.to_string(),
-                            tokens,
-                            font_scale,
-                            text,
                         );
-                        property_row(
+                        presentation.property_row(
                             ui,
-                            3_019,
+                            "technical-source-inspection",
                             "Source inspection",
                             subject.source_inspection_id,
-                            tokens,
-                            font_scale,
-                            text,
                         );
                     }
-                    property_row(
+                    presentation.property_row(
                         ui,
-                        3_021,
+                        "technical-schedule",
                         "Schedule",
                         &recurrence_label(obligation),
-                        tokens,
-                        font_scale,
-                        text,
                     );
                 });
             if let Some(error) = read.topic_error {
-                status_badge(
-                    ui,
-                    3_030,
-                    error,
-                    StatusTone::Error,
-                    tokens,
-                    font_scale,
-                    text,
-                );
+                presentation.badge(ui, "topic-error", error, StatusTone::Error);
             }
             ui.separator();
-            section_heading(ui, 3_040, "Activity and evidence", tokens, font_scale, text);
+            presentation.heading(ui, "activity-heading", "Activity and evidence");
             if read.loading && read.topic.is_none() {
-                empty_message(ui, "Loading durable evidence…", tokens, font_scale, text);
+                empty_message(
+                    ui,
+                    "evidence-loading",
+                    "Loading durable evidence…",
+                    &mut presentation,
+                );
             } else if let Some(topic) = read.topic {
                 if topic.items.is_empty() {
                     empty_message(
                         ui,
+                        "evidence-empty",
                         "No durable topic items exist for this obligation",
-                        tokens,
-                        font_scale,
-                        text,
+                        &mut presentation,
                     );
                 }
                 for item in topic.items.iter().rev() {
-                    show_topic_item(
-                        ui,
-                        item,
-                        topic.captured_at,
-                        tokens,
-                        font_scale,
-                        text,
-                        semantic_nodes,
-                    );
+                    show_topic_item(ui, item, topic.captured_at, &mut presentation);
                 }
             }
-        });
+            presentation.finish(ui)
+        })
+        .inner
 }
 
 fn action_is_relevant(action: LifecycleAction, obligation: &OperatorObligation) -> bool {
@@ -2138,163 +2092,76 @@ fn show_topic_item(
     ui: &mut egui::Ui,
     item: &TopicItem,
     captured_at: i64,
-    tokens: &DesignTokens,
-    font_scale: f32,
-    text: &mut Vec<TextLayoutObservation>,
-    semantic_nodes: &mut Vec<UiNode>,
+    presentation: &mut PresentationContext,
 ) {
-    ui.add_space(tokens.spacing.section.0);
-    section_heading(
-        ui,
-        topic_text_instance(&item.stable_id, 0),
-        &format!(
-            "{} · {}",
-            source_label(item.source),
-            event_label(&item.event_type)
-        ),
-        tokens,
-        font_scale,
-        text,
-    );
-    measured_content_label(
-        ui,
-        topic_text_instance(&item.stable_id, 1),
-        &relative_time(item.occurred_at, Some(captured_at)),
-        TextRole::Secondary,
-        TextOverflow::Wrap,
-        2,
-        TextInteraction::Inert,
-        tokens,
-        font_scale,
-        text,
-    );
-    let fields = common_evidence(&item.evidence);
-    let summary = fields
-        .iter()
-        .filter(|(label, _)| evidence_summary(label))
-        .take(2)
-        .map(|(label, value)| {
-            if *label == "Repository" {
-                value.clone()
-            } else {
-                format!("{label}: {value}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" · ");
-    if !summary.is_empty() {
-        measured_fixed_slot_label(
-            ui,
-            topic_text_instance(&item.stable_id, 6),
-            &summary,
-            TextRole::Secondary,
-            TextOverflow::Ellipsis,
-            1,
-            TextInteraction::Inert,
-            tokens,
-            font_scale,
-            text,
-        );
-    }
-    egui::CollapsingHeader::new("Event technical details")
-        .id_salt(("event-technical-details", &item.stable_id))
-        .show(ui, |ui| {
-            property_row(
-                ui,
-                topic_text_instance(&item.stable_id, 5),
-                "Unix time",
-                &item.occurred_at.to_string(),
-                tokens,
-                font_scale,
-                text,
-            );
-            for (field_index, (label, value)) in fields.iter().enumerate() {
-                property_row(
-                    ui,
-                    topic_text_instance(&item.stable_id, 10 + field_index as u64),
-                    label,
-                    value,
-                    tokens,
-                    font_scale,
-                    text,
-                );
-            }
-            property_row(
-                ui,
-                topic_text_instance(&item.stable_id, 2),
-                "Stable ID",
-                &item.stable_id,
-                tokens,
-                font_scale,
-                text,
-            );
-            property_row(
-                ui,
-                topic_text_instance(&item.stable_id, 3),
-                "Source sequence",
-                &item.source_sequence,
-                tokens,
-                font_scale,
-                text,
-            );
-            if let Some(occurrence) = item.occurrence {
-                property_row(
-                    ui,
-                    topic_text_instance(&item.stable_id, 4),
-                    "Occurrence",
-                    &occurrence.to_string(),
-                    tokens,
-                    font_scale,
-                    text,
-                );
-            }
-        });
-    let disclosure = egui::CollapsingHeader::new("Raw durable evidence")
-        .id_salt(("raw-evidence", &item.stable_id))
-        .show(ui, |ui| {
-            let raw = serde_json::to_string_pretty(&item.evidence)
-                .unwrap_or_else(|_| "Evidence could not be formatted".to_owned());
-            egui::ScrollArea::vertical()
-                .id_salt(("evidence-reader", &item.stable_id))
-                .max_height(TextRole::Body.style(tokens, font_scale).line_height * 12.0)
-                .min_scrolled_height(TextRole::Body.style(tokens, font_scale).line_height * 12.0)
-                .show(ui, |ui| {
-                    let galley = egui::WidgetText::from(
-                        TextRole::MonospaceTechnical
-                            .style(tokens, font_scale)
-                            .rich_text(raw),
-                    )
-                    .into_galley(
-                        ui,
-                        Some(egui::TextWrapMode::Wrap),
-                        ui.available_width(),
-                        egui::TextStyle::Monospace,
-                    );
-                    let response = ui.add(egui::Label::new(galley.clone()).selectable(true));
-                    record_native_text_control(&response, NativeTextControlKind::Selectable);
-                    // This observation comes from the galley submitted by the real selectable
-                    // label, and includes only complete rows inside its current paint clip.
-                    let visible = visible_reader_text(&galley, response.rect.min, ui.clip_rect());
-                    let mut node = UiNode::container(
-                        SemanticUiId::new(format!("bokkie.evidence-reader.{}", item.stable_id)),
-                        Some(SemanticUiId::pane(TIMELINE_PANE_ID)),
-                        UiRole::ScrollArea,
-                        response.rect.intersect(ui.clip_rect()).into(),
-                    );
-                    node.name = visible;
-                    node.text_selectable = true;
-                    semantic_nodes.push(node);
-                });
-        });
-    let mut node = UiNode::container(
-        SemanticUiId::new(format!("bokkie.raw-evidence.{}", item.stable_id)),
-        Some(SemanticUiId::pane(TIMELINE_PANE_ID)),
-        UiRole::Section,
-        disclosure.header_response.rect.into(),
-    );
-    node.name = "Raw durable evidence".to_owned();
-    node.expanded = Some(disclosure.body_response.is_some());
-    semantic_nodes.push(node);
+    presentation.scoped(ui, ("topic", &item.stable_id), |ui, presentation| {
+        ui.add_space(presentation.tokens().spacing.section.0);
+        presentation.heading(ui, "event-heading", &format!("{} · {}",
+            source_label(item.source), event_label(&item.event_type)));
+        presentation.content(ui, "occurred-at", &relative_time(item.occurred_at, Some(captured_at)),
+            ContentTextSpec { role: TextRole::Secondary, overflow: TextOverflow::Wrap,
+                max_lines: 2, interaction: TextInteraction::Inert });
+        let fields = common_evidence(&item.evidence);
+        let summary = fields.iter().filter(|(_, label, _)| evidence_summary(label)).take(2)
+            .map(|(_, label, value)| if *label == "Repository" { value.clone() }
+                else { format!("{label}: {value}") }).collect::<Vec<_>>().join(" · ");
+        if !summary.is_empty() {
+            row_line(ui, "summary", &summary, TextRole::Secondary, presentation);
+        }
+        egui::CollapsingHeader::new("Event technical details")
+            .id_salt(("event-technical-details", &item.stable_id))
+            .show(ui, |ui| {
+                presentation.property_row(ui, "unix-time", "Unix time", &item.occurred_at.to_string());
+                for (path, label, value) in &fields {
+                    presentation.property_row(ui, ("evidence-field", path), label, value);
+                }
+                presentation.property_row(ui, "stable-id", "Stable ID", &item.stable_id);
+                presentation.property_row(ui, "source-sequence", "Source sequence", &item.source_sequence);
+                if let Some(occurrence) = item.occurrence {
+                    presentation.property_row(ui, "occurrence", "Occurrence", &occurrence.to_string());
+                }
+            });
+        let disclosure = egui::CollapsingHeader::new("Raw durable evidence")
+            .id_salt(("raw-evidence", &item.stable_id))
+            .show(ui, |ui| {
+                let raw = serde_json::to_string_pretty(&item.evidence)
+                    .unwrap_or_else(|_| "Evidence could not be formatted".to_owned());
+                let height = TextRole::Body.style(presentation.tokens(), presentation.font_scale()).line_height * 12.0;
+                egui::ScrollArea::vertical()
+                    .id_salt(("evidence-reader", &item.stable_id))
+                    .max_height(height).min_scrolled_height(height)
+                    .show(ui, |ui| {
+                        let style = TextRole::MonospaceTechnical.style(presentation.tokens(), presentation.font_scale());
+                        let node = presentation.raw(ui, "evidence-reader",
+                            "Unbounded selectable evidence uses the actual native galley; only complete painted rows form visible-tail evidence, not measured text coverage",
+                            |ui| {
+                                let galley = egui::WidgetText::from(style.rich_text(raw)).into_galley(
+                                    ui, Some(egui::TextWrapMode::Wrap), ui.available_width(), egui::TextStyle::Monospace);
+                                let response = ui.add(egui::Label::new(galley.clone()).selectable(true));
+                                record_native_text_control(&response, NativeTextControlKind::Selectable);
+                                // Read the galley submitted by the real selectable label, retaining
+                                // only complete rows inside the current paint clip. This native
+                                // reader is deliberately outside the measured-text denominator.
+                                let visible = visible_reader_text(&galley, response.rect.min, ui.clip_rect());
+                                let mut node = UiNode::container(
+                                    SemanticUiId::new(format!("bokkie.evidence-reader.{}", item.stable_id)),
+                                    Some(SemanticUiId::pane(TIMELINE_PANE_ID)), UiRole::ScrollArea,
+                                    response.rect.intersect(ui.clip_rect()).into());
+                                node.name = visible;
+                                node.text_selectable = true;
+                                node
+                            });
+                        presentation.observe_node(ui, node);
+                    });
+            });
+        let mut node = UiNode::container(
+            SemanticUiId::new(format!("bokkie.raw-evidence.{}", item.stable_id)),
+            Some(SemanticUiId::pane(TIMELINE_PANE_ID)), UiRole::Section,
+            disclosure.header_response.rect.into());
+        node.name = "Raw durable evidence".to_owned();
+        node.expanded = Some(disclosure.body_response.is_some());
+        presentation.observe_node(ui, node);
+    });
 }
 
 fn visible_reader_text(galley: &egui::Galley, origin: egui::Pos2, clip: egui::Rect) -> String {
@@ -2470,20 +2337,38 @@ fn gardener_confirmation_provenance(gardener: &GardenerConfirmation) -> [String;
 const INBOX_ROW: [(TextRole, u8); 2] = [(TextRole::Body, 1), (TextRole::Secondary, 1)];
 const OBLIGATION_ROW: [(TextRole, u8); 2] = INBOX_ROW;
 
-#[allow(clippy::too_many_arguments)]
+/// The two collections and activity summary share this one-line recipe.
+fn row_line(
+    ui: &mut egui::Ui,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    value: &str,
+    role: TextRole,
+    presentation: &mut PresentationContext,
+) {
+    presentation.fixed_slot(
+        ui,
+        key,
+        value,
+        ContentTextSpec {
+            role,
+            overflow: TextOverflow::Ellipsis,
+            max_lines: 1,
+            interaction: TextInteraction::Inert,
+        },
+    );
+}
+
 fn attention_row_line(
     ui: &mut egui::Ui,
-    obligation: &OperatorObligation,
-    field: u8,
+    key: &'static str,
     primary: &str,
     metadata: &str,
     role: TextRole,
-    tokens: &DesignTokens,
-    font_scale: f32,
-    text: &mut Vec<TextLayoutObservation>,
+    presentation: &mut PresentationContext,
 ) {
+    let tokens = presentation.tokens();
     let width = ui.available_width();
-    let height = role.style(tokens, font_scale).line_height;
+    let height = role.style(tokens, presentation.font_scale()).line_height;
     let metadata_width = (width * 0.29).clamp(64.0, 130.0);
     let (_, rect) = ui.allocate_space(egui::vec2(width, height));
     let main_rect = egui::Rect::from_min_max(
@@ -2497,27 +2382,16 @@ fn attention_row_line(
         egui::pos2(rect.right() - metadata_width, rect.top()),
         rect.max,
     );
-    for (slot, value, slot_role, instance) in [
-        (main_rect, primary, role, field),
-        (metadata_rect, metadata, TextRole::Secondary, field + 2),
+    for (slot, value, slot_role, field) in [
+        (main_rect, primary, role, "primary"),
+        (metadata_rect, metadata, TextRole::Secondary, "metadata"),
     ] {
         let mut child = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(slot)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
-        measured_fixed_slot_label(
-            &mut child,
-            row_text_instance("inbox", &obligation.id, instance),
-            value,
-            slot_role,
-            TextOverflow::Ellipsis,
-            1,
-            TextInteraction::Inert,
-            tokens,
-            font_scale,
-            text,
-        );
+        row_line(&mut child, (key, field), value, slot_role, presentation);
     }
 }
 
@@ -2628,10 +2502,9 @@ fn ledger_row(
     selected: bool,
     height: f32,
     semantic_label: &str,
-    tokens: &DesignTokens,
     pane: PaneId,
-    semantic_nodes: &mut Vec<UiNode>,
-    content: impl FnOnce(&mut egui::Ui),
+    presentation: &mut PresentationContext,
+    content: impl FnOnce(&mut egui::Ui, &mut PresentationContext),
 ) -> egui::Response {
     let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width().max(1.0), height));
     let response = ui.interact(
@@ -2658,52 +2531,66 @@ fn ledger_row(
         node.set_selected(selected);
         node.add_action(Action::Click);
     });
-    semantic_nodes.push(UiNode {
-        id: SemanticUiId::new(format!("bokkie.{scope}-row.{stable_id}")),
-        parent: Some(SemanticUiId::pane(pane)),
-        role: UiRole::ResultRow,
-        name: semantic_label.to_owned(),
-        description: None,
-        rect: response.rect.into(),
-        enabled: true,
-        focused: response.has_focus(),
-        selected,
-        checked: None,
-        expanded: None,
-        pane: Some(pane),
-        domain_reference: None,
-        actions: Vec::new(),
-        text_selectable: false,
-        disabled_reason: None,
-    });
-    if selected || response.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            6.0,
+    presentation.observe_node(
+        ui,
+        UiNode {
+            id: SemanticUiId::new(format!("bokkie.{scope}-row.{stable_id}")),
+            parent: Some(SemanticUiId::pane(pane)),
+            role: UiRole::ResultRow,
+            name: semantic_label.to_owned(),
+            description: None,
+            rect: response.rect.into(),
+            enabled: true,
+            focused: response.has_focus(),
+            selected,
+            checked: None,
+            expanded: None,
+            pane: Some(pane),
+            domain_reference: Some(DomainReference::External {
+                namespace: "bokkie.obligation".to_owned(),
+                id: stable_id.to_owned(),
+            }),
+            actions: Vec::new(),
+            text_selectable: false,
+            disabled_reason: None,
+        },
+    );
+    let tokens = *presentation.tokens();
+    presentation.raw(
+        ui,
+        ("row-chrome", stable_id),
+        "Application-owned collection selection marker, hover surface and keyboard focus ring",
+        |ui| {
+            if selected || response.hovered() {
+                ui.painter().rect_filled(
+                    rect,
+                    6.0,
+                    if selected {
+                        tokens.colours.selection_background
+                    } else {
+                        tokens.colours.surface_hover
+                    },
+                );
+            }
             if selected {
-                tokens.colours.selection_background
-            } else {
-                tokens.colours.surface_hover
-            },
-        );
-    }
-    if selected {
-        let marker = egui::Rect::from_min_max(
-            rect.left_top() + egui::vec2(0.0, 8.0),
-            egui::pos2(rect.left() + 3.0, rect.bottom() - 8.0),
-        );
-        ui.painter()
-            .rect_filled(marker, 1.5, tokens.colours.selection_indicator);
-    }
-    if response.has_focus() && keyboard_focus_visible(ui.ctx()) {
-        ui.painter().rect_stroke(
-            rect,
-            6.0,
-            egui::Stroke::new(2.0, tokens.colours.focus_ring),
-            egui::StrokeKind::Inside,
-        );
-    }
-    let content_rect = rect.shrink(tokens.spacing.inline.0);
+                let marker = egui::Rect::from_min_max(
+                    rect.left_top() + egui::vec2(0.0, 8.0),
+                    egui::pos2(rect.left() + 3.0, rect.bottom() - 8.0),
+                );
+                ui.painter()
+                    .rect_filled(marker, 1.5, tokens.colours.selection_indicator);
+            }
+            if response.has_focus() && keyboard_focus_visible(ui.ctx()) {
+                ui.painter().rect_stroke(
+                    rect,
+                    6.0,
+                    egui::Stroke::new(2.0, tokens.colours.focus_ring),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        },
+    );
+    let content_rect = rect.shrink(presentation.tokens().spacing.inline.0);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .id_salt(("bokkie-ledger-row-content", scope, stable_id))
@@ -2711,7 +2598,7 @@ fn ledger_row(
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
     child.set_clip_rect(ui.clip_rect().intersect(content_rect));
-    content(&mut child);
+    presentation.scoped(&mut child, stable_id, content);
     response
 }
 
@@ -2749,41 +2636,21 @@ fn keyboard_focus_visible(context: &egui::Context) -> bool {
 
 fn empty_message(
     ui: &mut egui::Ui,
+    key: &'static str,
     message: &str,
-    tokens: &DesignTokens,
-    font_scale: f32,
-    text: &mut Vec<TextLayoutObservation>,
+    presentation: &mut PresentationContext,
 ) {
-    measured_content_label(
+    presentation.content(
         ui,
-        stable_text_instance(message),
+        key,
         message,
-        TextRole::Secondary,
-        TextOverflow::Wrap,
-        3,
-        TextInteraction::Selectable,
-        tokens,
-        font_scale,
-        text,
+        ContentTextSpec {
+            role: TextRole::Secondary,
+            overflow: TextOverflow::Wrap,
+            max_lines: 3,
+            interaction: TextInteraction::Selectable,
+        },
     );
-}
-
-fn stable_text_instance(text: &str) -> u64 {
-    text.bytes()
-        .fold(14_695_981_039_346_656_037, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(1_099_511_628_211)
-        })
-        // Polyorama property rows derive two child identities as `2n` and
-        // `2n + 1`; keep application-owned stable hashes inside that domain.
-        & (u64::MAX >> 2)
-}
-
-fn row_text_instance(scope: &str, stable_id: &str, field: u8) -> u64 {
-    stable_text_instance(&format!("{scope}:{stable_id}:{field}"))
-}
-
-fn topic_text_instance(stable_id: &str, field: u64) -> u64 {
-    stable_text_instance(&format!("topic:{stable_id}:{field}"))
 }
 
 fn connection_label(model: &AppModel) -> String {
@@ -3077,7 +2944,7 @@ fn evidence_summary(label: &str) -> bool {
     )
 }
 
-fn common_evidence(evidence: &Value) -> Vec<(&'static str, String)> {
+fn common_evidence(evidence: &Value) -> Vec<(Vec<&'static str>, &'static str, String)> {
     const FIELDS: [(&str, &str); 55] = [
         ("id", "Evidence ID"),
         ("obligation_id", "Obligation ID"),
@@ -3139,7 +3006,7 @@ fn common_evidence(evidence: &Value) -> Vec<(&'static str, String)> {
         ("to_state", "To state"),
     ];
     let Some(object) = evidence.as_object() else {
-        return vec![("Evidence value", value_text(evidence))];
+        return vec![(vec!["$value"], "Evidence value", value_text(evidence))];
     };
     let mut output = FIELDS
         .into_iter()
@@ -3147,13 +3014,20 @@ fn common_evidence(evidence: &Value) -> Vec<(&'static str, String)> {
             object
                 .get(key)
                 .filter(|value| !value.is_null())
-                .map(|value| (label, value_text(value)))
+                .map(|value| (vec![key], label, value_text(value)))
         })
         .collect::<Vec<_>>();
     if let Some(Value::String(details)) = object.get("details_json")
         && let Ok(parsed) = serde_json::from_str::<Value>(details)
     {
-        output.extend(common_evidence(&parsed));
+        output.extend(
+            common_evidence(&parsed)
+                .into_iter()
+                .map(|(mut path, label, value)| {
+                    path.insert(0, "details_json");
+                    (path, label, value)
+                }),
+        );
     }
     output
 }
@@ -3366,16 +3240,19 @@ mod tests {
                     let mut observations = Vec::new();
                     let mut output = context.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO, egui::vec2(400.0, 800.0))), ..Default::default() }, |ui| {
+                        let mut presentation = PresentationContext::new(ui, tokens, font_scale,
+                            PresentationScope::new("geometry-test"), SemanticUiId::pane(OBLIGATIONS_PANE_ID));
                         ledger_row(ui, "geometry-test", "fixture", false,
-                            row_height(&tokens, font_scale, recipe), "Representative row", &tokens,
-                            OBLIGATIONS_PANE_ID, &mut Vec::new(), |ui| {
-                                for (index, (role, lines)) in recipe.iter().enumerate() {
-                                    measured_fixed_slot_label(ui, index as u64,
+                            row_height(&tokens, font_scale, recipe), "Representative row",
+                            OBLIGATIONS_PANE_ID, &mut presentation, |ui, presentation| {
+                                for (role, lines) in recipe {
+                                    presentation.fixed_slot(ui, format!("{role:?}"),
                                         "Representative long content that wraps across the deliberately reserved row slots",
-                                        *role, TextOverflow::Wrap, *lines, TextInteraction::Inert,
-                                        &tokens, font_scale, &mut observations);
+                                        ContentTextSpec { role: *role, overflow: TextOverflow::Wrap,
+                                            max_lines: *lines, interaction: TextInteraction::Inert });
                                 }
                             });
+                        observations = presentation.finish(ui).text_layouts;
                     });
                     output.textures_delta.clear();
                     assert_eq!(observations.len(), recipe.len());
@@ -3643,6 +3520,13 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
+                    let mut presentation = PresentationContext::new(
+                        ui,
+                        tokens,
+                        1.0,
+                        PresentationScope::new("geometry-test"),
+                        SemanticUiId::pane(INBOX_PANE_ID),
+                    );
                     ledger_row(
                         ui,
                         "inbox",
@@ -3650,34 +3534,28 @@ mod tests {
                         false,
                         height,
                         "Test row",
-                        &tokens,
                         INBOX_PANE_ID,
-                        &mut Vec::new(),
-                        |ui| {
+                        &mut presentation,
+                        |ui, presentation| {
                             attention_row_line(
                                 ui,
-                                &obligation,
-                                1,
+                                "title",
                                 &obligation.description,
                                 "2m ago",
                                 TextRole::Body,
-                                &tokens,
-                                1.0,
-                                &mut observations,
+                                presentation,
                             );
                             attention_row_line(
                                 ui,
-                                &obligation,
-                                2,
+                                "reason",
                                 "Approval needed",
                                 "Bokkie",
                                 TextRole::Secondary,
-                                &tokens,
-                                1.0,
-                                &mut observations,
+                                presentation,
                             );
                         },
                     );
+                    observations = presentation.finish(ui).text_layouts;
                 },
             );
             output.textures_delta.clear();
@@ -3692,6 +3570,274 @@ mod tests {
                 assert!(item.allocated_rect.max_y <= item.clip_rect.max_y + 1.0);
             }
         }
+    }
+
+    #[test]
+    fn collection_row_identity_survives_reordering_and_narrow_layout() {
+        use std::collections::BTreeMap;
+        for pane in [INBOX_PANE_ID, OBLIGATIONS_PANE_ID] {
+            let context = egui::Context::default();
+            Appearance::default().apply(&context);
+            let tokens = UiPreferences::default()
+                .tokens(false)
+                .with_typography_profile(TypographyProfile::Reading);
+            let first = fixture(1);
+            let second = fixture(2);
+            let mut previous = None;
+            for (width, reversed) in [(480.0, false), (340.0, true), (480.0, false)] {
+                let mut observed = None;
+                context
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 800.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            // Incidental shell identity must not enter logical row identity.
+                            ui.push_id(if reversed { "narrow" } else { "desktop" }, |ui| {
+                                let mut presentation = PresentationContext::new(
+                                    ui,
+                                    tokens,
+                                    1.0,
+                                    PresentationScope::new(("bokkie.collection", pane.0)),
+                                    SemanticUiId::pane(pane),
+                                );
+                                let obligations = if reversed {
+                                    vec![&second, &first]
+                                } else {
+                                    vec![&first, &second]
+                                };
+                                if pane == INBOX_PANE_ID {
+                                    show_inbox(
+                                        ui,
+                                        &InboxReadModel {
+                                            search: "",
+                                            obligations,
+                                            selected: Some(&first.id),
+                                            captured_at: Some(100),
+                                            connection: &ConnectionState::Current,
+                                            loading: false,
+                                            selection_destination: Some(TIMELINE_PANE_ID),
+                                        },
+                                        &mut Vec::new(),
+                                        &mut presentation,
+                                    );
+                                } else {
+                                    show_obligations(
+                                        ui,
+                                        &ObligationsReadModel {
+                                            obligations,
+                                            total: 2,
+                                            selected: Some(&first.id),
+                                            filter: StateFilter::All,
+                                            captured_at: Some(100),
+                                            loading: false,
+                                            selection_destination: Some(TIMELINE_PANE_ID),
+                                        },
+                                        &mut Vec::new(),
+                                        &mut presentation,
+                                        &mut VirtualisationObservation::default(),
+                                    );
+                                }
+                                observed = Some(presentation.finish(ui));
+                            });
+                        },
+                    )
+                    .textures_delta
+                    .clear();
+                let observed = observed.unwrap();
+                assert!(polyorama_ui_egui::audit_text_layouts(&observed.text_layouts).is_empty());
+                let fields = if pane == INBOX_PANE_ID { 4 } else { 2 };
+                assert_eq!(observed.text_layouts.len(), fields * 2);
+                let identities = observed
+                    .semantic_nodes
+                    .iter()
+                    .zip(observed.text_layouts.chunks(fields))
+                    .map(|(node, text)| {
+                        let DomainReference::External { namespace, id } =
+                            node.domain_reference.as_ref().unwrap()
+                        else {
+                            panic!("row must retain its obligation identity");
+                        };
+                        assert_eq!(namespace, "bokkie.obligation");
+                        assert_eq!(node.selected, id == &first.id);
+                        let expected_scope = if pane == INBOX_PANE_ID {
+                            "inbox"
+                        } else {
+                            "obligation"
+                        };
+                        assert_eq!(
+                            node.id,
+                            SemanticUiId::new(format!("bokkie.{expected_scope}-row.{id}"))
+                        );
+                        (
+                            node.id.0.clone(),
+                            text.iter()
+                                .map(|item| item.component_id)
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                assert_eq!(identities.len(), 2);
+                assert_ne!(identities.values().next(), identities.values().nth(1));
+                if let Some(previous) = previous {
+                    assert_eq!(identities, previous);
+                }
+                previous = Some(identities);
+            }
+        }
+    }
+
+    #[test]
+    fn evidence_properties_keep_source_paths_when_fields_are_added_or_labels_repeat() {
+        let before = common_evidence(&serde_json::json!({
+            "fingerprint": "first", "proposal_fingerprint": "second",
+            "details_json": "{\"fingerprint\":\"nested\"}"
+        }));
+        let after = common_evidence(&serde_json::json!({
+            "id": "new-first-field", "fingerprint": "first", "proposal_fingerprint": "second",
+            "details_json": "{\"fingerprint\":\"nested\"}"
+        }));
+        assert_eq!(before.len(), 3);
+        assert!(before.iter().all(|field| after.contains(field)));
+        let identities = before
+            .iter()
+            .map(|(path, _, _)| {
+                PresentationScope::new("evidence-test")
+                    .instance(("evidence-field", path))
+                    .text_instance()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            identities.len(),
+            before.len(),
+            "duplicate display labels are distinct fields"
+        );
+    }
+
+    #[test]
+    fn actual_evidence_reader_scrolls_to_long_tail_without_claiming_measurement() {
+        let context = egui::Context::default();
+        Appearance::default().apply(&context);
+        context.all_styles_mut(|style| style.animation_time = 0.0);
+        let tokens = UiPreferences::default()
+            .tokens(false)
+            .with_typography_profile(TypographyProfile::Reading);
+        let item = TopicItem {
+            occurred_at: 100,
+            source: TopicSource::AuditEvent,
+            source_sequence: "7".into(),
+            stable_id: "long-reader-test".into(),
+            occurrence: Some(1),
+            event_type: "created".into(),
+            evidence: serde_json::json!({"long_text": format!("{}TAIL_MARKER", "long evidence word ".repeat(1600))}),
+        };
+        let mut pointer = None;
+        let mut disclosure_pointer = None;
+        let mut saw_tail = false;
+        let mut saw_start = false;
+        for pass in 0..12 {
+            let mut observed = None;
+            let events = pointer.map_or_else(
+                || {
+                    disclosure_pointer.map_or_else(Vec::new, |pos| {
+                        vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed: true,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed: false,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ]
+                    })
+                },
+                |position| {
+                    vec![
+                        egui::Event::PointerMoved(position),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            phase: egui::TouchPhase::Move,
+                            delta: egui::vec2(0.0, -100_000.0),
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]
+                },
+            );
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(420.0, 800.0),
+                        )),
+                        events,
+                        time: Some(f64::from(pass) * 0.1),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut presentation = PresentationContext::new(
+                            ui,
+                            tokens,
+                            1.0,
+                            PresentationScope::new("reader-test"),
+                            SemanticUiId::pane(TIMELINE_PANE_ID),
+                        );
+                        show_topic_item(ui, &item, 100, &mut presentation);
+                        observed = Some(presentation.finish(ui));
+                    },
+                )
+                .textures_delta
+                .clear();
+            let observed = observed.unwrap();
+            let Some(reader) = observed
+                .semantic_nodes
+                .iter()
+                .find(|node| node.id.0 == "bokkie.evidence-reader.long-reader-test")
+            else {
+                let disclosure = observed
+                    .semantic_nodes
+                    .iter()
+                    .find(|node| node.id.0 == "bokkie.raw-evidence.long-reader-test")
+                    .unwrap();
+                disclosure_pointer = Some(egui::pos2(
+                    (disclosure.rect.min_x + disclosure.rect.max_x) * 0.5,
+                    (disclosure.rect.min_y + disclosure.rect.max_y) * 0.5,
+                ));
+                continue;
+            };
+            assert!(reader.text_selectable);
+            assert_eq!(
+                observed.text_layouts.len(),
+                2,
+                "only heading and timing are measured"
+            );
+            assert_eq!(observed.coverage.observed_native_controls, 0);
+            assert!(observed.coverage.native_text_controls >= 1);
+            assert_eq!(observed.raw_presentations.len(), 1);
+            if !saw_start {
+                assert!(!reader.name.contains("TAIL_MARKER"));
+                saw_start = true;
+            }
+            saw_tail |= reader.name.contains("TAIL_MARKER");
+            pointer = Some(egui::pos2(
+                (reader.rect.min_x + reader.rect.max_x) * 0.5,
+                (reader.rect.min_y + reader.rect.max_y) * 0.5,
+            ));
+        }
+        assert!(
+            saw_tail,
+            "scrolling the actual reader must expose its complete tail row"
+        );
     }
 
     #[test]
@@ -4034,13 +4180,13 @@ mod tests {
             "uncommon_raw_field": {"kept": true}
         });
         let common = common_evidence(&evidence);
-        assert!(common.iter().any(|(label, _)| *label == "Attempt ID"));
-        assert!(common.iter().any(|(label, _)| *label == "Codex task ID"));
-        assert!(common.iter().any(|(label, _)| *label == "Pull request"));
+        assert!(common.iter().any(|(_, label, _)| *label == "Attempt ID"));
+        assert!(common.iter().any(|(_, label, _)| *label == "Codex task ID"));
+        assert!(common.iter().any(|(_, label, _)| *label == "Pull request"));
         assert!(
             !common
                 .iter()
-                .any(|(label, _)| *label == "uncommon_raw_field")
+                .any(|(_, label, _)| *label == "uncommon_raw_field")
         );
         assert!(
             serde_json::to_string_pretty(&evidence)
