@@ -30,11 +30,31 @@ pub struct InteractionObservation {
     pub confirmation_conflict: Option<String>,
 }
 
+/// A pass-local explanation for painting outside the measured component recipes.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RawPresentationObservation {
+    pub id: SemanticUiId,
+    pub reason: String,
+}
+
+impl From<polyorama_ui_egui::RawPresentation> for RawPresentationObservation {
+    fn from(value: polyorama_ui_egui::RawPresentation) -> Self {
+        Self {
+            id: value.id,
+            reason: value.reason.to_owned(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct TestSnapshot {
+    /// Application render-pass sequence, including discarded egui layout passes.
     pub frame_number: u64,
     pub ui_snapshot: UiSnapshot,
+    /// Includes clipped raw attempts; these are annotations, not text measurements.
+    pub raw_presentations: Vec<RawPresentationObservation>,
     pub virtualisation: VirtualisationObservation,
+    /// Model state used to render these nodes, before this pass's intents apply.
     pub interaction: InteractionObservation,
 }
 
@@ -52,6 +72,7 @@ pub fn finish_snapshot(
     frame_number: u64,
     mut nodes: Vec<UiNode>,
     mut text: Vec<polyorama_ui_egui::TextLayoutObservation>,
+    raw_presentations: Vec<RawPresentationObservation>,
     virtualisation: VirtualisationObservation,
     interaction: InteractionObservation,
 ) -> TestSnapshot {
@@ -93,6 +114,7 @@ pub fn finish_snapshot(
     TestSnapshot {
         frame_number,
         ui_snapshot,
+        raw_presentations,
         virtualisation,
         interaction,
     }
@@ -131,6 +153,7 @@ mod tests {
             1,
             Vec::new(),
             observations,
+            Vec::new(),
             VirtualisationObservation::default(),
             InteractionObservation::default(),
         );
@@ -154,6 +177,10 @@ mod tests {
             7,
             vec![root_node(root), offscreen],
             Vec::new(),
+            vec![RawPresentationObservation {
+                id: SemanticUiId::new("offscreen.raw"),
+                reason: "Overscanned custom row painter".to_owned(),
+            }],
             VirtualisationObservation {
                 total_rows: 50_000,
                 visible_rows: (120, 126),
@@ -162,6 +189,11 @@ mod tests {
             InteractionObservation::default(),
         );
         assert_eq!(snapshot.ui_snapshot.nodes.len(), 1);
+        assert_eq!(snapshot.raw_presentations.len(), 1);
+        assert_eq!(
+            snapshot.raw_presentations[0].id,
+            SemanticUiId::new("offscreen.raw")
+        );
         assert!(snapshot.ui_snapshot.semantic_audit.is_empty());
         assert_eq!(snapshot.virtualisation.materialised_rows, (116, 130));
     }

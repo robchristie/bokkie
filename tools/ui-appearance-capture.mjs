@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { captureSettled } from './ui-capture-settling.mjs';
 
 const root = process.cwd();
-const evidence = resolve(process.env.BOKKIE_UI_EVIDENCE_DIR ?? join(root, 'docs/appearance-evidence/comparison'));
+const evidence = resolve(process.env.BOKKIE_UI_EVIDENCE_DIR ?? join(root, '.ui-qualification-runtime/appearance'));
 await mkdir(evidence, { recursive: true });
 const moduleName = process.env.BOKKIE_PLAYWRIGHT_MODULE ?? 'playwright';
 const moduleSpecifier = moduleName.startsWith('/') ? pathToFileURL(moduleName).href : moduleName;
@@ -194,18 +194,19 @@ try {
     args: ['--no-sandbox', '--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-angle=vulkan', '--disable-vulkan-surface'],
   });
   observations.browser = { version: browser.version(), fontconfig_file: process.env.FONTCONFIG_FILE ?? 'system default' };
-  const url = await startFixture('full');
+  const url = await startFixture(process.env.BOKKIE_APPEARANCE_FIXTURE ?? 'full');
   for (const candidate of cases) {
-    const { name, width = 1440, height = 900, selection = 'proposal', keyboard_focus = false, confirmation = false, ...appearance } = candidate;
+    const { name, width = 1440, height = 900, selection = 'proposal', obligation = null, keyboard_focus = false, confirmation = false, ...appearance } = candidate;
     const page = await browser.newPage({ viewport: { width, height } });
     diagnosticPage = page;
     page.on('pageerror', error => unexpected.push(String(error)));
     await page.goto(`${url}?appearance=${encodeURIComponent(JSON.stringify(appearance))}`, { waitUntil: 'domcontentloaded' });
     await waitCurrent(page);
     let state = audit(await snapshot(page), `${name} ready`);
-    const selected = selection === 'failure' ? 'bokkie.inbox-row.attention-nonretryable'
+    const selected = obligation != null ? `bokkie.inbox-row.${obligation}`
+      : selection === 'failure' ? 'bokkie.inbox-row.attention-nonretryable'
       : state.ui_snapshot.nodes.find(item => item.id.startsWith('bokkie.inbox-row.gardener:implement:'))?.id;
-    if (!selected) throw new Error('missing selected proposal');
+    if (!selected) throw new Error('missing requested selection');
     await clickId(page, selected);
     await page.waitForFunction(() => !window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().interaction.topic_busy);
     // Move the pointer away: selection colour must not be an incidental hover.

@@ -50,8 +50,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if !ui_dir.is_dir() {
         return Err(format!("UI directory {} does not exist", ui_dir.display()).into());
     }
-    if !matches!(variant.as_str(), "full" | "empty" | "empty-inbox" | "large") {
-        return Err("--variant must be full, empty, empty-inbox, or large".into());
+    if !matches!(
+        variant.as_str(),
+        "experience" | "full" | "empty" | "empty-inbox" | "large"
+    ) {
+        return Err("--variant must be experience, full, empty, empty-inbox, or large".into());
     }
 
     let root = FixtureRoot(
@@ -61,6 +64,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let database = root.0.join("fixture.sqlite");
     let mut store = Store::open(&database)?;
     match variant.as_str() {
+        "experience" => seed_experience(&mut store)?,
         "full" => seed_full(&mut store, &root.0)?,
         "empty-inbox" => seed_empty_inbox(&mut store)?,
         "large" => seed_large(&mut store)?,
@@ -113,6 +117,104 @@ fn obligation(id: &str, description: String, scheduled_at: i64, approval: bool) 
         approval_required: approval,
         retry: RetryPolicy::default(),
     }
+}
+
+/// Seed a small, ordinary operator day without invoking a runner or adapter.
+///
+/// Every state is produced through the same Store transitions used by the
+/// service. The fixture therefore supplies durable activity for reading-flow
+/// review while its temporary database remains entirely side-effect free.
+fn seed_experience(store: &mut Store) -> Result<(), Box<dyn Error>> {
+    store.create(
+        obligation(
+            "prepare-support-handover",
+            "Prepare the morning support handover".to_owned(),
+            FUTURE,
+            false,
+        ),
+        NOW,
+    )?;
+    store.create(
+        obligation(
+            "approve-roster-update",
+            "Approve the Tuesday roster update".to_owned(),
+            FUTURE,
+            true,
+        ),
+        NOW,
+    )?;
+    store.create(
+        obligation(
+            "compile-weekly-summary",
+            "Compile the weekly planning summary".to_owned(),
+            NOW,
+            false,
+        ),
+        NOW - 10,
+    )?;
+    let running = store.claim_due(NOW, 3_600, 1)?.remove(0);
+    assert_eq!(running.obligation_id, "compile-weekly-summary");
+
+    for (id, description, disposition, error, evidence) in [
+        (
+            "retry-calendar-sync",
+            "Refresh the shared planning calendar",
+            bokkie::FailureDisposition::RetrySafe,
+            "The calendar service was temporarily unavailable; another attempt is scheduled",
+            "The previous calendar remains available. No changes were submitted.",
+        ),
+        (
+            "check-import-warning",
+            "Review an unrecognised column in the contact import",
+            bokkie::FailureDisposition::Terminal,
+            "The import contains an unrecognised preferred-contact column",
+            "Review the column mapping before retrying. Existing contacts are unchanged.",
+        ),
+    ] {
+        store.create(obligation(id, description.to_owned(), NOW, false), NOW - 10)?;
+        let claim = store.claim_due(NOW, 60, 1)?.remove(0);
+        assert_eq!(claim.obligation_id, id);
+        store.complete(
+            &claim,
+            Completion::Failed {
+                disposition,
+                error: error.to_owned(),
+                evidence: Some(evidence.to_owned()),
+            },
+            NOW + 1,
+        )?;
+    }
+
+    store.create(
+        obligation(
+            "confirm-meeting-notes",
+            "Confirm the planning meeting notes".to_owned(),
+            NOW,
+            false,
+        ),
+        NOW - 10,
+    )?;
+    let completed = store.claim_due(NOW, 60, 1)?.remove(0);
+    assert_eq!(completed.obligation_id, "confirm-meeting-notes");
+    store.complete(
+        &completed,
+        Completion::Succeeded {
+            evidence: Some("Notes shared with the planning group".to_owned()),
+        },
+        NOW + 1,
+    )?;
+
+    store.create(
+        obligation(
+            "archive-superseded-reminder",
+            "Archive the superseded onboarding reminder".to_owned(),
+            FUTURE,
+            false,
+        ),
+        NOW,
+    )?;
+    store.cancel("archive-superseded-reminder", NOW + 1)?;
+    Ok(())
 }
 
 fn seed_full(store: &mut Store, root: &Path) -> Result<(), Box<dyn Error>> {
@@ -470,4 +572,57 @@ fn seed_empty_inbox(store: &mut Store) -> Result<(), Box<dyn Error>> {
         NOW + 1,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use bokkie::ObligationState;
+
+    use super::{Store, seed_experience};
+
+    #[test]
+    fn experience_fixture_uses_store_transitions_for_ordinary_activity() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(root.path().join("fixture.sqlite")).unwrap();
+
+        seed_experience(&mut store).unwrap();
+
+        let states = store
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|obligation| (obligation.id, obligation.state))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(states.len(), 7);
+        assert_eq!(
+            states.get("prepare-support-handover"),
+            Some(&ObligationState::Pending)
+        );
+        assert_eq!(
+            states.get("approve-roster-update"),
+            Some(&ObligationState::AwaitingApproval)
+        );
+        assert_eq!(
+            states.get("compile-weekly-summary"),
+            Some(&ObligationState::Running)
+        );
+        assert_eq!(
+            states.get("retry-calendar-sync"),
+            Some(&ObligationState::RetryScheduled)
+        );
+        assert_eq!(
+            states.get("check-import-warning"),
+            Some(&ObligationState::Attention)
+        );
+        assert_eq!(
+            states.get("confirm-meeting-notes"),
+            Some(&ObligationState::Completed)
+        );
+        assert_eq!(
+            states.get("archive-superseded-reminder"),
+            Some(&ObligationState::Cancelled)
+        );
+    }
 }

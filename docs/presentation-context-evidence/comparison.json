@@ -1,0 +1,91 @@
+{
+  "source": {
+    "revision": "83f508066d556e09edd4037214ab0eb949396440",
+    "polyorama_revision": "3c1c51f873de70162629a7fc4c17896f89bf7125",
+    "polyorama_tree": "cc5904b04ddc338abb77c650f6398c7e257d3d72",
+    "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "wasm_sha256": "eda57eb19a8663fb5a87f813961b25ba9fad51a5dc36c40570c9f24eb87a7a27",
+    "appearance_source_sha256": "f698e6189ed5cb412e2c25604574008908c1e2f22b83f42be97812af3a44e485",
+    "fixture_binary_sha256": "3f9b3f3b324b857664e1803eaf03729fda6d08bbb603b9da0524b12677a29dc6",
+    "inter_regular_sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+    "inter_semibold_sha256": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3"
+  },
+  "behavioural_checks": "passed",
+  "presentation_checks": "passed",
+  "design_decision": "accepted: preserve the approved appearance through a mechanical refactor",
+  "comparisons": [
+    {
+      "case": "graphite-inter-1440",
+      "reference": "../appearance-evidence/final/graphite-inter-1440.png",
+      "reference_sha256": "7603c1a75a1378d8f6c000e7147913167e9bcf6c6ff16f9d3412bc4abe86c893",
+      "candidate_sha256": "7603c1a75a1378d8f6c000e7147913167e9bcf6c6ff16f9d3412bc4abe86c893",
+      "changed_pixels": 0
+    },
+    {
+      "case": "graphite-inter-1280",
+      "reference": "../appearance-evidence/final/graphite-inter-1280.png",
+      "reference_sha256": "5d1d72c9e31afd0e0df968d3b4fe45fc54650921392d8e504c51d5d72328e34d",
+      "candidate_sha256": "5d1d72c9e31afd0e0df968d3b4fe45fc54650921392d8e504c51d5d72328e34d",
+      "changed_pixels": 0
+    },
+    {
+      "case": "graphite-inter-narrow",
+      "reference": "../appearance-evidence/final/graphite-inter-narrow.png",
+      "reference_sha256": "131cd6b3dadc00d6a656cbe97ede0aa09d1aac4c365dc88e341d0d111c3ec65f",
+      "candidate_sha256": "131cd6b3dadc00d6a656cbe97ede0aa09d1aac4c365dc88e341d0d111c3ec65f",
+      "changed_pixels": 0
+    },
+    {
+      "case": "graphite-inter-large-narrow",
+      "reference": "../appearance-evidence/final/graphite-inter-large-narrow.png",
+      "reference_sha256": "ed43b20d4aa59964407e5b4c84072506d24f6cb95e69cec0a50fd59545916840",
+      "candidate_sha256": "ed43b20d4aa59964407e5b4c84072506d24f6cb95e69cec0a50fd59545916840",
+      "changed_pixels": 0
+    },
+    {
+      "case": "graphite-inter-light",
+      "reference": "../appearance-evidence/final/graphite-inter-light.png",
+      "reference_sha256": "cbb5a2bf398cd93d3dd272f02102b5369d8d6a8829be9d453b307df54554153b",
+      "candidate_sha256": "cbb5a2bf398cd93d3dd272f02102b5369d8d6a8829be9d453b307df54554153b",
+      "changed_pixels": 0
+    },
+    {
+      "case": "graphite-inter-high-contrast",
+      "reference": "../appearance-evidence/final/graphite-inter-high-contrast.png",
+      "reference_sha256": "9a4ad423d6f11cdf9aeb4083cc007ca977c33bf61b0cd7d172bc62d266501780",
+      "candidate_sha256": "9a4ad423d6f11cdf9aeb4083cc007ca977c33bf61b0cd7d172bc62d266501780",
+      "changed_pixels": 0
+    },
+    {
+      "case": "graphite-inter-light-high-contrast",
+      "reference": "../appearance-evidence/final/graphite-inter-light-high-contrast.png",
+      "reference_sha256": "79be859b431524d73bfb05aa040280857faee43252cb251c56d8d48eecb9b3c7",
+      "candidate_sha256": "79be859b431524d73bfb05aa040280857faee43252cb251c56d8d48eecb9b3c7",
+      "changed_pixels": 0
+    },
+    {
+      "case": "graphite-inter-keyboard-focus",
+      "reference": "../appearance-evidence/final/graphite-inter-keyboard-focus.png",
+      "reference_sha256": "179ed18771591824b24cb65b05f7d3257cadfc91e8eefc1e19f0dfe51a3a3500",
+      "candidate_sha256": "179ed18771591824b24cb65b05f7d3257cadfc91e8eefc1e19f0dfe51a3a3500",
+      "changed_pixels": 0
+    },
+    {
+      "case": "graphite-inter-failure",
+      "reference": "../appearance-evidence/final/graphite-inter-failure.png",
+      "reference_sha256": "505fdebf5f620e875504db65cdad852e51153c581e78b15165e2290d8ecd8fd8",
+      "candidate_sha256": "505fdebf5f620e875504db65cdad852e51153c581e78b15165e2290d8ecd8fd8",
+      "changed_pixels": 0
+    },
+    {
+      "case": "graphite-inter-confirmation",
+      "reference": "../appearance-evidence/final/graphite-inter-confirmation.png",
+      "reference_sha256": "6f848e38a86588f7a098a50b6079d426723bd8e08507f749bf6c9dc39cd3486e",
+      "candidate_sha256": "6f848e38a86588f7a098a50b6079d426723bd8e08507f749bf6c9dc39cd3486e",
+      "changed_pixels": 0
+    }
+  ],
+  "font_configuration_observation": "Unchanged pre-refactor and candidate search both failed without a working hidden-input font configuration. Ordinary HTML typing and full candidate journeys passed with the previously qualified FONTCONFIG_FILE. No production input workaround was added.",
+  "native_scratch_observation": "Native qualification passed while the existing appearance capture directories remained intact; scratch now uses a private subdirectory.",
+  "remaining_trade_off": "Native readers and raw chrome are explicitly outside measured text-layout coverage. Browser disconnect presentation remains the existing labelled approximation."
+}

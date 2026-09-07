@@ -17,8 +17,8 @@ path = "src/main.rs"
 bokkie-operator-api = { path = "../../crates/bokkie-operator-api" }
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "wgpu"] }
 ehttp = { version = "0.7.1", features = ["json"] }
-polyorama-core = { git = "https://github.com/robchristie/polyorama", rev = "25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f" }
-polyorama-ui-egui = { git = "https://github.com/robchristie/polyorama", rev = "25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f" }
+polyorama-core = { git = "https://github.com/robchristie/polyorama", rev = "3c1c51f873de70162629a7fc4c17896f89bf7125" }
+polyorama-ui-egui = { git = "https://github.com/robchristie/polyorama", rev = "3c1c51f873de70162629a7fc4c17896f89bf7125" }
 percent-encoding = "2.3.2"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.143"

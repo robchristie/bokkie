@@ -103,6 +103,37 @@ data or an in-progress request temporarily prevents a decision.
 
 Appearance comparison, mode/contrast qualification and reproduction options are
 recorded in [the appearance evidence](../../docs/appearance-evidence/README.md).
+After building the fixture and browser assets, `node tools/ui-appearance-capture.mjs`
+captures fresh comparisons under the ignored `.ui-qualification-runtime/appearance/`
+directory by default. Set `BOKKIE_UI_EVIDENCE_DIR` to choose another output directory;
+use an explicit destination when deliberately retaining a new evidence cohort.
+Ordinary capture runs therefore preserve the checked-in historical comparison.
+
+Presentation code uses Polyorama's pass-local `PresentationContext` for headings,
+content, fixed row slots, technical properties and actions. Create the context
+at a pane or detail boundary; pass it into app-owned compositions instead of
+threading tokens, font scale and observation vectors through each component.
+Use logical control keys under the stable obligation or topic identity. Evidence
+properties use their original JSON field paths, so inserting a field or repeating
+a display label cannot change another field's identity. Keep layout, virtual row
+ranges, read models and emitted intents in the application.
+
+The collection row owns its selection marker and keyboard focus treatment;
+`raw` annotates that painter and the unbounded native evidence galley. Existing
+public row and evidence semantic IDs remain explicit at this compatibility
+boundary. The evidence reader records selectable native coverage and visible
+complete painted rows, without claiming measured-text coverage. Publish and
+merge context observations only within the current viewport and render pass;
+viewport filtering must retain failed text attempts.
+
+The test snapshot's `interaction` fields describe the model used to render its
+`ui_snapshot` nodes, before applying intents emitted by that render pass. Opening
+a confirmation or changing selection appears in both observations on the next
+render pass. `frame_number` counts application render passes, including egui
+layout passes that are subsequently discarded; it is not a presented-frame count.
+Capture tooling still waits for matching pixels and semantic layouts before
+retaining a screenshot.
+
 Graphite is the default; the bounded `BOKKIE_APPEARANCE` JSON object (native) or
 `appearance` JSON query value (browser) can select `identity` (`graphite`,
 `restrained-blue`, `warm-light`), `typeface` (`inter`, `source-sans`), `light`,
