@@ -3,8 +3,8 @@
 - Status: active
 - Reorientation budget: 180
 - Owner: Bokkie product/integration; Polyorama components and review conventions
-- Landed pull requests: none
-- Next action: Complete row/evidence migration, then run canonical and runtime qualification.
+- Landed pull requests: Polyorama #34
+- Next action: Qualify Bokkie against the merged owner, then complete final review and landing.
 
 ## Outcome and design contract
 
@@ -24,13 +24,12 @@ is included.
 
 ## Current phase
 
-The scoped pilot is selected: Bokkie's detail header/actions pass 52 UI tests
-and all ten captured appearance cases have zero changed pixels against the
-rebuilt pre-refactor reference. Polyorama's pilot verifies stable action/text
-identities, AccessKit parity, reordering, discarded passes, viewport isolation,
-failed attempts and recipe shape equivalence. Extend the same adapter to rows
-and evidence, then qualify the complete candidate. The appearance remains the
-accepted direction; this is a mechanical-equivalence decision.
+Polyorama #34 landed at `3c1c51f873de70162629a7fc4c17896f89bf7125` after
+canonical verification, independent review and CI, with identical reviewed and
+landed trees. Bokkie's complete migration passes 55 focused tests and all ten
+appearance captures are byte-identical to accepted evidence. Final verification
+now uses the merged owner pin and reproducible lockfile, followed by retained
+integration evidence and terminal review. No appearance direction changed.
 
 ## Delivery graph
 
@@ -79,5 +78,5 @@ configured for this pair of public repositories.
 
 ## Next action
 
-Complete the row/evidence extension, verify the integrated candidate, obtain
-independent review and land Polyorama before final Bokkie pin and qualification.
+Finish merged-owner qualification, retain exact evidence, complete the plan and
+obtain final independent review/CI before Bokkie landing.
