@@ -4,7 +4,9 @@
 - Reorientation budget: 160
 - Owner: Bokkie (product and integration); Polyorama (framework)
 - Landed pull requests: none
-- Next action: Qualify polished graphite/Inter and prepare concrete baseline review.
+- Terminal integration draft: Bokkie #19
+- Framework draft: Polyorama #33
+- Next action: Obtain explicit acceptance of the five Polyorama baseline candidates.
 
 ## Outcome and boundary
 
@@ -31,12 +33,20 @@ the font. Neutral primary actions remain clear; blue is unnecessary for this
 fixture. Warm light remains a supported alternative. Initial captures also
 exposed a detail background allocation defect being repaired during polish.
 
-Polyorama repair candidate `ab86d64f7805b01d43b70154aa73318a6365d9ca`
-also resolves native weak fills. Framework canonical checks reached strict
-snapshots after passing builds and browser smokes; five visual baselines differ,
-with unchanged semantic/text/metadata evidence on the first checkpoint.
-Replacement baselines remain unapproved. Qualify the final candidate and retain
-reviewable replacement artefacts before requesting that specific approval.
+Polyorama candidate `e17fd7f062da54cab600990b7e1f1e2f1622782c` passed
+independent product review; source `a3eb8463eb9459be3376595d6d071f41c3eb4726`
+passed canonical builds/tests/browser checks and native gallery verification.
+Five strict visual/native-control-coverage baselines differ and remain
+unapproved. Current candidate images, diffs, logs and hashes are retained in
+Polyorama `docs/application-identity-evidence/` and linked from PR #33.
+
+Bokkie source `20a18d504d26245fc2eda56effd08f14dbe5737d` passed the settled
+10-case appearance matrix and full native/browser qualification. Its earlier
+confirmation capture was rejected during independent review because it caught
+fade-in; bounded real-frame/pixel settling now retains an opaque dialog. A
+suspected focus clipping issue was withdrawn after independent decoded-pixel
+comparison proved the entire reading surface unchanged. Historical comparison
+captures remain intact; final evidence lives in `docs/appearance-evidence/`.
 
 Question: can neutral surfaces, independent action/selection roles and quiet
 recipes distinguish Bokkie without changing component interaction contracts?
@@ -52,10 +62,10 @@ and the selected candidate passes interaction, text and contrast verification.
 
 | Increment | Owner revision | Consumer revision | Result | Status | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| Foreground, theme roles and gallery workbench | Pending | Pending | Unproved | Calibration | Polyorama tests and docs |
-| Bokkie candidates and typography comparison | Pending | Pending | Unproved | Awaiting owner API | Bokkie appearance evidence |
-| Composition and final qualification | Pending | Pending | Unproved | Planned | UI qualification |
-| Reviewed landing and integration closeout | Pending | Pending | Unproved | Planned | Owner PR then terminal Bokkie PR |
+| Foreground, theme roles and gallery workbench | `e17fd7f` | `20a18d5` | Product review passed; baseline hold | Qualified candidate | Polyorama #33 evidence |
+| Bokkie candidates and typography comparison | `8f0d922` | `6794e74` | Graphite/Inter retained | Complete calibration | Appearance comparison evidence |
+| Composition and final qualification | `a3eb846` | `20a18d5` | UI/backend checks and real journeys passed | Repair review | Appearance final/qualification evidence |
+| Reviewed landing and integration closeout | Pending | Pending | Unproved | Baseline acceptance hold | Polyorama #33 then Bokkie #19 |
 
 ## Resources and verification
 
@@ -74,18 +84,20 @@ directory; Git worktree registration owns their current absolute paths.
 
 ## Acceptance
 
-- Unproved: Actual button painting covers primary, pressed and disabled foregrounds.
-- Unproved: Validated app theme drives both egui styling and custom component tokens.
-- Unproved: Analytical reference remains compatible and universal rules are neutral.
-- Unproved: Gallery can switch/adjust/export a bounded set of complete appearances.
-- Unproved: Identical Bokkie fixture has three controlled colour captures.
-- Unproved: Source Sans 3 versus Inter comparison has retained evidence and decision.
-- Unproved: Graphite composition reduces outlines and compacts status/activity metadata.
-- Unproved: Light/high-contrast, focus, selection, long text, narrow width, larger text,
+- Proved: Actual button painting covers primary, pressed and disabled foregrounds.
+- Proved: Validated app theme drives both egui styling and custom component tokens.
+- Proved: Analytical reference remains compatible and universal rules are neutral.
+- Proved: Gallery can switch/adjust/export a bounded set of complete appearances.
+- Proved: Identical Bokkie fixture has three controlled colour captures.
+- Proved: Source Sans 3 versus Inter comparison has retained evidence and decision.
+- Proved: Graphite composition reduces outlines and compacts status/activity metadata.
+- Proved: Light/high-contrast, focus, selection, long text, narrow width, larger text,
   stale states and confirmations have executable and rendered evidence.
 - Unproved: Canonical checks, independent review, CI and owner-before-consumer landing.
 
 ## Next action
 
-Finish rendered and interaction qualification, independently review the candidates,
-and present concrete baseline differences for approval before owner landing.
+Present the five concrete Polyorama candidate baselines for explicit acceptance.
+After approval, replace only accepted baseline files, rerun canonical checks,
+review and land Polyorama #33, pin Bokkie to the merged revision, repeat final
+integration and finish Bokkie #19. Preserve both drafts until these gates pass.

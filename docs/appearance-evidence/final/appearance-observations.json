@@ -1,0 +1,317 @@
+{
+  "browser": {
+    "version": "151.0.7922.34",
+    "fontconfig_file": "/nvme/development/floatingpie/.pixi/envs/default/etc/fonts/fonts.conf"
+  },
+  "journeys": [],
+  "states": {
+    "full": {
+      "fixture": {
+        "address": "127.0.0.1:42725",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-35e73d8d-e916-44f4-a9c1-be28c640098a",
+        "service": {
+          "api_contract_version": 1,
+          "build": "bokkie/0.1.0",
+          "process_id": 2529115,
+          "schema_version": 9,
+          "session_id": "cd1328af-12cf-4128-869e-4d6967baa8a2"
+        },
+        "variant": "full"
+      }
+    },
+    "loading": {
+      "nodes": 8,
+      "classification": "direct Rust current-frame state before the first HTTP snapshot completed"
+    }
+  },
+  "viewports": [],
+  "errors": [],
+  "source": {
+    "revision": "20a18d504d26245fc2eda56effd08f14dbe5737d",
+    "polyorama_revision": "a3eb8463eb9459be3376595d6d071f41c3eb4726",
+    "polyorama_tree": "0f107dbe48a03bc6228bf354c9abf73832bdec60",
+    "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "wasm_sha256": "094c9dfdd4433fbdf2f6731546706fdfdb7a8c96a0ddf86258be0fe654576857",
+    "appearance_source_sha256": "f698e6189ed5cb412e2c25604574008908c1e2f22b83f42be97812af3a44e485",
+    "fixture_binary_sha256": "9e9bc01aab45c637d04f4f170de5d5be11b92ee7c3c5d5f3aeb56b5c8233e07c",
+    "inter_regular_sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+    "inter_semibold_sha256": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3",
+    "polyorama_checkout_at_capture": {
+      "revision": "e17fd7f062da54cab600990b7e1f1e2f1622782c",
+      "tree": "7332456ec9c36c60760102bfe89f95abe7c8a556",
+      "crates_tree": "f4fd3f6dc2e3387cde2597dfceff392ed90b6000",
+      "difference_from_declared_revision": "documentation and appearance evidence only"
+    },
+    "polyorama_declared_crates_tree": "f4fd3f6dc2e3387cde2597dfceff392ed90b6000",
+    "provenance_reconciliation": "The environment initially paired the declared code revision with the live checkout HEAD tree. Both identities are retained explicitly here; declared and observed crate trees are identical."
+  },
+  "captures": [
+    {
+      "name": "graphite-inter-1440",
+      "appearance": {},
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [
+        "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f"
+      ],
+      "keyboard_focus": false,
+      "confirmation": false,
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 428,
+        "frame": "24",
+        "png_sha256": "7603c1a75a1378d8f6c000e7147913167e9bcf6c6ff16f9d3412bc4abe86c893",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "screenshot": "graphite-inter-1440.png",
+      "semantic": "graphite-inter-1440.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "graphite-inter-1280",
+      "appearance": {},
+      "viewport": {
+        "width": 1280,
+        "height": 720
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [
+        "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f"
+      ],
+      "keyboard_focus": false,
+      "confirmation": false,
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 408,
+        "frame": "24",
+        "png_sha256": "5d1d72c9e31afd0e0df968d3b4fe45fc54650921392d8e504c51d5d72328e34d",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "screenshot": "graphite-inter-1280.png",
+      "semantic": "graphite-inter-1280.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "graphite-inter-narrow",
+      "appearance": {},
+      "viewport": {
+        "width": 480,
+        "height": 720
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [],
+      "keyboard_focus": false,
+      "confirmation": false,
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 332,
+        "frame": "28",
+        "png_sha256": "131cd6b3dadc00d6a656cbe97ede0aa09d1aac4c365dc88e341d0d111c3ec65f",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "screenshot": "graphite-inter-narrow.png",
+      "semantic": "graphite-inter-narrow.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "graphite-inter-large-narrow",
+      "appearance": {
+        "font_scale": 1.5
+      },
+      "viewport": {
+        "width": 480,
+        "height": 720
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [],
+      "keyboard_focus": false,
+      "confirmation": false,
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 332,
+        "frame": "30",
+        "png_sha256": "ed43b20d4aa59964407e5b4c84072506d24f6cb95e69cec0a50fd59545916840",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "screenshot": "graphite-inter-large-narrow.png",
+      "semantic": "graphite-inter-large-narrow.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "graphite-inter-light",
+      "appearance": {
+        "light": true
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [
+        "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f"
+      ],
+      "keyboard_focus": false,
+      "confirmation": false,
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 422,
+        "frame": "24",
+        "png_sha256": "cbb5a2bf398cd93d3dd272f02102b5369d8d6a8829be9d453b307df54554153b",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "screenshot": "graphite-inter-light.png",
+      "semantic": "graphite-inter-light.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "graphite-inter-high-contrast",
+      "appearance": {
+        "high_contrast": true
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [
+        "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f"
+      ],
+      "keyboard_focus": false,
+      "confirmation": false,
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 408,
+        "frame": "25",
+        "png_sha256": "9a4ad423d6f11cdf9aeb4083cc007ca977c33bf61b0cd7d172bc62d266501780",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "screenshot": "graphite-inter-high-contrast.png",
+      "semantic": "graphite-inter-high-contrast.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "graphite-inter-light-high-contrast",
+      "appearance": {
+        "light": true,
+        "high_contrast": true
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [
+        "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f"
+      ],
+      "keyboard_focus": false,
+      "confirmation": false,
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 390,
+        "frame": "24",
+        "png_sha256": "79be859b431524d73bfb05aa040280857faee43252cb251c56d8d48eecb9b3c7",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "screenshot": "graphite-inter-light-high-contrast.png",
+      "semantic": "graphite-inter-light-high-contrast.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "graphite-inter-keyboard-focus",
+      "appearance": {},
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [
+        "bokkie.inbox-row.attention-exhausted"
+      ],
+      "keyboard_focus": true,
+      "confirmation": false,
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 406,
+        "frame": "28",
+        "png_sha256": "179ed18771591824b24cb65b05f7d3257cadfc91e8eefc1e19f0dfe51a3a3500",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "screenshot": "graphite-inter-keyboard-focus.png",
+      "semantic": "graphite-inter-keyboard-focus.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "graphite-inter-failure",
+      "appearance": {},
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "attention-nonretryable",
+      "focused": [
+        "bokkie.inbox-row.attention-nonretryable"
+      ],
+      "keyboard_focus": false,
+      "confirmation": false,
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 373,
+        "frame": "25",
+        "png_sha256": "505fdebf5f620e875504db65cdad852e51153c581e78b15165e2290d8ecd8fd8",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "screenshot": "graphite-inter-failure.png",
+      "semantic": "graphite-inter-failure.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "graphite-inter-confirmation",
+      "appearance": {},
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [
+        "action.approve_exact_gardener_proposal.pane.3"
+      ],
+      "keyboard_focus": false,
+      "confirmation": true,
+      "settling": {
+        "samples": 3,
+        "elapsed_ms": 710,
+        "frame": "41",
+        "png_sha256": "6f848e38a86588f7a098a50b6079d426723bd8e08507f749bf6c9dc39cd3486e",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "screenshot": "graphite-inter-confirmation.png",
+      "semantic": "graphite-inter-confirmation.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    }
+  ]
+}

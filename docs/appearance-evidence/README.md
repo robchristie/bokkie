@@ -60,3 +60,83 @@ Run `tools/check.sh`, `tools/check-ui.sh`, and `tools/qualify-ui.sh` with a sepa
 and secondary text on six surfaces and action contrast (4.5:1 standard, 7:1 high
 contrast), plus focus and selection marker contrast (3:1). This is bounded
 contrast evidence, not a claim of complete accessibility certification.
+
+## Retained polished candidate
+
+The settled final matrix ran against clean Bokkie
+`20a18d504d26245fc2eda56effd08f14dbe5737d`. The declared Polyorama code revision
+is `a3eb8463eb9459be3376595d6d071f41c3eb4726`; its crate tree is identical to the
+checkout `e17fd7f062da54cab600990b7e1f1e2f1622782c`, which adds only evidence.
+The [final manifest](final/appearance-observations.json) records both owner
+revision/tree pairs, shared crate identity, fixture and painted Wasm hashes.
+The local owner patch remains provisional pending framework landing and the
+replacement baseline decision.
+
+| Case | Retained rendering and observation |
+| --- | --- |
+| Desktop | [1440×900](final/graphite-inter-1440.png), [1280×720](final/graphite-inter-1280.png): full reading surface, inline status, quiet secondary actions and compact activity. |
+| Narrow / larger text | [480×720](final/graphite-inter-narrow.png), [150% text](final/graphite-inter-large-narrow.png): wrapping and scrolling retain the reading content. |
+| Light and high contrast | [Light](final/graphite-inter-light.png), [dark high contrast](final/graphite-inter-high-contrast.png), [light high contrast](final/graphite-inter-light-high-contrast.png): independently authored, validated palettes. |
+| Selection and focus | [Keyboard traversal](final/graphite-inter-keyboard-focus.png): the selected proposal retains its neutral fill and left marker while the next row independently gains the focus ring. |
+| Failure | [Failure detail](final/graphite-inter-failure.png): a short error label carries emphasis; long diagnostics and activity remain readable. |
+| Confirmation | [Exact gardener confirmation](final/graphite-inter-confirmation.png): opaque, settled dialog with source-bound provenance; the appearance harness submits nothing. |
+
+All ten captures have empty text and semantic audits. The harness now requests
+real paints and retains a screenshot only after two consecutive identical
+framebuffers and semantic layouts, with no frame change across the retained
+screenshot. The bound is 16 probes, with a 5-second frame wait and 100ms animation
+advance per probe. These cases settled in 2–3 probes (332–710ms); the modal
+required three. Each capture records its observed bounds and PNG hash. Explicit
+paint requests do not add an idle repaint loop or a business operation.
+
+An earlier confirmation capture at `84af2a6a3c7a981d2b4269cc41d60decd189e771`
+was rejected before approval because it captured the dialog during fade-in,
+letting activity text show through. Its SHA-256 was
+`b6efbda79a3f2b68dddb0c2add2245840865618453a69ba6ff2e91a248a39684`. It is replaced by this settled cohort;
+the rejected image is not presented as final evidence. A suspected keyboard
+clipping difference was withdrawn after independent pixel comparison: the
+entire reading region (x560–1404, y82–864) has zero differing RGBA pixels between
+the desktop and keyboard-focus captures. This also holds in the settled cohort.
+
+`tools/check-ui.sh` passed 49 application tests, Clippy with warnings denied,
+native and Wasm builds, and formatting. Bokkie-specific contrast tests cover
+secondary text at 4.5:1 (7:1 high contrast) and meaningful control edges at 3:1
+against canvas, detail, raised, hover, selection and quiet-hover surfaces in all
+three identities and all four modes. The theme is validated at startup; frame
+rendering only resolves it.
+
+`tools/qualify-ui.sh` passed both browser and native smokes with source and harness
+at `20a18d504d26245fc2eda56effd08f14dbe5737d`. The qualification guard recorded
+`+working-tree` because only this evidence README had an uncommitted update at
+startup. [Source provenance](qualification/source-provenance.json) retains the
+exact [documentation-only diff](qualification/docs-only-source.patch), its hash,
+unchanged runtime/harness identity and compiled artefact hashes. The clean final
+matrix independently records the same painted Wasm. No test result is relabelled
+as a clean checkout result.
+
+[Browser interactions](qualification/browser-interactions.json) retain ten
+passing journeys: physical search, the long selectable evidence tail,
+desktop/narrow navigation and Back, exact gardener confirmation, process restart
+and session invalidation, real conditional cancellation, stale confirmation
+conflict, keyboard traversal, selection/scroll across refresh, and scrolled
+ledger resize. The 5,000-obligation fixture materialised 18 rows and warmed idle
+frame counts remained stable. Browser rendering reported WebGPU on NVIDIA Ampere.
+
+[The stale confirmation](qualification/browser-stale-confirmation.png) and
+[its matching semantic observation](qualification/browser-stale-confirmation.json)
+show a visible conflict reason and disabled submission after connection recovery.
+The reviewed confirmation remains stale and blocked. Both this capture and
+[the qualification’s gardener confirmation](qualification/browser-gardener-confirmation.png)
+use the same explicit framebuffer/semantic settling rule.
+
+[Native interaction](qualification/native-interaction.json) retains real X11
+pointer selection, confirmation inspection and keyboard focus under Xvfb, with
+empty text and semantic audits. Its conditional durable mutation is a harness
+POST; browser qualification proves submission through the UI. Native rendering
+used Mesa llvmpipe. Existing screen-reader and disconnected-surface qualification
+limits remain as documented in the attention UI README.
+
+[SHA256SUMS](SHA256SUMS) covers every retained PNG, JSON and source-provenance
+text/patch file. The retained direction is graphite with Inter and the refined
+composition. Baseline approval and final owner-before-consumer landing are
+recorded separately by the owning pull requests.

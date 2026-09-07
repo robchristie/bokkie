@@ -1,0 +1,18 @@
+{
+  "source_revision": "20a18d504d26245fc2eda56effd08f14dbe5737d",
+  "recorded_by_qualification": "20a18d504d26245fc2eda56effd08f14dbe5737d+working-tree",
+  "qualification_dirty_scope": [
+    "docs/appearance-evidence/README.md"
+  ],
+  "docs_only_diff": "docs-only-source.patch",
+  "docs_only_diff_sha256": "8864d5b657f42a13a2e3b7a059a21ae78ae3eca9d57413a09e84424460f7a96d",
+  "runtime_and_harness_diff": "empty: apps/, tools/, Cargo.toml and Cargo.lock match the committed source",
+  "polyorama_declared_revision": "a3eb8463eb9459be3376595d6d071f41c3eb4726",
+  "polyorama_declared_tree": "0f107dbe48a03bc6228bf354c9abf73832bdec60",
+  "polyorama_observed_checkout_revision": "e17fd7f062da54cab600990b7e1f1e2f1622782c",
+  "polyorama_shared_crates_tree": "f4fd3f6dc2e3387cde2597dfceff392ed90b6000",
+  "wasm_sha256": "094c9dfdd4433fbdf2f6731546706fdfdb7a8c96a0ddf86258be0fe654576857",
+  "native_binary_sha256": "17e556f63bed1ccd4d66853a28adaa3f5fa15ebb51de4069499d3b6c755c9c0d",
+  "fixture_binary_sha256": "9e9bc01aab45c637d04f4f170de5d5be11b92ee7c3c5d5f3aeb56b5c8233e07c",
+  "result": "browser and native UI smokes passed; README-only evidence reconciliation does not change the compiled application or harness"
+}
