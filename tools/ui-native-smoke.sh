@@ -4,15 +4,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 EVIDENCE="${BOKKIE_UI_EVIDENCE_DIR:-$ROOT/docs/ui-qualification-evidence}"
-RUNTIME="$ROOT/.ui-qualification-runtime"
+# Each run owns only its private scratch directory. Appearance captures and
+# other qualification evidence may share the ignored runtime parent.
+mkdir -p "$ROOT/.ui-qualification-runtime"
+RUNTIME="$(mktemp -d "$ROOT/.ui-qualification-runtime/native.XXXXXX")"
 SYSROOT="${BOKKIE_UI_SYSROOT:-/nvme/development/polyorama/.tools/sysroot}"
 mkdir -p "$EVIDENCE" "$RUNTIME/.X11-unix"
 # Evidence has one stable in-sandbox path even when its host path is below
 # /tmp, which the private runtime mount replaces.
 EVIDENCE="$(cd "$EVIDENCE" && pwd)"
 SANDBOX_EVIDENCE=/tmp/bokkie-ui-evidence
-find "$RUNTIME" -mindepth 1 -maxdepth 1 ! -name '.X11-unix' -delete
-find "$RUNTIME/.X11-unix" -mindepth 1 -delete
 chmod 1777 "$RUNTIME" "$RUNTIME/.X11-unix"
 
 DISPLAY_NUMBER=:96
