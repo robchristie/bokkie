@@ -63,6 +63,7 @@ export async function qualifyTaskJourney({
   await capture('browser-task-desktop');
 
   const endpoint = process.env.BOKKIE_UI_LANTERN_ENDPOINT;
+  let lanternShared;
   if (endpoint) {
     const targets = JSON.parse((await execute('lantern', ['targets', '--endpoint', endpoint, '--json'])).stdout);
     const targetList = targets.targets ?? targets.result?.targets ?? [];
@@ -71,6 +72,7 @@ export async function qualifyTaskJourney({
     const target = pages.length === 1 ? pages[0] : null;
     if (!target) throw new Error('Lantern could not uniquely identify the owned fixture page');
     const shared = ['--endpoint', endpoint, '--target-id', target.id ?? target.target_id, '--json'];
+    lanternShared = shared;
     for (const [name, args] of [
       ['page', ['page']],
       ['layout', ['layout', '--container-selector', 'body']],
@@ -87,6 +89,16 @@ export async function qualifyTaskJourney({
   await page.setViewportSize({ width: 480, height: 720 });
   await page.waitForTimeout(250);
   await capture('browser-task-narrow');
+  if (lanternShared) {
+    for (const [name, args] of [
+      ['layout', ['layout', '--container-selector', 'body']],
+      ['screenshot', ['screenshot', '--output', join(evidence, 'lantern-task-narrow.png')]],
+    ]) {
+      const { stdout } = await execute('lantern', [...args, ...lanternShared]);
+      if (!JSON.parse(stdout).ok) throw new Error(`Lantern narrow ${name} did not complete`);
+      await writeFile(join(evidence, `lantern-task-narrow-${name}.json`), stdout);
+    }
+  }
   await clickId(page, 'bokkie.back-to-list');
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
     .ui_snapshot.nodes.some(item => item.id === 'pane.2'));
