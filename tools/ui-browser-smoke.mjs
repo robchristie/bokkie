@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { captureSettled } from './ui-capture-settling.mjs';
+import { qualifyTaskJourney } from './ui-task-journey.mjs';
 
 const root = process.cwd();
 const evidence = resolve(process.env.BOKKIE_UI_EVIDENCE_DIR ?? join(root, 'docs/ui-qualification-evidence'));
@@ -173,6 +174,9 @@ try {
     args: [
       '--no-sandbox', '--enable-unsafe-webgpu', '--enable-features=Vulkan',
       '--use-angle=vulkan', '--disable-vulkan-surface',
+      ...(process.env.BOKKIE_UI_LANTERN_ENDPOINT
+        ? [`--remote-debugging-port=${new URL(process.env.BOKKIE_UI_LANTERN_ENDPOINT).port}`]
+        : []),
     ],
   });
   observations.browser = {
@@ -693,6 +697,10 @@ try {
   };
 
   await page.setViewportSize({ width: 1440, height: 900 });
+  await qualifyTaskJourney({
+    page, evidence, startFixture, waitCurrent, snapshot, node, clickId,
+    clickAction, selectCollection, pointFor, audit, observations, json,
+  });
   const largeRequestStart = operatorRequests.length;
   url = await startFixture('large');
   await page.goto(url, { waitUntil: 'domcontentloaded' });

@@ -72,6 +72,12 @@ pub(crate) const MIGRATIONS: &[MigrationManifestEntry] = &[
         sql: include_str!("../migrations/0009_global_event_envelope.sql"),
         sha256: "8f1a76fc4d9087e0ae73090ea23a605f647206b5ac399433afae910fa2ff0902",
     },
+    MigrationManifestEntry {
+        version: 10,
+        name: "0010_gardener_task_configuration.sql",
+        sql: include_str!("../migrations/0010_gardener_task_configuration.sql"),
+        sha256: "c1d649073e8cc84bf505c1a2a8571737239e062cbf38905c376066937318e39e",
+    },
 ];
 
 pub(crate) fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
@@ -479,8 +485,8 @@ mod tests {
                     connection
                         .execute(
                             "INSERT INTO schema_migrations(version, name, sha256)
-                             VALUES (10, '0010_future.sql', ?1)",
-                            ["9".repeat(64)],
+                             VALUES (?1, 'future.sql', ?2)",
+                            params![MIGRATIONS.last().unwrap().version + 1, "9".repeat(64)],
                         )
                         .unwrap();
                 }

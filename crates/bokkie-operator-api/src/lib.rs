@@ -6,7 +6,7 @@ use serde_json::Value;
 /// Version of the HTTP contract consumed by the bundled operator UI.
 pub const API_CONTRACT_VERSION: u32 = 1;
 /// Exact SQLite migration version understood by this build of the UI.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 9;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 10;
 /// Stable package identity; the per-process session ID distinguishes restarts.
 pub const BOKKIE_BUILD_ID: &str = concat!("bokkie/", env!("CARGO_PKG_VERSION"));
 
@@ -190,8 +190,62 @@ pub struct OperatorCapabilities {
     pub reject_gardener_proposal: ActionCapability,
 }
 
+/// Presentation metadata over an existing obligation; task identity is its obligation ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperatorTaskKind {
+    GardenerInspection,
+    GardenerImplementation,
+    Simulated,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstructionMode {
+    Extend,
+    Replace,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct GardenerTaskConfiguration {
+    pub repository: String,
+    pub default_branch: String,
+    pub checkout_path: String,
+    pub inspection_cron: String,
+    pub inspection_timezone: String,
+    pub approval_policy: String,
+    pub proposal_limit: u32,
+    pub default_instructions: String,
+    pub instruction_mode: InstructionMode,
+    pub instructions: String,
+    pub effective_instructions: String,
+    pub revision: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OperatorTask {
+    pub kind: OperatorTaskKind,
+    pub title: String,
+    pub parent_task_id: Option<String>,
+    pub configuration: Option<GardenerTaskConfiguration>,
+    pub proposal_instance_id: Option<String>,
+}
+
+/// Only inspection guidance is editable. Registration owns the schedule and repository.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskConfigurationUpdate {
+    pub expected_revision: i64,
+    pub instruction_mode: InstructionMode,
+    pub instructions: String,
+    pub actor: String,
+    pub note: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OperatorObligation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<OperatorTask>,
     pub id: String,
     pub description: String,
     pub state: OperatorObligationState,

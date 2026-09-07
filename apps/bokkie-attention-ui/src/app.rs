@@ -1,3 +1,6 @@
+#[path = "task_ui.rs"]
+mod task_ui;
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
@@ -170,6 +173,11 @@ enum OperatorIntent {
     },
     DismissConfirmation,
     SubmitConfirmation,
+    BeginSettings,
+    UpdateSettings(crate::model::TaskSettingsDraft),
+    DismissSettings,
+    ReviewCurrentSettings,
+    SubmitSettings,
 }
 
 #[derive(Debug)]
@@ -325,7 +333,7 @@ impl AttentionApp {
             | ApiRequest::Changes { .. }
             | ApiRequest::Obligation { .. } => self.model.snapshot_busy = true,
             ApiRequest::TopicPage { .. } => self.model.topic_busy = true,
-            ApiRequest::Act(_) => self.model.action_busy = true,
+            ApiRequest::Act(_) | ApiRequest::ConfigureTask { .. } => self.model.action_busy = true,
         }
         transport.send(
             request,
@@ -369,6 +377,29 @@ impl AttentionApp {
                     *projection,
                     context,
                 ),
+                (
+                    ApiRequest::ConfigureTask { obligation_id, .. },
+                    Ok(ApiPayload::ActionAccepted),
+                ) => {
+                    self.model.settings = None;
+                    self.model.action_busy = false;
+                    self.model.status = "Task settings saved; refreshing durable state".to_owned();
+                    self.begin_changes(BTreeSet::from([obligation_id]), context);
+                }
+                (
+                    ApiRequest::ConfigureTask { obligation_id, .. },
+                    Err(ApiFailure::Conflict(message)),
+                ) => {
+                    self.model.action_busy = false;
+                    if let Some(draft) = self.model.settings.as_mut() {
+                        draft.error = Some(format!(
+                            "Settings conflict: {message}. Your draft is retained for review."
+                        ));
+                    }
+                    self.model
+                        .mark_stale("Settings conflict; refreshing current state");
+                    self.begin_changes(BTreeSet::from([obligation_id]), context);
+                }
                 (ApiRequest::Act(action), Ok(ApiPayload::ActionAccepted)) => {
                     let affected = BTreeSet::from([action.obligation_id.clone()]);
                     self.model
@@ -435,6 +466,17 @@ impl AttentionApp {
                             context,
                         );
                     }
+                }
+                (ApiRequest::ConfigureTask { .. }, Err(error)) => {
+                    self.model.action_busy = false;
+                    if let Some(draft) = self.model.settings.as_mut() {
+                        draft.error = Some(format!(
+                            "Settings request failed: {error}. Refresh and review before trying again."
+                        ));
+                    }
+                    self.model
+                        .mark_stale(format!("Settings request failed: {error}"));
+                    self.next_poll_at = Some(Instant::now() + RECONNECT_DELAY);
                 }
                 (ApiRequest::Act(_), Err(error)) => {
                     self.model.action_busy = false;
@@ -504,7 +546,7 @@ impl AttentionApp {
 
     fn request_is_current(&self, request: &ApiRequest) -> bool {
         match request {
-            ApiRequest::Bootstrap | ApiRequest::Act(_) => true,
+            ApiRequest::Bootstrap | ApiRequest::Act(_) | ApiRequest::ConfigureTask { .. } => true,
             ApiRequest::SnapshotPage { generation, .. } => self
                 .snapshot_assembly
                 .as_ref()
@@ -928,6 +970,43 @@ impl AttentionApp {
                     context.request_repaint();
                 }
                 OperatorIntent::SubmitConfirmation => self.submit_confirmation(context),
+                OperatorIntent::BeginSettings => {
+                    if let Err(reason) = self.model.begin_settings() {
+                        self.model.status = reason;
+                    }
+                }
+                OperatorIntent::UpdateSettings(draft) => {
+                    if !self.model.action_busy
+                        && self.model.settings.as_ref().is_some_and(|current| {
+                            current.obligation_id == draft.obligation_id
+                                && current.update.expected_revision
+                                    == draft.update.expected_revision
+                        })
+                    {
+                        self.model.settings = Some(draft);
+                    }
+                }
+                OperatorIntent::DismissSettings => self.model.settings = None,
+                OperatorIntent::ReviewCurrentSettings => {
+                    if let Err(reason) = self.model.review_current_settings() {
+                        self.model.status = reason;
+                    }
+                }
+                OperatorIntent::SubmitSettings => {
+                    if let Some(draft) = self.model.settings.clone()
+                        && draft.reviewing
+                        && self.model.settings_unavailable_reason(&draft).is_none()
+                        && self.session.is_some()
+                    {
+                        self.dispatch(
+                            ApiRequest::ConfigureTask {
+                                obligation_id: draft.obligation_id,
+                                update: draft.update,
+                            },
+                            context,
+                        );
+                    }
+                }
             }
         }
     }
@@ -1157,6 +1236,7 @@ impl eframe::App for AttentionApp {
                     selection_destination: Some(TIMELINE_PANE_ID),
                 };
                 let timeline = TimelineReadModel {
+                    related_obligations: self.model.obligations(),
                     obligation: self.model.selected(),
                     topic: self.model.topic.as_ref(),
                     topic_error: self.model.topic_error.as_deref(),
@@ -1214,6 +1294,18 @@ impl eframe::App for AttentionApp {
                 virtualisation = presenter.virtualisation;
             });
 
+        if let Some(draft) = self.model.settings.clone() {
+            task_ui::show_settings(
+                &context,
+                &draft,
+                &self.model,
+                &tokens,
+                self.preferences.font_scale,
+                &mut intents,
+                &mut semantic_nodes,
+                &mut text_observations,
+            );
+        }
         if let Some(confirmation) = self.model.confirmation.clone() {
             let submit_unavailable = self.confirmation_submit_unavailable_reason(&confirmation);
             show_confirmation(
@@ -1289,6 +1381,7 @@ struct ObligationsReadModel<'a> {
 }
 
 struct TimelineReadModel<'a> {
+    related_obligations: &'a [OperatorObligation],
     obligation: Option<&'a OperatorObligation>,
     topic: Option<&'a ObligationTopic>,
     topic_error: Option<&'a str>,
@@ -1316,7 +1409,7 @@ impl PanePresenter for OperatorPanePresenter<'_> {
     fn title(&self, pane: PaneId) -> &'static str {
         match pane {
             INBOX_PANE_ID => "Needs attention",
-            OBLIGATIONS_PANE_ID => "All obligations",
+            OBLIGATIONS_PANE_ID => "Tasks",
             TIMELINE_PANE_ID => "Detail",
             _ => "Unknown pane",
         }
@@ -1443,7 +1536,7 @@ fn show_collection_tabs(
         (
             OBLIGATIONS_PANE_ID,
             "bokkie.collection.all",
-            "All obligations".to_owned(),
+            "Tasks".to_owned(),
         ),
     ] {
         let response = ui.selectable_label(collection == pane, &label);
@@ -1477,6 +1570,10 @@ fn record_navigation(
 fn matches_search(obligation: &OperatorObligation, search: &str) -> bool {
     let query = search.trim().to_lowercase();
     query.is_empty()
+        || obligation
+            .task
+            .as_ref()
+            .is_some_and(|task| task.title.to_lowercase().contains(&query))
         || obligation.state.label().to_lowercase().contains(&query)
         || obligation.id.to_lowercase().contains(&query)
         || obligation.description.to_lowercase().contains(&query)
@@ -1636,7 +1733,7 @@ fn show_obligations(
         },
     );
     if read.loading {
-        empty_message(ui, "loading", "Loading obligations…", presentation);
+        empty_message(ui, "loading", "Loading tasks…", presentation);
         return;
     }
     if read.obligations.is_empty() {
@@ -1644,9 +1741,9 @@ fn show_obligations(
             ui,
             "empty",
             if read.total == 0 {
-                "This database contains no obligations"
+                "This database contains no tasks"
             } else {
-                "No obligations match the current search and state filter"
+                "No tasks match the current search and state filter"
             },
             presentation,
         );
@@ -1694,7 +1791,7 @@ fn show_obligations(
                             row_line(
                                 ui,
                                 "title",
-                                &obligation.description,
+                                attention_title(obligation),
                                 TextRole::Body,
                                 presentation,
                             );
@@ -1825,6 +1922,7 @@ fn show_timeline(
                 },
             );
             show_detail_actions(ui, read, obligation, intents, &mut presentation);
+            task_ui::show_task_detail(ui, read, obligation, intents, &mut presentation);
             egui::CollapsingHeader::new("Technical provenance")
                 .id_salt(("obligation-technical-details", &obligation.id))
                 .show(ui, |ui| {
@@ -2396,6 +2494,9 @@ fn attention_row_line(
 }
 
 fn attention_title(obligation: &OperatorObligation) -> &str {
+    if let Some(task) = &obligation.task {
+        return &task.title;
+    }
     if let Some(subject) = exact_gardener_subject(obligation)
         && obligation.description
             == format!(
@@ -2410,13 +2511,13 @@ fn attention_title(obligation: &OperatorObligation) -> &str {
 }
 
 fn obligation_source(obligation: &OperatorObligation) -> &str {
-    exact_gardener_subject(obligation)
-        .map(|subject| subject.repository)
-        .unwrap_or(if obligation.id.starts_with("gardener:") {
-            "Coding gardener"
-        } else {
-            "Bokkie"
-        })
+    use bokkie_operator_api::OperatorTaskKind;
+    match obligation.task.as_ref().map(|task| task.kind) {
+        Some(OperatorTaskKind::GardenerInspection) => "Code gardening · recurring inspection",
+        Some(OperatorTaskKind::GardenerImplementation) => "Code gardening · implementation",
+        Some(OperatorTaskKind::Simulated) => "Simulated execution",
+        None => "Bokkie obligation",
+    }
 }
 
 fn ledger_status(obligation: &OperatorObligation, captured_at: Option<i64>) -> String {
@@ -3473,6 +3574,7 @@ mod tests {
             reason: "lost connection".to_owned(),
         };
         let read = TimelineReadModel {
+            related_obligations: &[],
             obligation: Some(&obligation),
             topic: None,
             topic_error: None,
@@ -3517,6 +3619,7 @@ mod tests {
                     for index in order {
                         let obligation = &obligations[index];
                         let read = TimelineReadModel {
+                            related_obligations: &[],
                             obligation: Some(obligation),
                             topic: None,
                             topic_error: None,
@@ -4034,6 +4137,7 @@ mod tests {
 
     fn fixture(index: usize) -> OperatorObligation {
         OperatorObligation {
+            task: None,
             id: format!("obligation-{index:06}"),
             description: "Long deterministic description ".repeat(4),
             state: OperatorObligationState::RetryScheduled,
@@ -4120,6 +4224,145 @@ mod tests {
             last_test_snapshot: TestSnapshot::default(),
             test_observer: None,
         }
+    }
+
+    fn configured_task_fixture() -> OperatorObligation {
+        let mut task = fixture(1);
+        task.state = OperatorObligationState::Pending;
+        task.task = Some(bokkie_operator_api::OperatorTask {
+            kind: bokkie_operator_api::OperatorTaskKind::GardenerInspection,
+            title: "Garden Bokkie".to_owned(), parent_task_id: None, proposal_instance_id: None,
+            configuration: Some(serde_json::from_value(serde_json::json!({
+                "repository":"robchristie/bokkie", "default_branch":"main", "checkout_path":"/fixture/bokkie",
+                "inspection_cron":"0 9 * * *", "inspection_timezone":"Australia/Adelaide", "approval_policy":"human_approval",
+                "proposal_limit":3, "default_instructions":"Inspect correctness and recovery paths.", "instruction_mode":"extend",
+                "instructions":"Check scheduling", "effective_instructions":"Inspect correctness and recovery paths.\n\nCheck scheduling", "revision":4
+            })).unwrap()),
+        });
+        task
+    }
+
+    #[test]
+    fn task_settings_editor_and_review_have_complete_semantics_at_both_widths() {
+        use eframe::App;
+        for width in [1440.0, 480.0] {
+            for reviewing in [false, true] {
+                let context = egui::Context::default();
+                Appearance::default().apply(&context);
+                let mut app = test_app();
+                app.workspace.active_pane = TIMELINE_PANE_ID;
+                app.collection = OBLIGATIONS_PANE_ID;
+                app.model.apply_snapshot(OperatorSnapshot {
+                    captured_at: 100,
+                    service: None,
+                    next_cursor: None,
+                    watermark: 9,
+                    obligations: vec![configured_task_fixture()],
+                });
+                app.model.begin_settings().unwrap();
+                app.model.settings.as_mut().unwrap().reviewing = reviewing;
+                let mut frame = eframe::Frame::_new_kittest();
+                for _ in 0..3 {
+                    context
+                        .run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, if width < 760.0 { 720.0 } else { 900.0 }),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| app.ui(ui, &mut frame),
+                        )
+                        .textures_delta
+                        .clear();
+                }
+                let snapshot = app.test_snapshot();
+                assert!(
+                    snapshot.ui_snapshot.semantic_audit.is_empty(),
+                    "{width}, review={reviewing}: {:?}",
+                    snapshot.ui_snapshot.semantic_audit
+                );
+                assert!(
+                    snapshot.ui_snapshot.text_audit.is_empty(),
+                    "{width}, review={reviewing}: {:?}",
+                    snapshot.ui_snapshot.text_audit
+                );
+                let expected = if reviewing {
+                    "bokkie.task.settings.save"
+                } else {
+                    "bokkie.task.settings.review"
+                };
+                assert!(
+                    snapshot
+                        .ui_snapshot
+                        .nodes
+                        .iter()
+                        .any(|node| node.id == SemanticUiId::new(expected) && node.enabled)
+                );
+                assert!(
+                    snapshot
+                        .ui_snapshot
+                        .nodes
+                        .iter()
+                        .any(|node| node.id == SemanticUiId::new("bokkie.task.settings"))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settings_conflict_requires_explicit_current_review_and_preserves_operator_text() {
+        let context = egui::Context::default();
+        let mut app = test_app();
+        let mut task = configured_task_fixture();
+        app.model.apply_snapshot(OperatorSnapshot {
+            captured_at: 100,
+            service: None,
+            next_cursor: None,
+            watermark: 9,
+            obligations: vec![task.clone()],
+        });
+        app.apply_intents(vec![OperatorIntent::BeginSettings], &context);
+        let draft = app.model.settings.as_mut().unwrap();
+        draft.update.instructions = "Keep this exact draft".to_owned();
+        draft.update.actor = "rob".to_owned();
+        draft.update.note = Some("Reviewed before conflict".to_owned());
+        draft.reviewing = true;
+        draft.error = Some("Settings changed".to_owned());
+        task.task
+            .as_mut()
+            .unwrap()
+            .configuration
+            .as_mut()
+            .unwrap()
+            .revision = 5;
+        app.model.apply_snapshot(OperatorSnapshot {
+            captured_at: 101,
+            service: None,
+            next_cursor: None,
+            watermark: 10,
+            obligations: vec![task],
+        });
+        assert!(
+            app.model
+                .settings_unavailable_reason(app.model.settings.as_ref().unwrap())
+                .is_some()
+        );
+        app.apply_intents(vec![OperatorIntent::ReviewCurrentSettings], &context);
+        let draft = app.model.settings.as_ref().unwrap();
+        assert_eq!(draft.update.expected_revision, 5);
+        assert_eq!(draft.update.instructions, "Keep this exact draft");
+        assert_eq!(draft.update.actor, "rob");
+        assert_eq!(
+            draft.update.note.as_deref(),
+            Some("Reviewed before conflict")
+        );
+        assert!(!draft.reviewing);
+        assert!(app.model.settings_unavailable_reason(draft).is_none());
+        app.apply_intents(vec![OperatorIntent::SubmitSettings], &context);
+        assert!(!app.model.action_busy, "saving requires a new review step");
+        assert!(app.model.connection.decisions_safe());
     }
 
     #[test]

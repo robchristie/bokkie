@@ -7,7 +7,7 @@ use bokkie_operator_api::{
     ActionCapability, ActionConsequence, ActionPrecondition, ApprovalSubject, AttentionCause,
     DisabledReason, DurableLiveness, ExceptionReason, ObligationTopic, OperatorCapabilities,
     OperatorFailureDisposition, OperatorObligation, OperatorObligationState, OperatorSnapshot,
-    TopicItem, TopicSource,
+    OperatorTask, OperatorTaskKind, TopicItem, TopicSource,
 };
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,21 @@ use crate::{
         obligation_from_row, proposal_instance_for_obligation, retry_transition_is_legal,
     },
 };
+
+/// Keep list titles readable without changing the immutable prompt or obligation description.
+fn implementation_task_title(prompt: Option<&str>) -> String {
+    const MAX_TITLE_CHARS: usize = 120;
+    let line = prompt
+        .and_then(|prompt| prompt.lines().map(str::trim).find(|line| !line.is_empty()))
+        .unwrap_or("Implement approved gardener proposal");
+    if line.chars().count() <= MAX_TITLE_CHARS {
+        line.to_owned()
+    } else {
+        let mut title: String = line.chars().take(MAX_TITLE_CHARS - 1).collect();
+        title.push('…');
+        title
+    }
+}
 
 #[derive(Debug, Serialize)]
 struct ApprovalEvidence {
@@ -999,7 +1014,36 @@ impl Store {
             }
             ObligationState::Completed | ObligationState::Cancelled => unreachable!(),
         };
+        let task = match self.gardener_obligation_kind(&obligation.id)? {
+            Some(crate::GardenerObligationKind::Inspection) => OperatorTask {
+                kind: OperatorTaskKind::GardenerInspection,
+                title: "Garden Bokkie".to_owned(),
+                parent_task_id: None,
+                configuration: Some(self.gardener_task_configuration(&obligation.id)?),
+                proposal_instance_id: None,
+            },
+            Some(crate::GardenerObligationKind::Implementation) => {
+                let parent_task_id = self.connection.query_row(
+                    "SELECT i.obligation_id FROM gardener_inspections i JOIN gardener_proposal_instances pi ON pi.source_inspection_id = i.id WHERE pi.implementation_obligation_id = ?1 LIMIT 1",
+                    [&obligation.id], |row| row.get(0)).optional()?;
+                OperatorTask {
+                    kind: OperatorTaskKind::GardenerImplementation,
+                    title: implementation_task_title(proposal.map(|value| value.prompt.as_str())),
+                    parent_task_id,
+                    configuration: None,
+                    proposal_instance_id: proposal.map(|value| value.id.clone()),
+                }
+            }
+            None => OperatorTask {
+                kind: OperatorTaskKind::Simulated,
+                title: obligation.description.clone(),
+                parent_task_id: None,
+                configuration: None,
+                proposal_instance_id: None,
+            },
+        };
         Ok(OperatorObligation {
+            task: Some(task),
             id: obligation.id.clone(),
             description: obligation.description.clone(),
             state: obligation.state.into(),
@@ -1480,6 +1524,22 @@ impl From<ObligationState> for OperatorObligationState {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn implementation_titles_use_the_first_nonempty_line_and_bound_unicode_safely() {
+        assert_eq!(
+            super::implementation_task_title(Some("\n  \n  Repair recovery tests  \nDetails")),
+            "Repair recovery tests"
+        );
+        let prompt = "🦘".repeat(121);
+        let title = super::implementation_task_title(Some(&prompt));
+        assert_eq!(title.chars().count(), 120);
+        assert_eq!(title, format!("{}…", "🦘".repeat(119)));
+        assert_eq!(
+            super::implementation_task_title(None),
+            "Implement approved gardener proposal"
+        );
+    }
+
     use std::collections::BTreeMap;
 
     use super::*;

@@ -510,7 +510,8 @@ impl<'a> GardenerRunner<'a> {
         let unique = Uuid::new_v4().simple().to_string();
         let inspection_id = format!("inspection-{unique}");
         let worktree_path = root.join(&inspection_id);
-        let prompt = inspection_prompt(&source);
+        let configuration = store.gardener_task_configuration(&claim.obligation_id)?;
+        let prompt = inspection_prompt(&source, &configuration);
         let prompt_digest = digest(&prompt);
         store.start_gardener_inspection(
             claim,
@@ -1148,9 +1149,13 @@ impl ProcessHeartbeat for StoreObserver<'_> {
     }
 }
 
-fn inspection_prompt(source: &CommitId) -> String {
+fn inspection_prompt(
+    source: &CommitId,
+    configuration: &bokkie_operator_api::GardenerTaskConfiguration,
+) -> String {
     format!(
-        "You are performing a bounded, read-only coding-gardener inspection of only {CANONICAL_REPOSITORY} at exact commit {source}. Read AGENTS.md, README.md, and relevant files under docs/plans/ before inspecting the repository. Do not modify files, run network commands, start implementation, commit, push, open a pull request, or request permissions. Return one JSON object matching the supplied schema. Propose at most three independently useful, concrete goal prompts for maintainability, correctness, tests, or documentation. Each goal prompt must be self-contained, constrained to {CANONICAL_REPOSITORY}, and suitable for separate human approval. If no worthwhile work is supported by repository evidence, return an empty proposed_goal_prompts array."
+        "You are performing a bounded, read-only coding-gardener inspection of only {CANONICAL_REPOSITORY} at exact commit {source}. Read AGENTS.md, README.md, and relevant files under docs/plans/ before inspecting the repository. Fixed safety constraints take precedence over inspection guidance: do not modify files, run network commands, start implementation, commit, push, open a pull request, or request permissions. Return one JSON object matching the supplied schema. Propose at most three independently useful, concrete goal prompts. Each goal prompt must be self-contained, constrained to {CANONICAL_REPOSITORY}, and suitable for separate human approval. If no worthwhile work is supported by repository evidence, return an empty proposed_goal_prompts array. Inspection guidance (configuration revision {}):\n{}",
+        configuration.revision, configuration.effective_instructions,
     )
 }
 

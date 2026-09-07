@@ -208,6 +208,11 @@ enum GardenerCommand {
     },
     /// Show the canonical repository registration.
     Repository,
+    /// Read or update revision-checked inspection guidance.
+    Configuration {
+        #[command(subcommand)]
+        command: GardenerConfigurationCommand,
+    },
     /// List or show persisted inspections.
     Inspections {
         #[command(subcommand)]
@@ -228,6 +233,32 @@ enum GardenerCommand {
         #[command(subcommand)]
         command: GardenerRunCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum GardenerConfigurationCommand {
+    Show {
+        task_id: String,
+    },
+    Update {
+        task_id: String,
+        #[arg(long)]
+        expected_revision: i64,
+        #[arg(long, value_enum)]
+        instruction_mode: InstructionModeArg,
+        #[arg(long)]
+        instructions: String,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum InstructionModeArg {
+    Extend,
+    Replace,
 }
 
 #[derive(Debug, Subcommand)]
@@ -649,6 +680,32 @@ fn run_gardener_command(
             now,
         )?),
         GardenerCommand::Repository => print_json(&require_gardener_repository(store)?),
+        GardenerCommand::Configuration { command } => match command {
+            GardenerConfigurationCommand::Show { task_id } => {
+                print_json(&store.gardener_task_configuration(&task_id)?)
+            }
+            GardenerConfigurationCommand::Update {
+                task_id,
+                expected_revision,
+                instruction_mode,
+                instructions,
+                actor,
+                note,
+            } => print_json(&store.update_gardener_task_configuration(
+                &task_id,
+                &bokkie::TaskConfigurationUpdate {
+                    expected_revision,
+                    instruction_mode: match instruction_mode {
+                        InstructionModeArg::Extend => bokkie::InstructionMode::Extend,
+                        InstructionModeArg::Replace => bokkie::InstructionMode::Replace,
+                    },
+                    instructions,
+                    actor,
+                    note,
+                },
+                now,
+            )?),
+        },
         GardenerCommand::Inspections { command } => match command {
             GardenerInspectionCommand::List { page } => {
                 print_json(&store.gardener_inspection_page(

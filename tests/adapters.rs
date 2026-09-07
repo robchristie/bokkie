@@ -172,6 +172,35 @@ fn gardener_cli_registers_and_exposes_persisted_state_and_decisions() {
     );
     assert_eq!(cli_json(&database, &["gardener", "repository"]), registered);
 
+    let task_id = registered["inspection_obligation_id"].as_str().unwrap();
+    let settings = cli_json(&database, &["gardener", "configuration", "show", task_id]);
+    assert_eq!(settings["revision"], 1);
+    let update = [
+        "gardener",
+        "configuration",
+        "update",
+        task_id,
+        "--expected-revision",
+        "1",
+        "--instruction-mode",
+        "replace",
+        "--instructions",
+        "Prioritise persistence recovery.",
+        "--actor",
+        "cli-test",
+    ];
+    let saved = cli_json(&database, &update);
+    assert_eq!(saved["revision"], 2);
+    assert_eq!(
+        saved["effective_instructions"],
+        "Prioritise persistence recovery."
+    );
+    assert_eq!(
+        cli_json(&database, &["gardener", "configuration", "show", task_id]),
+        saved
+    );
+    assert_eq!(run_cli(&database, &update).status.code(), Some(4));
+
     let conflict = run_cli(
         &database,
         &[
