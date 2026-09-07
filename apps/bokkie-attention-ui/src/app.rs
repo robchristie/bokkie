@@ -1224,7 +1224,8 @@ impl eframe::App for AttentionApp {
                 &mut text_observations,
             );
         }
-        self.apply_intents(intents, &context);
+        // Observe the model that produced this pass, before applying its intents.
+        // A requested confirmation belongs to the next pass's painted surface.
         let confirmation = self.model.confirmation.as_ref();
         self.last_test_snapshot = finish_snapshot(
             &context,
@@ -1253,6 +1254,7 @@ impl eframe::App for AttentionApp {
                 confirmation_conflict: confirmation.and_then(|value| value.conflict.clone()),
             },
         );
+        self.apply_intents(intents, &context);
         if let Some(observer) = &self.test_observer {
             *observer.borrow_mut() = self.last_test_snapshot.clone();
         }
@@ -3197,6 +3199,127 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn confirmation_transition_observations_match_each_render_pass() {
+        use eframe::App;
+
+        for repeat_layout in [false, true] {
+            let context = egui::Context::default();
+            let mut app = test_app();
+            app.model.apply_snapshot(OperatorSnapshot {
+                captured_at: 100,
+                service: None,
+                next_cursor: None,
+                watermark: 9,
+                obligations: vec![fixture(1)],
+            });
+            app.model.selected_obligation = Some(fixture(1).id);
+            let input = |events| egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut frame = eframe::Frame::_new_kittest();
+            for _ in 0..2 {
+                context
+                    .run_ui(input(Vec::new()), |ui| app.ui(ui, &mut frame))
+                    .textures_delta
+                    .clear();
+            }
+            let button = app
+                .test_snapshot()
+                .ui_snapshot
+                .nodes
+                .into_iter()
+                .find(|node| {
+                    node.enabled
+                        && node
+                            .actions
+                            .iter()
+                            .any(|action| action.0 == LifecycleAction::Cancel.stable_id())
+                })
+                .expect("rendered cancellation action");
+            let point = egui::pos2(
+                (button.rect.min_x + button.rect.max_x) / 2.0,
+                (button.rect.min_y + button.rect.max_y) / 2.0,
+            );
+            let pointer = |pressed| egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            context
+                .run_ui(
+                    input(vec![egui::Event::PointerMoved(point), pointer(true)]),
+                    |ui| app.ui(ui, &mut frame),
+                )
+                .textures_delta
+                .clear();
+            let mut passes = Vec::new();
+            context
+                .run_ui(input(vec![pointer(false)]), |ui| {
+                    app.ui(ui, &mut frame);
+                    passes.push(app.test_snapshot());
+                    if context.current_pass_index() == 0 {
+                        // Reapplying BeginAction would replace this draft with its
+                        // default actor, even if the dialog still appeared open.
+                        app.model
+                            .confirmation
+                            .as_mut()
+                            .expect("click applied its intent")
+                            .actor = "transition-pass operator".to_owned();
+                    }
+                    if repeat_layout && context.current_pass_index() == 0 {
+                        context.request_discard(
+                            "exercise confirmation transition across layout passes",
+                        );
+                    }
+                })
+                .textures_delta
+                .clear();
+            assert!(app.model.confirmation.is_some(), "click applied its intent");
+            assert_eq!(
+                app.model.confirmation.as_ref().unwrap().actor,
+                "transition-pass operator",
+                "a repeated layout must not reapply the action and replace the draft"
+            );
+            assert!(passes[0].interaction.confirmation_action.is_none());
+            assert_eq!(passes.len(), if repeat_layout { 2 } else { 1 });
+            context
+                .run_ui(input(Vec::new()), |ui| {
+                    app.ui(ui, &mut frame);
+                    passes.push(app.test_snapshot());
+                })
+                .textures_delta
+                .clear();
+            assert_eq!(
+                passes
+                    .last()
+                    .unwrap()
+                    .interaction
+                    .confirmation_action
+                    .as_deref(),
+                Some(LifecycleAction::Cancel.stable_id())
+            );
+            for pass in passes {
+                let rendered_confirmation = pass
+                    .ui_snapshot
+                    .nodes
+                    .iter()
+                    .any(|node| node.id == SemanticUiId::new("bokkie.lifecycle-confirmation"));
+                assert_eq!(
+                    pass.interaction.confirmation_action.is_some(),
+                    rendered_confirmation,
+                    "interaction and semantics must describe the same pass"
+                );
+            }
+        }
+    }
 
     #[test]
     fn row_recipes_contain_painted_text_at_normal_and_enlarged_scales() {

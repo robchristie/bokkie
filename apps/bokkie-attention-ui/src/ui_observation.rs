@@ -32,9 +32,11 @@ pub struct InteractionObservation {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct TestSnapshot {
+    /// Application render-pass sequence, including discarded egui layout passes.
     pub frame_number: u64,
     pub ui_snapshot: UiSnapshot,
     pub virtualisation: VirtualisationObservation,
+    /// Model state used to render these nodes, before this pass's intents apply.
     pub interaction: InteractionObservation,
 }
 

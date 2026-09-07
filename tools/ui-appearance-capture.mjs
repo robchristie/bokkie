@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { captureSettled } from './ui-capture-settling.mjs';
 
 const root = process.cwd();
-const evidence = resolve(process.env.BOKKIE_UI_EVIDENCE_DIR ?? join(root, 'docs/appearance-evidence/comparison'));
+const evidence = resolve(process.env.BOKKIE_UI_EVIDENCE_DIR ?? join(root, '.ui-qualification-runtime/appearance'));
 await mkdir(evidence, { recursive: true });
 const moduleName = process.env.BOKKIE_PLAYWRIGHT_MODULE ?? 'playwright';
 const moduleSpecifier = moduleName.startsWith('/') ? pathToFileURL(moduleName).href : moduleName;
