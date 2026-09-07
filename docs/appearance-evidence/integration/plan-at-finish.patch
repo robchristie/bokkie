@@ -1,0 +1,47 @@
+diff --git a/docs/plans/active/visual-identity.md b/docs/plans/active/visual-identity.md
+index 273d55c..7527c7d 100644
+--- a/docs/plans/active/visual-identity.md
++++ b/docs/plans/active/visual-identity.md
+@@ -6,7 +6,7 @@
+ - Landed pull requests: none
+ - Terminal integration draft: Bokkie #19
+ - Framework draft: Polyorama #33
+-- Next action: Obtain explicit acceptance of the five Polyorama baseline candidates.
++- Next action: Verify and land the explicitly approved Polyorama candidate.
+ 
+ ## Outcome and boundary
+ 
+@@ -36,8 +36,8 @@ exposed a detail background allocation defect being repaired during polish.
+ Polyorama candidate `e17fd7f062da54cab600990b7e1f1e2f1622782c` passed
+ independent product review; source `a3eb8463eb9459be3376595d6d071f41c3eb4726`
+ passed canonical builds/tests/browser checks and native gallery verification.
+-Five strict visual/native-control-coverage baselines differ and remain
+-unapproved. Current candidate images, diffs, logs and hashes are retained in
++The user explicitly approved all five visual/native-control-coverage baseline
++replacements on 2026-09-07. The acceptance hold is discharged. Current candidate images, diffs, logs and hashes are retained in
+ Polyorama `docs/application-identity-evidence/` and linked from PR #33.
+ 
+ Bokkie source `20a18d504d26245fc2eda56effd08f14dbe5737d` passed the settled
+@@ -65,10 +65,10 @@ and the selected candidate passes interaction, text and contrast verification.
+ 
+ | Increment | Owner revision | Consumer revision | Result | Status | Evidence |
+ | --- | --- | --- | --- | --- | --- |
+-| Foreground, theme roles and gallery workbench | `e17fd7f` | `20a18d5` | Product review passed; baseline hold | Qualified candidate | Polyorama #33 evidence |
++| Foreground, theme roles and gallery workbench | `e17fd7f` | `20a18d5` | Product review passed; baselines approved | Qualified candidate | Polyorama #33 evidence |
+ | Bokkie candidates and typography comparison | `8f0d922` | `6794e74` | Graphite/Inter retained | Complete calibration | Appearance comparison evidence |
+ | Composition and final qualification | `a3eb846` | `20a18d5` | UI/backend checks and real journeys passed | Repair review | Appearance final/qualification evidence |
+-| Reviewed landing and integration closeout | Pending | Pending | Unproved | Baseline acceptance hold | Polyorama #33 then Bokkie #19 |
++| Reviewed landing and integration closeout | Pending | Pending | Unproved | Owner verification and landing | Polyorama #33 then Bokkie #19 |
+ 
+ ## Resources and verification
+ 
+@@ -100,7 +100,7 @@ directory; Git worktree registration owns their current absolute paths.
+ 
+ ## Next action
+ 
+-Present the five concrete Polyorama candidate baselines for explicit acceptance.
+-After approval, replace only accepted baseline files, rerun canonical checks,
++The user accepted the five concrete Polyorama baseline replacements. Apply only
++those accepted files and rerun canonical checks,
+ review and land Polyorama #33, pin Bokkie to the merged revision, repeat final
+ integration and finish Bokkie #19. Preserve both drafts until these gates pass.

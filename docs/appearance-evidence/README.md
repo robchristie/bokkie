@@ -1,8 +1,9 @@
 # Bokkie appearance evidence
 
-These are candidate appearance and interaction captures, not approved replacement
-visual baselines. Historical attention-desk and UI qualification evidence remains
-unchanged. The real Rust application paints every screen through egui/wgpu; the
+These records retain the controlled appearance candidates and completed UI
+integration qualification. The user explicitly approved Polyorama’s exact
+replacement baseline set before its reviewed landing. Historical attention-desk
+and UI qualification evidence remains unchanged. The real Rust application paints every screen through egui/wgpu; the
 harness clicks its current semantic geometry against a disposable `full` fixture.
 
 ## Controlled comparison
@@ -69,11 +70,9 @@ is `a3eb8463eb9459be3376595d6d071f41c3eb4726`; its crate tree is identical to th
 checkout `e17fd7f062da54cab600990b7e1f1e2f1622782c`, which adds only evidence.
 The [final manifest](final/appearance-observations.json) records both owner
 revision/tree pairs, shared crate identity, fixture and painted Wasm hashes.
-The capture used a provisional local owner patch. The draft now resolves the
-same owner crates through published Git revision
-`e17fd7f062da54cab600990b7e1f1e2f1622782c`; its locked UI check passes. The
-final merged owner pin and integration check follow framework baseline acceptance
-and landing.
+This historical capture used a provisional local owner patch. The final consumer
+now pins the reviewed, merged Git owner without a local patch; its completed
+integration check is recorded below.
 
 | Case | Retained rendering and observation |
 | --- | --- |
@@ -141,5 +140,43 @@ limits remain as documented in the attention UI README.
 
 [SHA256SUMS](SHA256SUMS) covers every retained PNG, JSON and source-provenance
 text/patch file. The retained direction is graphite with Inter and the refined
-composition. Baseline approval and final owner-before-consumer landing are
-recorded separately by the owning pull requests.
+composition. Polyorama baseline approval is discharged; the owning pull requests
+record framework landing and consumer delivery.
+
+## Merged-owner integration
+
+The user approved the exact Polyorama baseline replacements, and
+[Polyorama pull request #33](https://github.com/robchristie/polyorama/pull/33)
+landed as `25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f`, with reviewed tree
+`104c2c5b1e225c94dd85fb557fef210b4761be4d`. Bokkie
+`b811edd244a3785681388704b5d85aee0c8693bf` pins that merged Git revision.
+All four resolved Polyorama crates use it; no local Cargo patch remains.
+[Integration source provenance](integration/source-provenance.json) records the
+exact application and harness trees, lockfile, compiled native/Wasm artefacts,
+owner identity and verification results.
+
+`tools/check-ui.sh` passed 49 tests, Clippy with warnings denied, native and Wasm
+builds, and formatting. `tools/qualify-ui.sh` passed both real browser and native
+smokes against the merged owner. The canonical guard reports
+`b811edd244a3785681388704b5d85aee0c8693bf+working-tree` because the main agent
+was updating only `docs/plans/active/visual-identity.md`; the preserved
+[plan diff at start](integration/plan-at-start.patch) and
+[plan diff at finish](integration/plan-at-finish.patch) identify that documentation
+change. Application, harness, manifest and lockfile source matched the committed
+candidate throughout qualification. The dirty marker is preserved unchanged.
+
+[The integration browser record](integration/browser-interactions.json) contains
+all ten passing journeys, zero unexpected browser errors, a quiet warmed idle
+frame count, and 18 materialised rows for the 5,000-obligation fixture.
+[The native record](integration/native-interaction.json) has empty semantic and
+text audits. The [exact gardener confirmation](integration/browser-gardener-confirmation.png)
+and [stale confirmation](integration/browser-stale-confirmation.png) settled in
+three and two probes respectively. Their PNG hashes match the earlier settled
+qualification, including the opaque modal and disabled stale submission.
+
+The owner crate tree remains `f4fd3f6dc2e3387cde2597dfceff392ed90b6000`, identical
+to the source used for the ten-case appearance matrix. The comparison/font/mode
+cohorts above therefore remain relevant; full native and browser integration was
+repeated against the actual merged dependency. Historical candidate evidence is
+preserved separately. This result qualifies the UI integration and does not
+claim deployment, screen-reader certification or native physical-GPU performance.

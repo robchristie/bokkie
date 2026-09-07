@@ -1,0 +1,85 @@
+{
+  "bokkie_source_revision": "b811edd244a3785681388704b5d85aee0c8693bf",
+  "reported_qualification_revision": "b811edd244a3785681388704b5d85aee0c8693bf+working-tree",
+  "application_tree": "40dc9b95b3a098d73bb6cec5048ce0ff2b410a2c",
+  "harness_tree": "9cd8267a43c02af2366d35c23a66328166ff8fe8",
+  "runtime_and_harness_diff": "empty; application, tools, manifests and lockfile match the committed source",
+  "tracked_dirty_scope_during_qualification": [
+    "docs/plans/active/visual-identity.md"
+  ],
+  "plan_diff_at_start": {
+    "path": "plan-at-start.patch",
+    "sha256": "237b9de5a8699d5d09681451fdbecb69bbdc0ca01ded61c42dbbb006eab70c29"
+  },
+  "plan_diff_at_finish": {
+    "path": "plan-at-finish.patch",
+    "sha256": "237b9de5a8699d5d09681451fdbecb69bbdc0ca01ded61c42dbbb006eab70c29"
+  },
+  "dirty_marker_explanation": "The canonical guard retains +working-tree because the main agent was updating only the umbrella plan. No runtime or harness source changed.",
+  "owner": {
+    "revision": "25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f",
+    "tree": "104c2c5b1e225c94dd85fb557fef210b4761be4d",
+    "crates_tree": "f4fd3f6dc2e3387cde2597dfceff392ed90b6000",
+    "prior_qualified_revision": "a3eb8463eb9459be3376595d6d071f41c3eb4726",
+    "prior_qualified_crates_tree": "f4fd3f6dc2e3387cde2597dfceff392ed90b6000",
+    "pull_request": "https://github.com/robchristie/polyorama/pull/33",
+    "baseline_authority": "User explicitly approved the exact replacement baseline set before reviewed landing."
+  },
+  "dependency_resolution": {
+    "local_patch_present": false,
+    "packages": [
+      {
+        "name": "polyorama-core",
+        "source": "git+https://github.com/robchristie/polyorama?rev=25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f#25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f"
+      },
+      {
+        "name": "polyorama-render-wgpu",
+        "source": "git+https://github.com/robchristie/polyorama?rev=25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f#25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f"
+      },
+      {
+        "name": "polyorama-runtime",
+        "source": "git+https://github.com/robchristie/polyorama?rev=25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f#25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f"
+      },
+      {
+        "name": "polyorama-ui-egui",
+        "source": "git+https://github.com/robchristie/polyorama?rev=25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f#25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f"
+      }
+    ]
+  },
+  "artefacts": {
+    "Cargo.lock": "6477b7eb100265ebc253a535959c400e48c6668f4aed1d66fb7f22dcfe223f2e",
+    "apps/bokkie-attention-ui/Cargo.toml": "76e7053f5288b78ac3258b1753d871190a5e0d3eab038ec94ab36197466c7dd3",
+    "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "40021709b141f3775c505f69687ad521491f34d054ef2961eb7f353ba8f218fd",
+    "target/debug/bokkie-attention-ui": "969a6d111834b077830f2f6de1a7843a876e913f74392d0e6baf7f4483a09432",
+    "target/debug/bokkie-ui-fixture": "9e9bc01aab45c637d04f4f170de5d5be11b92ee7c3c5d5f3aeb56b5c8233e07c",
+    "tools/ui-browser-smoke.mjs": "5dd61b3bb5fe7849377f5a6c6cef69ef8b81c15093d281ee329a4e23e0a5a458",
+    "tools/ui-capture-settling.mjs": "788077eb54e1c08b447c036cb48da044e19860a2b916416f18a9af70186bc995",
+    "tools/ui-native-smoke.sh": "0f02f5139aab825b99e701a6654dc2e815a04f3b475bb73ad89dbe68e6688c81"
+  },
+  "checks": {
+    "tools/check-ui.sh": {
+      "result": "passed",
+      "tests": 49,
+      "clippy": "warnings denied",
+      "builds": [
+        "native",
+        "wasm32-unknown-unknown"
+      ],
+      "formatting": "passed"
+    },
+    "tools/qualify-ui.sh": {
+      "result": "passed",
+      "browser_journeys": 10,
+      "browser_errors": [],
+      "native_semantic_audit": [],
+      "native_text_audit": [],
+      "warmed_idle": {
+        "before": "248",
+        "after": "248",
+        "stable": true,
+        "interval_ms": 1000
+      },
+      "large_fixture_materialised_rows": 18
+    }
+  }
+}
