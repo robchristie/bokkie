@@ -69,8 +69,11 @@ is `a3eb8463eb9459be3376595d6d071f41c3eb4726`; its crate tree is identical to th
 checkout `e17fd7f062da54cab600990b7e1f1e2f1622782c`, which adds only evidence.
 The [final manifest](final/appearance-observations.json) records both owner
 revision/tree pairs, shared crate identity, fixture and painted Wasm hashes.
-The local owner patch remains provisional pending framework landing and the
-replacement baseline decision.
+The capture used a provisional local owner patch. The draft now resolves the
+same owner crates through published Git revision
+`e17fd7f062da54cab600990b7e1f1e2f1622782c`; its locked UI check passes. The
+final merged owner pin and integration check follow framework baseline acceptance
+and landing.
 
 | Case | Retained rendering and observation |
 | --- | --- |

@@ -33,7 +33,3 @@ uuid = { version = "1.18.1", features = ["v4"] }
 proptest = "=1.7.0"
 tempfile = "3.21.0"
 tower = "0.5.2"
-
-[patch."https://github.com/robchristie/polyorama"]
-polyorama-core = { path = "/nvme/development/polyorama-worktrees/visual-identity/crates/polyorama-core" }
-polyorama-ui-egui = { path = "/nvme/development/polyorama-worktrees/visual-identity/crates/polyorama-ui-egui" }

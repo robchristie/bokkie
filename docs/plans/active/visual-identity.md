@@ -47,6 +47,9 @@ fade-in; bounded real-frame/pixel settling now retains an opaque dialog. A
 suspected focus clipping issue was withdrawn after independent decoded-pixel
 comparison proved the entire reading surface unchanged. Historical comparison
 captures remain intact; final evidence lives in `docs/appearance-evidence/`.
+The draft uses published owner Git revision `e17fd7f` without a local path patch;
+its locked UI checks pass. Replace this candidate pin with the merged owner
+revision during terminal integration.
 
 Question: can neutral surfaces, independent action/selection roles and quiet
 recipes distinguish Bokkie without changing component interaction contracts?
