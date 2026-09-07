@@ -4,6 +4,7 @@
 - Reorientation budget: 180
 - Owner: Bokkie product/integration; Polyorama components and review conventions
 - Landed pull requests: none
+- Next action: Prove the scoped pilot, then extend rows and evidence.
 
 ## Outcome and design contract
 
@@ -50,10 +51,10 @@ configured for this pair of public repositories.
 
 ## Workspaces and verification
 
-- Bokkie: `/nvme/development/bokkie-worktrees/presentation-context`, branch
+- Bokkie: worktree `presentation-context` in sibling `bokkie-worktrees`, branch
   `codex/presentation-context`, starts at `ab86f27`;
   `tools/check.sh`, `tools/check-ui.sh`, relevant real browser/native journeys.
-- Polyorama: `/nvme/development/polyorama-worktrees/presentation-context`, branch
+- Polyorama: worktree `presentation-context` in sibling `polyorama-worktrees`, branch
   `codex/presentation-context`, starts at
   `25a7eb1184c1fd6b614b3e3b2b23ccb5c458d45f`; `cargo xtask verify`.
 - Generated candidates stay in ignored task runtime directories. Tracked
