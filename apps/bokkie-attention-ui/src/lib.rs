@@ -1,4 +1,6 @@
 mod app;
+mod appearance;
+pub use appearance::Appearance;
 mod model;
 mod transport;
 mod ui_observation;
@@ -41,15 +43,26 @@ impl WebHandle {
     }
 
     pub async fn start(&self, canvas: web_sys::HtmlCanvasElement) -> Result<(), JsValue> {
+        self.start_with_appearance(canvas, "{}").await
+    }
+
+    pub async fn start_with_appearance(
+        &self,
+        canvas: web_sys::HtmlCanvasElement,
+        appearance: &str,
+    ) -> Result<(), JsValue> {
+        let appearance: Appearance = serde_json::from_str(appearance)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
         let observer = self.observer.clone();
         self.runner
             .start(
                 canvas,
                 eframe::WebOptions::default(),
                 Box::new(move |creation| {
-                    Ok(Box::new(AttentionApp::new_observed(
+                    Ok(Box::new(AttentionApp::new_observed_with_appearance(
                         creation,
                         Some(observer),
+                        appearance,
                     )))
                 }),
             )

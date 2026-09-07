@@ -20,15 +20,18 @@ use polyorama_ui_egui::{
     ActionTarget, Availability, DesignTokens, NativeTextControlKind, PanePresenter, SemanticUiId,
     StatusTone, TextInteraction, TextLayoutObservation, TextOverflow, TextRole, TypographyProfile,
     UiNode, UiPreferences, UiRole, action_button, action_semantic_node, application_bar_frame,
-    application_bar_height, apply_design_system_with_typography, measured_content_label,
+    application_bar_height, measured_content_label,
     measured_fixed_slot_label, property_row, record_native_text_control, section_heading,
     status_badge,
 };
+#[cfg(test)]
+use polyorama_ui_egui::apply_design_system_with_typography;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
     APPLICATION_NAME,
+    appearance::Appearance,
     model::{
         AppModel, ChangeAssembly, ChangeProgress, Confirmation, ConnectionState,
         GardenerConfirmation, INBOX_PANE_ID, LifecycleAction, OBLIGATIONS_PANE_ID,
@@ -210,6 +213,7 @@ pub struct AttentionApp {
     sender: Sender<ApiMessage>,
     receiver: Receiver<ApiMessage>,
     preferences: UiPreferences,
+    appearance: Appearance,
     next_poll_at: Option<Instant>,
     deadline_obligations: BTreeSet<String>,
     next_generation: u64,
@@ -233,12 +237,23 @@ impl AttentionApp {
         creation: &eframe::CreationContext<'_>,
         test_observer: Option<Rc<RefCell<TestSnapshot>>>,
     ) -> Self {
-        let preferences = UiPreferences::default();
-        apply_design_system_with_typography(
-            &creation.egui_ctx,
-            preferences,
-            TypographyProfile::Reading,
-        );
+        #[cfg(not(target_arch = "wasm32"))]
+        let appearance = std::env::var("BOKKIE_APPEARANCE")
+            .ok()
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or_default();
+        #[cfg(target_arch = "wasm32")]
+        let appearance = Appearance::default();
+        Self::new_observed_with_appearance(creation, test_observer, appearance)
+    }
+
+    pub(crate) fn new_observed_with_appearance(
+        creation: &eframe::CreationContext<'_>,
+        test_observer: Option<Rc<RefCell<TestSnapshot>>>,
+        appearance: Appearance,
+    ) -> Self {
+        let preferences = appearance.preferences();
+        appearance.apply(&creation.egui_ctx);
         let (sender, receiver) = mpsc::channel();
         #[cfg(not(target_arch = "wasm32"))]
         let base =
@@ -263,6 +278,7 @@ impl AttentionApp {
             sender,
             receiver,
             preferences,
+            appearance,
             next_poll_at: None,
             deadline_obligations: BTreeSet::new(),
             next_generation: 1,
@@ -1003,10 +1019,7 @@ impl eframe::App for AttentionApp {
         let context = root_ui.ctx().clone();
         self.poll_transport(&context);
         self.drive_polling(&context);
-        let tokens = self
-            .preferences
-            .tokens(context.theme() == egui::Theme::Dark)
-            .with_typography_profile(TypographyProfile::Reading);
+        let tokens = self.appearance.tokens(context.theme() == egui::Theme::Dark);
         let mut intents = Vec::new();
         let mut semantic_nodes = vec![root_node(root_ui.max_rect())];
         let mut text_observations = Vec::new();
@@ -3473,6 +3486,7 @@ mod tests {
             sender,
             receiver,
             preferences: UiPreferences::default(),
+            appearance: Appearance::default(),
             next_poll_at: None,
             deadline_obligations: BTreeSet::new(),
             next_generation: 1,
