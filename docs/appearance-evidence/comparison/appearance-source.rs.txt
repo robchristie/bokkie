@@ -1,8 +1,8 @@
 //! Bokkie owns its visual identity; mode, density and typography remain independent.
 use eframe::egui;
 use polyorama_ui_egui::{
-    AppearancePreference, ApplicationGeometry, ApplicationTheme, ColourTokens, ContrastPreference,
-    DesignTokens, REGULAR_FONT_FAMILY, Rgba8, SEMIBOLD_FONT_FAMILY, ThemeColours, ThemeVariant,
+    AppearancePreference, ApplicationTheme, ColourTokens, ContrastPreference, DesignTokens,
+    REGULAR_FONT_FAMILY, Rgba8, SEMIBOLD_FONT_FAMILY, ThemeColours, ThemeVariant,
     TypographyProfile, UiPreferences, apply_design_system_with_theme,
 };
 use serde::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ impl Default for Appearance {
     fn default() -> Self {
         Self {
             identity: Identity::Graphite,
-            typeface: Typeface::Inter,
+            typeface: Typeface::SourceSans,
             light: false,
             high_contrast: false,
             font_scale: 1.0,
@@ -73,14 +73,7 @@ impl Appearance {
             light_high_contrast: palette(self.identity, false, true),
             dark_high_contrast: palette(self.identity, true, true),
         };
-        ApplicationTheme::new(colours)
-            .expect("Bokkie palettes satisfy the shared theme contract")
-            .with_geometry(ApplicationGeometry {
-                application_bar_height: 46.0,
-                control_height: 34.0,
-                control_radius: 6.0,
-            })
-            .expect("Bokkie chrome stays inside the shared geometry bounds")
+        ApplicationTheme::new(colours).expect("Bokkie palettes satisfy the shared theme contract")
     }
 
     pub fn tokens(self, system_dark: bool) -> DesignTokens {
@@ -152,7 +145,7 @@ fn palette(identity: Identity, dark: bool, high: bool) -> ColourTokens {
         c.surface_panel = rgb(if warm { 0xfaf8f4 } else { 0xfafafa });
         c.surface_raised = rgb(0xffffff);
         c.surface_hover = rgb(if warm { 0xe9e4dc } else { 0xe6e6eb });
-        c.selection_background = rgb(if warm { 0xe2dbd0 } else { 0xdddde4 });
+        c.selection_background = rgb(if warm { 0xe2dbd0 } else { 0xddddE4 });
         c.text_primary = rgb(0x242428);
         c.text_muted = rgb(if high { 0x414149 } else { 0x5c5c67 });
         c.border_decorative = rgb(if high { 0x80808a } else { 0xd3d3d9 });
@@ -225,57 +218,6 @@ mod tests {
             let _ = appearance.theme();
         }
     }
-    fn contrast(a: Rgba8, b: Rgba8) -> f64 {
-        let luminance = |colour: Rgba8| {
-            let linear = |channel: u8| {
-                let value = f64::from(channel) / 255.0;
-                if value <= 0.04045 {
-                    value / 12.92
-                } else {
-                    ((value + 0.055) / 1.055).powf(2.4)
-                }
-            };
-            0.2126 * linear(colour.red)
-                + 0.7152 * linear(colour.green)
-                + 0.0722 * linear(colour.blue)
-        };
-        let a = luminance(a);
-        let b = luminance(b);
-        (a.max(b) + 0.05) / (a.min(b) + 0.05)
-    }
-
-    #[test]
-    fn collection_metadata_and_meaningful_control_edges_keep_contrast_in_every_mode() {
-        for identity in [
-            Identity::Graphite,
-            Identity::RestrainedBlue,
-            Identity::WarmLight,
-        ] {
-            for dark in [false, true] {
-                for high in [false, true] {
-                    let c = palette(identity, dark, high);
-                    for background in [
-                        c.surface_canvas,
-                        c.surface_panel,
-                        c.surface_raised,
-                        c.surface_hover,
-                        c.selection_background,
-                        c.action_quiet_hover,
-                    ] {
-                        assert!(
-                            contrast(c.text_muted, background) >= if high { 7.0 } else { 4.5 },
-                            "{identity:?}, dark={dark}, high={high}: muted collection metadata"
-                        );
-                        assert!(
-                            contrast(c.border_control, background) >= 3.0,
-                            "{identity:?}, dark={dark}, high={high}: meaningful control edge"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
     #[test]
     fn shared_style_and_custom_tokens_resolve_identical_app_colours() {
         for light in [false, true] {

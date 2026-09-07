@@ -4,7 +4,7 @@
 - Reorientation budget: 160
 - Owner: Bokkie (product and integration); Polyorama (framework)
 - Landed pull requests: none
-- Next action: Stabilise framework theme API and foreground proof.
+- Next action: Qualify polished graphite/Inter and prepare concrete baseline review.
 
 ## Outcome and boundary
 
@@ -22,12 +22,21 @@ Fixture databases and generated captures are disposable qualification outputs.
 
 ## Current phase
 
-Calibration: first repair the actual painted button foreground, then establish a
-small validated theme contract shared by egui and custom components. Compare
-three appearances with identical fixture, viewport, selection, font and geometry.
-Graphite-neutral is the user's preferred direction. Compare Source Sans 3 and
-Inter only after the colour comparison. Baseline replacement requires explicit
-approval; retain candidate captures separately for review.
+Graphite-neutral with Inter selected for composition refinement after inspecting
+four controlled captures at Bokkie `6794e74ce9aaab24a2e982cfefc37a868ec4ad3a`
+and Polyorama `8f0d92292df67ebbb4e639754a82f7fffb9b24c7`.
+Initial evidence: `docs/appearance-evidence/comparison/`. Source Sans 3 remains
+the fixed font for the three-colour comparison; the fourth capture changes only
+the font. Neutral primary actions remain clear; blue is unnecessary for this
+fixture. Warm light remains a supported alternative. Initial captures also
+exposed a detail background allocation defect being repaired during polish.
+
+Polyorama repair candidate `ab86d64f7805b01d43b70154aa73318a6365d9ca`
+also resolves native weak fills. Framework canonical checks reached strict
+snapshots after passing builds and browser smokes; five visual baselines differ,
+with unchanged semantic/text/metadata evidence on the first checkpoint.
+Replacement baselines remain unapproved. Qualify the final candidate and retain
+reviewable replacement artefacts before requesting that specific approval.
 
 Question: can neutral surfaces, independent action/selection roles and quiet
 recipes distinguish Bokkie without changing component interaction contracts?
@@ -78,5 +87,5 @@ directory; Git worktree registration owns their current absolute paths.
 
 ## Next action
 
-Stabilise the Polyorama theme API and foreground proof, then implement the Bokkie
-appearance comparison against that contract.
+Finish rendered and interaction qualification, independently review the candidates,
+and present concrete baseline differences for approval before owner landing.

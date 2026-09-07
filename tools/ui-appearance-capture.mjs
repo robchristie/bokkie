@@ -167,6 +167,8 @@ function audit(state, label) {
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const source = {
   revision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+  polyorama_revision: process.env.BOKKIE_POLYORAMA_REVISION ?? null,
+  polyorama_tree: process.env.BOKKIE_POLYORAMA_TREE ?? null,
   diff_sha256: digest(execFileSync('git', ['diff', '--binary', 'HEAD'])),
   wasm_sha256: digest(await readFile('apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm')),
   appearance_source_sha256: digest(await readFile('apps/bokkie-attention-ui/src/appearance.rs')),
@@ -193,7 +195,7 @@ try {
   observations.browser = { version: browser.version(), fontconfig_file: process.env.FONTCONFIG_FILE ?? 'system default' };
   const url = await startFixture('full');
   for (const candidate of cases) {
-    const { name, width = 1440, height = 900, selection = 'proposal', ...appearance } = candidate;
+    const { name, width = 1440, height = 900, selection = 'proposal', keyboard_focus = false, confirmation = false, ...appearance } = candidate;
     const page = await browser.newPage({ viewport: { width, height } });
     diagnosticPage = page;
     page.on('pageerror', error => unexpected.push(String(error)));
@@ -208,12 +210,21 @@ try {
     // Move the pointer away: selection colour must not be an incidental hover.
     await page.mouse.move(2, 2);
     await page.waitForTimeout(200);
+    if (keyboard_focus) {
+      await page.keyboard.press('Tab');
+      await page.waitForTimeout(150);
+    }
+    if (confirmation) {
+      await clickAction(page, 'approve_exact_gardener_proposal', 3);
+      await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().interaction.confirmation_action === 'approve_exact_gardener_proposal');
+    }
     state = audit(await snapshot(page), name);
     const focused = state.ui_snapshot.nodes.filter(item => item.focused).map(item => item.id);
+    if (keyboard_focus && !focused.length) throw new Error(`${name}: keyboard focus was not observed`);
     await page.screenshot({ path: join(evidence, `${name}.png`) });
     await writeFile(join(evidence, `${name}.json`), `${json(state)}\n`);
     observations.captures.push({ name, appearance, viewport: { width, height }, selected: state.interaction.selected_obligation,
-      focused, screenshot: `${name}.png`, semantic: `${name}.json`, text_audit: state.ui_snapshot.text_audit,
+      focused, keyboard_focus, confirmation, screenshot: `${name}.png`, semantic: `${name}.json`, text_audit: state.ui_snapshot.text_audit,
       semantic_audit: state.ui_snapshot.semantic_audit, classification: 'real Rust egui/wgpu application; candidate, not an approved replacement baseline' });
     await page.close();
   }
