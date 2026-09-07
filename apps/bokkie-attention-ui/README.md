@@ -79,9 +79,17 @@ never automatically retries a mutation. Every action supplies the token only
 in `X-Bokkie-Mutation-Token`; the Store precondition remains a separate,
 additive concurrent-state check.
 
+Bokkie owns a neutral graphite theme with a recessed collection, a full reading
+surface, a neutral primary action and a persistent selection marker independent
+of keyboard focus. It applies the same validated Polyorama theme to native egui
+controls and custom components, with 46-point application chrome, 34-point
+buttons and 6-point control corners at normal scale. Secondary actions are
+borderless; compact status and activity metadata keep full evidence in disclosure.
+
 The workspace uses Polyorama's reading typography profile: 21-point detail
 headings, 15-point section headings, 14-point reading text and 12.5-point
-secondary metadata at normal scale, with bundled regular and semibold faces.
+secondary metadata at normal scale, with bundled Inter 4.1 regular and semibold faces. The original OFL notice and
+input hashes are retained in [the font record](assets/fonts/README.md).
 Attention rows use two typography-derived lines: a title with quiet timing
 metadata, then the reason for attention. Their height follows font scale and
 density. Search applies to the active collection; the full ledger also offers
@@ -92,6 +100,14 @@ area, with technical provenance in disclosures. Exact decision provenance
 remains in confirmations. Routine scheduling is neutral; actual failures use
 error emphasis. Relevant actions remain visible with an explanation when stale
 data or an in-progress request temporarily prevents a decision.
+
+Appearance comparison, mode/contrast qualification and reproduction options are
+recorded in [the appearance evidence](../../docs/appearance-evidence/README.md).
+Graphite is the default; the bounded `BOKKIE_APPEARANCE` JSON object (native) or
+`appearance` JSON query value (browser) can select `identity` (`graphite`,
+`restrained-blue`, `warm-light`), `typeface` (`inter`, `source-sans`), `light`,
+`high_contrast` and `font_scale` (clamped to 1.0–1.5). These presentation choices
+never change transport or lifecycle behaviour.
 
 The application compositions and their acceptance criteria are documented in
 [the attention desk design](../../docs/attention-desk.md).

@@ -15,12 +15,14 @@ use bokkie_operator_api::{
 };
 use eframe::egui;
 use polyorama_core::{DockNodeId, PaneId, Workspace, virtual_rows};
+#[cfg(test)]
+use polyorama_ui_egui::apply_design_system_with_typography;
 use polyorama_ui_egui::{
     ActionButtonSpec, ActionButtonState, ActionEmphasis, ActionKey, ActionScope, ActionSpec,
-    ActionTarget, Availability, DesignTokens, NativeTextControlKind, PanePresenter, SemanticUiId,
-    StatusTone, TextInteraction, TextLayoutObservation, TextOverflow, TextRole, TypographyProfile,
-    UiNode, UiPreferences, UiRole, action_button, action_semantic_node, application_bar_frame,
-    application_bar_height, apply_design_system_with_typography, measured_content_label,
+    ActionTarget, ApplicationTheme, Availability, DesignTokens, NativeTextControlKind,
+    PanePresenter, SemanticUiId, StatusTone, TextInteraction, TextLayoutObservation, TextOverflow,
+    TextRole, TypographyProfile, UiNode, UiPreferences, UiRole, action_button,
+    action_semantic_node, application_bar_frame, application_bar_height, measured_content_label,
     measured_fixed_slot_label, property_row, record_native_text_control, section_heading,
     status_badge,
 };
@@ -29,6 +31,7 @@ use serde_json::Value;
 
 use crate::{
     APPLICATION_NAME,
+    appearance::Appearance,
     model::{
         AppModel, ChangeAssembly, ChangeProgress, Confirmation, ConnectionState,
         GardenerConfirmation, INBOX_PANE_ID, LifecycleAction, OBLIGATIONS_PANE_ID,
@@ -210,6 +213,7 @@ pub struct AttentionApp {
     sender: Sender<ApiMessage>,
     receiver: Receiver<ApiMessage>,
     preferences: UiPreferences,
+    theme: ApplicationTheme,
     next_poll_at: Option<Instant>,
     deadline_obligations: BTreeSet<String>,
     next_generation: u64,
@@ -233,12 +237,23 @@ impl AttentionApp {
         creation: &eframe::CreationContext<'_>,
         test_observer: Option<Rc<RefCell<TestSnapshot>>>,
     ) -> Self {
-        let preferences = UiPreferences::default();
-        apply_design_system_with_typography(
-            &creation.egui_ctx,
-            preferences,
-            TypographyProfile::Reading,
-        );
+        #[cfg(not(target_arch = "wasm32"))]
+        let appearance = std::env::var("BOKKIE_APPEARANCE")
+            .ok()
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or_default();
+        #[cfg(target_arch = "wasm32")]
+        let appearance = Appearance::default();
+        Self::new_observed_with_appearance(creation, test_observer, appearance)
+    }
+
+    pub(crate) fn new_observed_with_appearance(
+        creation: &eframe::CreationContext<'_>,
+        test_observer: Option<Rc<RefCell<TestSnapshot>>>,
+        appearance: Appearance,
+    ) -> Self {
+        let preferences = appearance.preferences();
+        appearance.apply(&creation.egui_ctx);
         let (sender, receiver) = mpsc::channel();
         #[cfg(not(target_arch = "wasm32"))]
         let base =
@@ -263,6 +278,7 @@ impl AttentionApp {
             sender,
             receiver,
             preferences,
+            theme: appearance.theme(),
             next_poll_at: None,
             deadline_obligations: BTreeSet::new(),
             next_generation: 1,
@@ -1003,10 +1019,12 @@ impl eframe::App for AttentionApp {
         let context = root_ui.ctx().clone();
         self.poll_transport(&context);
         self.drive_polling(&context);
-        let tokens = self
-            .preferences
-            .tokens(context.theme() == egui::Theme::Dark)
-            .with_typography_profile(TypographyProfile::Reading);
+        let tokens = self.theme.resolve(
+            self.preferences
+                .theme_variant(context.theme() == egui::Theme::Dark),
+            self.preferences.density_variant(),
+            TypographyProfile::Reading,
+        );
         let mut intents = Vec::new();
         let mut semantic_nodes = vec![root_node(root_ui.max_rect())];
         let mut text_observations = Vec::new();
@@ -1017,7 +1035,7 @@ impl eframe::App for AttentionApp {
             .show(root_ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.heading("Bokkie");
-                    ui.separator();
+                    ui.add_space(12.0);
                     if ui.max_rect().width() - 32.0 >= NARROW_WORKSPACE_WIDTH {
                         show_collection_tabs(
                             ui,
@@ -1046,7 +1064,7 @@ impl eframe::App for AttentionApp {
                                 target,
                                 availability: availability.clone(),
                                 state: ActionButtonState::Momentary,
-                                emphasis: ActionEmphasis::Quiet,
+                                emphasis: ActionEmphasis::QuietBorderless,
                                 compact: false,
                             },
                             &tokens,
@@ -1063,8 +1081,17 @@ impl eframe::App for AttentionApp {
                         if response.clicked() {
                             intents.push(OperatorIntent::Refresh);
                         }
-                        ui.label(compact_connection_label(&self.model))
-                            .on_hover_text(connection_label(&self.model));
+                        let colour =
+                            if matches!(self.model.connection, ConnectionState::Stale { .. }) {
+                                tokens.colours.status_warning
+                            } else {
+                                tokens.colours.text_muted
+                            };
+                        ui.label(
+                            egui::RichText::new(compact_connection_label(&self.model))
+                                .color(egui::Color32::from(colour)),
+                        )
+                        .on_hover_text(connection_label(&self.model));
                     });
                 });
             });
@@ -1168,7 +1195,12 @@ impl eframe::App for AttentionApp {
                         egui::Frame::NONE
                             .fill(tokens.colours.surface_panel.into())
                             .inner_margin(20.0)
+                            .corner_radius(8.0)
                             .show(ui, |ui| {
+                                ui.set_min_size(
+                                    (detail_rect.size() - egui::vec2(40.0, 40.0))
+                                        .max(egui::Vec2::ZERO),
+                                );
                                 presenter.pane_ui(ui, TIMELINE_PANE_ID, ui.max_rect());
                             });
                     });
@@ -1506,7 +1538,7 @@ fn show_inbox(
                 );
             }
             for obligation in &read.obligations {
-                ui.separator();
+                ui.add_space(tokens.spacing.unit.0);
                 let why = obligation
                     .exception
                     .as_ref()
@@ -1551,12 +1583,7 @@ fn show_inbox(
                             2,
                             &why,
                             obligation_source(obligation),
-                            if exception_text_role(obligation.exception.as_ref()) == TextRole::Error
-                            {
-                                TextRole::Error
-                            } else {
-                                TextRole::Secondary
-                            },
+                            TextRole::Secondary,
                             tokens,
                             font_scale,
                             text,
@@ -1731,7 +1758,7 @@ fn show_timeline(
                 font_scale,
                 text,
             );
-            status_badge(
+            measured_content_label(
                 ui,
                 3_002,
                 &format!(
@@ -1739,7 +1766,14 @@ fn show_timeline(
                     obligation.state.label(),
                     obligation_source(obligation)
                 ),
-                state_tone(obligation),
+                if state_tone(obligation) == StatusTone::Error {
+                    TextRole::Error
+                } else {
+                    TextRole::Secondary
+                },
+                TextOverflow::Wrap,
+                2,
+                TextInteraction::Inert,
                 tokens,
                 font_scale,
                 text,
@@ -1749,7 +1783,7 @@ fn show_timeline(
                     ui,
                     3_003,
                     &exception_label(reason),
-                    exception_text_role(Some(reason)),
+                    TextRole::Body,
                     TextOverflow::Wrap,
                     3,
                     TextInteraction::Selectable,
@@ -2027,7 +2061,7 @@ fn show_detail_actions(
                     ) {
                         ActionEmphasis::Primary
                     } else {
-                        ActionEmphasis::Quiet
+                        ActionEmphasis::QuietBorderless
                     },
                     compact: false,
                 },
@@ -2085,7 +2119,7 @@ fn show_topic_item(
     text: &mut Vec<TextLayoutObservation>,
     semantic_nodes: &mut Vec<UiNode>,
 ) {
-    ui.separator();
+    ui.add_space(tokens.spacing.section.0);
     section_heading(
         ui,
         topic_text_instance(&item.stable_id, 0),
@@ -2098,26 +2132,41 @@ fn show_topic_item(
         font_scale,
         text,
     );
-    property_row(
+    measured_content_label(
         ui,
         topic_text_instance(&item.stable_id, 1),
-        "When",
         &relative_time(item.occurred_at, Some(captured_at)),
+        TextRole::Secondary,
+        TextOverflow::Wrap,
+        2,
+        TextInteraction::Inert,
         tokens,
         font_scale,
         text,
     );
     let fields = common_evidence(&item.evidence);
-    for (field_index, (label, value)) in fields
+    let summary = fields
         .iter()
-        .enumerate()
-        .filter(|(_, (label, _))| evidence_summary(label))
-    {
-        property_row(
+        .filter(|(label, _)| evidence_summary(label))
+        .take(2)
+        .map(|(label, value)| {
+            if *label == "Repository" {
+                value.clone()
+            } else {
+                format!("{label}: {value}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if !summary.is_empty() {
+        measured_fixed_slot_label(
             ui,
-            topic_text_instance(&item.stable_id, 10 + field_index as u64),
-            label,
-            value,
+            topic_text_instance(&item.stable_id, 6),
+            &summary,
+            TextRole::Secondary,
+            TextOverflow::Ellipsis,
+            1,
+            TextInteraction::Inert,
             tokens,
             font_scale,
             text,
@@ -2135,11 +2184,7 @@ fn show_topic_item(
                 font_scale,
                 text,
             );
-            for (field_index, (label, value)) in fields
-                .iter()
-                .enumerate()
-                .filter(|(_, (label, _))| !evidence_summary(label))
-            {
+            for (field_index, (label, value)) in fields.iter().enumerate() {
                 property_row(
                     ui,
                     topic_text_instance(&item.stable_id, 10 + field_index as u64),
@@ -2352,7 +2397,7 @@ fn show_confirmation(
                         target,
                         availability: dismiss_availability.clone(),
                         state: ActionButtonState::Momentary,
-                        emphasis: ActionEmphasis::Quiet,
+                        emphasis: ActionEmphasis::QuietBorderless,
                         compact: false,
                     },
                     tokens,
@@ -2608,14 +2653,29 @@ fn ledger_row(
         disabled_reason: None,
     });
     if selected || response.hovered() {
-        ui.painter()
-            .rect_filled(rect, 0.0, tokens.colours.selection_background);
+        ui.painter().rect_filled(
+            rect,
+            6.0,
+            if selected {
+                tokens.colours.selection_background
+            } else {
+                tokens.colours.surface_hover
+            },
+        );
     }
-    if response.has_focus() {
+    if selected {
+        let marker = egui::Rect::from_min_max(
+            rect.left_top() + egui::vec2(0.0, 8.0),
+            egui::pos2(rect.left() + 3.0, rect.bottom() - 8.0),
+        );
+        ui.painter()
+            .rect_filled(marker, 1.5, tokens.colours.selection_indicator);
+    }
+    if response.has_focus() && keyboard_focus_visible(ui.ctx()) {
         ui.painter().rect_stroke(
             rect,
-            0.0,
-            egui::Stroke::new(1.0, tokens.colours.focus_ring),
+            6.0,
+            egui::Stroke::new(2.0, tokens.colours.focus_ring),
             egui::StrokeKind::Inside,
         );
     }
@@ -2629,6 +2689,38 @@ fn ledger_row(
     child.set_clip_rect(ui.clip_rect().intersect(content_rect));
     content(&mut child);
     response
+}
+
+/// Keep a persistent selection marker independent of the keyboard focus ring.
+fn keyboard_focus_visible(context: &egui::Context) -> bool {
+    let keyboard = context.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(
+                event,
+                egui::Event::Key {
+                    key: egui::Key::Tab
+                        | egui::Key::ArrowUp
+                        | egui::Key::ArrowDown
+                        | egui::Key::ArrowLeft
+                        | egui::Key::ArrowRight,
+                    pressed: true,
+                    ..
+                }
+            )
+        })
+    });
+    let pointer = context.input(|input| input.pointer.any_pressed());
+    context.data_mut(|data| {
+        let visible =
+            data.get_temp_mut_or_default::<bool>(egui::Id::new("bokkie.keyboard-focus-visible"));
+        if keyboard {
+            *visible = true;
+        }
+        if pointer {
+            *visible = false;
+        }
+        *visible
+    })
 }
 
 fn empty_message(
@@ -3473,6 +3565,7 @@ mod tests {
             sender,
             receiver,
             preferences: UiPreferences::default(),
+            theme: Appearance::default().theme(),
             next_poll_at: None,
             deadline_obligations: BTreeSet::new(),
             next_generation: 1,

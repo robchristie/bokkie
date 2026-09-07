@@ -1,0 +1,1718 @@
+{
+  "frame_number": "306",
+  "ui_snapshot": {
+    "frame": "306",
+    "pixels_per_point": 1,
+    "root": "application",
+    "nodes": [
+      {
+        "id": "application",
+        "role": "application",
+        "name": "",
+        "rect": {
+          "min_x": 0,
+          "min_y": 0,
+          "max_x": 1440,
+          "max_y": 900
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "actions": []
+      },
+      {
+        "id": "bokkie.collection.attention",
+        "parent": "application",
+        "role": "section",
+        "name": "Needs attention · 7",
+        "rect": {
+          "min_x": 75.90625,
+          "min_y": 5.5,
+          "max_x": 216.46875,
+          "max_y": 39.5
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "actions": []
+      },
+      {
+        "id": "bokkie.collection.all",
+        "parent": "application",
+        "role": "section",
+        "name": "All obligations",
+        "rect": {
+          "min_x": 223.46875,
+          "min_y": 5.5,
+          "max_x": 334.0625,
+          "max_y": 39.5
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": true,
+        "actions": []
+      },
+      {
+        "id": "action.refresh_operator_state",
+        "parent": "application",
+        "role": "button",
+        "name": "Refresh",
+        "description": "Read a current snapshot and selected obligation topic",
+        "rect": {
+          "min_x": 1367.15625,
+          "min_y": 5.5,
+          "max_x": 1432,
+          "max_y": 39.5
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "actions": [
+          "refresh_operator_state"
+        ]
+      },
+      {
+        "id": "bokkie.application-bar",
+        "parent": "application",
+        "role": "application_bar",
+        "name": "Bokkie Operator",
+        "rect": {
+          "min_x": 0,
+          "min_y": 0,
+          "max_x": 1440,
+          "max_y": 46
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "actions": []
+      },
+      {
+        "id": "pane.2",
+        "parent": "application",
+        "role": "pane",
+        "name": "All obligations",
+        "rect": {
+          "min_x": 16,
+          "min_y": 62,
+          "max_x": 516,
+          "max_y": 884
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-search",
+        "parent": "pane.2",
+        "role": "section",
+        "name": "Search obligations",
+        "rect": {
+          "min_x": 16,
+          "min_y": 62,
+          "max_x": 516,
+          "max_y": 83
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0166",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0166\nledger-0166 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 7.1875,
+          "max_x": 516,
+          "max_y": 61.9375
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0167",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0167\nledger-0167 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 61.9375,
+          "max_x": 516,
+          "max_y": 116.71875
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0168",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0168\nledger-0168 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 116.71875,
+          "max_x": 516,
+          "max_y": 171.5
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0169",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0169\nledger-0169 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 171.5,
+          "max_x": 516,
+          "max_y": 226.28125
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0170",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0170\nledger-0170 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 226.28125,
+          "max_x": 516,
+          "max_y": 281.0625
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0171",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0171\nledger-0171 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 281.0625,
+          "max_x": 516,
+          "max_y": 335.8125
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0172",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0172\nledger-0172 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 335.8125,
+          "max_x": 516,
+          "max_y": 390.59375
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0173",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0173\nledger-0173 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 390.59375,
+          "max_x": 516,
+          "max_y": 445.375
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0174",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0174\nledger-0174 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 445.375,
+          "max_x": 516,
+          "max_y": 500.15625
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0175",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0175\nledger-0175 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 500.15625,
+          "max_x": 516,
+          "max_y": 554.9375
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0176",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0176\nledger-0176 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 554.9375,
+          "max_x": 516,
+          "max_y": 609.6875
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0177",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0177\nledger-0177 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 609.6875,
+          "max_x": 516,
+          "max_y": 664.46875
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0178",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0178\nledger-0178 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 664.46875,
+          "max_x": 516,
+          "max_y": 719.25
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.ledger-0179",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Representative ledger item 0179\nledger-0179 · Pending · occurrence 1 · attempts 0/3\nNext scheduled wake in 3645d\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 719.25,
+          "max_x": 516,
+          "max_y": 774.03125
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.completed-with-long-evidence",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Completed representative work\ncompleted-with-long-evidence · Completed · occurrence 1 · attempts 1/3\nNo further work is scheduled\nOne-off · updated 4d ago\nEvidence: source=cccccccccccccccccccccccccccccccccccccccc input=fixture-input-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx result=pass retained evidence remains selectable Evidence paragraph 000: the deterministic check passed with retained source and input identities. Evidence paragraph 001: the deterministic check passed with retained source and input identities. Evidence paragraph 002: the deterministic check passed with retained source and input identities. Evidence paragraph 003: the deterministic check passed with retained source and input identities. Evidence paragraph 004: the deterministic check passed with retained source and input identities. Evidence paragraph 005: the deterministic check passed with retained source and input identities. Evidence paragraph 006: the deterministic check passed with retained source and input identities. Evidence paragraph 007: the deterministic check passed with retained source and input identities. Evidence paragraph 008: the deterministic check passed with retained source and input identities. Evidence paragraph 009: the deterministic check passed with retained source and input identities. Evidence paragraph 010: the deterministic check passed with retained source and input identities. Evidence paragraph 011: the deterministic check passed with retained source and input identities. Evidence paragraph 012: the deterministic check passed with retained source and input identities. Evidence paragraph 013: the deterministic check passed with retained source and input identities. Evidence paragraph 014: the deterministic check passed with retained source and input identities. Evidence paragraph 015: the deterministic check passed with retained source and input identities. Evidence paragraph 016: the deterministic check passed with retained source and input identities. Evidence paragraph 017: the deterministic check passed with retained source and input identities. Evidence paragraph 018: the deterministic check passed with retained source and input identities. Evidence paragraph 019: the deterministic check passed with retained source and input identities. Evidence paragraph 020: the deterministic check passed with retained source and input identities. Evidence paragraph 021: the deterministic check passed with retained source and input identities. Evidence paragraph 022: the deterministic check passed with retained source and input identities. Evidence paragraph 023: the deterministic check passed with retained source and input identities. Evidence paragraph 024: the deterministic check passed with retained source and input identities. Evidence paragraph 025: the deterministic check passed with retained source and input identities. Evidence paragraph 026: the deterministic check passed with retained source and input identities. Evidence paragraph 027: the deterministic check passed with retained source and input identities. Evidence paragraph 028: the deterministic check passed with retained source and input identities. Evidence paragraph 029: the deterministic check passed with retained source and input identities. Evidence paragraph 030: the deterministic check passed with retained source and input identities. Evidence paragraph 031: the deterministic check passed with retained source and input identities. Evidence paragraph 032: the deterministic check passed with retained source and input identities. Evidence paragraph 033: the deterministic check passed with retained source and input identities. Evidence paragraph 034: the deterministic check passed with retained source and input identities. Evidence paragraph 035: the deterministic check passed with retained source and input identities. Evidence paragraph 036: the deterministic check passed with retained source and input identities. Evidence paragraph 037: the deterministic check passed with retained source and input identities. Evidence paragraph 038: the deterministic check passed with retained source and input identities. Evidence paragraph 039: the deterministic check passed with retained source and input identities. Evidence paragraph 040: the deterministic check passed with retained source and input identities. Evidence paragraph 041: the deterministic check passed with retained source and input identities. Evidence paragraph 042: the deterministic check passed with retained source and input identities. Evidence paragraph 043: the deterministic check passed with retained source and input identities. Evidence paragraph 044: the deterministic check passed with retained source and input identities. Evidence paragraph 045: the deterministic check passed with retained source and input identities. Evidence paragraph 046: the deterministic check passed with retained source and input identities. Evidence paragraph 047: the deterministic check passed with retained source and input identities. Evidence paragraph 048: the deterministic check passed with retained source and input identities. Evidence paragraph 049: the deterministic check passed with retained source and input identities. Evidence paragraph 050: the deterministic check passed with retained source and input identities. Evidence paragraph 051: the deterministic check passed with retained source and input identities. Evidence paragraph 052: the deterministic check passed with retained source and input identities. Evidence paragraph 053: the deterministic check passed with retained source and input identities. Evidence paragraph 054: the deterministic check passed with retained source and input identities. Evidence paragraph 055: the deterministic check passed with retained source and input identities. Evidence paragraph 056: the deterministic check passed with retained source and input identities. Evidence paragraph 057: the deterministic check passed with retained source and input identities. Evidence paragraph 058: the deterministic check passed with retained source and input identities. Evidence paragraph 059: the deterministic check passed with retained source and input identities. Evidence paragraph 060: the deterministic check passed with retained source and input identities. Evidence paragraph 061: the deterministic check passed with retained source and input identities. Evidence paragraph 062: the deterministic check passed with retained source and input identities. Evidence paragraph 063: the deterministic check passed with retained source and input identities. Evidence paragraph 064: the deterministic check passed with retained source and input identities. Evidence paragraph 065: the deterministic check passed with retained source and input identities. Evidence paragraph 066: the deterministic check passed with retained source and input identities. Evidence paragraph 067: the deterministic check passed with retained source and input identities. Evidence paragraph 068: the deterministic check passed with retained source and input identities. Evidence paragraph 069: the deterministic check passed with retained source and input identities. Evidence paragraph 070: the deterministic check passed with retained source and input identities. Evidence paragraph 071: the deterministic check passed with retained source and input identities. Evidence paragraph 072: the deterministic check passed with retained source and input identities. Evidence paragraph 073: the deterministic check passed with retained source and input identities. Evidence paragraph 074: the deterministic check passed with retained source and input identities. Evidence paragraph 075: the deterministic check passed with retained source and input identities. Evidence paragraph 076: the deterministic check passed with retained source and input identities. Evidence paragraph 077: the deterministic check passed with retained source and input identities. Evidence paragraph 078: the deterministic check passed with retained source and input identities. Evidence paragraph 079: the deterministic check passed with retained source and input identities. Evidence paragraph 080: the deterministic check passed with retained source and input identities. Evidence paragraph 081: the deterministic check passed with retained source and input identities. Evidence paragraph 082: the deterministic check passed with retained source and input identities. Evidence paragraph 083: the deterministic check passed with retained source and input identities. Evidence paragraph 084: the deterministic check passed with retained source and input identities. Evidence paragraph 085: the deterministic check passed with retained source and input identities. Evidence paragraph 086: the deterministic check passed with retained source and input identities. Evidence paragraph 087: the deterministic check passed with retained source and input identities. Evidence paragraph 088: the deterministic check passed with retained source and input identities. Evidence paragraph 089: the deterministic check passed with retained source and input identities. Evidence paragraph 090: the deterministic check passed with retained source and input identities. Evidence paragraph 091: the deterministic check passed with retained source and input identities. Evidence paragraph 092: the deterministic check passed with retained source and input identities. Evidence paragraph 093: the deterministic check passed with retained source and input identities. Evidence paragraph 094: the deterministic check passed with retained source and input identities. Evidence paragraph 095: the deterministic check passed with retained source and input identities. Evidence paragraph 096: the deterministic check passed with retained source and input identities. Evidence paragraph 097: the deterministic check passed with retained source and input identities. Evidence paragraph 098: the deterministic check passed with retained source and input identities. Evidence paragraph 099: the deterministic check passed with retained source and input identities. Evidence paragraph 100: the deterministic check passed with retained source and input identities. Evidence paragraph 101: the deterministic check passed with retained source and input identities. Evidence paragraph 102: the deterministic check passed with retained source and input identities. Evidence paragraph 103: the deterministic check passed with retained source and input identities. Evidence paragraph 104: the deterministic check passed with retained source and input identities. Evidence paragraph 105: the deterministic check passed with retained source and input identities. Evidence paragraph 106: the deterministic check passed with retained source and input identities. Evidence paragraph 107: the deterministic check passed with retained source and input identities. Evidence paragraph 108: the deterministic check passed with retained source and input identities. Evidence paragraph 109: the deterministic check passed with retained source and input identities. Evidence paragraph 110: the deterministic check passed with retained source and input identities. Evidence paragraph 111: the deterministic check passed with retained source and input identities. Evidence paragraph 112: the deterministic check passed with retained source and input identities. Evidence paragraph 113: the deterministic check passed with retained source and input identities. Evidence paragraph 114: the deterministic check passed with retained source and input identities. Evidence paragraph 115: the deterministic check passed with retained source and input identities. Evidence paragraph 116: the deterministic check passed with retained source and input identities. Evidence paragraph 117: the deterministic check passed with retained source and input identities. Evidence paragraph 118: the deterministic check passed with retained source and input identities. Evidence paragraph 119: the deterministic check passed with retained source and input identities.  BOKKIE_EVIDENCE_TAIL_7F39",
+        "rect": {
+          "min_x": 16,
+          "min_y": 774.03125,
+          "max_x": 516,
+          "max_y": 828.8125
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": true,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "bokkie.obligation-row.cancelled-representative",
+        "parent": "pane.2",
+        "role": "result_row",
+        "name": "Cancelled representative work\ncancelled-representative · Cancelled · occurrence 1 · attempts 0/3\nNo further work is scheduled\nOne-off · updated 4d ago",
+        "rect": {
+          "min_x": 16,
+          "min_y": 828.8125,
+          "max_x": 516,
+          "max_y": 883.5625
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 2,
+        "actions": []
+      },
+      {
+        "id": "pane.3",
+        "parent": "application",
+        "role": "pane",
+        "name": "Detail",
+        "rect": {
+          "min_x": 560,
+          "min_y": 82,
+          "max_x": 1404,
+          "max_y": 864
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "pane": 3,
+        "actions": []
+      },
+      {
+        "id": "bokkie.raw-evidence.audit:18",
+        "parent": "pane.3",
+        "role": "section",
+        "name": "Raw durable evidence",
+        "rect": {
+          "min_x": 560,
+          "min_y": 412.125,
+          "max_x": 720.28125,
+          "max_y": 446.125
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "expanded": false,
+        "actions": []
+      },
+      {
+        "id": "bokkie.evidence-reader.attempt:5",
+        "parent": "pane.3",
+        "role": "scroll_area",
+        "name": "retained source and input identities. Evidence paragraph 112: the deterministic check passed with \nretained source and input identities. Evidence paragraph 113: the deterministic check passed with \nretained source and input identities. Evidence paragraph 114: the deterministic check passed with \nretained source and input identities. Evidence paragraph 115: the deterministic check passed with \nretained source and input identities. Evidence paragraph 116: the deterministic check passed with \nretained source and input identities. Evidence paragraph 117: the deterministic check passed with \nretained source and input identities. Evidence paragraph 118: the deterministic check passed with \nretained source and input identities. Evidence paragraph 119: the deterministic check passed with \nretained source and input identities.  BOKKIE_EVIDENCE_TAIL_7F39\",\n  \"failure_disposition\": null,\n  \"id\": 5,",
+        "rect": {
+          "min_x": 578,
+          "min_y": 613.75,
+          "max_x": 1404,
+          "max_y": 840.5499877929688
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "actions": [],
+        "text_selectable": true
+      },
+      {
+        "id": "bokkie.raw-evidence.attempt:5",
+        "parent": "pane.3",
+        "role": "section",
+        "name": "Raw durable evidence",
+        "rect": {
+          "min_x": 560,
+          "min_y": 574.75,
+          "max_x": 720.28125,
+          "max_y": 608.75
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "expanded": true,
+        "actions": []
+      }
+    ],
+    "text": [
+      {
+        "component_id": {
+          "kind": "action_button",
+          "instance": "2825315403889173"
+        },
+        "role": "button_label",
+        "horizontal_alignment": "centre",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 1376.15625,
+          "min_y": 5.5,
+          "max_x": 1423,
+          "max_y": 39.5
+        },
+        "painted_rect": {
+          "min_x": 1376.15625,
+          "min_y": 14,
+          "max_x": 1423,
+          "max_y": 31
+        },
+        "clip_rect": {
+          "min_x": 1376.15625,
+          "min_y": 5.5,
+          "max_x": 1423,
+          "max_y": 39.5
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1117162021613532236"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 178.5,
+          "max_x": 509,
+          "max_y": 197.40625
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 178.5,
+          "max_x": 235.90625,
+          "max_y": 197.5
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 178.5,
+          "max_x": 509,
+          "max_y": 197.40625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1117165320148416869"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 202.40625,
+          "max_x": 509,
+          "max_y": 219.28125
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 202.40625,
+          "max_x": 254.90625,
+          "max_y": 219.40625
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 202.40625,
+          "max_x": 509,
+          "max_y": 219.28125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2444036188501726006"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 233.28125,
+          "max_x": 509,
+          "max_y": 252.1875
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 233.28125,
+          "max_x": 235.09375,
+          "max_y": 252.28125
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 233.28125,
+          "max_x": 509,
+          "max_y": 252.1875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2444035088990097795"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 257.1875,
+          "max_x": 509,
+          "max_y": 274.0625
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 257.1875,
+          "max_x": 254.90625,
+          "max_y": 274.1875
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 257.1875,
+          "max_x": 509,
+          "max_y": 274.0625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1793089020887007093"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 288.0625,
+          "max_x": 509,
+          "max_y": 306.96875
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 288.0625,
+          "max_x": 232.15625,
+          "max_y": 307.0625
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 288.0625,
+          "max_x": 509,
+          "max_y": 306.96875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1793085722352122460"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 311.96875,
+          "max_x": 509,
+          "max_y": 328.84375
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 311.96875,
+          "max_x": 254.90625,
+          "max_y": 328.96875
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 311.96875,
+          "max_x": 509,
+          "max_y": 328.8125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "3619561453302594880"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 342.8125,
+          "max_x": 509,
+          "max_y": 361.71875
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 342.8125,
+          "max_x": 235,
+          "max_y": 361.8125
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 342.8125,
+          "max_x": 509,
+          "max_y": 361.71875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "3619564751837479513"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 366.71875,
+          "max_x": 509,
+          "max_y": 383.59375
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 366.71875,
+          "max_x": 254.90625,
+          "max_y": 383.71875
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 366.71875,
+          "max_x": 509,
+          "max_y": 383.59375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2976372439735018983"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 397.59375,
+          "max_x": 509,
+          "max_y": 416.5
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 397.59375,
+          "max_x": 234.875,
+          "max_y": 416.59375
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 397.59375,
+          "max_x": 509,
+          "max_y": 416.5
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2976373539246647194"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 421.5,
+          "max_x": 509,
+          "max_y": 438.375
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 421.5,
+          "max_x": 254.90625,
+          "max_y": 438.5
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 421.5,
+          "max_x": 509,
+          "max_y": 438.375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "313600468616575026"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 452.375,
+          "max_x": 509,
+          "max_y": 471.28125
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 452.375,
+          "max_x": 234.6875,
+          "max_y": 471.375
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 452.375,
+          "max_x": 509,
+          "max_y": 471.28125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "313599369104946815"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 476.28125,
+          "max_x": 509,
+          "max_y": 493.15625
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 476.28125,
+          "max_x": 254.90625,
+          "max_y": 493.28125
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 476.28125,
+          "max_x": 509,
+          "max_y": 493.15625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "4274339319429244017"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 507.15625,
+          "max_x": 509,
+          "max_y": 526.0625
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 507.15625,
+          "max_x": 234.625,
+          "max_y": 526.15625
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 507.15625,
+          "max_x": 509,
+          "max_y": 526.0625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "4274336020894359384"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 531.0625,
+          "max_x": 509,
+          "max_y": 547.9375
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 531.0625,
+          "max_x": 254.90625,
+          "max_y": 548.0625
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 531.0625,
+          "max_x": 509,
+          "max_y": 547.9375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1489266470905854908"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 561.9375,
+          "max_x": 509,
+          "max_y": 580.84375
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 561.9375,
+          "max_x": 234.9375,
+          "max_y": 580.9375
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 561.9375,
+          "max_x": 509,
+          "max_y": 580.84375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1489269769440739541"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 585.84375,
+          "max_x": 509,
+          "max_y": 602.71875
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 585.84375,
+          "max_x": 254.90625,
+          "max_y": 602.84375
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 585.84375,
+          "max_x": 509,
+          "max_y": 602.6875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "953143501625760147"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 616.6875,
+          "max_x": 509,
+          "max_y": 635.59375
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 616.6875,
+          "max_x": 234.65625,
+          "max_y": 635.6875
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 616.6875,
+          "max_x": 509,
+          "max_y": 635.59375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "953144601137388358"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 640.59375,
+          "max_x": 509,
+          "max_y": 657.46875
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 640.59375,
+          "max_x": 254.90625,
+          "max_y": 657.59375
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 640.59375,
+          "max_x": 509,
+          "max_y": 657.46875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1985874090580336910"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 671.46875,
+          "max_x": 509,
+          "max_y": 690.375
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 671.46875,
+          "max_x": 234.9375,
+          "max_y": 690.46875
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 671.46875,
+          "max_x": 509,
+          "max_y": 690.375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1985872991068708699"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 695.375,
+          "max_x": 509,
+          "max_y": 712.25
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 695.375,
+          "max_x": 254.90625,
+          "max_y": 712.375
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 695.375,
+          "max_x": 509,
+          "max_y": 712.25
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1457368537858974157"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 726.25,
+          "max_x": 509,
+          "max_y": 745.15625
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 726.25,
+          "max_x": 235,
+          "max_y": 745.25
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 726.25,
+          "max_x": 509,
+          "max_y": 745.15625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "1457365239324089524"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 750.15625,
+          "max_x": 509,
+          "max_y": 767.03125
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 750.15625,
+          "max_x": 254.90625,
+          "max_y": 767.15625
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 750.15625,
+          "max_x": 509,
+          "max_y": 767.03125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "3419685346214082221"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 781.03125,
+          "max_x": 509,
+          "max_y": 799.9375
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 781.03125,
+          "max_x": 230.875,
+          "max_y": 800.03125
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 781.03125,
+          "max_x": 509,
+          "max_y": 799.9375
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "3419682047679197588"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 804.9375,
+          "max_x": 509,
+          "max_y": 821.8125
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 804.9375,
+          "max_x": 230.59375,
+          "max_y": 821.9375
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 804.9375,
+          "max_x": 509,
+          "max_y": 821.8125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "697160944293060987"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 835.8125,
+          "max_x": 509,
+          "max_y": 854.71875
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 835.8125,
+          "max_x": 224.71875,
+          "max_y": 854.8125
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 835.8125,
+          "max_x": 509,
+          "max_y": 854.71875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "697162043804689198"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23,
+          "min_y": 859.71875,
+          "max_x": 509,
+          "max_y": 876.59375
+        },
+        "painted_rect": {
+          "min_x": 23,
+          "min_y": 859.71875,
+          "max_x": 227.90625,
+          "max_y": 876.71875
+        },
+        "clip_rect": {
+          "min_x": 23,
+          "min_y": 859.71875,
+          "max_x": 509,
+          "max_y": 876.5625
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "3002"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 91,
+          "max_x": 1404,
+          "max_y": 108
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 91,
+          "max_x": 674.78125,
+          "max_y": 108
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 91,
+          "max_x": 1404,
+          "max_y": 108
+        },
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": "3006"
+        },
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 113,
+          "max_x": 1404,
+          "max_y": 136.75
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 115.375,
+          "max_x": 700.5625,
+          "max_y": 134.375
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 113,
+          "max_x": 1404,
+          "max_y": 136.75
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "3004"
+        },
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 141.75,
+          "max_x": 1404,
+          "max_y": 160.75
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 141.75,
+          "max_x": 752.28125,
+          "max_y": 160.75
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 141.75,
+          "max_x": 1404,
+          "max_y": 160.75
+        },
+        "overflow": "wrap",
+        "interaction": "selectable",
+        "declared_max_lines": 3,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "582110727741952337"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 187.75,
+          "max_x": 1404,
+          "max_y": 204.75
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 187.75,
+          "max_x": 735.75,
+          "max_y": 204.75
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 187.75,
+          "max_x": 1404,
+          "max_y": 204.75
+        },
+        "overflow": "wrap",
+        "interaction": "selectable",
+        "declared_max_lines": 3,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": "3040"
+        },
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 259.75,
+          "max_x": 1404,
+          "max_y": 283.5
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 262.125,
+          "max_x": 716.875,
+          "max_y": 281.125
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 259.75,
+          "max_x": 1404,
+          "max_y": 283.5
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": "2501464829057808126"
+        },
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 300.5,
+          "max_x": 1404,
+          "max_y": 324.25
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 302.875,
+          "max_x": 766,
+          "max_y": 321.875
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 300.5,
+          "max_x": 1404,
+          "max_y": 324.25
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2501465928569436337"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 329.25,
+          "max_x": 1404,
+          "max_y": 346.25
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 329.25,
+          "max_x": 601.4375,
+          "max_y": 346.25
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 329.25,
+          "max_x": 1404,
+          "max_y": 346.25
+        },
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "2501467028081064548"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 351.25,
+          "max_x": 1404,
+          "max_y": 368.125
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 351.25,
+          "max_x": 801.90625,
+          "max_y": 368.25
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 351.25,
+          "max_x": 1404,
+          "max_y": 368.125
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": "4351493055730030700"
+        },
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 463.125,
+          "max_x": 1404,
+          "max_y": 486.875
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 465.5,
+          "max_x": 845.65625,
+          "max_y": 484.5
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 463.125,
+          "max_x": 1404,
+          "max_y": 486.875
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "4351494155241658911"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 491.875,
+          "max_x": 1404,
+          "max_y": 508.875
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 491.875,
+          "max_x": 601.4375,
+          "max_y": 508.875
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 491.875,
+          "max_x": 1404,
+          "max_y": 508.875
+        },
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": "4351490856706774278"
+        },
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560,
+          "min_y": 513.875,
+          "max_x": 1404,
+          "max_y": 530.75
+        },
+        "painted_rect": {
+          "min_x": 560,
+          "min_y": 513.875,
+          "max_x": 852.34375,
+          "max_y": 530.875
+        },
+        "clip_rect": {
+          "min_x": 560,
+          "min_y": 513.875,
+          "max_x": 1404,
+          "max_y": 530.75
+        },
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      }
+    ],
+    "text_audit": [],
+    "text_audit_coverage": {
+      "measured_components": "38",
+      "attempted_components": "55",
+      "successful_components": "55",
+      "failed_components": "0",
+      "native_text_controls": "5",
+      "observed_native_controls": "0",
+      "excluded_categories": [
+        "ordinary_egui_labels",
+        "native_combo_box_text",
+        "native_selectable_text"
+      ]
+    },
+    "semantic_audit": []
+  },
+  "virtualisation": {
+    "total_rows": "193",
+    "visible_rows": [
+      "179",
+      "193"
+    ],
+    "materialised_rows": [
+      "175",
+      "193"
+    ]
+  },
+  "interaction": {
+    "selected_obligation": "completed-with-long-evidence",
+    "active_pane": 3,
+    "connection": "current",
+    "status": "Current operator state",
+    "snapshot_busy": false,
+    "topic_busy": false,
+    "action_busy": false
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "browser": {
+    "version": "151.0.7922.34",
+    "fontconfig_file": "/nvme/development/floatingpie/.pixi/envs/default/etc/fonts/fonts.conf"
+  },
+  "journeys": [],
+  "states": {
+    "full": {
+      "fixture": {
+        "address": "127.0.0.1:41399",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-ae0d36f1-3e0b-423e-8369-d4ca105d52fb",
+        "service": {
+          "api_contract_version": 1,
+          "build": "bokkie/0.1.0",
+          "process_id": 2239421,
+          "schema_version": 9,
+          "session_id": "1cdca838-1491-4939-921a-f57718b3dfa8"
+        },
+        "variant": "full"
+      }
+    },
+    "loading": {
+      "nodes": 8,
+      "classification": "direct Rust current-frame state before the first HTTP snapshot completed"
+    }
+  },
+  "viewports": [],
+  "errors": [],
+  "source": {
+    "revision": "6794e74ce9aaab24a2e982cfefc37a868ec4ad3a",
+    "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "wasm_sha256": "85e660935f829aa9f3c52e527c0355cefec4dd1b7a07e46f901f4b8508c1396e",
+    "appearance_source_sha256": "02d9832da75a71ccb8f553b2ebf4de2fb1768dfa505c0487eac57f4415c5ac82",
+    "fixture_binary_sha256": "bbf2d3b66f6b05ea3084747323f398603828f1a568532942c19cdd5c0dc79e47",
+    "inter_regular_sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+    "inter_semibold_sha256": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3"
+  },
+  "captures": [
+    {
+      "name": "graphite-source-sans",
+      "appearance": {
+        "identity": "graphite",
+        "typeface": "source-sans"
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [
+        "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f"
+      ],
+      "screenshot": "graphite-source-sans.png",
+      "semantic": "graphite-source-sans.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "restrained-blue-source-sans",
+      "appearance": {
+        "identity": "restrained-blue",
+        "typeface": "source-sans"
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [
+        "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f"
+      ],
+      "screenshot": "restrained-blue-source-sans.png",
+      "semantic": "restrained-blue-source-sans.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "warm-light-source-sans",
+      "appearance": {
+        "identity": "warm-light",
+        "typeface": "source-sans"
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [
+        "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f"
+      ],
+      "screenshot": "warm-light-source-sans.png",
+      "semantic": "warm-light-source-sans.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    },
+    {
+      "name": "graphite-inter",
+      "appearance": {
+        "identity": "graphite",
+        "typeface": "inter"
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "focused": [
+        "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f"
+      ],
+      "screenshot": "graphite-inter.png",
+      "semantic": "graphite-inter.json",
+      "text_audit": [],
+      "semantic_audit": [],
+      "classification": "real Rust egui/wgpu application; candidate, not an approved replacement baseline"
+    }
+  ]
+}

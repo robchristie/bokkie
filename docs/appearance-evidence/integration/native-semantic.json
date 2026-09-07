@@ -1,0 +1,2020 @@
+{
+  "frame_number": 51,
+  "ui_snapshot": {
+    "frame": 51,
+    "pixels_per_point": 1.0,
+    "root": "application",
+    "nodes": [
+      {
+        "id": "application",
+        "parent": null,
+        "role": "application",
+        "name": "",
+        "description": null,
+        "rect": {
+          "min_x": 0.0,
+          "min_y": 0.0,
+          "max_x": 1280.0,
+          "max_y": 720.0
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.collection.attention",
+        "parent": "application",
+        "role": "section",
+        "name": "Needs attention · 7",
+        "description": null,
+        "rect": {
+          "min_x": 75.90625,
+          "min_y": 5.5,
+          "max_x": 218.46875,
+          "max_y": 39.5
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": true,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.collection.all",
+        "parent": "application",
+        "role": "section",
+        "name": "All obligations",
+        "description": null,
+        "rect": {
+          "min_x": 225.46875,
+          "min_y": 5.5,
+          "max_x": 334.0625,
+          "max_y": 39.5
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "action.refresh_operator_state",
+        "parent": "application",
+        "role": "button",
+        "name": "Refresh",
+        "description": "Read a current snapshot and selected obligation topic",
+        "rect": {
+          "min_x": 1207.1562,
+          "min_y": 5.5,
+          "max_x": 1272.0,
+          "max_y": 39.5
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [
+          "refresh_operator_state"
+        ],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.application-bar",
+        "parent": "application",
+        "role": "application_bar",
+        "name": "Bokkie Operator",
+        "description": null,
+        "rect": {
+          "min_x": 0.0,
+          "min_y": 0.0,
+          "max_x": 1280.0,
+          "max_y": 46.0
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "pane.1",
+        "parent": "application",
+        "role": "pane",
+        "name": "Needs attention",
+        "description": null,
+        "rect": {
+          "min_x": 16.0,
+          "min_y": 62.0,
+          "max_x": 516.0,
+          "max_y": 704.0
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": 1,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.obligation-search",
+        "parent": "pane.1",
+        "role": "section",
+        "name": "Search obligations",
+        "description": null,
+        "rect": {
+          "min_x": 16.0,
+          "min_y": 62.0,
+          "max_x": 516.0,
+          "max_y": 83.0
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.inbox-row.approval-safe-cancel",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Safe temporary approval-bound lifecycle action\nAwaiting your approval\napproval-safe-cancel · occurrence 1 · 4d ago\nSchedule the current occurrence or Move the current occurrence to attention or Permanently cancel this obligation · current",
+        "description": null,
+        "rect": {
+          "min_x": 16.0,
+          "min_y": 104.0,
+          "max_x": 516.0,
+          "max_y": 162.78125
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": true,
+        "checked": null,
+        "expanded": null,
+        "pane": 1,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.inbox-row.gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Implement approved gardener proposal d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f\nReview the proposed code change before implementation\ngardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f · occurrence 1 · 4d ago\nPermanently cancel this obligation or Schedule implementation of this exact immutable proposal or Reject this exact immutable proposal into attention · current",
+        "description": null,
+        "rect": {
+          "min_x": 16.0,
+          "min_y": 171.78125,
+          "max_x": 516.0,
+          "max_y": 230.5625
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": 1,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.inbox-row.attention-exhausted",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Representative attention-exhausted state\nRetry attempts exhausted · Deterministic attention-exhausted failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-exhausted · occurrence 1 · 4d ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "description": null,
+        "rect": {
+          "min_x": 16.0,
+          "min_y": 239.5625,
+          "max_x": 516.0,
+          "max_y": 298.34375
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": 1,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.inbox-row.attention-nonretryable",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Representative attention-nonretryable state\nNon-retryable failure · Deterministic attention-nonretryable failure with long diagnostic eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nattention-nonretryable · occurrence 1 · 4d ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "description": null,
+        "rect": {
+          "min_x": 16.0,
+          "min_y": 307.34375,
+          "max_x": 516.0,
+          "max_y": 366.125
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": 1,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.inbox-row.generic-rejected",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Rejected generic approval with exact actor and note provenance\nRejected by qualification-operator: Deliberately rejected fixture decision\ngeneric-rejected · occurrence 1 · 4d ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "description": null,
+        "rect": {
+          "min_x": 16.0,
+          "min_y": 375.125,
+          "max_x": 516.0,
+          "max_y": 433.90625
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": 1,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.inbox-row.gardener:implement:1bbc0bb203cb1621115c04928b12d00cd11ab4c13586d41e17f7b97e5307c692",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Implement approved gardener proposal 1bbc0bb203cb1621115c04928b12d00cd11ab4c13586d41e17f7b97e5307c692\nBlocking verification: Blocking finding retained against the exact inert head · Blocking finding retained against the exact inert head\ngardener:implement:1bbc0bb203cb1621115c04928b12d00cd11ab4c13586d41e17f7b97e5307c692 · occurrence 1 · 4d ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "description": null,
+        "rect": {
+          "min_x": 16.0,
+          "min_y": 442.90625,
+          "max_x": 516.0,
+          "max_y": 501.6875
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": 1,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.inbox-row.gardener:implement:8235a8df3151bc5053bfc362ff69c6639999e65e95b196c40548d5d4da77673b",
+        "parent": "pane.1",
+        "role": "result_row",
+        "name": "Implement approved gardener proposal 8235a8df3151bc5053bfc362ff69c6639999e65e95b196c40548d5d4da77673b\nInconclusive verification: Inconclusive verification retained against the exact inert head · Inconclusive verification retained against the exact inert head\ngardener:implement:8235a8df3151bc5053bfc362ff69c6639999e65e95b196c40548d5d4da77673b · occurrence 1 · 4d ago\nReopen this obligation for retry or Permanently cancel this obligation · current",
+        "description": null,
+        "rect": {
+          "min_x": 16.0,
+          "min_y": 510.6875,
+          "max_x": 516.0,
+          "max_y": 569.46875
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": 1,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "pane.3",
+        "parent": "application",
+        "role": "pane",
+        "name": "Detail",
+        "description": null,
+        "rect": {
+          "min_x": 560.0,
+          "min_y": 82.0,
+          "max_x": 1244.0,
+          "max_y": 684.0
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": 3,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "action.approve_obligation.pane.3",
+        "parent": "pane.3",
+        "role": "button",
+        "name": "Approve",
+        "description": "Approve the current generic occurrence",
+        "rect": {
+          "min_x": 560.0,
+          "min_y": 211.75,
+          "max_x": 629.25,
+          "max_y": 245.75
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": 3,
+        "domain_reference": {
+          "kind": "pane",
+          "value": 3
+        },
+        "actions": [
+          "approve_obligation"
+        ],
+        "disabled_reason": null
+      },
+      {
+        "id": "action.reject_obligation.pane.3",
+        "parent": "pane.3",
+        "role": "button",
+        "name": "Reject",
+        "description": "Reject the current generic occurrence into attention",
+        "rect": {
+          "min_x": 636.25,
+          "min_y": 211.75,
+          "max_x": 692.0,
+          "max_y": 245.75
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": 3,
+        "domain_reference": {
+          "kind": "pane",
+          "value": 3
+        },
+        "actions": [
+          "reject_obligation"
+        ],
+        "disabled_reason": null
+      },
+      {
+        "id": "action.cancel_obligation.pane.3",
+        "parent": "pane.3",
+        "role": "button",
+        "name": "Cancel",
+        "description": "Cancel eligible non-terminal work",
+        "rect": {
+          "min_x": 699.0,
+          "min_y": 211.75,
+          "max_x": 758.96875,
+          "max_y": 245.75
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": 3,
+        "domain_reference": {
+          "kind": "pane",
+          "value": 3
+        },
+        "actions": [
+          "cancel_obligation"
+        ],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.raw-evidence.audit:2",
+        "parent": "pane.3",
+        "role": "section",
+        "name": "Raw durable evidence",
+        "description": null,
+        "rect": {
+          "min_x": 560.0,
+          "min_y": 453.125,
+          "max_x": 720.28125,
+          "max_y": 487.125
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": false,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      },
+      {
+        "id": "action.confirm_lifecycle_action",
+        "parent": "bokkie.lifecycle-confirmation",
+        "role": "button",
+        "name": "Confirm action",
+        "description": "Submit this deliberately reviewed lifecycle action to Bokkie",
+        "rect": {
+          "min_x": 367.0,
+          "min_y": 398.0,
+          "max_x": 474.5625,
+          "max_y": 432.0
+        },
+        "enabled": true,
+        "focused": true,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [
+          "confirm_lifecycle_action"
+        ],
+        "disabled_reason": null
+      },
+      {
+        "id": "action.dismiss_lifecycle_confirmation",
+        "parent": "bokkie.lifecycle-confirmation",
+        "role": "button",
+        "name": "Keep state unchanged",
+        "description": "Close this confirmation without submitting a lifecycle action",
+        "rect": {
+          "min_x": 481.5625,
+          "min_y": 398.0,
+          "max_x": 635.0,
+          "max_y": 432.0
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [
+          "dismiss_lifecycle_confirmation"
+        ],
+        "disabled_reason": null
+      },
+      {
+        "id": "bokkie.lifecycle-confirmation",
+        "parent": "application",
+        "role": "section",
+        "name": "Confirm lifecycle action",
+        "description": null,
+        "rect": {
+          "min_x": 360.0,
+          "min_y": 282.0,
+          "max_x": 920.0,
+          "max_y": 439.0
+        },
+        "enabled": true,
+        "focused": false,
+        "selected": false,
+        "checked": null,
+        "expanded": null,
+        "pane": null,
+        "domain_reference": null,
+        "actions": [],
+        "disabled_reason": null
+      }
+    ],
+    "text": [
+      {
+        "component_id": {
+          "kind": "action_button",
+          "instance": 2825315403889173
+        },
+        "parent_id": null,
+        "role": "button_label",
+        "horizontal_alignment": "centre",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 1216.1562,
+          "min_y": 5.5,
+          "max_x": 1263.0,
+          "max_y": 39.5
+        },
+        "painted_rect": {
+          "min_x": 1216.1562,
+          "min_y": 14.0,
+          "max_x": 1263.0,
+          "max_y": 31.0
+        },
+        "clip_rect": {
+          "min_x": 1216.1562,
+          "min_y": 5.5,
+          "max_x": 1263.0,
+          "max_y": 39.5
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1687121305791974662
+        },
+        "parent_id": null,
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 111.0,
+          "max_x": 372.0,
+          "max_y": 129.90625
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 111.0,
+          "max_x": 337.6875,
+          "max_y": 130.0
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 111.0,
+          "max_x": 372.0,
+          "max_y": 129.90625
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1687119106768718240
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 111.0,
+          "max_x": 509.0,
+          "max_y": 127.875
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 111.0,
+          "max_x": 420.4375,
+          "max_y": 128.0
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 111.0,
+          "max_x": 509.0,
+          "max_y": 127.875
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1687120206280346451
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 134.90625,
+          "max_x": 372.0,
+          "max_y": 151.78125
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 134.90625,
+          "max_x": 157.71875,
+          "max_y": 151.90625
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 134.90625,
+          "max_x": 372.0,
+          "max_y": 151.78125
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1687126803350115717
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 134.90625,
+          "max_x": 509.0,
+          "max_y": 151.78125
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 134.90625,
+          "max_x": 418.71875,
+          "max_y": 151.90625
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 134.90625,
+          "max_x": 509.0,
+          "max_y": 151.78125
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 571078913282098315
+        },
+        "parent_id": null,
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 178.78125,
+          "max_x": 372.0,
+          "max_y": 197.6875
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 178.78125,
+          "max_x": 227.5,
+          "max_y": 197.78125
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 178.78125,
+          "max_x": 372.0,
+          "max_y": 197.6875
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 571081112305354737
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 178.78125,
+          "max_x": 509.0,
+          "max_y": 195.65625
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 178.78125,
+          "max_x": 420.4375,
+          "max_y": 195.78125
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 178.78125,
+          "max_x": 509.0,
+          "max_y": 195.65625
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 571080012793726526
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 202.6875,
+          "max_x": 372.0,
+          "max_y": 219.5625
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 202.6875,
+          "max_x": 364.125,
+          "max_y": 219.6875
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 202.6875,
+          "max_x": 372.0,
+          "max_y": 219.5625
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 571082211816982948
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 202.6875,
+          "max_x": 509.0,
+          "max_y": 219.5625
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 202.6875,
+          "max_x": 485.71875,
+          "max_y": 219.6875
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 202.6875,
+          "max_x": 509.0,
+          "max_y": 219.5625
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3022254992266596600
+        },
+        "parent_id": null,
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 246.5625,
+          "max_x": 372.0,
+          "max_y": 265.46875
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 246.5625,
+          "max_x": 295.0625,
+          "max_y": 265.5625
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 246.5625,
+          "max_x": 372.0,
+          "max_y": 265.46875
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3022257191289853022
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 246.5625,
+          "max_x": 509.0,
+          "max_y": 263.4375
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 246.5625,
+          "max_x": 420.4375,
+          "max_y": 263.5625
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 246.5625,
+          "max_x": 509.0,
+          "max_y": 263.4375
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3022258290801481233
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 270.46875,
+          "max_x": 372.0,
+          "max_y": 287.34375
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 270.46875,
+          "max_x": 368.8125,
+          "max_y": 287.46875
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 270.46875,
+          "max_x": 372.0,
+          "max_y": 287.34375
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3022260489824737655
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 270.46875,
+          "max_x": 509.0,
+          "max_y": 287.34375
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 270.46875,
+          "max_x": 418.71875,
+          "max_y": 287.46875
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 270.46875,
+          "max_x": 509.0,
+          "max_y": 287.34375
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1284952527056911892
+        },
+        "parent_id": null,
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 314.34375,
+          "max_x": 372.0,
+          "max_y": 333.25
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 314.34375,
+          "max_x": 310.5625,
+          "max_y": 333.34375
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 314.34375,
+          "max_x": 372.0,
+          "max_y": 333.25
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1284954726080168314
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 314.34375,
+          "max_x": 509.0,
+          "max_y": 331.21875
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 314.34375,
+          "max_x": 420.4375,
+          "max_y": 331.34375
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 314.34375,
+          "max_x": 509.0,
+          "max_y": 331.21875
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1284955825591796525
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 338.25,
+          "max_x": 372.0,
+          "max_y": 355.125
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 338.25,
+          "max_x": 369.8125,
+          "max_y": 355.25
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 338.25,
+          "max_x": 372.0,
+          "max_y": 355.125
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1284949228522027259
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 338.25,
+          "max_x": 509.0,
+          "max_y": 355.125
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 338.25,
+          "max_x": 418.71875,
+          "max_y": 355.25
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 338.25,
+          "max_x": 509.0,
+          "max_y": 355.125
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3004179870339876760
+        },
+        "parent_id": null,
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 382.125,
+          "max_x": 372.0,
+          "max_y": 401.03125
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 382.125,
+          "max_x": 370.09375,
+          "max_y": 401.125
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 382.125,
+          "max_x": 372.0,
+          "max_y": 401.03125
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3004182069363133182
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 382.125,
+          "max_x": 509.0,
+          "max_y": 399.0
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 382.125,
+          "max_x": 420.4375,
+          "max_y": 399.125
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 382.125,
+          "max_x": 509.0,
+          "max_y": 399.0
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3004183168874761393
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 406.03125,
+          "max_x": 372.0,
+          "max_y": 422.90625
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 406.03125,
+          "max_x": 370.8125,
+          "max_y": 423.03125
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 406.03125,
+          "max_x": 372.0,
+          "max_y": 422.90625
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3004185367898017815
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 406.03125,
+          "max_x": 509.0,
+          "max_y": 422.90625
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 406.03125,
+          "max_x": 418.71875,
+          "max_y": 423.03125
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 406.03125,
+          "max_x": 509.0,
+          "max_y": 422.90625
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1781311863433446194
+        },
+        "parent_id": null,
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 449.90625,
+          "max_x": 372.0,
+          "max_y": 468.8125
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 449.90625,
+          "max_x": 365.09375,
+          "max_y": 468.90625
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 449.90625,
+          "max_x": 372.0,
+          "max_y": 468.8125
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1781309664410189772
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 449.90625,
+          "max_x": 509.0,
+          "max_y": 466.78125
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 449.90625,
+          "max_x": 420.4375,
+          "max_y": 466.90625
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 449.90625,
+          "max_x": 509.0,
+          "max_y": 466.78125
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1781310763921817983
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 473.8125,
+          "max_x": 372.0,
+          "max_y": 490.6875
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 473.8125,
+          "max_x": 368.8125,
+          "max_y": 490.8125
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 473.8125,
+          "max_x": 372.0,
+          "max_y": 490.6875
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 1781308564898561561
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 473.8125,
+          "max_x": 509.0,
+          "max_y": 490.6875
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 473.8125,
+          "max_x": 478.375,
+          "max_y": 490.8125
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 473.8125,
+          "max_x": 509.0,
+          "max_y": 490.6875
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 810019804420176236
+        },
+        "parent_id": null,
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 517.6875,
+          "max_x": 372.0,
+          "max_y": 536.59375
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 517.6875,
+          "max_x": 364.09375,
+          "max_y": 536.6875
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 517.6875,
+          "max_x": 372.0,
+          "max_y": 536.59375
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 810022003443432658
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 517.6875,
+          "max_x": 509.0,
+          "max_y": 534.5625
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 517.6875,
+          "max_x": 420.4375,
+          "max_y": 534.6875
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 517.6875,
+          "max_x": 509.0,
+          "max_y": 534.5625
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 810023102955060869
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 23.0,
+          "min_y": 541.59375,
+          "max_x": 372.0,
+          "max_y": 558.46875
+        },
+        "painted_rect": {
+          "min_x": 23.0,
+          "min_y": 541.59375,
+          "max_x": 370.8125,
+          "max_y": 558.59375
+        },
+        "clip_rect": {
+          "min_x": 23.0,
+          "min_y": 541.59375,
+          "max_x": 372.0,
+          "max_y": 558.46875
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": true
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 810016505885291603
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 379.0,
+          "min_y": 541.59375,
+          "max_x": 509.0,
+          "max_y": 558.46875
+        },
+        "painted_rect": {
+          "min_x": 379.0,
+          "min_y": 541.59375,
+          "max_x": 478.375,
+          "max_y": 558.59375
+        },
+        "clip_rect": {
+          "min_x": 379.0,
+          "min_y": 541.59375,
+          "max_x": 509.0,
+          "max_y": 558.46875
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3001
+        },
+        "parent_id": null,
+        "role": "application_title",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560.0,
+          "min_y": 82.0,
+          "max_x": 1244.0,
+          "max_y": 108.0
+        },
+        "painted_rect": {
+          "min_x": 560.0,
+          "min_y": 82.0,
+          "max_x": 1043.1875,
+          "max_y": 108.0
+        },
+        "clip_rect": {
+          "min_x": 560.0,
+          "min_y": 82.0,
+          "max_x": 1244.0,
+          "max_y": 108.0
+        },
+        "baseline": null,
+        "overflow": "wrap",
+        "interaction": "selectable",
+        "declared_max_lines": 3,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3002
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560.0,
+          "min_y": 113.0,
+          "max_x": 1244.0,
+          "max_y": 130.0
+        },
+        "painted_rect": {
+          "min_x": 560.0,
+          "min_y": 113.0,
+          "max_x": 715.15625,
+          "max_y": 130.0
+        },
+        "clip_rect": {
+          "min_x": 560.0,
+          "min_y": 113.0,
+          "max_x": 1244.0,
+          "max_y": 130.0
+        },
+        "baseline": null,
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3003
+        },
+        "parent_id": null,
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560.0,
+          "min_y": 135.0,
+          "max_x": 1244.0,
+          "max_y": 154.0
+        },
+        "painted_rect": {
+          "min_x": 560.0,
+          "min_y": 135.0,
+          "max_x": 710.875,
+          "max_y": 154.0
+        },
+        "clip_rect": {
+          "min_x": 560.0,
+          "min_y": 135.0,
+          "max_x": 1244.0,
+          "max_y": 154.0
+        },
+        "baseline": null,
+        "overflow": "wrap",
+        "interaction": "selectable",
+        "declared_max_lines": 3,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": 3006
+        },
+        "parent_id": null,
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560.0,
+          "min_y": 159.0,
+          "max_x": 1244.0,
+          "max_y": 182.75
+        },
+        "painted_rect": {
+          "min_x": 560.0,
+          "min_y": 161.375,
+          "max_x": 700.5625,
+          "max_y": 180.375
+        },
+        "clip_rect": {
+          "min_x": 560.0,
+          "min_y": 159.0,
+          "max_x": 1244.0,
+          "max_y": 182.75
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3004
+        },
+        "parent_id": null,
+        "role": "body",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560.0,
+          "min_y": 187.75,
+          "max_x": 1244.0,
+          "max_y": 206.75
+        },
+        "painted_rect": {
+          "min_x": 560.0,
+          "min_y": 187.75,
+          "max_x": 778.25,
+          "max_y": 206.75
+        },
+        "clip_rect": {
+          "min_x": 560.0,
+          "min_y": 187.75,
+          "max_x": 1244.0,
+          "max_y": 206.75
+        },
+        "baseline": null,
+        "overflow": "wrap",
+        "interaction": "selectable",
+        "declared_max_lines": 3,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "action_button",
+          "instance": 6931487856044241
+        },
+        "parent_id": null,
+        "role": "button_label",
+        "horizontal_alignment": "centre",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 569.0,
+          "min_y": 211.75,
+          "max_x": 620.25,
+          "max_y": 245.75
+        },
+        "painted_rect": {
+          "min_x": 569.125,
+          "min_y": 220.25,
+          "max_x": 620.125,
+          "max_y": 237.25
+        },
+        "clip_rect": {
+          "min_x": 569.0,
+          "min_y": 211.75,
+          "max_x": 620.25,
+          "max_y": 245.75
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "action_button",
+          "instance": 8707845739762533
+        },
+        "parent_id": null,
+        "role": "button_label",
+        "horizontal_alignment": "centre",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 645.25,
+          "min_y": 211.75,
+          "max_x": 683.0,
+          "max_y": 245.75
+        },
+        "painted_rect": {
+          "min_x": 645.25,
+          "min_y": 220.25,
+          "max_x": 683.0,
+          "max_y": 237.25
+        },
+        "clip_rect": {
+          "min_x": 645.25,
+          "min_y": 211.75,
+          "max_x": 683.0,
+          "max_y": 245.75
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "action_button",
+          "instance": 3945057837291156
+        },
+        "parent_id": null,
+        "role": "button_label",
+        "horizontal_alignment": "centre",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 708.0,
+          "min_y": 211.75,
+          "max_x": 749.96875,
+          "max_y": 245.75
+        },
+        "painted_rect": {
+          "min_x": 708.0,
+          "min_y": 220.25,
+          "max_x": 749.96875,
+          "max_y": 237.25
+        },
+        "clip_rect": {
+          "min_x": 708.0,
+          "min_y": 211.75,
+          "max_x": 749.96875,
+          "max_y": 245.75
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": 3040
+        },
+        "parent_id": null,
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560.0,
+          "min_y": 300.75,
+          "max_x": 1244.0,
+          "max_y": 324.5
+        },
+        "painted_rect": {
+          "min_x": 560.0,
+          "min_y": 303.125,
+          "max_x": 716.875,
+          "max_y": 322.125
+        },
+        "clip_rect": {
+          "min_x": 560.0,
+          "min_y": 300.75,
+          "max_x": 1244.0,
+          "max_y": 324.5
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "section_heading",
+          "instance": 3957230077040081407
+        },
+        "parent_id": null,
+        "role": "section_heading",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 560.0,
+          "min_y": 341.5,
+          "max_x": 1244.0,
+          "max_y": 365.25
+        },
+        "painted_rect": {
+          "min_x": 560.0,
+          "min_y": 343.875,
+          "max_x": 744.46875,
+          "max_y": 362.875
+        },
+        "clip_rect": {
+          "min_x": 560.0,
+          "min_y": 341.5,
+          "max_x": 1244.0,
+          "max_y": 365.25
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3957228977528453196
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560.0,
+          "min_y": 370.25,
+          "max_x": 1244.0,
+          "max_y": 387.25
+        },
+        "painted_rect": {
+          "min_x": 560.0,
+          "min_y": 370.25,
+          "max_x": 601.4375,
+          "max_y": 387.25
+        },
+        "clip_rect": {
+          "min_x": 560.0,
+          "min_y": 370.25,
+          "max_x": 1244.0,
+          "max_y": 387.25
+        },
+        "baseline": null,
+        "overflow": "wrap",
+        "interaction": "inert",
+        "declared_max_lines": 2,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "content_label",
+          "instance": 3957227878016824985
+        },
+        "parent_id": null,
+        "role": "secondary",
+        "horizontal_alignment": "start",
+        "vertical_alignment": "top",
+        "allocated_rect": {
+          "min_x": 560.0,
+          "min_y": 392.25,
+          "max_x": 1244.0,
+          "max_y": 409.125
+        },
+        "painted_rect": {
+          "min_x": 560.0,
+          "min_y": 392.25,
+          "max_x": 720.5,
+          "max_y": 409.25
+        },
+        "clip_rect": {
+          "min_x": 560.0,
+          "min_y": 392.25,
+          "max_x": 1244.0,
+          "max_y": 409.125
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "action_button",
+          "instance": 4017127806084545
+        },
+        "parent_id": null,
+        "role": "button_label",
+        "horizontal_alignment": "centre",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 376.0,
+          "min_y": 398.0,
+          "max_x": 465.5625,
+          "max_y": 432.0
+        },
+        "painted_rect": {
+          "min_x": 376.0,
+          "min_y": 406.5,
+          "max_x": 465.5625,
+          "max_y": 423.5
+        },
+        "clip_rect": {
+          "min_x": 376.0,
+          "min_y": 398.0,
+          "max_x": 465.5625,
+          "max_y": 432.0
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      },
+      {
+        "component_id": {
+          "kind": "action_button",
+          "instance": 1812945188460580
+        },
+        "parent_id": null,
+        "role": "button_label",
+        "horizontal_alignment": "centre",
+        "vertical_alignment": "centre",
+        "allocated_rect": {
+          "min_x": 490.5625,
+          "min_y": 398.0,
+          "max_x": 626.0,
+          "max_y": 432.0
+        },
+        "painted_rect": {
+          "min_x": 490.78125,
+          "min_y": 406.5,
+          "max_x": 625.78125,
+          "max_y": 423.5
+        },
+        "clip_rect": {
+          "min_x": 490.5625,
+          "min_y": 398.0,
+          "max_x": 626.0,
+          "max_y": 432.0
+        },
+        "baseline": null,
+        "overflow": "ellipsis",
+        "interaction": "inert",
+        "declared_max_lines": 1,
+        "line_count": 1,
+        "truncated": false
+      }
+    ],
+    "text_audit": [],
+    "text_audit_coverage": {
+      "measured_components": 43,
+      "attempted_components": 43,
+      "successful_components": 43,
+      "failed_components": 0,
+      "native_text_controls": 3,
+      "observed_native_controls": 0,
+      "excluded_categories": [
+        "ordinary_egui_labels",
+        "native_selectable_text"
+      ]
+    },
+    "semantic_audit": []
+  },
+  "virtualisation": {
+    "total_rows": 0,
+    "visible_rows": [
+      0,
+      0
+    ],
+    "materialised_rows": [
+      0,
+      0
+    ]
+  },
+  "interaction": {
+    "selected_obligation": "approval-safe-cancel",
+    "active_pane": 3,
+    "connection": "current",
+    "status": "Current operator state",
+    "snapshot_busy": false,
+    "topic_busy": false,
+    "action_busy": false,
+    "confirmation_action": "cancel_obligation",
+    "confirmation_obligation": "approval-safe-cancel",
+    "confirmation_occurrence": 1,
+    "confirmation_consequence": "Permanently cancel this obligation",
+    "confirmation_fingerprint": null,
+    "confirmation_prompt": null,
+    "confirmation_conflict": null
+  }
+}

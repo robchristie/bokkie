@@ -27,9 +27,13 @@ add product capabilities.
   Deliberate confirmation retains the exact repository, proposal, source,
   occurrence, consequence and backend-issued precondition.
 
-These are Bokkie-owned compositions using the existing Polyorama design
-system. Extract a shared library pattern only after a concrete consumer shows
-which decisions generalise. This change requires no framework or token fork.
+These are Bokkie-owned compositions using Polyorama’s validated application-theme
+contract. Bokkie authors graphite colours, light and high-contrast counterparts,
+Inter typography and bounded chrome geometry; the same resolved theme drives
+native controls and custom components. Decorative separators stay quiet while
+control boundaries, selection markers and keyboard focus retain contrast.
+The [appearance evidence](appearance-evidence/README.md) records the controlled
+colour/font comparison and preserves historical qualification separately.
 
 The composition references are [Linear's inbox](https://linear.app/docs/inbox)
 and [Carbon's data table usage](https://carbondesignsystem.com/components/data-table/usage/).

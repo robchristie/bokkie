@@ -4,6 +4,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { captureSettled } from './ui-capture-settling.mjs';
 
 const root = process.cwd();
 const evidence = resolve(process.env.BOKKIE_UI_EVIDENCE_DIR ?? join(root, 'docs/ui-qualification-evidence'));
@@ -412,13 +413,16 @@ try {
       || !state.interaction.confirmation_consequence) {
     throw new Error('exact gardener confirmation is not physically visible');
   }
-  await page.screenshot({ path: join(evidence, 'browser-gardener-confirmation.png') });
+  const confirmationCapture = await captureSettled(page, snapshot);
+  state = audit(confirmationCapture.state, 'settled gardener confirmation');
+  await writeFile(join(evidence, 'browser-gardener-confirmation.png'), confirmationCapture.png);
   await writeFile(
     join(evidence, 'browser-gardener-confirmation-semantic.json'),
     `${json(state)}\n`,
   );
   observations.journeys.push({
     name: 'exact gardener confirmation',
+    settling: confirmationCapture.settling,
     classification: 'direct physical pointer plus Rust semantic state',
     obligation: state.interaction.confirmation_obligation,
     confirmation_bounds: confirmation.rect,
@@ -531,8 +535,13 @@ try {
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
     .interaction.confirmation_conflict != null, null, { timeout: 15_000 });
   state = audit(await snapshot(page), 'conflict');
+  const staleCapture = await captureSettled(page, snapshot);
+  state = audit(staleCapture.state, 'settled stale confirmation');
+  await writeFile(join(evidence, 'browser-stale-confirmation.png'), staleCapture.png);
+  await writeFile(join(evidence, 'browser-stale-confirmation.json'), `${json(state)}\n`);
   observations.journeys.push({
     name: 'stale confirmation conflict',
+    settling: staleCapture.settling,
     classification: 'direct physical confirmation against externally advanced temporary store state',
     conflict: state.interaction.confirmation_conflict,
     connection: state.interaction.connection,
