@@ -66,8 +66,10 @@ export async function qualifyTaskJourney({
   if (endpoint) {
     const targets = JSON.parse((await execute('lantern', ['targets', '--endpoint', endpoint, '--json'])).stdout);
     const targetList = targets.targets ?? targets.result?.targets ?? [];
-    const target = targetList.find(item => item.url === url);
-    if (!target) throw new Error('Lantern could not identify the fixture page');
+    // This qualification owns one browser page; Lantern reports redacted URL shapes.
+    const pages = targetList.filter(item => item.type === 'page');
+    const target = pages.length === 1 ? pages[0] : null;
+    if (!target) throw new Error('Lantern could not uniquely identify the owned fixture page');
     const shared = ['--endpoint', endpoint, '--target-id', target.id ?? target.target_id, '--json'];
     for (const [name, args] of [
       ['page', ['page']],

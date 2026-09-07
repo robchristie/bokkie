@@ -1598,7 +1598,7 @@ fn show_search(
     let response = ui.add(
         egui::TextEdit::singleline(&mut value)
             .id_salt("obligation-search")
-            .hint_text("Search obligations")
+            .hint_text("Search tasks")
             .desired_width(f32::INFINITY),
     );
     record_native_text_control(&response, NativeTextControlKind::Selectable);
@@ -1608,7 +1608,7 @@ fn show_search(
         UiRole::Section,
         response.rect.into(),
     );
-    node.name = "Search obligations".to_owned();
+    node.name = "Search tasks".to_owned();
     node.focused = response.has_focus();
     nodes.push(node);
     if response.changed() {
