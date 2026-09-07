@@ -3097,6 +3097,137 @@ mod tests {
     use super::*;
 
     #[test]
+    fn physical_search_input_filters_collections_through_repeated_layout() {
+        use eframe::App;
+
+        for pane in [INBOX_PANE_ID, OBLIGATIONS_PANE_ID] {
+            for width in [1440.0, 420.0] {
+                for repeat_layout in [false, true] {
+                    let context = egui::Context::default();
+                    Appearance::default().apply(&context);
+                    let mut app = test_app();
+                    app.collection = pane;
+                    app.workspace.active_pane = pane;
+                    let mut obligations = vec![fixture(1), fixture(2)];
+                    for (index, obligation) in obligations.iter_mut().enumerate() {
+                        obligation.description = if index == 0 {
+                            "Review approval"
+                        } else {
+                            "Investigate nonretryable failure"
+                        }
+                        .to_owned();
+                        obligation.exception = Some(ExceptionReason::ExpiredLease {
+                            token: format!("lease-{index}"),
+                            generation: 1,
+                            expires_at: 99,
+                        });
+                    }
+                    app.model.apply_snapshot(OperatorSnapshot {
+                        captured_at: 100,
+                        service: None,
+                        next_cursor: None,
+                        watermark: 9,
+                        obligations,
+                    });
+                    app.model.selected_obligation = Some(fixture(1).id);
+                    let input = |events| egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    };
+                    let mut frame = eframe::Frame::_new_kittest();
+                    for _ in 0..2 {
+                        context
+                            .run_ui(input(Vec::new()), |ui| app.ui(ui, &mut frame))
+                            .textures_delta
+                            .clear();
+                    }
+                    let search = app
+                        .test_snapshot()
+                        .ui_snapshot
+                        .nodes
+                        .into_iter()
+                        .find(|node| node.id.0 == "bokkie.obligation-search")
+                        .unwrap();
+                    let pos = egui::pos2(
+                        (search.rect.min_x + search.rect.max_x) * 0.5,
+                        (search.rect.min_y + search.rect.max_y) * 0.5,
+                    );
+                    for pressed in [true, false] {
+                        context
+                            .run_ui(
+                                input(vec![
+                                    egui::Event::PointerMoved(pos),
+                                    egui::Event::PointerButton {
+                                        pos,
+                                        button: egui::PointerButton::Primary,
+                                        pressed,
+                                        modifiers: egui::Modifiers::NONE,
+                                    },
+                                ]),
+                                |ui| app.ui(ui, &mut frame),
+                            )
+                            .textures_delta
+                            .clear();
+                    }
+                    assert!(
+                        app.test_snapshot()
+                            .ui_snapshot
+                            .nodes
+                            .iter()
+                            .any(|node| node.id.0 == "bokkie.obligation-search" && node.focused)
+                    );
+                    for character in "nonretryable".chars() {
+                        context
+                            .run_ui(
+                                input(vec![egui::Event::Text(character.to_string())]),
+                                |ui| {
+                                    app.ui(ui, &mut frame);
+                                    if repeat_layout && context.current_pass_index() == 0 {
+                                        context.request_discard(
+                                            "verify search text across repeated layout",
+                                        );
+                                    }
+                                },
+                            )
+                            .textures_delta
+                            .clear();
+                    }
+                    assert_eq!(
+                        app.model.search, "nonretryable",
+                        "pane {pane:?}, width {width}, repeated {repeat_layout}"
+                    );
+                    context
+                        .run_ui(input(Vec::new()), |ui| app.ui(ui, &mut frame))
+                        .textures_delta
+                        .clear();
+                    let snapshot = app.test_snapshot();
+                    let rows = snapshot
+                        .ui_snapshot
+                        .nodes
+                        .iter()
+                        .filter(|node| node.role == UiRole::ResultRow)
+                        .collect::<Vec<_>>();
+                    assert_eq!(rows.len(), 1);
+                    assert!(rows[0].id.0.ends_with(&fixture(2).id));
+                    assert!(
+                        snapshot
+                            .ui_snapshot
+                            .nodes
+                            .iter()
+                            .any(|node| node.id.0 == "bokkie.obligation-search" && node.focused)
+                    );
+                    assert!(snapshot.ui_snapshot.text_audit.is_empty());
+                    assert!(snapshot.ui_snapshot.semantic_audit.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn confirmation_transition_observations_match_each_render_pass() {
         use eframe::App;
 
