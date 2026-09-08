@@ -5181,7 +5181,11 @@ fn latest_approval_is_approved(
 }
 
 fn retry_delay(base: i64, maximum: i64, attempt_number: u32) -> i64 {
-    let exponent = attempt_number.saturating_sub(1).min(62);
+    let exponent = attempt_number.saturating_sub(1);
+    // Valid policies have a positive base, so 2^63 already exceeds any maximum.
+    if exponent >= 63 {
+        return maximum;
+    }
     base.saturating_mul(1_i64 << exponent).min(maximum)
 }
 
@@ -5468,6 +5472,25 @@ mod tests {
     use super::*;
     use crate::migrations::MIGRATIONS;
     use crate::{FakeOutcome, FakeRunner, RetryPolicy, run_one};
+
+    #[test]
+    fn retry_delay_saturates_at_the_i64_boundary() {
+        assert_eq!(retry_delay(1, i64::MAX, 63), 1_i64 << 62);
+        for attempt in [64, 65, 1_000_000, u32::MAX] {
+            assert_eq!(retry_delay(1, i64::MAX, attempt), i64::MAX);
+        }
+        assert_eq!(retry_delay(2, i64::MAX, 63), i64::MAX);
+    }
+
+    #[test]
+    fn retry_delay_preserves_ordinary_capped_backoff() {
+        for (attempt, expected) in [(0, 10), (1, 10), (2, 20), (3, 40), (4, 60)] {
+            assert_eq!(retry_delay(10, 60, attempt), expected);
+        }
+        for attempt in [5, 63, 64, 1_000_000, u32::MAX] {
+            assert_eq!(retry_delay(10, 60, attempt), 60);
+        }
+    }
 
     fn one_off(id: &str, scheduled_at: i64) -> NewObligation {
         NewObligation {
