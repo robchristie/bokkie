@@ -124,10 +124,16 @@ export async function qualifyTaskJourney({
     await page.keyboard.press('ControlOrMeta+A');
     await page.keyboard.type(value, { delay: 15 });
   }
+  await page.setViewportSize({ width: 480, height: 720 });
+  await page.waitForTimeout(250);
+  await capture('browser-task-settings-edit-narrow');
   await reveal('bokkie.task.settings.review');
   await clickId(page, 'bokkie.task.settings.review');
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
     .ui_snapshot.nodes.some(item => item.id === 'bokkie.task.settings.save' && item.enabled));
+  await capture('browser-task-settings-review-narrow');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(250);
   await capture('browser-task-settings-review');
   await reveal('bokkie.task.settings.save');
   await clickId(page, 'bokkie.task.settings.save');
