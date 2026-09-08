@@ -1,6 +1,7 @@
 use std::{
     io::{self, Read},
     net::SocketAddr,
+    os::fd::AsRawFd,
     path::PathBuf,
     process::ExitCode,
     time::Duration,
@@ -168,7 +169,7 @@ enum Command {
         /// Controlled HOME for Codex, Git, gh and candidate-check children.
         #[arg(long, requires = "enable_coding_gardener")]
         gardener_home: Option<PathBuf>,
-        /// Read the optional GitHub mutation token once from standard input, then close it.
+        /// Read the optional GitHub mutation token once, then replace standard input with /dev/null.
         #[arg(long, requires = "enable_coding_gardener")]
         gardener_github_token_stdin: bool,
         /// Narrative Codex profile identity retained in the run manifest when supplied.
@@ -1063,12 +1064,16 @@ fn controlled_executable_path(paths: &[&PathBuf]) -> Result<Vec<PathBuf>, AppErr
 fn read_github_credential_from_stdin() -> Result<GitHubCredential, AppError> {
     let mut token = Vec::new();
     let read_result = io::stdin().take(16 * 1024 + 1).read_to_end(&mut token);
-    // SAFETY: serve mode has explicitly consumed standard input as a one-shot
-    // credential channel. Closing the descriptor before any child starts is
-    // the security boundary; every supervised child receives its own pipe.
-    let close_result = unsafe { libc::close(libc::STDIN_FILENO) };
+    // Replace the one-shot credential channel atomically, keeping descriptor 0
+    // occupied. Otherwise SQLite can open this database as fd 0 and close it
+    // while moving above the standard descriptors, releasing every POSIX lock
+    // this process holds on the database, including other connections' locks.
+    let null_input = std::fs::File::open("/dev/null")?;
+    // SAFETY: dup2 closes the consumed credential descriptor and replaces it
+    // with the valid null input descriptor without leaving an allocation gap.
+    let replace_result = unsafe { libc::dup2(null_input.as_raw_fd(), libc::STDIN_FILENO) };
     read_result.map_err(AppError::Io)?;
-    if close_result != 0 {
+    if replace_result < 0 {
         return Err(AppError::Io(io::Error::last_os_error()));
     }
     if token.len() > 16 * 1024 {
@@ -1156,10 +1161,74 @@ mod tests {
     }
 
     #[test]
+    fn credential_input_preserves_cross_process_database_visibility() {
+        const HELPER: &str = "BOKKIE_CREDENTIAL_DATABASE_HELPER";
+        const TEST: &str = "tests::credential_input_preserves_cross_process_database_visibility";
+        if let Some(role) = std::env::var_os(HELPER) {
+            let path = std::env::var_os("BOKKIE_CREDENTIAL_DATABASE_PATH").unwrap();
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            if role == "reader" {
+                let value: i64 = connection
+                    .query_row("SELECT value FROM probe", [], |row| row.get(0))
+                    .unwrap();
+                let expected: i64 = std::env::var("BOKKIE_CREDENTIAL_DATABASE_EXPECTED")
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert_eq!(value, expected);
+                return;
+            }
+            connection
+                .execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES(1);")
+                .unwrap();
+            let _credential = read_github_credential_from_stdin().unwrap();
+            // Opening another connection must not release the first one's
+            // locks. A separate reader closing then exposes lost WAL locks;
+            // the next committed write must still reach a fresh process.
+            let second = rusqlite::Connection::open(&path).unwrap();
+            second
+                .query_row("SELECT value FROM probe", [], |row| row.get::<_, i64>(0))
+                .unwrap();
+            for expected in [1, 2] {
+                let status = Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", TEST, "--nocapture"])
+                    .env(HELPER, "reader")
+                    .env("BOKKIE_CREDENTIAL_DATABASE_EXPECTED", expected.to_string())
+                    .stdin(Stdio::null())
+                    .status()
+                    .unwrap();
+                assert!(status.success());
+                if expected == 1 {
+                    connection.execute("UPDATE probe SET value=2", []).unwrap();
+                }
+            }
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let token = root.path().join("token");
+        std::fs::write(&token, "test-token\n").unwrap();
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--nocapture"])
+            .env(HELPER, "service")
+            .env(
+                "BOKKIE_CREDENTIAL_DATABASE_PATH",
+                root.path().join("db.sqlite"),
+            )
+            .stdin(File::open(token).unwrap())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
     fn one_shot_credential_input_is_closed_and_unavailable_to_a_child() {
         const HELPER: &str = "BOKKIE_CREDENTIAL_BOUNDARY_HELPER";
         if std::env::var_os(HELPER).is_some() {
             let credential = read_github_credential_from_stdin().unwrap();
+            assert_eq!(
+                std::fs::read_link("/proc/self/fd/0").unwrap(),
+                PathBuf::from("/dev/null")
+            );
             protect_process_credentials().unwrap();
             assert_eq!(format!("{credential:?}"), "GitHubCredential([REDACTED])");
             let sentinel = std::env::var_os("BOKKIE_CREDENTIAL_SENTINEL").unwrap();

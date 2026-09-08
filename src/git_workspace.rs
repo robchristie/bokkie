@@ -1391,6 +1391,11 @@ impl GitWorkspace {
         )?;
         append_optional_cache_mount(
             &mut arguments,
+            &self.environment.home().join(".cargo/git"),
+            Path::new("/home/bokkie/.cargo/git"),
+        )?;
+        append_optional_cache_mount(
+            &mut arguments,
             &self.environment.home().join(".rustup/toolchains"),
             Path::new("/runtime/rustup/toolchains"),
         )?;
@@ -2849,6 +2854,152 @@ mod tests {
         adapter
             .remove_clean_worktree(&worktree, &mut NoopHeartbeat)
             .unwrap();
+    }
+
+    #[test]
+    fn candidate_sandbox_resolves_offline_git_dependencies_with_read_only_cache() {
+        let Some(sandbox_path) = ["/usr/bin/bwrap", "/usr/local/bin/bwrap"]
+            .into_iter()
+            .map(Path::new)
+            .find(|path| path.is_file())
+        else {
+            return;
+        };
+        let fixture = RepositoryFixture::new();
+        let mut adapter = fixture.adapter("unused-gh");
+        adapter.environment = ChildEnvironment::new(
+            fixture.path("home"),
+            fixture.path("config"),
+            fixture.path("cache"),
+            vec![PathBuf::from("/usr/bin"), PathBuf::from("/bin")],
+        )
+        .unwrap();
+        let dependency = fixture.path("dependency");
+        fs::create_dir_all(dependency.join("src")).unwrap();
+        fs::write(
+            dependency.join("Cargo.toml"),
+            "[package]\nname = \"sandbox-dependency\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(dependency.join("src/lib.rs"), "pub fn available() {}\n").unwrap();
+        git(&dependency, ["init", "--initial-branch=main"]);
+        git(&dependency, ["config", "user.name", "Gardener Test"]);
+        git(
+            &dependency,
+            ["config", "user.email", "gardener@example.invalid"],
+        );
+        git(&dependency, ["add", "."]);
+        git(&dependency, ["commit", "-m", "Seed local dependency"]);
+        let directory = CandidateSandboxDirectory::materialise(&fixture.checkout, &[]).unwrap();
+        fs::create_dir(directory.workspace.join("src")).unwrap();
+        fs::write(directory.workspace.join("src/lib.rs"), "").unwrap();
+        fs::write(
+            directory.workspace.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"sandbox-consumer\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\nsandbox-dependency = {{ git = \"file://{}\" }}\n",
+                dependency.display(),
+            ),
+        )
+        .unwrap();
+        // Seed only an authored local repository, without acquiring network data.
+        let cargo = Path::new(env!("CARGO"));
+        let seed = Command::new(cargo)
+            .arg("generate-lockfile")
+            .current_dir(&directory.workspace)
+            .env("CARGO_HOME", adapter.environment.home().join(".cargo"))
+            .env("CARGO_NET_OFFLINE", "false")
+            .output()
+            .unwrap();
+        assert!(
+            seed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&seed.stderr)
+        );
+        let expected_lock = fs::read(directory.workspace.join("Cargo.lock")).unwrap();
+        fs::remove_file(directory.workspace.join("Cargo.lock")).unwrap();
+        fs::remove_dir_all(&dependency).unwrap();
+        let sentinel = adapter.environment.home().join(".cargo/git/sentinel");
+        fs::write(&sentinel, "read only\n").unwrap();
+        fs::write(
+            adapter.environment.home().join(".cargo/credentials.toml"),
+            "secret",
+        )
+        .unwrap();
+        let supervisor = ProcessSupervisor::new(
+            Duration::from_millis(10),
+            ProcessLimits::default(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let resolve = |role, path: &Path| {
+            ExecutableIdentity::resolve(
+                role,
+                path,
+                &["--version"],
+                &adapter.environment,
+                &supervisor,
+                Duration::from_secs(5),
+                &mut NoopHeartbeat,
+            )
+            .unwrap()
+        };
+        let sandbox = resolve(ExecutableRole::CandidateSandbox, sandbox_path);
+        let check = CandidateCheckCommand::sandboxed(
+            sandbox.clone(),
+            resolve(ExecutableRole::CandidateCheck, cargo),
+            ["generate-lockfile", "--offline"],
+        )
+        .unwrap();
+        let output = adapter
+            .sandboxed_check_command(&sandbox, &check, &directory)
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read(directory.workspace.join("Cargo.lock")).unwrap(),
+            expected_lock
+        );
+        // Without the dedicated cache, the same offline resolution must fail.
+        let git_cache = adapter.environment.home().join(".cargo/git");
+        let hidden_cache = fixture.path("hidden-git-cache");
+        fs::rename(&git_cache, &hidden_cache).unwrap();
+        fs::remove_file(directory.workspace.join("Cargo.lock")).unwrap();
+        let output = adapter
+            .sandboxed_check_command(&sandbox, &check, &directory)
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("offline"));
+        fs::rename(hidden_cache, git_cache).unwrap();
+
+        let boundary_check = fixture.path("cache-boundary-check");
+        write_executable(
+            &boundary_check,
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'cache-boundary-check 1'; exit 0; fi\n[ ! -e /home/bokkie/.cargo/credentials.toml ] || exit 21\nif touch /home/bokkie/.cargo/git/new-file 2>/dev/null; then exit 22; fi\nif (printf changed > /home/bokkie/.cargo/git/sentinel) 2>/dev/null; then exit 23; fi\n",
+        );
+        let check = CandidateCheckCommand::sandboxed(
+            sandbox.clone(),
+            resolve(ExecutableRole::CandidateCheck, &boundary_check),
+            ["check"],
+        )
+        .unwrap();
+        let output = adapter
+            .sandboxed_check_command(&sandbox, &check, &directory)
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read_to_string(sentinel).unwrap(), "read only\n");
     }
 
     #[test]

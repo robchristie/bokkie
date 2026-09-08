@@ -79,8 +79,8 @@ homes, or the kernel service. Deliver a short-lived, repository-scoped
 credential only to the gardener worker through host configuration approved by
 the operator. The example has PID 1 open a root-only source as a one-shot
 standard-input descriptor: the worker cannot traverse its backing directory,
-and Bokkie consumes and closes the descriptor and makes itself non-dumpable
-before any child starts. A systemd service-owned credential mount is not used
+and Bokkie consumes the credential, atomically replaces stdin with `/dev/null`,
+and makes itself non-dumpable before any child starts. A systemd service-owned credential mount is not used
 because same-UID descendants could read it by path. The credential must be
 absent from
 inspection, proposal, verification, candidate-check and public-observation
@@ -92,7 +92,11 @@ leave its original process group. Bokkie's supervisor does not continue to a
 later publication operation until the boundary exits. This prevents a hostile
 same-UID Codex survivor from reading a later credential-bearing Git or `gh`
 environment through host procfs. The credential is available only to Git push,
-`gh pr create`, and `gh pr ready` after metadata revalidation. Exact draft/ready
+`gh pr create`, and `gh pr ready` after metadata revalidation. Git HTTPS receives
+a GitHub-scoped HTTP Basic header encoding `x-access-token` and the token as
+the password; `gh` receives `GH_TOKEN`. Neither form is written to Git config
+files or command arguments. Diagnostics redact both the raw token and its
+encoded Basic credential. Exact draft/ready
 state is observed separately
 through a bounded, HTTPS-only public GitHub API request made by the identified
 `curl` binary with configuration disabled and no credential. Revocation,
@@ -120,8 +124,8 @@ copies only entries in the exact Git tree manifest into a private disposable
 directory, excluding Git metadata. It runs the fixed command through the
 startup-identified Bubblewrap executable with new user, mount, PID and network
 namespaces, an empty root, private HOME and `/tmp`, read-only system/toolchain
-and dependency-cache mounts, and no mount for the worker database, credential
-directory, authoritative worktree or daemon processes. The disposable copy is
+and dedicated Cargo registry/Git dependency-cache mounts, and no mount for the
+worker database, credential directory, authoritative worktree or daemon processes. The disposable copy is
 writable only inside that boundary and is removed after each check. No
 candidate may choose executable paths, mounts, credentials, remote names, or
 the promotion state.

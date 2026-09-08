@@ -353,8 +353,8 @@ every Codex turn receives a private PID namespace and private procfs so no
 daemonised model child can survive into publication, and candidate checks run
 in the stronger network-off disposable-tree sandbox described below. The
 optional `--gardener-github-token-stdin` flag reads at most 16 KiB once from
-standard input, closes the descriptor and makes the credential-holding Linux
-process non-dumpable before resolving or spawning a child. Supply it only
+standard input, atomically replaces that input with `/dev/null`, and makes the
+credential-holding Linux process non-dumpable before resolving or spawning a child. Supply it only
 through a one-shot broker or supervisor-opened descriptor whose backing object
 the worker account cannot traverse or read; never redirect it from a
 worker-readable file. Bokkie injects the value only into the Git push, draft PR
@@ -380,6 +380,14 @@ manifest-derived disposable copy through Bubblewrap, with private HOME, mount,
 PID and network namespaces and no worker credential, database, Git metadata or
 authoritative worktree mounted. Verification uses a fresh read-only Codex
 thread in a detached worktree at the independently observed pull-request head.
+
+Provision the dedicated gardener home with the pinned Rust toolchains and the
+complete locked Cargo registry and Git dependency caches before enabling work.
+Candidate checks mount `.cargo/registry`, `.cargo/git`, and `.rustup/toolchains`
+read-only; they cannot download missing dependencies. Cargo can require a
+workspace member’s Git dependency even when checking only the backend package.
+Use a dedicated cache containing only dependencies authorised for this worker.
+
 Unexpected command and file-change approvals receive an explicit cancellation;
 permission escalation receives an empty turn-scoped permission grant. The
 configured sandboxes prevent unplanned writes or network access, and the
@@ -551,7 +559,9 @@ The example has PID 1 open `/etc/bokkie-gardener/github-token` as standard input
 before it drops to the worker account. Configuration management must keep the
 parent directory root-owned mode `0700` and the source root-owned mode `0400`,
 so neither Bokkie nor any descendant can open the backing path. Bokkie consumes
-and closes the descriptor before any child starts. Do not use
+and replaces the credential input with `/dev/null` before any child starts.
+Keeping descriptor zero occupied prevents subsequent SQLite opens from releasing
+existing process-wide database locks. Do not use
 `LoadCredential=` here: its service-owned credential mount remains readable to
 same-UID descendants. Do not put a token in the unit, repository, command line,
 broad service environment, worker-readable file, or kernel service. No real
