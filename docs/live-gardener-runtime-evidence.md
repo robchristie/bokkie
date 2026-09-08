@@ -62,3 +62,21 @@ credential input. Both retained their main-database POSIX locks and WAL while
 API creates/cancels were observed identically by independent CLI reads and CLI
 creates/cancels were observed identically by API reads. The synthetic obligations
 were scheduled in the future; none executed. Both probe services stopped.
+
+## Second attempt: Git authentication
+
+After the runtime repairs, the second implementation produced local candidate
+`195a7491aa2f525e03de18e5c6a309b0fe1b9a36`. Persisted tests, Clippy and formatting
+checks all passed. API and CLI views agreed, and database diagnostics remained
+healthy. The attempt then entered attention when Git could not authenticate its
+push. No remote branch or PR was observed.
+
+The Git mutation environment supplied a Bearer header. GitHub’s HTTPS Git
+authentication uses the token as a password; its
+[checkout implementation](https://github.com/actions/checkout/blob/main/src/git-auth-helper.ts)
+constructs HTTP Basic authentication from `x-access-token:<token>`. The repair
+uses that format without changing credential scope or persistence, and redacts
+the derived credential from diagnostics as well as the original token. Local
+regressions check the effective Git header, process-role confinement and
+redaction. They do not establish live token validity, permissions or a successful
+GitHub publication; a subsequent attempt must establish those observations.

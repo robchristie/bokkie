@@ -16,6 +16,7 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -484,13 +485,25 @@ impl GitHubCredential {
         &self.0
     }
 
+    fn git_basic_credential(&self) -> String {
+        let token = self
+            .0
+            .to_str()
+            .expect("credential construction requires UTF-8");
+        STANDARD.encode(format!("x-access-token:{token}"))
+    }
+
     pub(crate) fn redact_text(&self, value: &str) -> String {
-        value.replace(
-            self.0
-                .to_str()
-                .expect("credential construction requires UTF-8"),
-            "[REDACTED]",
-        )
+        // Redact the derived credential first: a short raw token can also occur
+        // inside its encoding and must not prevent the complete replacement.
+        value
+            .replace(&self.git_basic_credential(), "[REDACTED]")
+            .replace(
+                self.0
+                    .to_str()
+                    .expect("credential construction requires UTF-8"),
+                "[REDACTED]",
+            )
     }
 
     pub(crate) fn redact_bytes(&self, value: &[u8]) -> Vec<u8> {
@@ -667,14 +680,9 @@ fn apply_git_policy(
         ("http.https://github.com/.extraheader", String::new()),
     ];
     if let Some(credential) = credential {
-        let token = credential.expose().to_str().ok_or_else(|| {
-            RuntimeTrustError::InvalidEnvironment(
-                "GitHub credential must be valid UTF-8 for Git HTTP authentication".to_owned(),
-            )
-        })?;
         entries.push((
             "http.https://github.com/.extraheader",
-            format!("Authorization: Bearer {token}"),
+            format!("Authorization: Basic {}", credential.git_basic_credential()),
         ));
     }
     command.env("GIT_CONFIG_COUNT", entries.len().to_string());
@@ -794,6 +802,84 @@ mod tests {
         assert_eq!(identity.invocation_path(), link);
         assert_eq!(identity.version(), "candidate-check 3");
         identity.verify_unchanged().unwrap();
+    }
+
+    #[test]
+    fn git_mutation_uses_basic_authentication_scoped_to_github() {
+        let root = tempfile::tempdir().unwrap();
+        let environment = environment(root.path());
+        let credential = GitHubCredential::new("explicit-token").unwrap();
+        // Independent fixture: base64 of the literal x-access-token:explicit-token.
+        let expected = "Authorization: Basic eC1hY2Nlc3MtdG9rZW46ZXhwbGljaXQtdG9rZW4=";
+        let mut command = Command::new("/bin/git");
+        environment
+            .apply(
+                &mut command,
+                ProcessPolicy::GitHubMutationGit,
+                Some(&credential),
+            )
+            .unwrap();
+        assert!(!command.get_envs().any(|(key, _)| key == "GH_TOKEN"));
+
+        let query = |policy, credential, url| {
+            let mut command = Command::new("/bin/git");
+            command.current_dir(root.path()).args([
+                "config",
+                "--get-urlmatch",
+                "http.extraheader",
+                url,
+            ]);
+            environment.apply(&mut command, policy, credential).unwrap();
+            command.output().unwrap()
+        };
+        let github = query(
+            ProcessPolicy::GitHubMutationGit,
+            Some(&credential),
+            "https://github.com/owner/repository.git",
+        );
+        assert!(github.status.success());
+        assert_eq!(String::from_utf8(github.stdout).unwrap().trim(), expected);
+        for url in [
+            "https://example.com/owner/repository.git",
+            "https://github.com.example.com/owner/repository.git",
+            "http://github.com/owner/repository.git",
+        ] {
+            let other = query(ProcessPolicy::GitHubMutationGit, Some(&credential), url);
+            assert_eq!(other.status.code(), Some(1));
+            assert!(other.stdout.is_empty());
+        }
+        for policy in [
+            ProcessPolicy::GitLocal,
+            ProcessPolicy::GitRemoteRead,
+            ProcessPolicy::Codex,
+            ProcessPolicy::CandidateCheck,
+        ] {
+            let read = query(policy, None, "https://github.com/owner/repository.git");
+            assert!(read.status.success());
+            assert!(String::from_utf8(read.stdout).unwrap().trim().is_empty());
+            assert!(matches!(
+                environment.apply(&mut Command::new("/bin/git"), policy, Some(&credential)),
+                Err(RuntimeTrustError::CredentialScope)
+            ));
+        }
+    }
+
+    #[test]
+    fn credential_redaction_covers_raw_tokens_and_basic_authentication() {
+        let credential = GitHubCredential::new("explicit-token").unwrap();
+        let diagnostic = "token=explicit-token; Authorization: Basic eC1hY2Nlc3MtdG9rZW46ZXhwbGljaXQtdG9rZW4=; encoded=eC1hY2Nlc3MtdG9rZW46ZXhwbGljaXQtdG9rZW4=";
+        let expected = "token=[REDACTED]; Authorization: Basic [REDACTED]; encoded=[REDACTED]";
+        assert_eq!(credential.redact_text(diagnostic), expected);
+        assert_eq!(
+            credential.redact_bytes(diagnostic.as_bytes()),
+            expected.as_bytes()
+        );
+
+        let overlapping = GitHubCredential::new("e").unwrap();
+        assert_eq!(
+            overlapping.redact_text("eC1hY2Nlc3MtdG9rZW46ZQ=="),
+            "[REDACTED]"
+        );
     }
 
     #[test]
