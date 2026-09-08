@@ -4,7 +4,7 @@
 - Owner: Bokkie product, kernel projections and attention UI
 - Reorientation budget: 160
 - Landed pull requests: none
-- Next Action: Integrate the typed task workspace and qualify the fixture journey.
+- Next Action: Independently review and land the qualified task workspace, then reconcile completion.
 
 ## Outcome and scope
 
@@ -45,26 +45,25 @@ notifications, deployment and publication of runtime-produced work are excluded.
 
 ## Current phase
 
-Implementation and calibration. The typed projection uses existing gardener
-bindings; schema v10 adds revisioned guidance and immutable inspection snapshots.
-Backend and UI implementations are being integrated. Question: can the existing list/detail shell
-expose a configured recurring task and its generated work without duplicating
-the kernel or overwhelming the detail? Smallest probe: fixture Garden Bokkie with
-one completed inspection, a pending proposal and verified follow-on work, at
-1440×900 and 480×720. Semantic evidence owner: task UI fixture and qualification
-tools; retain exact source/input identities with task-journey evidence. Exit when
-the relationships and settings are clear in opened images and tested navigation.
+Calibration is complete; the task-centred composition is retained. Schema v10
+adds revisioned guidance and immutable inspection snapshots over existing
+bindings. Canonical backend/UI checks and browser/native qualification pass.
+The 1440×900 and 480×720 task and settings captures were opened and inspected;
+physical input proves configuration save, unchanged proposal approval and
+verified-work navigation. [Task-journey evidence](../../task-journey-evidence/README.md)
+owns source/input identities, the rejected clipping probe and accepted result.
+The qualified implementation is ready for independent review and ordinary CI.
 
 ## Checkpoints
 
 | Increment | Owner | Status | Evidence |
 | --- | --- | --- | --- |
-| Backend task/configuration contract | Domain/store/operator API | mapping | This plan |
-| Task workspace and settings | Attention UI | pending | This plan |
-| Integration and qualification | Bokkie | pending | This plan |
+| Backend task/configuration contract | Domain/store/operator API | locally verified | Task-journey backend check |
+| Task workspace and settings | Attention UI | locally verified | Task-journey UI check |
+| Integration and qualification | Bokkie | passed | Task-journey evidence |
 | Independent review and landing | Owning PR | pending | This plan |
 
 ## Next action
 
-Select the typed task/configuration contract, implement backend persistence and
-projection, then integrate the task workspace against that contract.
+Obtain independent review of the exact candidate, satisfy CI and land the
+implementation. Reconcile the completed plan against its actual landing.
