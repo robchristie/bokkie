@@ -92,7 +92,11 @@ leave its original process group. Bokkie's supervisor does not continue to a
 later publication operation until the boundary exits. This prevents a hostile
 same-UID Codex survivor from reading a later credential-bearing Git or `gh`
 environment through host procfs. The credential is available only to Git push,
-`gh pr create`, and `gh pr ready` after metadata revalidation. Exact draft/ready
+`gh pr create`, and `gh pr ready` after metadata revalidation. Git HTTPS receives
+a GitHub-scoped HTTP Basic header encoding `x-access-token` and the token as
+the password; `gh` receives `GH_TOKEN`. Neither form is written to Git config
+files or command arguments. Diagnostics redact both the raw token and its
+encoded Basic credential. Exact draft/ready
 state is observed separately
 through a bounded, HTTPS-only public GitHub API request made by the identified
 `curl` binary with configuration disabled and no credential. Revocation,
