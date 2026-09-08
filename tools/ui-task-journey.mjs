@@ -36,10 +36,16 @@ export async function qualifyTaskJourney({
 
   async function reveal(id) {
     for (let attempt = 0; attempt < 30; attempt += 1) {
-      if (node(await snapshot(page), id)) return;
-      const point = await pointFor(page, 'pane.3');
+      const state = await snapshot(page);
+      const containerId = id.startsWith('bokkie.task.settings.') && node(state, 'bokkie.task.settings')
+        ? 'bokkie.task.settings' : 'pane.3';
+      const container = node(state, containerId);
+      const target = node(state, id);
+      if (target && container && target.rect.min_y >= container.rect.min_y + 8
+          && target.rect.max_y <= container.rect.max_y - 8) return;
+      const point = await pointFor(page, containerId);
       await page.mouse.move(point.x, point.y);
-      await page.mouse.wheel(0, 260);
+      await page.mouse.wheel(0, target && target.rect.min_y < container.rect.min_y ? -260 : 260);
       await page.waitForTimeout(100);
     }
     throw new Error(`task control did not become visible: ${id}`);
@@ -118,10 +124,12 @@ export async function qualifyTaskJourney({
     await page.keyboard.press('ControlOrMeta+A');
     await page.keyboard.type(value, { delay: 15 });
   }
+  await reveal('bokkie.task.settings.review');
   await clickId(page, 'bokkie.task.settings.review');
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
     .ui_snapshot.nodes.some(item => item.id === 'bokkie.task.settings.save' && item.enabled));
   await capture('browser-task-settings-review');
+  await reveal('bokkie.task.settings.save');
   await clickId(page, 'bokkie.task.settings.save');
   await page.waitForFunction(async ({ parent, instructions }) => {
     const response = await fetch(`/operator/obligations/${encodeURIComponent(parent)}`);

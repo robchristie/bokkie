@@ -23,9 +23,13 @@ fn button(
     enabled: bool,
     presentation: &mut PresentationContext,
 ) -> bool {
-    let (response, ()) = presentation.native(ui, NativeTextControlKind::Button, |ui| {
-        (ui.add_enabled(enabled, egui::Button::new(label)), ())
-    });
+    let (response, ()) = ui
+        .push_id(id, |ui| {
+            presentation.native(ui, NativeTextControlKind::Button, |ui| {
+                (ui.add_enabled(enabled, egui::Button::new(label)), ())
+            })
+        })
+        .inner;
     let mut node = UiNode::container(
         SemanticUiId::new(id),
         Some(
@@ -111,11 +115,11 @@ pub(super) fn show_task_detail(
                 configuration.inspection_cron, configuration.inspection_timezone
             ),
         );
-        presentation.property_row(
+        body(
             ui,
             "task-policy",
-            "Approval policy",
-            &configuration.approval_policy.replace('_', " "),
+            &configuration.approval_policy,
+            presentation,
         );
         presentation.property_row(
             ui,
@@ -545,7 +549,7 @@ pub(super) fn show_settings(
     let unavailable = model.settings_unavailable_reason(draft);
     let window = egui::Window::new(if draft.reviewing { "Review task settings" } else { "Edit inspection guidance" })
         .id(egui::Id::new("bokkie-task-settings")).collapsible(false).resizable(false)
-        .default_width(520.0).max_width((context.content_rect().width() - 32.0).max(240.0))
+        .default_width(520.0).default_height(640.0).max_width((context.content_rect().width() - 32.0).max(240.0))
         .max_height(context.content_rect().height() - 48.0).vscroll(true)
         .show(context, |ui| {
             let mut presentation = PresentationContext::new(ui, *tokens, font_scale,
