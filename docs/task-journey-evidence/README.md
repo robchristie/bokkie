@@ -53,7 +53,15 @@ Decision: retain this task-centred composition. Settings retain window space whe
 switching from editing to review, keeping controls stable. Native qualification
 covers the established operator journey; the new settings mutation is physically
 qualified in the browser and deterministically tested in the shared UI model.
-Exact final review, CI and squash identities belong to the owning pull request.
+Implementation landed in [PR #21](https://github.com/robchristie/bokkie/pull/21)
+as `dbe51f39ffaea654cfd17c623f328d5c11e72a74`. Independent review passed at
+`2ae4536938701a1b8984664ed7d7ea696e6f9c93`; the reviewed and landed tree is
+`c568c21632d5ba23d6fa7ce2babc7069187823c4`. All three required jobs in
+[candidate CI](https://github.com/robchristie/bokkie/actions/runs/34172202361)
+passed. A second complete browser/native qualification at that exact reviewed
+head passed with 11 browser journeys and no unexpected errors. PR #21 retains
+the review and final landing record; the [completed plan](../plans/completed/task-centred-gardener.md)
+records the delivered scope and boundaries.
 
 ## Evidence limits
 
