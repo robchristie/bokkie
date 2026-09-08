@@ -1,11 +1,12 @@
 # Repair the first live gardener runtime
 
-- Status: active
-- Reorientation budget: 100
-- Landed pull requests: none
-- Next action: verify descriptor and offline-cache repairs, then review and land one candidate.
+- Status: complete
+- Delivery state: acceptance-complete
+- Acceptance state: passed
+- Acceptance evidence: [Runtime calibration and regressions](../../live-gardener-runtime-evidence.md)
+- Landing evidence: https://github.com/robchristie/bokkie/pull/24
 
-## Current phase
+## Outcome
 
 The first live inspection and UI approval succeeded. Implementation created
 candidate `880eb9e53978520ac44994505cd1c2cbe69c41b9` from
@@ -20,20 +21,20 @@ Operational evidence remains in the operator's private cycle state directory.
 
 ## Bounded repair
 
-- Consume the one-shot credential without leaving descriptor zero available
+- Consumed the one-shot credential without leaving descriptor zero available
   for SQLite; preserve credential confinement and non-dumpability.
-- Expose only the dedicated Cargo Git cache read-only to candidate checks,
+- Exposed only the dedicated Cargo Git cache read-only to candidate checks,
   alongside the existing registry cache. Keep checks offline and isolated.
-- Retain deterministic regressions and real sandbox/paired service probes.
-- Document required offline cache provisioning and the descriptor invariant.
+- Retained deterministic regressions and real sandbox/paired service probes.
+- Documented required offline cache provisioning and the descriptor invariant.
 
 ## Acceptance
 
-- Credential-bearing startup preserves cross-process SQLite visibility.
-- Existing credential isolation checks continue to pass.
-- A cached Git dependency resolves in the network-off candidate sandbox,
+- [x] Credential-bearing startup preserves cross-process SQLite visibility.
+- [x] Existing credential isolation checks continue to pass.
+- [x] A cached Git dependency resolves in the network-off candidate sandbox,
   and the cache remains read-only.
-- Canonical backend checks pass; independently review and land the repair.
+- [x] Canonical backend checks passed (`tools/check.sh`).
 
 The original retry-delay proposal remains approved. Its later rerun is a
 continuation of the operator cycle, not evidence that these repairs have

@@ -52,3 +52,13 @@ and that Cargo credentials remain outside the sandbox.
 These regressions qualify the two runtime repairs. They do not claim that the
 original live candidate passed checks, was published, or was independently
 verified. A subsequent live attempt must retain its own evidence.
+
+Canonical validation: `tools/check.sh` passed on the integrated repair, including
+governance, locked backend tests, Clippy and formatting. The dedicated Git cache
+was provisioned for the operator’s next attempt using locked dependency fetch.
+
+A paired probe of the rebuilt service also passed with and without synthetic
+credential input. Both retained their main-database POSIX locks and WAL while
+API creates/cancels were observed identically by independent CLI reads and CLI
+creates/cancels were observed identically by API reads. The synthetic obligations
+were scheduled in the future; none executed. Both probe services stopped.
