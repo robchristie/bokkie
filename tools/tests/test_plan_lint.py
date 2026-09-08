@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -23,6 +24,57 @@ class PlanLintTests(unittest.TestCase):
 
     def test_valid_completed_plan(self) -> None:
         self.assertEqual(self.messages("valid-completed.md", "completed"), [])
+
+    def test_acceptance_complete_needs_no_future_merge_identity(self) -> None:
+        self.assertEqual(self.messages("valid-acceptance-complete.md", "completed"), [])
+
+    def test_acceptance_complete_requires_acceptance_and_owning_pr(self) -> None:
+        candidate = (FIXTURES / "valid-acceptance-complete.md").read_text()
+        mutations = (
+            ("- Acceptance state: passed", "", "Acceptance State"),
+            ("- Acceptance state: passed", "- Acceptance state: pending", "passed acceptance"),
+            ("- Acceptance evidence: [Verification results](../../evidence/README.md)", "", "Acceptance Evidence"),
+            ("[Verification results](../../evidence/README.md)", "checks passed", "must link"),
+            ("- Landing evidence: https://github.com/robchristie/bokkie/pull/23", "", "Landing Evidence"),
+            ("https://github.com/robchristie/bokkie/pull/23", "this PR", "owning Bokkie"),
+            ("https://github.com/robchristie/bokkie/pull/23", "https://github.com/other/repo/pull/23", "owning Bokkie"),
+            ("acceptance-complete", "complete", "delivery state"),
+            ("- Acceptance state: passed", "- Acceptance state: passed\n- Acceptance state: passed", "duplicate lifecycle"),
+        )
+        for original, replacement, expected in mutations:
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "candidate.md"
+                path.write_text(candidate.replace(original, replacement))
+                messages = [problem.message for problem in PLAN_LINT.lint_plan(path, "completed")]
+                self.assertTrue(any(expected in message for message in messages), messages)
+
+    def test_acceptance_complete_preserves_unfinished_work_guards(self) -> None:
+        candidate = (FIXTURES / "valid-acceptance-complete.md").read_text()
+        mutations = (
+            ("- [x]", "- [ ]", "terminal plan items"),
+            ("- [x]", "- [~]", "terminal plan items"),
+            ("## Acceptance", "## Current phase", "active phase"),
+            ("## Acceptance", "## Next action", "active phase"),
+            ("Required product behaviour verified.", "Product checks still need to pass.", "as pending"),
+            ("Required product behaviour verified.", "Review is pending.", "as pending"),
+            ("Required product behaviour verified.", "Worktree: /tmp/worktrees/current", "worktree"),
+        )
+        for original, replacement, expected in mutations:
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "candidate.md"
+                path.write_text(candidate.replace(original, replacement))
+                messages = [problem.message for problem in PLAN_LINT.lint_plan(path, "completed")]
+                self.assertTrue(any(expected in message for message in messages), messages)
+
+    def test_acceptance_complete_cannot_claim_future_delivery_facts(self) -> None:
+        candidate = (FIXTURES / "valid-acceptance-complete.md").read_text()
+        for field in ("Review state: passed", "CI state: passed", "Merge state: landed",
+                      "Landed commit: " + "a" * 40, "Landed date: 2026-09-08"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "candidate.md"
+                path.write_text(candidate + "\n- " + field + "\n")
+                messages = [problem.message for problem in PLAN_LINT.lint_plan(path, "completed")]
+                self.assertTrue(any("in PR landing evidence" in message for message in messages), messages)
 
     def test_valid_active_plan(self) -> None:
         self.assertEqual(self.messages("valid-active.md", "active"), [])
