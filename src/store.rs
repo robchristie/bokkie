@@ -5,7 +5,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use bokkie_operator_api::ActionPrecondition;
+use bokkie_operator_api::{
+    ActionPrecondition, GardenerTaskConfiguration, InstructionMode, TaskConfigurationUpdate,
+};
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Row, Transaction, TransactionBehavior, params,
     types::Type,
@@ -514,6 +516,10 @@ impl Store {
                 now
             ],
         )?;
+        transaction.execute(
+            "INSERT INTO gardener_task_settings(obligation_id) VALUES (?1)",
+            [&obligation_id],
+        )?;
         append_gardener_event(
             &transaction,
             CANONICAL_REPOSITORY,
@@ -533,6 +539,74 @@ impl Store {
         repository_registration(&self.connection, CANONICAL_REPOSITORY)
     }
 
+    pub fn gardener_task_configuration(
+        &self,
+        obligation_id: &str,
+    ) -> Result<GardenerTaskConfiguration, StoreError> {
+        task_configuration(&self.connection, obligation_id)
+    }
+
+    /// Updates guidance and its audit evidence atomically, without lifecycle transitions.
+    pub fn update_gardener_task_configuration(
+        &mut self,
+        obligation_id: &str,
+        update: &TaskConfigurationUpdate,
+        now: i64,
+    ) -> Result<GardenerTaskConfiguration, StoreError> {
+        validate_bounded_text(
+            "task instructions",
+            &update.instructions,
+            MAX_GARDENER_PROMPT_CHARS,
+            true,
+        )?;
+        validate_bounded_text(
+            "configuration actor",
+            &update.actor,
+            MAX_APPROVAL_ACTOR_CHARS,
+            false,
+        )?;
+        if let Some(note) = &update.note {
+            validate_bounded_text("configuration note", note, MAX_APPROVAL_NOTE_CHARS, true)?;
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let obligation = require_obligation(&transaction, obligation_id)?;
+        require_gardener_kind(&transaction, obligation_id, "inspection")?;
+        let previous = task_configuration(&transaction, obligation_id)?;
+        if previous.revision != update.expected_revision {
+            return Err(StoreError::Conflict(
+                "task configuration revision is stale".to_owned(),
+            ));
+        }
+        if obligation.state == ObligationState::Running {
+            return Err(StoreError::Conflict(
+                "running claim owns the inspection task".to_owned(),
+            ));
+        }
+        let mode = match update.instruction_mode {
+            InstructionMode::Extend => "extend",
+            InstructionMode::Replace => "replace",
+        };
+        transaction.execute(
+            "UPDATE gardener_task_settings SET revision = revision + 1, instruction_mode = ?2, instructions = ?3 WHERE obligation_id = ?1 AND revision = ?4",
+            params![obligation_id, mode, update.instructions, update.expected_revision],
+        )?;
+        let current = task_configuration(&transaction, obligation_id)?;
+        append_event(
+            &transaction,
+            obligation_id,
+            obligation.occurrence,
+            "task_configuration_updated",
+            now,
+            Some(obligation.state),
+            obligation.state,
+            json!({"actor": update.actor, "note": update.note, "previous": previous, "configuration": current}),
+        )?;
+        transaction.commit()?;
+        Ok(current)
+    }
+
     pub fn start_gardener_inspection(
         &mut self,
         claim: &Claim,
@@ -548,11 +622,12 @@ impl Store {
         require_gardener_kind(&transaction, &claim.obligation_id, "inspection")?;
         let repository =
             registration_for_inspection_obligation(&transaction, &claim.obligation_id)?;
+        let configuration = task_configuration(&transaction, &claim.obligation_id)?;
         transaction.execute(
             "INSERT INTO gardener_inspections(
                 id, repository, obligation_id, occurrence, lease_generation, lease_token,
-                source_commit, worktree_path, prompt_digest, started_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                source_commit, worktree_path, prompt_digest, started_at, configuration_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 inspection.id,
                 repository,
@@ -563,7 +638,9 @@ impl Store {
                 inspection.source_commit,
                 inspection.worktree_path,
                 inspection.prompt_digest,
-                now
+                now,
+                serde_json::to_string(&configuration)
+                    .map_err(|e| StoreError::Invalid(e.to_string()))?
             ],
         )?;
         append_gardener_event(
@@ -615,7 +692,7 @@ impl Store {
         let mut statement = transaction.prepare(
             "SELECT id, repository, obligation_id, occurrence, lease_generation,
                     source_commit, worktree_path, prompt_digest, codex_thread_id,
-                    codex_turn_id, result_json, started_at, completed_at
+                    codex_turn_id, result_json, started_at, completed_at, configuration_json
              FROM gardener_inspections
              WHERE (started_at, id) > (?1, ?2) AND (started_at, id) <= (?3, ?4)
              ORDER BY started_at, id LIMIT ?5",
@@ -3464,6 +3541,48 @@ fn validate_inspection_result(result: &InspectionResult) -> Result<(), StoreErro
     Ok(())
 }
 
+fn task_configuration(
+    connection: &Connection,
+    obligation_id: &str,
+) -> Result<GardenerTaskConfiguration, StoreError> {
+    let repository = registration_for_inspection_obligation(connection, obligation_id)?;
+    let registration = repository_registration(connection, &repository)?
+        .ok_or_else(|| StoreError::NotFound(obligation_id.to_owned()))?;
+    let (revision, mode, instructions): (i64, String, String) = connection.query_row(
+        "SELECT revision, instruction_mode, instructions FROM gardener_task_settings WHERE obligation_id = ?1",
+        [obligation_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+    let instruction_mode = match mode.as_str() {
+        "extend" => InstructionMode::Extend,
+        "replace" => InstructionMode::Replace,
+        _ => {
+            return Err(StoreError::Invalid(
+                "invalid inspection instruction mode".to_owned(),
+            ));
+        }
+    };
+    let defaults = crate::gardener::DEFAULT_INSPECTION_INSTRUCTIONS;
+    let effective_instructions = match instruction_mode {
+        InstructionMode::Extend if instructions.is_empty() => defaults.to_owned(),
+        InstructionMode::Extend => format!("{defaults}\n\n{instructions}"),
+        InstructionMode::Replace => instructions.clone(),
+    };
+    Ok(GardenerTaskConfiguration {
+        repository: registration.repository,
+        default_branch: registration.default_branch,
+        checkout_path: registration.checkout_path,
+        inspection_cron: registration.inspection_cron,
+        inspection_timezone: registration.inspection_timezone,
+        approval_policy: "Human approval of each exact source-bound proposal before implementation"
+            .to_owned(),
+        proposal_limit: MAX_GARDENER_PROMPTS as u32,
+        default_instructions: defaults.to_owned(),
+        instruction_mode,
+        instructions,
+        effective_instructions,
+        revision,
+    })
+}
+
 fn gardener_inspection(
     connection: &Connection,
     id: &str,
@@ -3472,7 +3591,7 @@ fn gardener_inspection(
         .query_row(
             "SELECT id, repository, obligation_id, occurrence, lease_generation,
                     source_commit, worktree_path, prompt_digest, codex_thread_id,
-                    codex_turn_id, result_json, started_at, completed_at
+                    codex_turn_id, result_json, started_at, completed_at, configuration_json
              FROM gardener_inspections WHERE id = ?1",
             [id],
             gardener_inspection_from_row,
@@ -3483,6 +3602,14 @@ fn gardener_inspection(
 
 fn gardener_inspection_from_row(row: &Row<'_>) -> rusqlite::Result<GardenerInspection> {
     Ok(GardenerInspection {
+        configuration: row
+            .get::<_, Option<String>>(13)?
+            .map(|value| {
+                serde_json::from_str(&value).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(13, Type::Text, Box::new(error))
+                })
+            })
+            .transpose()?,
         id: row.get(0)?,
         repository: row.get(1)?,
         obligation_id: row.get(2)?,
@@ -5691,7 +5818,8 @@ mod tests {
                 (6, "0006_source_bound_proposal_generations.sql".to_owned()),
                 (7, "0007_immutable_migration_manifest.sql".to_owned()),
                 (8, "0008_typed_failure_dispositions.sql".to_owned()),
-                (9, "0009_global_event_envelope.sql".to_owned())
+                (9, "0009_global_event_envelope.sql".to_owned()),
+                (10, "0010_gardener_task_configuration.sql".to_owned())
             ]
         );
         drop(store);
@@ -6026,6 +6154,195 @@ mod tests {
             inspection_recurrence: Recurrence::new("* * * * *", "Australia/Adelaide").unwrap(),
             first_inspection_at,
         }
+    }
+
+    #[test]
+    fn task_configuration_migration_initialises_existing_registration_without_inventing_history() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("legacy-task.sqlite");
+        create_legacy_v5_database(&path, &['a'], false, None, false);
+        let store = Store::open(&path).unwrap();
+        let registration = store.gardener_repository().unwrap().unwrap();
+        let configuration = store
+            .gardener_task_configuration(&registration.inspection_obligation_id)
+            .unwrap();
+        assert_eq!(configuration.revision, 1);
+        assert_eq!(configuration.instruction_mode, InstructionMode::Extend);
+        assert!(configuration.instructions.is_empty());
+        assert_eq!(
+            configuration.effective_instructions,
+            configuration.default_instructions
+        );
+        let inspections = store.gardener_inspections().unwrap();
+        assert!(!inspections.is_empty());
+        assert!(
+            inspections
+                .iter()
+                .all(|inspection| inspection.configuration.is_none())
+        );
+    }
+
+    #[test]
+    fn task_configuration_survives_reopen_and_rejects_stale_running_and_wrong_tasks() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("task-configuration.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let registration = store
+            .register_gardener_repository(gardener_registration(1_000), 900)
+            .unwrap();
+        let id = &registration.inspection_obligation_id;
+        let initial = store.gardener_task_configuration(id).unwrap();
+        assert_eq!(initial.revision, 1);
+        assert_eq!(initial.effective_instructions, initial.default_instructions);
+        let update = TaskConfigurationUpdate {
+            expected_revision: 1,
+            instruction_mode: InstructionMode::Extend,
+            instructions: "Prioritise recovery tests.".to_owned(),
+            actor: "operator".to_owned(),
+            note: Some("Focus this task".to_owned()),
+        };
+        let before = store.get(id).unwrap().unwrap();
+        let watermark = store.operator_snapshot(900).unwrap().watermark;
+        let current = store
+            .update_gardener_task_configuration(id, &update, 901)
+            .unwrap();
+        assert_eq!(current.revision, 2);
+        assert!(
+            current
+                .effective_instructions
+                .starts_with(&initial.default_instructions)
+        );
+        assert!(
+            current
+                .effective_instructions
+                .ends_with(&update.instructions)
+        );
+        assert_eq!(store.get(id).unwrap().unwrap(), before);
+        assert!(store.operator_snapshot(901).unwrap().watermark > watermark);
+        let changes = store.change_page(watermark, None, 10).unwrap().items;
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].obligation_id.as_deref(), Some(id.as_str()));
+        assert_eq!(changes[0].event_type, "task_configuration_updated");
+        let audit = store.events(id).unwrap().pop().unwrap();
+        assert_eq!(audit.event_type, "task_configuration_updated");
+        let evidence: serde_json::Value = serde_json::from_str(&audit.details_json).unwrap();
+        assert_eq!(evidence["actor"], "operator");
+        assert_eq!(evidence["previous"]["revision"], 1);
+        assert_eq!(evidence["configuration"]["revision"], 2);
+        assert!(matches!(
+            store.update_gardener_task_configuration(id, &update, 902),
+            Err(StoreError::Conflict(_))
+        ));
+        store.create(one_off("generic", 2_000), 902).unwrap();
+        assert!(matches!(
+            store.update_gardener_task_configuration("generic", &update, 902),
+            Err(StoreError::Conflict(_))
+        ));
+        let oversized = TaskConfigurationUpdate {
+            instructions: "x".repeat(6_001),
+            expected_revision: 2,
+            ..update.clone()
+        };
+        assert!(matches!(
+            store.update_gardener_task_configuration(id, &oversized, 902),
+            Err(StoreError::Invalid(_))
+        ));
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        assert_eq!(store.gardener_task_configuration(id).unwrap(), current);
+        let claim = store.claim_due_gardener(1_000, 60, 1).unwrap().remove(0);
+        let replace = TaskConfigurationUpdate {
+            expected_revision: 2,
+            instruction_mode: InstructionMode::Replace,
+            ..update
+        };
+        assert!(matches!(
+            store.update_gardener_task_configuration(id, &replace, 1_001),
+            Err(StoreError::Conflict(_))
+        ));
+        // Even an expired lease requires normal reconciliation before configuration can change.
+        assert!(matches!(
+            store.update_gardener_task_configuration(id, &replace, 2_000),
+            Err(StoreError::Conflict(_))
+        ));
+        let inspection = store
+            .start_gardener_inspection(&claim, new_inspection("configured", 'a'), 1_001)
+            .unwrap();
+        assert_eq!(inspection.configuration, Some(current.clone()));
+        assert!(store.connection.execute("UPDATE gardener_inspections SET configuration_json = '{}' WHERE id = 'configured'", []).is_err());
+        let proposal = store
+            .finish_gardener_inspection(
+                &claim,
+                "configured",
+                &inspection_result("Keep this approved prompt immutable"),
+                1_002,
+            )
+            .unwrap()
+            .remove(0);
+        store
+            .complete(&claim, Completion::Succeeded { evidence: None }, 1_003)
+            .unwrap();
+        let before_approval = store
+            .operator_obligation(&proposal.implementation_obligation_id, 1_003)
+            .unwrap();
+        assert_eq!(
+            before_approval.task.as_ref().unwrap().title,
+            "Keep this approved prompt immutable"
+        );
+        let original_description = before_approval.description;
+        store
+            .decide_gardener_proposal(
+                &proposal.fingerprint,
+                ApprovalDecision::Approved,
+                "operator",
+                None,
+                1_004,
+            )
+            .unwrap();
+        let approved = store
+            .gardener_proposal_instances(&proposal.fingerprint)
+            .unwrap();
+        let replaced = store
+            .update_gardener_task_configuration(id, &replace, 1_005)
+            .unwrap();
+        assert_eq!(replaced.effective_instructions, replace.instructions);
+        assert_eq!(replaced.revision, 3);
+        assert_eq!(
+            store
+                .gardener_proposal_instances(&proposal.fingerprint)
+                .unwrap(),
+            approved
+        );
+        assert_eq!(
+            store
+                .gardener_inspection("configured")
+                .unwrap()
+                .unwrap()
+                .configuration,
+            Some(current)
+        );
+        let projected = store
+            .operator_obligation(&proposal.implementation_obligation_id, 1_005)
+            .unwrap();
+        assert_eq!(projected.description, original_description);
+        assert_eq!(
+            projected.task.as_ref().unwrap().title,
+            "Keep this approved prompt immutable"
+        );
+        let task = projected.task.unwrap();
+        assert_eq!(task.kind, crate::OperatorTaskKind::GardenerImplementation);
+        assert_eq!(task.parent_task_id.as_deref(), Some(id.as_str()));
+        assert_eq!(
+            task.proposal_instance_id.as_deref(),
+            Some(approved[0].id.as_str())
+        );
+        assert!(task.configuration.is_none());
+        let generic = store
+            .operator_obligation("generic", 1_005)
+            .unwrap()
+            .task
+            .unwrap();
+        assert_eq!(generic.kind, crate::OperatorTaskKind::Simulated);
     }
 
     fn new_inspection(id: &str, source_commit: char) -> NewGardenerInspection {

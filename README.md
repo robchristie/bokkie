@@ -120,8 +120,13 @@ The first operator workspace is a separate Rust application that reads Bokkie's
 HTTP projections; it never opens SQLite directly and cannot create a second
 state path. Its default attention desk pairs one collection list with one detail
 surface.
-Needs attention and All obligations select the existing backend projections;
-on a narrow screen a row opens its detail directly, with Back returning to the
+Needs attention shows exceptions; Tasks shows configured work, including
+Garden Bokkie, with generated work accessible through its parent task.
+The task model is a projection of existing obligations and gardener bindings.
+Opening Garden Bokkie shows its effective settings, inspection runs and proposals;
+opening a proposal follows its existing implementation obligation through approval,
+execution and verification. Ordinary obligations are labelled as simulated tasks.
+On a narrow screen a row opens its detail directly, with Back returning to the
 same collection. It offers only actions that the backend declares legal.
 Native builds use a literal loopback HTTP base. Browser builds use relative API
 paths and must be served by this same loopback Bokkie origin at `/ui/`.
@@ -129,6 +134,14 @@ Browser and native transports bootstrap a process session in memory, attach its
 token only as `X-Bokkie-Mutation-Token`, and discard stale tokens and
 confirmations when Bokkie restarts or its identity is incompatible. There is no
 CORS exception, proxy, multi-user authentication layer or remote-access mode.
+
+Code gardening supplies default inspection guidance. Each registered task can
+add its own instructions or explicitly replace that guidance; fixed execution
+and approval rules remain in force. Settings edits require review and save
+against the displayed configuration revision. They affect future inspections,
+which retain their effective configuration, and leave existing proposal prompts
+and approvals unchanged. Repository and schedule are shown from the original
+registration; registration remains available through the CLI and HTTP API.
 
 Every lifecycle action requires a separate confirmation. Gardener decisions
 also display and submit the stable goal fingerprint, exact immutable proposal

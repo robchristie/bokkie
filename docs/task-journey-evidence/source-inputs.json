@@ -1,0 +1,20 @@
+{
+  "source_revision": "f2664f3604ac409b55d581417cd0ae5ee3721d27",
+  "fixture_variant": "tasks",
+  "fixture_clock": 1788381000,
+  "scenario": "registered task, completed inspection, pending/blocking/passing implementation work",
+  "authority": "synthetic temporary SQLite only; gardener runtime disabled",
+  "input_sha256": {
+    "Cargo.lock": "666268bb7a97fbd29c69b98bb8c3d3f197bf03236ddc6893e6aafbd51626f528",
+    "src/bin/bokkie-ui-fixture.rs": "f8fea2592b4a4b9fdf722c8d4be2f7f8a35e735ab8592f17a46aa524acde8ad5",
+    "tools/ui-browser-smoke.mjs": "7a1e8726520ade64e7d4fe85d2a313b30f0c51dbf0e7b518a845d167b7b199c2",
+    "tools/ui-task-journey.mjs": "0df5307a74fb2c3c207b6bc68f1252e2676d1a41cd62ad374d0376a3b2fa71d4",
+    "tools/ui-native-smoke.sh": "4598bc4bf965f24713e41a69d2740936ac3bdeedf2c06a5e16b85ec0097b3c0f",
+    "rust-toolchain.toml": "19fcd7491a66e0653370b3fea22acda83b749c4c541357a4daff7b33d5aab480",
+    "apps/bokkie-attention-ui/rust-toolchain.toml": "a44741d72491bdb674c8a07e43451482a80e4e013d0364055e4e1eacd861319f",
+    "apps/bokkie-attention-ui/assets/fonts/Inter-LICENSE.txt": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a",
+    "apps/bokkie-attention-ui/assets/fonts/Inter-Regular.ttf": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+    "apps/bokkie-attention-ui/assets/fonts/Inter-SemiBold.ttf": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3",
+    "apps/bokkie-attention-ui/assets/fonts/README.md": "3fdc3365b0d97120b6c753006cbc6e1b33864691f7bab4519c0a1beb4fd4e041"
+  }
+}

@@ -182,11 +182,45 @@ For browser use, build the Wasm assets, then start the existing service with
 `--ui-dir apps/bokkie-attention-ui/web` and open `/ui/` on that listener. Do
 not add a proxy, port forwarding, CORS policy or a non-loopback bind.
 
-The default desk pairs **Needs attention** or **All obligations** with one
+The default desk pairs **Needs attention** or **Tasks** with one
 selected detail. Search narrows the current collection. On a narrow screen,
 selecting a row opens detail directly; **Back** returns to that collection.
 Read **What happens next** and **Activity and evidence** first, and expand
 **Technical provenance** when exact diagnostic identities are useful.
+
+**Tasks** lists configured gardening tasks and ordinary simulated tasks.
+Garden Bokkie groups its inspection runs and proposals; opening proposed or
+completed work follows its existing implementation obligation. The parent link
+returns to Garden Bokkie. **Needs attention** also exposes generated work that
+requires approval or recovery.
+
+Garden Bokkie shows repository and schedule from registration, plus default and
+effective inspection guidance. **Edit inspection guidance** supports additions to the
+defaults or an explicit replacement, followed by review and save. The fixed
+execution and approval policy cannot be replaced. Edits apply to future
+inspections; existing proposal prompts and approvals remain immutable.
+
+`POST /operator/tasks/{id}/configuration` accepts `expected_revision`,
+`instruction_mode` (`extend` or `replace`), `instructions`, `actor` and optional
+`note`. The mutation requires the normal session token and JSON request. Store
+rejects stale revisions, non-inspection tasks, active inspections and oversized
+input. It appends an audit event and advances the configuration revision
+atomically. Schema v10 adds task settings and an immutable configuration snapshot
+on new inspections; historical inspections have no invented configuration record.
+
+The same settings are available through the CLI:
+
+```sh
+bokkie --database /path/to/bokkie.sqlite gardener configuration show \
+  'gardener:inspect:robchristie/bokkie'
+bokkie --database /path/to/bokkie.sqlite gardener configuration update \
+  'gardener:inspect:robchristie/bokkie' --expected-revision 1 \
+  --instruction-mode extend --instructions 'Prioritise recovery tests.' \
+  --actor operator
+```
+
+Use the revision returned by `show`, and percent-encode the complete task ID
+when constructing an HTTP path, including its repository slash.
 
 Both UI builds first read `GET /bootstrap`. They retain its mutation token only
 in process memory and attach it as `X-Bokkie-Mutation-Token` on each action.

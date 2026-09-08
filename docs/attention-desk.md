@@ -2,13 +2,15 @@
 
 Bokkie makes unattended work feel under control and human decisions easy to
 understand. The default workspace gives one collection list and one selected
-detail the available space. It does not change the obligation lifecycle or
-add product capabilities.
+detail the available space. Task identity and relationships project the existing
+obligation lifecycle; inspection guidance has its own revision-checked settings.
 
 ## Application compositions
 
 - **List/detail shell:** Needs attention uses backend-projected exceptions;
-  All obligations uses the ordered ledger. The shell allocates a bounded list
+  Tasks shows configured gardener tasks and ordinary simulated work. Generated
+  implementation work is reached through its parent or Needs attention, with
+  an explicit link back to the parent. The shell allocates a bounded list
   width and gives the remaining width to detail, with local scrolling. Narrow
   selection opens detail directly. Back retains the originating collection,
   selection and list position. Collection switching does not mutate work.
@@ -41,6 +43,26 @@ They inform collection/detail composition and progressive disclosure; their
 branding, capabilities and implementation stacks are not dependencies.
 
 ## Visual calibration and acceptance
+
+The task-centred journey extends the accepted shell with a configured task
+detail: effective settings, latest inspection, run history, proposals and
+follow-on work. Code gardening is a task type; Garden Bokkie is its registered
+instance. These are configuration relationships, not arbitrary parent/child
+completion rules. Proposals link to the implementation obligations created by
+inspection; approving one schedules that existing work.
+
+Instruction settings distinguish the default guidance from additions or an
+explicit replacement. Repository, schedule and approval policy remain visible
+read-only settings. Review and save is a separate deliberate action with an
+audited actor and optimistic configuration revision; edits during an active
+inspection or against stale settings are rejected. Inspection evidence retains
+the configuration used. Historical proposals and approvals remain unchanged.
+
+The `tasks` fixture supplies one configured task, a completed inspection, a
+pending proposal, blocked work and an exact-head verified completed result.
+`tools/ui-task-journey.mjs`, called by the canonical browser smoke, owns physical
+task navigation, settings save, proposal approval and completed-work navigation
+at desktop and narrow sizes. It uses a disposable database without a runner.
 
 Question: can one list and one detail make the populated attention queue easy
 to scan while retaining complete decision authority and evidence access?

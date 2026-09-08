@@ -410,6 +410,14 @@ pub struct GardenerConfirmation {
     pub prompt: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskSettingsDraft {
+    pub obligation_id: String,
+    pub update: bokkie_operator_api::TaskConfigurationUpdate,
+    pub reviewing: bool,
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppModel {
     pub snapshot: Option<OperatorSnapshot>,
@@ -425,6 +433,7 @@ pub struct AppModel {
     pub snapshot_busy: bool,
     pub topic_busy: bool,
     pub action_busy: bool,
+    pub settings: Option<TaskSettingsDraft>,
 }
 
 impl Default for AppModel {
@@ -443,6 +452,7 @@ impl Default for AppModel {
             snapshot_busy: false,
             topic_busy: false,
             action_busy: false,
+            settings: None,
         }
     }
 }
@@ -464,11 +474,21 @@ impl AppModel {
         let query = self.search.trim().to_lowercase();
         self.obligations()
             .iter()
+            .filter(|obligation| {
+                obligation
+                    .task
+                    .as_ref()
+                    .is_none_or(|task| task.parent_task_id.is_none())
+            })
             .filter(|obligation| self.state_filter.includes(obligation.state))
             .filter(|obligation| {
                 query.is_empty()
                     || obligation.id.to_lowercase().contains(&query)
                     || obligation.description.to_lowercase().contains(&query)
+                    || obligation
+                        .task
+                        .as_ref()
+                        .is_some_and(|task| task.title.to_lowercase().contains(&query))
                     || obligation
                         .last_error
                         .as_deref()
@@ -582,6 +602,7 @@ impl AppModel {
 
     pub fn record_session_change(&mut self, message: &str) {
         self.confirmation = None;
+        self.settings = None;
         self.action_busy = false;
         self.mark_stale(format!(
             "Bokkie process session changed: {message}; review current state before deciding"
@@ -592,10 +613,114 @@ impl AppModel {
         if self.selected_obligation.as_deref() == Some(&obligation_id) {
             return false;
         }
+        self.settings = None;
         self.selected_obligation = Some(obligation_id);
         self.topic = None;
         self.topic_error = None;
         true
+    }
+
+    pub fn begin_settings(&mut self) -> Result<(), String> {
+        if !self.connection.decisions_safe()
+            || self.snapshot_busy
+            || self.topic_busy
+            || self.action_busy
+        {
+            return Err("Refresh current state before editing task settings".to_owned());
+        }
+        let obligation = self.selected().ok_or("Select a task first")?;
+        if obligation.state == OperatorObligationState::Running {
+            return Err(
+                "Wait for the active inspection to finish before editing guidance".to_owned(),
+            );
+        }
+        let configuration = obligation
+            .task
+            .as_ref()
+            .and_then(|task| task.configuration.as_ref())
+            .ok_or("This task has no editable inspection guidance")?;
+        self.settings = Some(TaskSettingsDraft {
+            obligation_id: obligation.id.clone(),
+            update: bokkie_operator_api::TaskConfigurationUpdate {
+                expected_revision: configuration.revision,
+                instruction_mode: configuration.instruction_mode,
+                instructions: configuration.instructions.clone(),
+                actor: "operator".to_owned(),
+                note: None,
+            },
+            reviewing: false,
+            error: None,
+        });
+        self.confirmation = None;
+        Ok(())
+    }
+
+    pub fn review_current_settings(&mut self) -> Result<(), String> {
+        if !self.connection.decisions_safe()
+            || self.snapshot_busy
+            || self.topic_busy
+            || self.action_busy
+        {
+            return Err("Wait for current task state before reviewing settings".to_owned());
+        }
+        let selected = self.selected().ok_or("Select a task first")?;
+        if selected.state == OperatorObligationState::Running {
+            return Err("Wait for the active inspection to finish".to_owned());
+        }
+        let revision = selected
+            .task
+            .as_ref()
+            .and_then(|task| task.configuration.as_ref())
+            .ok_or("Current task configuration is unavailable")?
+            .revision;
+        let selected_id = selected.id.clone();
+        let draft = self
+            .settings
+            .as_mut()
+            .filter(|draft| draft.obligation_id == selected_id)
+            .ok_or("Open task settings first")?;
+        draft.update.expected_revision = revision;
+        draft.error = None;
+        draft.reviewing = false;
+        Ok(())
+    }
+
+    pub fn settings_unavailable_reason(&self, draft: &TaskSettingsDraft) -> Option<String> {
+        if self.action_busy
+            || self.snapshot_busy
+            || self.topic_busy
+            || !self.connection.decisions_safe()
+        {
+            return Some("Wait for current task state before saving settings".to_owned());
+        }
+        if self
+            .selected()
+            .is_some_and(|item| item.state == OperatorObligationState::Running)
+        {
+            return Some(
+                "Wait for the active inspection to finish before saving guidance".to_owned(),
+            );
+        }
+        if draft.error.is_some() {
+            return Some(
+                "Review current settings before saving; the request is never retried automatically"
+                    .to_owned(),
+            );
+        }
+        let current = self
+            .selected()
+            .filter(|item| item.id == draft.obligation_id)
+            .and_then(|item| item.task.as_ref())
+            .and_then(|task| task.configuration.as_ref());
+        if current
+            .is_none_or(|configuration| configuration.revision != draft.update.expected_revision)
+        {
+            return Some("Settings changed since this draft opened. Review current settings to retain your draft against the new revision".to_owned());
+        }
+        if draft.update.actor.trim().is_empty() {
+            return Some("Enter an actor for the audit record".to_owned());
+        }
+        None
     }
 
     pub fn begin_confirmation(&mut self, action: LifecycleAction) -> Result<(), String> {
@@ -839,6 +964,7 @@ mod tests {
     fn obligation(id: &str, state: OperatorObligationState) -> OperatorObligation {
         let approve = capability(false, ActionConsequence::ScheduleCurrentOccurrence);
         OperatorObligation {
+            task: None,
             id: id.to_owned(),
             description: format!("A deliberately long obligation description for {id}"),
             state,
@@ -1100,6 +1226,129 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    fn task_configuration() -> bokkie_operator_api::GardenerTaskConfiguration {
+        bokkie_operator_api::GardenerTaskConfiguration {
+            repository: "robchristie/bokkie".to_owned(),
+            default_branch: "main".to_owned(),
+            checkout_path: "/fixture/bokkie".to_owned(),
+            inspection_cron: "0 9 * * *".to_owned(),
+            inspection_timezone: "Australia/Adelaide".to_owned(),
+            approval_policy: "human_approval".to_owned(),
+            proposal_limit: 3,
+            default_instructions: "Review tests".to_owned(),
+            instruction_mode: bokkie_operator_api::InstructionMode::Extend,
+            instructions: "Inspect recovery".to_owned(),
+            effective_instructions: "Review tests\n\nInspect recovery".to_owned(),
+            revision: 4,
+        }
+    }
+
+    #[test]
+    fn task_collection_uses_projected_relationships_and_preserves_attention_children() {
+        use bokkie_operator_api::{OperatorTask, OperatorTaskKind};
+        let mut parent = obligation("ordinary-id", OperatorObligationState::Pending);
+        parent.task = Some(OperatorTask {
+            kind: OperatorTaskKind::GardenerInspection,
+            title: "Garden Bokkie".to_owned(),
+            parent_task_id: None,
+            configuration: Some(task_configuration()),
+            proposal_instance_id: None,
+        });
+        let mut child = obligation(
+            "no-gardener-prefix",
+            OperatorObligationState::AwaitingApproval,
+        );
+        child.task = Some(OperatorTask {
+            kind: OperatorTaskKind::GardenerImplementation,
+            title: "Review a proposal".to_owned(),
+            parent_task_id: Some(parent.id.clone()),
+            configuration: None,
+            proposal_instance_id: Some("instance-1".to_owned()),
+        });
+        child.exception = Some(ExceptionReason::AwaitingApproval {
+            subject: ApprovalSubject::Generic,
+        });
+        let mut model = AppModel::default();
+        model.apply_snapshot(OperatorSnapshot {
+            captured_at: 120,
+            service: None,
+            next_cursor: None,
+            watermark: 10,
+            obligations: vec![
+                parent,
+                child,
+                obligation("gardener:simulated", OperatorObligationState::Pending),
+            ],
+        });
+        assert_eq!(
+            model
+                .filtered_obligations()
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["ordinary-id", "gardener:simulated"]
+        );
+        assert_eq!(model.exceptions().next().unwrap().id, "no-gardener-prefix");
+        model.search = "garden bokkie".to_owned();
+        assert_eq!(model.filtered_obligations().len(), 1);
+        model.select("no-gardener-prefix".to_owned());
+        assert_eq!(model.selected().unwrap().id, "no-gardener-prefix");
+    }
+
+    #[test]
+    fn settings_draft_is_revision_checked_and_session_changes_require_fresh_review() {
+        use bokkie_operator_api::{OperatorTask, OperatorTaskKind};
+        let mut task = obligation("inspection", OperatorObligationState::Pending);
+        task.task = Some(OperatorTask {
+            kind: OperatorTaskKind::GardenerInspection,
+            title: "Garden Bokkie".to_owned(),
+            parent_task_id: None,
+            configuration: Some(task_configuration()),
+            proposal_instance_id: None,
+        });
+        let mut model = AppModel::default();
+        model.apply_snapshot(OperatorSnapshot {
+            captured_at: 120,
+            service: None,
+            next_cursor: None,
+            watermark: 10,
+            obligations: vec![task.clone()],
+        });
+        model.begin_settings().unwrap();
+        model.settings.as_mut().unwrap().update.instructions = "Retained operator draft".to_owned();
+        let draft = model.settings.clone().unwrap();
+        assert!(model.settings_unavailable_reason(&draft).is_none());
+        model.mark_stale("disconnected");
+        assert!(model.settings_unavailable_reason(&draft).is_some());
+        assert!(model.begin_settings().is_err());
+        task.task
+            .as_mut()
+            .unwrap()
+            .configuration
+            .as_mut()
+            .unwrap()
+            .revision += 1;
+        model.apply_snapshot(OperatorSnapshot {
+            captured_at: 121,
+            service: None,
+            next_cursor: None,
+            watermark: 11,
+            obligations: vec![task],
+        });
+        assert!(
+            model
+                .settings_unavailable_reason(&draft)
+                .unwrap()
+                .contains("changed")
+        );
+        assert_eq!(
+            model.settings.as_ref().unwrap().update.instructions,
+            "Retained operator draft"
+        );
+        model.record_session_change("restarted");
+        assert!(model.settings.is_none());
     }
 
     #[test]

@@ -52,9 +52,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     if !matches!(
         variant.as_str(),
-        "experience" | "full" | "empty" | "empty-inbox" | "large"
+        "experience" | "tasks" | "full" | "empty" | "empty-inbox" | "large"
     ) {
-        return Err("--variant must be experience, full, empty, empty-inbox, or large".into());
+        return Err(
+            "--variant must be experience, tasks, full, empty, empty-inbox, or large".into(),
+        );
     }
 
     let root = FixtureRoot(
@@ -65,6 +67,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut store = Store::open(&database)?;
     match variant.as_str() {
         "experience" => seed_experience(&mut store)?,
+        "tasks" => seed_task_journey(&mut store, &root.0)?,
         "full" => seed_full(&mut store, &root.0)?,
         "empty-inbox" => seed_empty_inbox(&mut store)?,
         "large" => seed_large(&mut store)?,
@@ -362,6 +365,18 @@ fn seed_failure(
 }
 
 fn seed_gardener_states(store: &mut Store, root: &Path) -> Result<(), Box<dyn Error>> {
+    seed_gardener_journey(store, root, false)
+}
+
+fn seed_task_journey(store: &mut Store, root: &Path) -> Result<(), Box<dyn Error>> {
+    seed_gardener_journey(store, root, true)
+}
+
+fn seed_gardener_journey(
+    store: &mut Store,
+    root: &Path,
+    task_journey: bool,
+) -> Result<(), Box<dyn Error>> {
     store.register_gardener_repository(
         NewRepositoryRegistration {
             repository: "robchristie/bokkie".to_owned(),
@@ -383,16 +398,28 @@ fn seed_gardener_states(store: &mut Store, root: &Path) -> Result<(), Box<dyn Er
         },
         NOW + 1,
     )?;
-    let prompts = [
-        "Review the operator projection and implement the smallest exact-head improvement.\n\nPreserve the trust boundary and retain exact source, tool, environment and input identities. This intentionally long immutable prompt must wrap and remain selectable in the confirmation surface.",
-        "Blocking verification fixture proposal",
-        "Inconclusive verification fixture proposal",
-    ];
+    let prompts = if task_journey {
+        [
+            "Add regression coverage for scheduler recovery after a lost lease. Keep the change confined to Bokkie and preserve stale-worker fencing.",
+            "Clarify the operator guidance for interrupted inspections. Verify every documented recovery step against the implementation.",
+            "Improve the test diagnostics for recurring obligations. Preserve scheduling behaviour and verify the exact candidate head.",
+        ]
+    } else {
+        [
+            "Review the operator projection and implement the smallest exact-head improvement.\n\nPreserve the trust boundary and retain exact source, tool, environment and input identities. This intentionally long immutable prompt must wrap and remain selectable in the confirmation surface.",
+            "Blocking verification fixture proposal",
+            "Inconclusive verification fixture proposal",
+        ]
+    };
     let proposals = store.finish_gardener_inspection(
         &inspection_claim,
         "qualification-inspection",
         &InspectionResult {
-            summary: "Three inert UI qualification proposals".to_owned(),
+            summary: if task_journey {
+                "The inspection found three small improvements to recovery coverage, operator guidance and test diagnostics. This is synthetic qualification evidence."
+            } else {
+                "Three inert UI qualification proposals"
+            }.to_owned(),
             proposed_goal_prompts: prompts.iter().map(ToString::to_string).collect(),
         },
         NOW + 2,
@@ -408,7 +435,11 @@ fn seed_gardener_states(store: &mut Store, root: &Path) -> Result<(), Box<dyn Er
     )?;
     for (index, verdict) in [
         GardenerVerificationVerdict::Blocking,
-        GardenerVerificationVerdict::Inconclusive,
+        if task_journey {
+            GardenerVerificationVerdict::Pass
+        } else {
+            GardenerVerificationVerdict::Inconclusive
+        },
     ]
     .into_iter()
     .enumerate()
@@ -523,9 +554,31 @@ fn seed_verification(
         GardenerVerificationVerdict::Inconclusive => {
             "Inconclusive verification retained against the exact inert head"
         }
-        GardenerVerificationVerdict::Pass => unreachable!(),
+        GardenerVerificationVerdict::Pass => {
+            "Independent verification passed for the exact inert pull-request head"
+        }
     };
     store.finish_gardener_verification(claim, &run_id, verdict, &head, summary, NOW + 30)?;
+    if verdict == GardenerVerificationVerdict::Pass {
+        store.record_gardener_pull_request_ready(
+            claim,
+            &run_id,
+            number,
+            &format!("https://github.com/robchristie/bokkie/pull/{number}"),
+            &head,
+            NOW + 31,
+        )?;
+        store.complete(
+            claim,
+            Completion::Succeeded {
+                evidence: Some(format!(
+                    "{summary}; tool=inert-fixture; no publication occurred"
+                )),
+            },
+            NOW + 32,
+        )?;
+        return Ok(());
+    }
     store.complete(
         claim,
         Completion::Failed {
@@ -580,7 +633,62 @@ mod tests {
 
     use bokkie::ObligationState;
 
-    use super::{Store, seed_experience};
+    use super::{Store, seed_experience, seed_task_journey};
+
+    #[test]
+    fn task_fixture_has_pending_work_and_an_exact_head_verified_result() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("fixture.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        seed_task_journey(&mut store, root.path()).unwrap();
+        drop(store);
+        let store = Store::open(&database).unwrap();
+        let registration = store.gardener_repository().unwrap().unwrap();
+        let inspections = store.gardener_inspections().unwrap();
+        assert_eq!(inspections.len(), 1);
+        assert_eq!(
+            inspections[0].obligation_id,
+            registration.inspection_obligation_id
+        );
+        assert!(inspections[0].completed_at.is_some());
+        let obligations = store.list().unwrap();
+        assert_eq!(obligations.len(), 4);
+        for state in [
+            ObligationState::Pending,
+            ObligationState::AwaitingApproval,
+            ObligationState::Attention,
+            ObligationState::Completed,
+        ] {
+            assert_eq!(
+                obligations
+                    .iter()
+                    .filter(|item| item.state == state)
+                    .count(),
+                1
+            );
+        }
+        let run = store
+            .gardener_implementation_run("qualification-run-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            run.verification_verdict,
+            Some(bokkie::GardenerVerificationVerdict::Pass)
+        );
+        assert_eq!(
+            run.publication_state,
+            bokkie::GardenerPublicationState::Ready
+        );
+        assert_eq!(
+            run.pull_request_head.as_deref(),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        assert!(
+            obligations.iter().any(
+                |item| item.id == run.obligation_id && item.state == ObligationState::Completed
+            )
+        );
+    }
 
     #[test]
     fn experience_fixture_uses_store_transitions_for_ordinary_activity() {

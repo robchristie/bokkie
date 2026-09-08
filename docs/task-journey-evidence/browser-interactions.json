@@ -1,0 +1,349 @@
+{
+  "browser": {
+    "version": "151.0.7922.34",
+    "backend": "browser WebGPU requested through eframe/wgpu",
+    "source_revision": "f2664f3604ac409b55d581417cd0ae5ee3721d27",
+    "fontconfig_file": "/nvme/development/floatingpie/.pixi/envs/default/etc/fonts/fonts.conf",
+    "webgpu": {
+      "navigator_gpu": true,
+      "adapter_available": true,
+      "adapter": {
+        "vendor": "nvidia",
+        "architecture": "ampere",
+        "device": "",
+        "description": ""
+      }
+    }
+  },
+  "journeys": [
+    {
+      "name": "attention search and failure detail",
+      "classification": "physical pointer, keyboard typing, selection and search clearing",
+      "query": "nonretryable",
+      "matched_obligation": "attention-nonretryable"
+    },
+    {
+      "name": "long evidence reader paints its tail after scrolling",
+      "classification": "physical disclosure and inner wheel; complete visible rows from the painted selectable galley",
+      "fixture_obligation": "completed-with-long-evidence",
+      "event": "attempt:5",
+      "marker": "BOKKIE_EVIDENCE_TAIL_7F39",
+      "before_visible_text": "{\n  \"attempt_number\": 1,\n  \"claimed_at\": 1788381000,\n  \"completed_at\": 1788381001,\n  \"error\": null,\n  \"evidence\": \"source=cccccccccccccccccccccccccccccccccccccccc \ninput=fixture-input-\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx result=pass \nretained evidence remains selectable Evidence paragraph 000: the deterministic check passed with \nretained source and input identities. Evidence paragraph 001: the deterministic check passed with \nretained source and input identities. Evidence paragraph 002: the deterministic check passed with ",
+      "after_visible_text": "retained source and input identities. Evidence paragraph 112: the deterministic check passed with \nretained source and input identities. Evidence paragraph 113: the deterministic check passed with \nretained source and input identities. Evidence paragraph 114: the deterministic check passed with \nretained source and input identities. Evidence paragraph 115: the deterministic check passed with \nretained source and input identities. Evidence paragraph 116: the deterministic check passed with \nretained source and input identities. Evidence paragraph 117: the deterministic check passed with \nretained source and input identities. Evidence paragraph 118: the deterministic check passed with \nretained source and input identities. Evidence paragraph 119: the deterministic check passed with \nretained source and input identities.  BOKKIE_EVIDENCE_TAIL_7F39\",\n  \"failure_disposition\": null,\n  \"id\": 5,",
+      "reader_bounds": {
+        "min_x": 578,
+        "min_y": 637.75,
+        "max_x": 1404,
+        "max_y": 864
+      },
+      "text_selectable": true,
+      "screenshot": "browser-evidence-reader-tail.png"
+    },
+    {
+      "name": "one list and detail with direct narrow navigation",
+      "classification": "physical collection tabs, pointer selection, resize and Back; current Rust pane and selection observations",
+      "selected": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "desktop_widths": [
+        1440,
+        1280
+      ],
+      "narrow_width": 480,
+      "attention_back": "pane.1",
+      "ledger_back": "pane.2"
+    },
+    {
+      "name": "exact gardener confirmation",
+      "settling": {
+        "samples": 3,
+        "elapsed_ms": 660,
+        "frame": "114",
+        "png_sha256": "e5a77171124eb8dd20a007dddb139d6b5b9f74662c80ae8fb3ccd2a62fe5a559",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "classification": "direct physical pointer plus Rust semantic state",
+      "obligation": "gardener:implement:d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "confirmation_bounds": {
+        "min_x": 440,
+        "min_y": 122,
+        "max_x": 1000,
+        "max_y": 815.8125
+      },
+      "observed_measured_components": 47,
+      "consequence_action": "approve_exact_gardener_proposal",
+      "occurrence": 1,
+      "consequence": "Schedule implementation of this exact immutable proposal",
+      "fingerprint": "d8c9e4df2bdc64008a2e8042b01641df4f1e329afe87e3f718dfb7d4122bf30f",
+      "prompt": "Review the operator projection and implement the smallest exact-head improvement.\n\nPreserve the trust boundary and retain exact source, tool, environment and input identities. This intentionally long immutable prompt must wrap and remain selectable in the confirmation surface.",
+      "submitted": false
+    },
+    {
+      "name": "process restart invalidates mutation session",
+      "classification": "direct rejected old-token submission followed by same-origin bootstrap and fresh snapshot",
+      "old_session": "35a15678-cfd3-40a6-a779-ad1511564c4c",
+      "new_session": "58b39efd-a5f6-4961-9fab-ee4ad6c52c39",
+      "confirmation_cleared": true,
+      "connection": "current"
+    },
+    {
+      "name": "safe cancel lifecycle",
+      "classification": "direct physical pointer, real HTTP/store path, refreshed durable projection",
+      "durable_result": {
+        "state": "cancelled",
+        "last_event": "cancelled"
+      },
+      "incremental_requests": [
+        "http://127.0.0.1:35667/operator/obligations/approval%2Dsafe%2Dcancel/cancel",
+        "http://127.0.0.1:35667/operator/changes?after=250",
+        "http://127.0.0.1:35667/operator/obligations/approval%2Dsafe%2Dcancel",
+        "http://127.0.0.1:35667/operator/obligations/approval%2Dsafe%2Dcancel/topic"
+      ]
+    },
+    {
+      "name": "stale confirmation conflict",
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 421,
+        "frame": "184",
+        "png_sha256": "467feb754259b52e0acdf12d1184f2431ee78609981c425d13d779c109e53b9f",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "classification": "direct physical confirmation against externally advanced temporary store state",
+      "conflict": "The state changed before this action could be applied: transition conflict: reviewed obligation state is stale (expected occurrence 1 at revision 10, found occurrence 1 at revision 214). Bokkie has refreshed the obligation; your actor and note are retained. Review the current state before trying again.",
+      "connection": "current",
+      "submit_enabled": false
+    },
+    {
+      "name": "keyboard focus traversal",
+      "classification": "direct keyboard input and Rust current-frame focus semantics",
+      "focused": [
+        "bokkie.collection.attention"
+      ]
+    },
+    {
+      "name": "selection and scroll across refresh",
+      "classification": "direct wheel, physical refresh action and Rust visible-range observation",
+      "selected": "attention-nonretryable",
+      "visible_start_before": 25,
+      "visible_start_after": 25
+    },
+    {
+      "name": "scrolled ledger survives resize and detail Back",
+      "classification": "physical resize, pointer selection and Back with Rust visible-range observation",
+      "visible_start": 25
+    },
+    {
+      "name": "configured task, settings, proposal approval and verified follow-on work",
+      "classification": "physical pointer/keyboard actions against synthetic Store-owned fixture state; no runner or publication",
+      "parent": "gardener:inspect:robchristie/bokkie",
+      "pending_proposal": "gardener:implement:ee1b4102948e92863365bd85647141c99f985d11c9bc1e477b04999b21677e30",
+      "completed_work": "gardener:implement:cafe6deaee6e5bd6f39e679d442342f89662283b34f39fece8021b4ce0331ebb",
+      "old_configuration_revision": 1,
+      "saved_configuration": {
+        "repository": "robchristie/bokkie",
+        "default_branch": "main",
+        "checkout_path": "/tmp/bokkie-ui-qualification-7c5da011-3c4e-4c20-ba22-1653df41bac7/inert-checkout",
+        "inspection_cron": "0 0 1 1 *",
+        "inspection_timezone": "UTC",
+        "approval_policy": "Human approval of each exact source-bound proposal before implementation",
+        "proposal_limit": 3,
+        "default_instructions": "Identify independently useful, concrete improvements to maintainability, correctness, tests, or documentation.",
+        "instruction_mode": "extend",
+        "instructions": "Prioritise deterministic scheduler recovery tests.",
+        "effective_instructions": "Identify independently useful, concrete improvements to maintainability, correctness, tests, or documentation.\n\nPrioritise deterministic scheduler recovery tests.",
+        "revision": 2
+      },
+      "approval_unchanged_by_settings": true,
+      "approval_submitted": true,
+      "responsive_widths": [
+        1440,
+        480
+      ]
+    }
+  ],
+  "states": {
+    "full": {
+      "fixture": {
+        "address": "127.0.0.1:35667",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-747ab4d9-6fe6-4db7-a4ab-47bc993533ef",
+        "service": {
+          "api_contract_version": 1,
+          "build": "bokkie/0.1.0",
+          "process_id": 9513,
+          "schema_version": 10,
+          "session_id": "58b39efd-a5f6-4961-9fab-ee4ad6c52c39"
+        },
+        "variant": "full"
+      },
+      "warmed_idle": {
+        "before": "253",
+        "after": "253",
+        "stable": true,
+        "interval_ms": 1000
+      }
+    },
+    "loading": {
+      "nodes": 8,
+      "classification": "direct Rust current-frame state before the first HTTP snapshot completed"
+    },
+    "empty": {
+      "fixture": {
+        "address": "127.0.0.1:36947",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-2961bdba-8256-464a-a6f1-06fa3799739c",
+        "service": {
+          "api_contract_version": 1,
+          "build": "bokkie/0.1.0",
+          "process_id": 14439,
+          "schema_version": 10,
+          "session_id": "5027d746-265a-4cd4-95ce-fbf661151ed0"
+        },
+        "variant": "empty"
+      },
+      "result": {
+        "total_rows": "0",
+        "classification": "direct real-router empty temporary SQLite database"
+      }
+    },
+    "empty-inbox": {
+      "fixture": {
+        "address": "127.0.0.1:44391",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-5076d635-80ea-4f17-ab7b-8d347e332c04",
+        "service": {
+          "api_contract_version": 1,
+          "build": "bokkie/0.1.0",
+          "process_id": 14482,
+          "schema_version": 10,
+          "session_id": "4f8300ea-e144-46f1-adde-41bc916162fd"
+        },
+        "variant": "empty-inbox"
+      }
+    },
+    "empty_inbox": {
+      "total_rows": "1",
+      "inbox_rows": 0,
+      "classification": "direct real-router terminal-only temporary SQLite database"
+    },
+    "tasks": {
+      "fixture": {
+        "address": "127.0.0.1:35053",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-7c5da011-3c4e-4c20-ba22-1653df41bac7",
+        "service": {
+          "api_contract_version": 1,
+          "build": "bokkie/0.1.0",
+          "process_id": 15065,
+          "schema_version": 10,
+          "session_id": "29bb93e0-3def-40f9-848d-66d1368e2e3b"
+        },
+        "variant": "tasks"
+      }
+    },
+    "large": {
+      "fixture": {
+        "address": "127.0.0.1:40607",
+        "database_kind": "new_temporary_fixture",
+        "gardener_runtime": false,
+        "root": "/tmp/bokkie-ui-qualification-94385c43-902e-4169-a167-c9bfa53b3cf8",
+        "service": {
+          "api_contract_version": 1,
+          "build": "bokkie/0.1.0",
+          "process_id": 24789,
+          "schema_version": 10,
+          "session_id": "03570805-1e7b-4ce9-91fa-d1ff21d9700c"
+        },
+        "variant": "large"
+      },
+      "result": {
+        "total_rows": "5000",
+        "visible_rows": [
+          "0",
+          "14"
+        ],
+        "materialised_rows": [
+          "0",
+          "18"
+        ],
+        "materialised_count": 18,
+        "classification": "direct current-frame Rust virtualisation observation",
+        "snapshot_page_requests": 50
+      }
+    },
+    "disconnected_request": "network: GET http://127.0.0.1:40607/operator/snapshot net::ERR_CONNECTION_REFUSED",
+    "disconnected_console": "console: Failed to load resource: net::ERR_CONNECTION_REFUSED",
+    "disconnected": {
+      "network_disconnected": true,
+      "app_stale_surface": "covered by conflict journey; post-shutdown repaint unavailable in headless harness",
+      "classification": "direct failed same-origin fetch after fixture shutdown; app surface classification approximate"
+    }
+  },
+  "viewports": [
+    {
+      "width": 1440,
+      "height": 900,
+      "label": "1440x900",
+      "screenshot": "browser-1440x900.png",
+      "node_count": 26,
+      "selected": "ledger-0019",
+      "active_pane": 2,
+      "layout": {
+        "document_width": 1440,
+        "document_scroll_width": 1440,
+        "document_height": 900,
+        "document_scroll_height": 900,
+        "canvas": {
+          "width": 1440,
+          "height": 900
+        }
+      }
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "label": "1280x720",
+      "screenshot": "browser-1280x720.png",
+      "node_count": 22,
+      "selected": "ledger-0019",
+      "active_pane": 2,
+      "layout": {
+        "document_width": 1280,
+        "document_scroll_width": 1280,
+        "document_height": 720,
+        "document_scroll_height": 720,
+        "canvas": {
+          "width": 1280,
+          "height": 720
+        }
+      }
+    },
+    {
+      "width": 480,
+      "height": 720,
+      "label": "narrow-480x720",
+      "screenshot": "browser-narrow-480x720.png",
+      "node_count": 19,
+      "selected": "ledger-0019",
+      "active_pane": 2,
+      "layout": {
+        "document_width": 480,
+        "document_scroll_width": 480,
+        "document_height": 720,
+        "document_scroll_height": 720,
+        "canvas": {
+          "width": 480,
+          "height": 720
+        }
+      }
+    }
+  ],
+  "errors": [],
+  "last_operator_response": {
+    "url": "http://127.0.0.1:40607/operator/obligations/large%2D00000/topic",
+    "status": 200
+  }
+}

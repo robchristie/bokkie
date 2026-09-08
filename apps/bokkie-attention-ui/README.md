@@ -2,7 +2,7 @@
 
 This application presents Bokkie's backend-projected attention queue, ordered
 obligation ledger and selected evidence through one Rust application model on
-native desktop and WebAssembly/WebGPU. Needs attention and All obligations
+native desktop and WebAssembly/WebGPU. Needs attention and Tasks
 share one list surface beside the selected detail. Narrow screens open detail
 directly from either list; Back preserves the collection and selection. Lifecycle
 controls use the backend's typed capabilities and always require a separate confirmation.
@@ -42,6 +42,22 @@ ignored. This arrangement adds no CORS policy, multi-user authentication, proxy,
 non-loopback listener or second database path.
 
 ## Operate the workspace
+
+Needs attention collects decisions and failures. Tasks shows configured work
+such as Garden Bokkie, alongside ordinary tasks labelled as simulated execution.
+Generated gardener work is linked from its parent task and remains visible in
+Needs attention when it requires a decision. Opening a task shows its effective
+settings, latest inspection, run history and proposals. Proposal links open the
+existing implementation task, where approval, execution and verification remain
+part of one durable history. A parent link returns to the configured task.
+
+Garden Bokkie's repository and schedule come from CLI/HTTP registration. Its
+inspection guidance can be edited in the UI: add task instructions to the code
+gardening defaults, or explicitly replace the default guidance. Fixed safety and
+approval rules remain in force. Review the change and save with an operator
+actor; the backend rejects a stale configuration revision or an active inspection.
+Saved settings apply to future inspections and do not change existing proposals
+or approvals. Each new inspection retains the configuration it used.
 
 The workspace reads Bokkie's projected HTTP state; it never reads SQLite. On
 start it acquires the same-origin `/bootstrap` session, validates the Bokkie

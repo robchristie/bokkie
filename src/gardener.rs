@@ -6,6 +6,9 @@ use crate::{ApprovalDecision, ObligationState, Recurrence};
 
 pub const CANONICAL_REPOSITORY: &str = "robchristie/bokkie";
 pub const CANONICAL_DEFAULT_BRANCH: &str = "main";
+/// Replaceable inspection focus; runner safety and proposal approval stay fixed.
+pub const DEFAULT_INSPECTION_INSTRUCTIONS: &str = "Identify independently useful, concrete improvements to maintainability, correctness, tests, or documentation.";
+
 pub const MAX_GARDENER_PROMPTS: usize = 3;
 pub const MAX_GARDENER_MODEL_TEXT_CHARS: usize = 16_384;
 pub const MAX_GARDENER_PROMPT_CHARS: usize = 6_000;
@@ -55,6 +58,8 @@ pub struct NewGardenerInspection {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GardenerInspection {
+    #[serde(default)]
+    pub configuration: Option<bokkie_operator_api::GardenerTaskConfiguration>,
     pub id: String,
     pub repository: String,
     pub obligation_id: String,

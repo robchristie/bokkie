@@ -230,7 +230,11 @@ for raw in sys.stdin:
         # connection proves the manifest committed before the turn was sent.
         db = sqlite3.connect("file:" + {database} + "?mode=ro", uri=True)
         if kind == "inspection":
-            owner = db.execute("SELECT id FROM gardener_inspections WHERE worktree_path = ?", (str(pathlib.Path.cwd()),)).fetchone()[0]
+            owner, snapshot_json = db.execute("SELECT id, configuration_json FROM gardener_inspections WHERE worktree_path = ?", (str(pathlib.Path.cwd()),)).fetchone()
+            snapshot = json.loads(snapshot_json)
+            assert snapshot["effective_instructions"] in prompt
+            assert "configuration revision " + str(snapshot["revision"]) in prompt
+            assert "Fixed safety constraints take precedence" in prompt
             rows = db.execute("SELECT details_json FROM gardener_events WHERE inspection_id = ? AND event_type = ?", (owner, kind + "_turn_manifest_recorded")).fetchall()
         else:
             column = "implementation_worktree_path" if kind == "implementation" else "verification_worktree_path"
@@ -859,6 +863,61 @@ fn unconfigured_ordinary_claims_cannot_take_gardener_work() {
         .unwrap();
     assert_eq!(gardener.len(), 1);
     assert!(gardener[0].obligation_id.starts_with("gardener:inspect:"));
+}
+
+#[test]
+fn inspection_uses_replaced_guidance_and_retains_the_exact_snapshot() {
+    let fixture = Fixture::new("pass", false, false);
+    let mut store = fixture.store();
+    let id = store
+        .gardener_repository()
+        .unwrap()
+        .unwrap()
+        .inspection_obligation_id;
+    let configuration = store
+        .update_gardener_task_configuration(
+            &id,
+            &crate::TaskConfigurationUpdate {
+                expected_revision: 1,
+                instruction_mode: crate::InstructionMode::Replace,
+                instructions: "Look specifically for deterministic recovery gaps.".to_owned(),
+                actor: "operator".to_owned(),
+                note: None,
+            },
+            fixture.clock.now(),
+        )
+        .unwrap();
+    let claim = store
+        .claim_due_gardener(fixture.clock.now(), 30, 1)
+        .unwrap()
+        .remove(0);
+    let config = fixture.config();
+    let runner = GardenerRunner::new(&config, 30, &fixture.clock).unwrap();
+    let result = runner.execute(&mut store, &claim);
+    assert!(
+        matches!(result.completion, Completion::Succeeded { .. }),
+        "{result:?}"
+    );
+    let inspection = store.gardener_inspections().unwrap().remove(0);
+    assert_eq!(inspection.configuration, Some(configuration.clone()));
+    let transcript = fs::read_to_string(&fixture.codex_log).unwrap();
+    let requests: Vec<serde_json::Value> = transcript
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let request = requests
+        .iter()
+        .find(|request| request["method"] == "turn/start")
+        .unwrap();
+    let prompt = request["params"]["input"][0]["text"].as_str().unwrap();
+    assert!(prompt.contains(&configuration.instructions));
+    assert!(!prompt.contains(&configuration.default_instructions));
+    assert!(prompt.contains("do not modify files, run network commands, start implementation"));
+    assert!(prompt.contains("Propose at most three"));
+    assert!(prompt.contains("separate human approval"));
+    assert!(prompt.contains("Read AGENTS.md, README.md, and relevant files under docs/plans/"));
+    assert!(prompt.contains("If no worthwhile work is supported by repository evidence, return an empty proposed_goal_prompts array."));
+    assert_eq!(inspection.prompt_digest, digest(prompt));
 }
 
 #[test]

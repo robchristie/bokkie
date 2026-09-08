@@ -194,6 +194,10 @@ fn router_core(executor: DbExecutor, runtime: ApiRuntime) -> Router {
     Router::new()
         .route("/bootstrap", get(bootstrap))
         .route("/health", get(health))
+        .route(
+            "/operator/tasks/{id}/configuration",
+            post(operator_task_configuration),
+        )
         .route("/operator/snapshot", get(operator_snapshot))
         .route("/operator/changes", get(operator_changes))
         .route("/operator/obligations/{id}", get(operator_obligation))
@@ -617,6 +621,19 @@ async fn operator_retry(
     with_store(&state, move |store, now| {
         store.retry_attention_if_current(&id, &request.precondition, now)?;
         require_obligation(store, &id)
+    })
+    .await
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn operator_task_configuration(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    request: Result<Json<bokkie_operator_api::TaskConfigurationUpdate>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    with_store(&state, move |store, now| {
+        store.update_gardener_task_configuration(&id, &request, now)
     })
     .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
@@ -1199,7 +1216,7 @@ mod tests {
         let (_, bootstrap) = response_json(bootstrap).await;
         assert_eq!(bootstrap["mutation_token"], TEST_TOKEN);
         assert_eq!(bootstrap["service"]["api_contract_version"], 1);
-        assert_eq!(bootstrap["service"]["schema_version"], 9);
+        assert_eq!(bootstrap["service"]["schema_version"], 10);
         assert_eq!(bootstrap["service"]["session_id"], "test-session");
 
         for path in ["/health", "/operator/snapshot"] {
@@ -1235,6 +1252,7 @@ mod tests {
             "/obligations/id/reject",
             "/obligations/id/retry",
             "/obligations/id/cancel",
+            "/operator/tasks/id/configuration",
             "/operator/obligations/id/approve",
             "/operator/obligations/id/reject",
             "/operator/obligations/id/retry",
@@ -1571,6 +1589,75 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn task_configuration_route_saves_revision_and_rejects_stale_or_extra_fields() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("task-configuration-http.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        let registration = store
+            .register_gardener_repository(
+                NewRepositoryRegistration {
+                    repository: crate::CANONICAL_REPOSITORY.to_owned(),
+                    default_branch: crate::CANONICAL_DEFAULT_BRANCH.to_owned(),
+                    checkout_path: "/srv/bokkie".to_owned(),
+                    inspection_recurrence: Recurrence::new("0 0 * * *", "UTC").unwrap(),
+                    first_inspection_at: 2_000_000_000,
+                },
+                100,
+            )
+            .unwrap();
+        drop(store);
+        let application = test_router(database.clone());
+        let body = serde_json::json!({
+            "expected_revision": 1, "instruction_mode": "replace",
+            "instructions": "Investigate recovery tests", "actor": "operator", "note": null
+        });
+        for (request_body, expected_status) in [
+            (body.clone(), StatusCode::OK),
+            (body.clone(), StatusCode::CONFLICT),
+            (
+                {
+                    let mut extra = body.clone();
+                    extra["inspection_cron"] = "* * * * *".into();
+                    extra
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            let response = application
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!(
+                            "/operator/tasks/{}/configuration",
+                            registration.inspection_obligation_id.replace('/', "%2F")
+                        ))
+                        .header("host", TEST_AUTHORITY)
+                        .header("content-type", "application/json")
+                        .header("X-Bokkie-Mutation-Token", TEST_TOKEN)
+                        .body(Body::from(request_body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let (status, response) = response_json(response).await;
+            assert_eq!(status, expected_status, "{response}");
+            if status == StatusCode::OK {
+                assert_eq!(response["revision"], 2);
+                assert_eq!(response["effective_instructions"], body["instructions"]);
+            }
+        }
+        let store = Store::open(&database).unwrap();
+        assert_eq!(
+            store
+                .gardener_task_configuration(&registration.inspection_obligation_id)
+                .unwrap()
+                .revision,
+            2
+        );
     }
 
     #[tokio::test]
@@ -1996,7 +2083,7 @@ mod tests {
         assert_eq!(page.changes.len(), 1);
         assert_eq!(page.requested_after, 0);
         assert!(page.next_after.is_some());
-        assert_eq!(page.service.schema_version, 9);
+        assert_eq!(page.service.schema_version, 10);
     }
 
     #[tokio::test]
@@ -2073,7 +2160,7 @@ mod tests {
         let affected: bokkie_operator_api::OperatorObligationProjection =
             serde_json::from_slice(&body).unwrap();
         assert_eq!(affected.service.session_id, "test-session");
-        assert_eq!(affected.service.schema_version, 9);
+        assert_eq!(affected.service.schema_version, 10);
         assert!(affected.watermark > 0);
         assert_eq!(affected.obligation.id, "affected");
 

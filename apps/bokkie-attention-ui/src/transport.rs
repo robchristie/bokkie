@@ -46,6 +46,10 @@ pub enum ApiRequest {
         generation: u64,
     },
     Act(Box<ActionRequest>),
+    ConfigureTask {
+        obligation_id: String,
+        update: bokkie_operator_api::TaskConfigurationUpdate,
+    },
 }
 
 #[derive(Debug)]
@@ -201,13 +205,19 @@ impl Transport {
             | ApiRequest::TopicPage { .. }
             | ApiRequest::Changes { .. }
             | ApiRequest::Obligation { .. } => Ok(ehttp::Request::get(endpoint)),
-            ApiRequest::Act(action) => {
+            ApiRequest::Act(_) | ApiRequest::ConfigureTask { .. } => {
                 let session = session.ok_or_else(|| {
                     ApiFailure::SessionChanged(
                         "A current Bokkie mutation session is required".to_owned(),
                     )
                 })?;
-                let body = action_body(action);
+                let body = match request {
+                    ApiRequest::Act(action) => action_body(action),
+                    ApiRequest::ConfigureTask { update, .. } => {
+                        serde_json::to_vec(update).expect("serialisable settings")
+                    }
+                    _ => unreachable!(),
+                };
                 let mut request = ehttp::Request::new(
                     ehttp::Method::POST,
                     endpoint,
@@ -253,6 +263,10 @@ impl Transport {
                 encode_path_segment(obligation_id)
             ),
             ApiRequest::Act(action) => action_endpoint(action),
+            ApiRequest::ConfigureTask { obligation_id, .. } => format!(
+                "/operator/tasks/{}/configuration",
+                encode_path_segment(obligation_id)
+            ),
         };
         #[cfg(not(target_arch = "wasm32"))]
         return format!("{}{path}", self.base);
@@ -394,6 +408,10 @@ fn decode(
                 Ok(ApiPayload::Obligation(Box::new(projection)))
             }),
         ApiRequest::Act(_) => Ok(ApiPayload::ActionAccepted),
+        ApiRequest::ConfigureTask { .. } => {
+            decode_json::<bokkie_operator_api::GardenerTaskConfiguration>(&response)
+                .map(|_| ApiPayload::ActionAccepted)
+        }
     }
 }
 
@@ -596,6 +614,43 @@ mod tests {
                 format!("http://127.0.0.1:7744{expected_path}")
             );
         }
+    }
+
+    #[test]
+    fn task_settings_transport_carries_exact_revision_and_memory_only_token() {
+        let transport = Transport::new("http://127.0.0.1:7744").unwrap();
+        let update = bokkie_operator_api::TaskConfigurationUpdate {
+            expected_revision: 17,
+            instruction_mode: bokkie_operator_api::InstructionMode::Replace,
+            instructions: "Inspect recovery paths".to_owned(),
+            actor: "rob".to_owned(),
+            note: Some("Reviewed".to_owned()),
+        };
+        let request = ApiRequest::ConfigureTask {
+            obligation_id: "inspection/task".to_owned(),
+            update: update.clone(),
+        };
+        assert!(transport.http_request(&request, None).is_err());
+        let current = session("process-one", &"a".repeat(64));
+        let http = transport.http_request(&request, Some(&current)).unwrap();
+        assert!(
+            http.url
+                .ends_with("/operator/tasks/inspection%2Ftask/configuration")
+        );
+        assert_eq!(
+            serde_json::from_slice::<bokkie_operator_api::TaskConfigurationUpdate>(&http.body)
+                .unwrap(),
+            update
+        );
+        assert_eq!(
+            http.headers.get("X-Bokkie-Mutation-Token"),
+            Some("a".repeat(64).as_str())
+        );
+        assert!(
+            !String::from_utf8(http.body)
+                .unwrap()
+                .contains(&"a".repeat(64))
+        );
     }
 
     #[test]
