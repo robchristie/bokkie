@@ -12,6 +12,8 @@ from pathlib import Path
 
 
 FIELD_RE = re.compile(r"^- ([A-Za-z][A-Za-z -]+):\s*(.+?)\s*$")
+EVIDENCE_LINK_RE = re.compile(r"\[[^]\n]+\]\([^\s)]+\)")
+LANDING_PR_RE = re.compile(r"https://github\.com/robchristie/bokkie/pull/[1-9][0-9]*")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 CHECKBOX_RE = re.compile(r"^\s*[-*+]\s+\[([^]])\]\s*(.*)$")
 WORKTREE_PATH_RE = re.compile(r"/(?:[^\s`|]*/)*[^\s`|]*worktrees?/[^\s`|]+")
@@ -111,40 +113,65 @@ def lint_plan(path: Path, kind: str) -> list[Problem]:
 
     if kind == "completed":
         delivery = require_field("delivery state")
-        if delivery and delivery[0].lower() != "landed":
-            problems.append(Problem(path, delivery[1], "completed-plan delivery state must be 'landed'"))
-
-        landed_commit = require_field("landed commit")
-        if landed_commit and not COMMIT_RE.fullmatch(landed_commit[0].strip("`")):
-            problems.append(Problem(path, landed_commit[1], "landed commit must be a full lowercase Git commit"))
-
-        landed_date = require_field("landed date")
-        if landed_date:
-            try:
-                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", landed_date[0]):
-                    raise ValueError("date is not dashed ISO form")
-                date.fromisoformat(landed_date[0])
-            except ValueError:
-                problems.append(Problem(path, landed_date[1], "landed date must be YYYY-MM-DD"))
-
-        review_state = require_field("review state")
-        if review_state and review_state[0].lower() != "passed":
-            problems.append(Problem(path, review_state[1], "completed-plan review state must be 'passed'"))
-        merge_state = require_field("merge state")
-        if merge_state and merge_state[0].lower() != "landed":
-            problems.append(Problem(path, merge_state[1], "completed-plan merge state must be 'landed'"))
-        ci_state = require_field("ci state")
-        if ci_state:
-            normalised_ci = ci_state[0].lower()
-            if normalised_ci != "passed" and not re.fullmatch(r"not-applicable:\s*\S.*", normalised_ci):
+        if delivery and delivery[0].lower() == "acceptance-complete":
+            acceptance = require_field("acceptance state")
+            if acceptance and acceptance[0].lower() != "passed":
                 problems.append(
-                    Problem(
-                        path,
-                        ci_state[1],
-                        "completed-plan CI state must be 'passed' or 'not-applicable: <reason>'",
+                    Problem(path, acceptance[1], "acceptance-complete plans require passed acceptance")
+                )
+            evidence = require_field("acceptance evidence")
+            if evidence and not EVIDENCE_LINK_RE.search(evidence[0]):
+                problems.append(
+                    Problem(path, evidence[1], "acceptance evidence must link to retained verification evidence")
+                )
+            landing = require_field("landing evidence")
+            if landing and not LANDING_PR_RE.fullmatch(landing[0]):
+                problems.append(
+                    Problem(path, landing[1], "landing evidence must name the owning Bokkie pull request URL")
+                )
+            # Live delivery facts belong to the PR, avoiding claims about the
+            # future merge of the candidate that contains this completed plan.
+            for name in ("review state", "ci state", "merge state", "landed commit", "landed date"):
+                for _, number in metadata.get(name, []):
+                    problems.append(
+                        Problem(path, number, f"acceptance-complete plans keep {name!r} in PR landing evidence")
                     )
+        else:
+            if delivery and delivery[0].lower() != "landed":
+                problems.append(
+                    Problem(path, delivery[1], "completed-plan delivery state must be 'landed' or 'acceptance-complete'")
                 )
 
+            landed_commit = require_field("landed commit")
+            if landed_commit and not COMMIT_RE.fullmatch(landed_commit[0].strip("`")):
+                problems.append(Problem(path, landed_commit[1], "landed commit must be a full lowercase Git commit"))
+
+            landed_date = require_field("landed date")
+            if landed_date:
+                try:
+                    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", landed_date[0]):
+                        raise ValueError("date is not dashed ISO form")
+                    date.fromisoformat(landed_date[0])
+                except ValueError:
+                    problems.append(Problem(path, landed_date[1], "landed date must be YYYY-MM-DD"))
+
+            review_state = require_field("review state")
+            if review_state and review_state[0].lower() != "passed":
+                problems.append(Problem(path, review_state[1], "completed-plan review state must be 'passed'"))
+            merge_state = require_field("merge state")
+            if merge_state and merge_state[0].lower() != "landed":
+                problems.append(Problem(path, merge_state[1], "completed-plan merge state must be 'landed'"))
+            ci_state = require_field("ci state")
+            if ci_state:
+                normalised_ci = ci_state[0].lower()
+                if normalised_ci != "passed" and not re.fullmatch(r"not-applicable:\s*\S.*", normalised_ci):
+                    problems.append(
+                        Problem(
+                            path,
+                            ci_state[1],
+                            "completed-plan CI state must be 'passed' or 'not-applicable: <reason>'",
+                        )
+                    )
         for number, line in enumerate(lines, 1):
             if line in {"## Current phase", "## Next action"}:
                 problems.append(Problem(path, number, "completed plans cannot retain active phase headings"))
