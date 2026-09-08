@@ -1,10 +1,15 @@
 # Task-centred gardener
 
-- Status: active
+- Status: complete
+- Delivery state: landed
+- Review state: passed
+- CI state: passed
+- Merge state: landed
+- Landed commit: `dbe51f39ffaea654cfd17c623f328d5c11e72a74`
+- Landed date: 2026-09-08
+- Implementation pull request: [#21](https://github.com/robchristie/bokkie/pull/21)
 - Owner: Bokkie product, kernel projections and attention UI
 - Reorientation budget: 160
-- Landed pull requests: none
-- Next Action: Independently review and land the qualified task workspace, then reconcile completion.
 
 ## Outcome and scope
 
@@ -43,7 +48,7 @@ notifications, deployment and publication of runtime-produced work are excluded.
 - Canonical backend/UI checks, exact-head independent review and CI pass before
   ordinary reviewed squash landing.
 
-## Current phase
+## Accepted result
 
 Calibration is complete; the task-centred composition is retained. Schema v10
 adds revisioned guidance and immutable inspection snapshots over existing
@@ -52,18 +57,30 @@ The 1440×900 and 480×720 task and settings captures were opened and inspected;
 physical input proves configuration save, unchanged proposal approval and
 verified-work navigation. [Task-journey evidence](../../task-journey-evidence/README.md)
 owns source/input identities, the rejected clipping probe and accepted result.
-The qualified implementation is ready for independent review and ordinary CI.
+Independent read-only review passed at `2ae4536938701a1b8984664ed7d7ea696e6f9c93`;
+all three required CI jobs passed. The reviewed and landed tree is
+`c568c21632d5ba23d6fa7ce2babc7069187823c4`. The exact reviewed head also passed
+the complete browser/native qualification. PR #21 owns review and landing evidence.
 
 ## Checkpoints
 
 | Increment | Owner | Status | Evidence |
 | --- | --- | --- | --- |
-| Backend task/configuration contract | Domain/store/operator API | locally verified | Task-journey backend check |
-| Task workspace and settings | Attention UI | locally verified | Task-journey UI check |
-| Integration and qualification | Bokkie | passed | Task-journey evidence |
-| Independent review and landing | Owning PR | pending | This plan |
+| Backend task/configuration contract | Domain/store/operator API | landed | Task-journey backend check |
+| Task workspace and settings | Attention UI | landed | Task-journey UI check |
+| Integration and qualification | Bokkie | accepted | Task-journey evidence |
+| Independent review and landing | Bokkie #21 | landed | PR review, CI and tree comparison |
 
-## Next action
 
-Obtain independent review of the exact candidate, satisfy CI and land the
-implementation. Reconcile the completed plan against its actual landing.
+## Boundaries
+
+Repository/schedule registration remains CLI/HTTP-owned. Only inspection guidance
+is editable in this UI slice. The canonical Bokkie repository restriction and
+runtime opt-in remain. Qualification uses synthetic temporary state; live gardener
+operation, deployment, publication, arbitrary task templates and additional
+runners are outside this delivered outcome. Physical new-settings mutation is
+browser-qualified; native qualification covers the existing operator journey
+with shared Rust settings/layout tests.
+
+This completed plan reconciles implementation PR #21. Its own documentation
+review, squash and cleanup are recorded by the terminal closeout pull request.
