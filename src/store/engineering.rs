@@ -404,6 +404,7 @@ impl Store {
                     at: now,
                 }],
                 processed_message_count: 0,
+                supervisor_wait_digest: None,
                 packages: vec![],
                 executions: vec![],
                 questions: vec![],
@@ -580,6 +581,18 @@ impl Store {
                 save(&tx, &mut state, now, "engineering_reconciliation_required")?;
                 continue;
             }
+            if role == EngineeringRole::Supervisor && quiet_supervisor_wait(&tx, &state, now)? {
+                apply_engineering_transition(
+                    &tx,
+                    &obligation_id,
+                    EngineeringTransition::Pending {
+                        at: now.saturating_add(60).min(budget.deadline),
+                        reason: "workers remain active; waiting for changed decision inputs",
+                    },
+                    now,
+                )?;
+                continue;
+            }
             let claim = apply_transition(
                 &tx,
                 Transition::Claim {
@@ -620,6 +633,9 @@ impl Store {
                 )?;
             }
             state.executions.push(execution);
+            if role == EngineeringRole::Supervisor {
+                state.supervisor_wait_digest = None;
+            }
             state.turns_used += 1;
             save(&tx, &mut state, now, "engineering_dispatch_intent")?;
             claims.push(EngineeringClaim {
@@ -650,6 +666,72 @@ fn defer(tx: &Transaction<'_>, id: &str, now: i64) -> Result<(), StoreError> {
         },
         now,
     )
+}
+fn supervisor_decision_digest(state: &EngineeringOutcomeSnapshot) -> Result<String, StoreError> {
+    // Starting work and routine progress do not require a decision. Fencing,
+    // cessation and reconciliation do; exclude only the supervisor's own reap.
+    let material_workers: Vec<_> = state
+        .executions
+        .iter()
+        .filter(|e| {
+            e.role == EngineeringRole::Worker
+                && (e.fenced || e.cessation_verified || e.recovery_required)
+        })
+        .map(|e| (&e.id, e.fenced, e.cessation_verified, e.recovery_required))
+        .collect();
+    let worker_reconciliations: Vec<_> = state
+        .reconciliations
+        .iter()
+        .filter(|r| {
+            state
+                .executions
+                .iter()
+                .any(|e| e.id == r.input.execution_id && e.role == EngineeringRole::Worker)
+        })
+        .collect();
+    digest(&(
+        state.contract_revision,
+        &state.messages,
+        &state.packages,
+        &state.questions,
+        &state.submissions,
+        &state.assessments,
+        &state.repairs,
+        state.cancellation_requested,
+        material_workers,
+        worker_reconciliations,
+    ))
+}
+fn quiet_supervisor_wait(
+    tx: &Transaction<'_>,
+    state: &EngineeringOutcomeSnapshot,
+    now: i64,
+) -> Result<bool, StoreError> {
+    let Some(saved) = &state.supervisor_wait_digest else {
+        return Ok(false);
+    };
+    if saved != &supervisor_decision_digest(state)? {
+        return Ok(false);
+    }
+    let mut active = false;
+    for worker in state
+        .executions
+        .iter()
+        .filter(|e| e.role == EngineeringRole::Worker && !e.cessation_verified)
+    {
+        let obligation = require_obligation(tx, &worker.obligation_id)?;
+        if worker.fenced
+            || worker.recovery_required
+            || obligation.state != ObligationState::Running
+            || obligation
+                .lease_expires_at
+                .is_none_or(|expiry| expiry <= now)
+        {
+            return Ok(false);
+        }
+        active = true;
+    }
+    Ok(active)
 }
 fn create_obligation(
     tx: &Transaction<'_>,
@@ -1472,6 +1554,11 @@ fn apply_command(
                             .iter()
                             .any(|a| a.input.submission_id == s.id)
                 });
+            state.supervisor_wait_digest = if incoming {
+                None
+            } else {
+                Some(supervisor_decision_digest(state)?)
+            };
             apply_engineering_transition(
                 tx,
                 &state.root.id,
@@ -3295,6 +3382,267 @@ mod tests {
         assert!(state.root.last_error.unwrap().contains("budget exhausted"));
         assert_eq!(state.turns_used, 1);
     }
+    #[test]
+    fn supervisor_quiet_wait_survives_reopen_progress_and_lease_renewals() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("engineering.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let (id, worker) = waiting_workers(&mut store);
+        let before = store.engineering_outcome(&id).unwrap().unwrap();
+        assert!(before.supervisor_wait_digest.is_some());
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        for now in [200, 260, 320, 380, 440] {
+            store.renew_lease(&worker.claim, now - 1, 120).unwrap();
+            command(
+                &mut store,
+                &id,
+                actor(&worker),
+                EngineeringCommand::RecordCheckpoint {
+                    runtime_identity: "runtime-1".into(),
+                    request_identity: None,
+                    cursor: now.to_string(),
+                    summary: "worker continues verification".into(),
+                    evidence_digest: sha("progress"),
+                },
+                now - 1,
+            );
+            assert!(
+                store
+                    .claim_due_engineering(EngineeringRole::Supervisor, now, 600, 1)
+                    .unwrap()
+                    .is_empty()
+            );
+            let state = store.engineering_outcome(&id).unwrap().unwrap();
+            assert_eq!(state.turns_used, before.turns_used);
+            assert_eq!(state.executions.len(), before.executions.len());
+            assert_eq!(state.root.attempts_made, before.root.attempts_made);
+            assert_eq!(state.root.state, ObligationState::Pending);
+            assert_eq!(state.root.next_wake_at, Some(now + 60));
+        }
+    }
+
+    // Yield before dispatch, as the runtime does. Neither worker start nor the
+    // supervisor's own subsequent reaping should invalidate the saved wait.
+    fn waiting_workers(store: &mut Store) -> (String, EngineeringClaim) {
+        let id = create(store);
+        let root = claim(store, EngineeringRole::Supervisor, 100);
+        new_package(store, &root, 101);
+        let mut other = package();
+        other.workspace = "other-workspace".into();
+        command(
+            store,
+            &id,
+            actor(&root),
+            EngineeringCommand::CreatePackage(other),
+            101,
+        );
+        command(
+            store,
+            &id,
+            actor(&root),
+            EngineeringCommand::YieldSupervisor {
+                next_wake_at: 200,
+                reason: "waiting for workers".into(),
+                processed_message_count: 1,
+            },
+            102,
+        );
+        reconcile(store, &root, None, 103);
+        let worker = store
+            .claim_due_engineering(EngineeringRole::Worker, 104, 120, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        claim(store, EngineeringRole::Worker, 104);
+        (id, worker)
+    }
+
+    #[test]
+    fn supervisor_quiet_wait_breaks_for_question_result_followup_and_cancellation() {
+        for event in [
+            "question",
+            "result",
+            "followup",
+            "cancellation",
+            "cessation",
+            "uncertain",
+        ] {
+            let mut store = Store::open_in_memory().unwrap();
+            let (id, worker) = waiting_workers(&mut store);
+            assert!(
+                store
+                    .claim_due_engineering(EngineeringRole::Supervisor, 200, 600, 1)
+                    .unwrap()
+                    .is_empty()
+            );
+            match event {
+                "question" => {
+                    command(
+                        &mut store,
+                        &id,
+                        actor(&worker),
+                        EngineeringCommand::AskQuestion {
+                            request_key: "broker/thread/turn/question".into(),
+                            kind: EngineeringQuestionKind::Routine,
+                            prompt: "Which fixture?".into(),
+                            options: vec![],
+                        },
+                        201,
+                    );
+                }
+                "result" => {
+                    reconcile(&mut store, &worker, Some(submission()), 201);
+                }
+                "followup" => {
+                    command(
+                        &mut store,
+                        &id,
+                        op(),
+                        EngineeringCommand::FollowUp {
+                            text: "Also check the missing file case".into(),
+                        },
+                        201,
+                    );
+                }
+                "cancellation" => {
+                    command(
+                        &mut store,
+                        &id,
+                        op(),
+                        EngineeringCommand::RequestCancellation {
+                            package_id: worker.package_id.clone(),
+                        },
+                        201,
+                    );
+                }
+                "cessation" => {
+                    reconcile(&mut store, &worker, None, 201);
+                }
+                "uncertain" => {
+                    command(
+                        &mut store,
+                        &id,
+                        EngineeringActor::Reconciler {
+                            adapter_id: "test-adapter".into(),
+                        },
+                        EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
+                            execution_id: worker.execution_id.clone(),
+                            runtime_identity: "runtime-1".into(),
+                            observation: "broker lost; cessation remains unproven".into(),
+                            evidence_digest: sha("uncertain"),
+                            runtime_failure: None,
+                            not_started: false,
+                            reaped_boundary: None,
+                            recovered_submission: None,
+                        }),
+                        201,
+                    );
+                }
+                _ => unreachable!(),
+            }
+            let claims = store
+                .claim_due_engineering(EngineeringRole::Supervisor, 201, 600, 1)
+                .unwrap();
+            assert_eq!(claims.len(), 1, "{event} must break the quiet wait");
+            let state = store.engineering_outcome(&id).unwrap().unwrap();
+            assert_eq!(state.turns_used, 4);
+            assert!(state.supervisor_wait_digest.is_none());
+        }
+    }
+
+    #[test]
+    fn supervisor_quiet_wait_breaks_for_worker_expiry_with_another_worker_active() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (id, worker) = waiting_workers(&mut store);
+        assert!(
+            store
+                .claim_due_engineering(EngineeringRole::Supervisor, 200, 600, 1)
+                .unwrap()
+                .is_empty()
+        );
+        let claims = store
+            .claim_due_engineering(EngineeringRole::Supervisor, 224, 600, 1)
+            .unwrap();
+        assert_eq!(claims.len(), 1);
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert_eq!(state.turns_used, 4);
+        assert!(
+            state
+                .executions
+                .iter()
+                .find(|e| e.id == worker.execution_id)
+                .unwrap()
+                .recovery_required
+        );
+        assert_eq!(
+            store
+                .get(&worker.claim.obligation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            ObligationState::Attention
+        );
+    }
+
+    #[test]
+    fn supervisor_quiet_wait_preserves_worker_failure_attention() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (id, worker) = waiting_workers(&mut store);
+        command(
+            &mut store,
+            &id,
+            EngineeringActor::Reconciler {
+                adapter_id: "test-adapter".into(),
+            },
+            EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
+                execution_id: worker.execution_id,
+                runtime_identity: "runtime-1".into(),
+                observation: "worker failed".into(),
+                evidence_digest: sha("failure"),
+                runtime_failure: Some("runtime stopped unexpectedly".into()),
+                not_started: false,
+                reaped_boundary: Some("boundary-1".into()),
+                recovered_submission: None,
+            }),
+            200,
+        );
+        assert!(
+            store
+                .claim_due_engineering(EngineeringRole::Supervisor, 201, 600, 1)
+                .unwrap()
+                .is_empty()
+        );
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert_eq!(state.root.state, ObligationState::Attention);
+        assert!(state.root.last_error.unwrap().contains("runtime failed"));
+        assert_eq!(state.turns_used, 3);
+    }
+
+    #[test]
+    fn old_snapshot_without_supervisor_wait_digest_remains_dispatchable() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (id, _) = waiting_workers(&mut store);
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        let mut old = serde_json::to_value(&state).unwrap();
+        old.as_object_mut()
+            .unwrap()
+            .remove("supervisor_wait_digest");
+        let mut restored: EngineeringOutcomeSnapshot = serde_json::from_value(old).unwrap();
+        assert!(restored.supervisor_wait_digest.is_none());
+        let tx = store.connection.transaction().unwrap();
+        assert!(!quiet_supervisor_wait(&tx, &restored, 200).unwrap());
+        save(&tx, &mut restored, 199, "test_legacy_snapshot").unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            store
+                .claim_due_engineering(EngineeringRole::Supervisor, 200, 600, 1)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     #[test]
     fn routine_question_wakes_supervisor_and_answer_receipt_is_exact_and_replayable() {
         let mut store = Store::open_in_memory().unwrap();

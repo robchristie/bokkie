@@ -16,6 +16,13 @@ This is qualification evidence, not a claim of product acceptance.
 
 | 20260909-f | `465b1d050d8b1fe440ac93bbc8a633dbff5ba7bb` | Actual offline completion, incomplete assessment and linked repair succeeded. The fresh repair passed tests and independent review. Rejected because distinct observations for one criterion were rejected only during Store import, after the worker was reaped. Repairs allow distinct evidence per criterion, preflight submissions before stopping workers, retain cessation independently of invalid import, and clarify that completed delivery uses empty limitations. The repaired runtime subsequently reconciled every boundary and completed cancellation; `post-repair-cleanup.json` retains the observation. |
 
+Run `20260909-g` at `83cbd5c4495c531d63565fd3bc33b99ff3e69783` is provisional.
+It has retained offline completion, an autonomous routine answer, a substantive
+incomplete assessment and linked repair. Repeated unchanged worker-wait decisions
+consume supervisor turns; a durable scheduling repair is in progress before the
+longer application run. This is an outer infrastructure intervention, not a
+substituted supervisor decision. Final acceptance remains pending.
+
 Historical retained synthetic evidence owner:
 `/nvme/development/bokkie-supervision-fixture-20260909-a` contains the SQLite
 records, private broker journals, exact profile, fixture revision

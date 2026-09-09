@@ -376,6 +376,9 @@ pub struct EngineeringOutcomeSnapshot {
     pub contracts: Vec<EngineeringContractRevision>,
     pub messages: Vec<EngineeringMessage>,
     pub processed_message_count: usize,
+    /// Decision inputs retained when the supervisor yields to its workers.
+    #[serde(default)]
+    pub supervisor_wait_digest: Option<String>,
     pub packages: Vec<EngineeringPackage>,
     pub executions: Vec<EngineeringExecution>,
     pub questions: Vec<EngineeringQuestion>,
