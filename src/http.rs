@@ -1,6 +1,6 @@
 //! Loopback HTTP adapter. Lifecycle decisions remain owned by [`crate::Store`].
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -27,9 +27,16 @@ use crate::{
 use bokkie_operator_api::ActionPrecondition;
 
 #[derive(Debug, Clone)]
+pub struct EngineeringIntakeConfig {
+    /// Trusted, explicitly enabled service profile. Never accepted from HTTP JSON.
+    pub contract_template: crate::engineering::EngineeringContract,
+}
+
+#[derive(Debug, Clone)]
 pub struct ApiState {
     pub executor: DbExecutor,
     pub runtime: ApiRuntime,
+    pub engineering_intake: Option<Arc<EngineeringIntakeConfig>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -190,8 +197,41 @@ pub fn router_with_executor(executor: DbExecutor, runtime: ApiRuntime) -> Router
 }
 
 fn router_core(executor: DbExecutor, runtime: ApiRuntime) -> Router {
-    let state = ApiState { executor, runtime };
+    router_state_core(ApiState {
+        executor,
+        runtime,
+        engineering_intake: None,
+    })
+}
+
+/// Service-owned engineering configuration shares the existing loopback security boundary.
+pub fn router_with_state(state: ApiState, ui_dir: Option<PathBuf>) -> Router {
+    let security = state.runtime.clone();
+    let mut router = router_state_core(state);
+    if let Some(ui_dir) = ui_dir {
+        router = router.nest_service(
+            "/ui",
+            ServeDir::new(ui_dir).append_index_html_on_directories(true),
+        );
+    }
+    router.layer(middleware::from_fn_with_state(security, enforce))
+}
+
+fn router_state_core(state: ApiState) -> Router {
     Router::new()
+        .route(
+            "/engineering/outcomes",
+            post(engineering_intake).get(engineering_list),
+        )
+        .route("/engineering/outcomes/{id}", get(engineering_detail))
+        .route(
+            "/engineering/outcomes/{id}/cancel",
+            post(engineering_cancel),
+        )
+        .route(
+            "/engineering/outcomes/{id}/messages",
+            post(engineering_follow_up),
+        )
         .route("/bootstrap", get(bootstrap))
         .route("/health", get(health))
         .route(
@@ -1158,6 +1198,183 @@ pub fn error_json(code: &'static str, message: impl Into<String>) -> Value {
     json!({"error": {"code": code, "message": message.into()}})
 }
 
+async fn engineering_intake(
+    State(state): State<ApiState>,
+    request: Result<Json<bokkie_operator_api::EngineeringIntakeRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    let mut contract = state
+        .engineering_intake
+        .as_ref()
+        .ok_or_else(|| ApiError {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "engineering_not_configured",
+            message: "Engineering supervision requires an explicitly configured runtime profile"
+                .to_owned(),
+        })?
+        .contract_template
+        .clone();
+    contract.intent = request.intent;
+    engineering_mutation(
+        &state,
+        crate::engineering::EngineeringCommandEnvelope {
+            command_id: request.command_id,
+            expected: None,
+            command: crate::engineering::EngineeringCommand::CreateOutcome { contract },
+        },
+    )
+    .await
+}
+
+async fn engineering_follow_up(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    request: Result<Json<bokkie_operator_api::EngineeringFollowUpRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    if request.expected.outcome_id != id {
+        return Err(
+            StoreError::Invalid("follow-up identity does not match the route".into()).into(),
+        );
+    }
+    let command = match request.question_id {
+        Some(question_id) => crate::engineering::EngineeringCommand::ResolveQuestion {
+            question_id,
+            answer: request.text,
+            authority_grants: Vec::new(),
+        },
+        None => crate::engineering::EngineeringCommand::FollowUp { text: request.text },
+    };
+    engineering_mutation(
+        &state,
+        crate::engineering::EngineeringCommandEnvelope {
+            command_id: request.command_id,
+            expected: Some(crate::engineering::EngineeringPrecondition {
+                outcome_id: id,
+                contract_revision: request.expected.contract_revision,
+                state_revision: request.expected.state_revision,
+            }),
+            command,
+        },
+    )
+    .await
+}
+
+async fn engineering_cancel(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    request: Result<Json<bokkie_operator_api::EngineeringCancellationRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    if request.expected.outcome_id != id {
+        return Err(
+            StoreError::Invalid("cancellation identity does not match the route".into()).into(),
+        );
+    }
+    engineering_mutation(
+        &state,
+        crate::engineering::EngineeringCommandEnvelope {
+            command_id: request.command_id,
+            expected: Some(crate::engineering::EngineeringPrecondition {
+                outcome_id: id,
+                contract_revision: request.expected.contract_revision,
+                state_revision: request.expected.state_revision,
+            }),
+            command: crate::engineering::EngineeringCommand::RequestCancellation {
+                package_id: None,
+            },
+        },
+    )
+    .await
+}
+
+async fn engineering_mutation(
+    state: &ApiState,
+    envelope: crate::engineering::EngineeringCommandEnvelope,
+) -> Result<Response, ApiError> {
+    let service = state.runtime.identity();
+    with_store(state, move |store, now| {
+        let replay = if let crate::engineering::EngineeringCommand::CreateOutcome { contract } =
+            &envelope.command
+        {
+            store.engineering_operator_intake_receipt(
+                &envelope.command_id,
+                &contract.intent,
+                "local operator",
+            )?
+        } else {
+            None
+        };
+        let receipt = match replay {
+            Some(receipt) => receipt,
+            None => store.engineering_command(
+                crate::engineering::EngineeringActor::Operator {
+                    name: "local operator".to_owned(),
+                },
+                envelope,
+                now,
+            )?,
+        };
+        let outcome = store
+            .engineering_outcome(&receipt.outcome_id)?
+            .ok_or_else(|| StoreError::NotFound(receipt.outcome_id.clone()))?;
+        Ok(bokkie_operator_api::EngineeringSaved {
+            service,
+            command_id: receipt.command_id,
+            outcome_id: receipt.outcome_id,
+            root_obligation_id: outcome.root.id,
+        })
+    })
+    .await
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn engineering_detail(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Response, ApiError> {
+    let service = state.runtime.identity();
+    with_store(&state, move |store, now| {
+        let outcome = store
+            .engineering_outcome(&id)?
+            .ok_or_else(|| StoreError::NotFound(id.clone()))?;
+        let (watermark, obligation) =
+            store.operator_obligation_with_watermark(&outcome.root.id, now)?;
+        Ok(bokkie_operator_api::OperatorObligationProjection {
+            service,
+            watermark,
+            obligation,
+        })
+    })
+    .await
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+/// Uses the existing keyset/watermark walk; callers must follow cursors even for filtered empty pages.
+async fn engineering_list(
+    State(state): State<ApiState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Response, ApiError> {
+    let service = state.runtime.identity();
+    with_store(&state, move |store, now| {
+        let mut page = store.operator_snapshot_page(
+            now,
+            query.cursor.as_deref(),
+            query.watermark,
+            query.limit,
+        )?;
+        page.service = Some(service);
+        page.obligations.retain(|obligation| {
+            obligation.task.as_ref().is_some_and(|task| {
+                task.kind == bokkie_operator_api::OperatorTaskKind::EngineeringSupervisor
+            })
+        });
+        Ok(page)
+    })
+    .await
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1174,6 +1391,376 @@ mod tests {
 
     fn test_runtime() -> ApiRuntime {
         ApiRuntime::deterministic(TEST_AUTHORITY.parse().unwrap(), 0x42, "test-session")
+    }
+
+    fn engineering_test_contract() -> crate::engineering::EngineeringContract {
+        use crate::engineering::*;
+        use sha2::{Digest, Sha256};
+        let instructions = EngineeringInstructions {
+            text: "test instructions".into(),
+            digest: format!("{:x}", Sha256::digest(b"test instructions")),
+            context_digests: vec![],
+            profile_digest: "a".repeat(64),
+            adapter_id: "test-adapter".into(),
+        };
+        EngineeringContract {
+            intent: "template".into(),
+            criteria: vec![],
+            permitted_scope: vec!["isolated test workspace".into()],
+            prohibited_effects: vec!["network publication".into()],
+            authority: vec![],
+            supervisor: instructions.clone(),
+            worker: instructions,
+            budget: EngineeringBudget {
+                max_turns: 5,
+                max_packages: 3,
+                max_repairs: 2,
+                max_recoveries: 2,
+                max_checkpoints: 20,
+                max_questions: 10,
+                max_concurrent_workers: 1,
+                turn_seconds: 30,
+                deadline: SystemClock.now() + 3600,
+            },
+        }
+    }
+
+    async fn engineering_post(
+        application: Router,
+        uri: &str,
+        body: Value,
+        token: bool,
+    ) -> (StatusCode, Value) {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("host", TEST_AUTHORITY)
+            .header("content-type", "application/json");
+        if token {
+            request = request.header("X-Bokkie-Mutation-Token", TEST_TOKEN);
+        }
+        response_json(
+            application
+                .oneshot(request.body(Body::from(body.to_string())).unwrap())
+                .await
+                .unwrap(),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn engineering_plain_intent_is_durable_replay_safe_and_fenced() {
+        let temp = TempDir::new().unwrap();
+        let database = temp.path().join("engineering.sqlite");
+        drop(Store::open(&database).unwrap());
+        let executor = DbExecutor::start(database.clone()).unwrap();
+        let application = router_with_state(
+            ApiState {
+                executor,
+                runtime: test_runtime(),
+                engineering_intake: Some(Arc::new(EngineeringIntakeConfig {
+                    contract_template: engineering_test_contract(),
+                })),
+            },
+            None,
+        );
+        let body = json!({"command_id":"ui-create", "intent":"Build a local reading workspace"});
+        assert_eq!(
+            engineering_post(
+                application.clone(),
+                "/engineering/outcomes",
+                body.clone(),
+                false
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        let (status, saved) = engineering_post(
+            application.clone(),
+            "/engineering/outcomes",
+            body.clone(),
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        let replay =
+            engineering_post(application.clone(), "/engineering/outcomes", body, true).await;
+        assert_eq!(replay.1, saved);
+        let mut changed_template = engineering_test_contract();
+        changed_template.budget.deadline += 300;
+        changed_template.permitted_scope = vec!["a different configured workspace".into()];
+        let restarted = router_with_state(
+            ApiState {
+                executor: DbExecutor::start(database.clone()).unwrap(),
+                runtime: test_runtime(),
+                engineering_intake: Some(Arc::new(EngineeringIntakeConfig {
+                    contract_template: changed_template,
+                })),
+            },
+            None,
+        );
+        let after_restart = engineering_post(
+            restarted.clone(),
+            "/engineering/outcomes",
+            json!({"command_id":"ui-create", "intent":"Build a local reading workspace"}),
+            true,
+        )
+        .await;
+        assert_eq!(after_restart.0, StatusCode::OK, "{}", after_restart.1);
+        assert_eq!(after_restart.1, saved);
+        assert_eq!(
+            engineering_post(
+                restarted,
+                "/engineering/outcomes",
+                json!({"command_id":"ui-create", "intent":"A different request"}),
+                true
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        let store = Store::open(&database).unwrap();
+        let outcome = store
+            .engineering_outcome(saved["outcome_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.contract().intent, "Build a local reading workspace");
+        assert_eq!(
+            outcome.contract().permitted_scope,
+            ["isolated test workspace"]
+        );
+        assert!(outcome.contract().criteria.is_empty());
+        let projected = store
+            .operator_obligation(&outcome.root.id, SystemClock.now())
+            .unwrap();
+        assert_eq!(
+            projected.task.as_ref().unwrap().kind,
+            bokkie_operator_api::OperatorTaskKind::EngineeringSupervisor
+        );
+        assert!(!projected.capabilities.cancel.available);
+        assert_eq!(
+            projected
+                .task
+                .as_ref()
+                .unwrap()
+                .engineering
+                .as_ref()
+                .unwrap()
+                .responsibility,
+            "Bokkie supervisor"
+        );
+        let uri = format!("/engineering/outcomes/{}/messages", outcome.id);
+        let message = json!({"command_id":"ui-followup", "expected":outcome.precondition(), "text":"Preserve original files", "question_id":null});
+        let (status, response) =
+            engineering_post(application.clone(), &uri, message.clone(), true).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(
+            engineering_post(application.clone(), &uri, message.clone(), true)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        let mut stale = message;
+        stale["command_id"] = "new-stale-command".into();
+        assert_eq!(
+            engineering_post(application.clone(), &uri, stale, true)
+                .await
+                .0,
+            StatusCode::CONFLICT
+        );
+        let current = store.engineering_outcome(&outcome.id).unwrap().unwrap();
+        assert_eq!(
+            current
+                .messages
+                .iter()
+                .filter(|m| m.text == "Preserve original files")
+                .count(),
+            1
+        );
+        let detail = application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/engineering/outcomes/{}", outcome.id))
+                    .header("host", TEST_AUTHORITY)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response_json(detail).await.0, StatusCode::OK);
+        let listing = application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/engineering/outcomes?limit=1")
+                    .header("host", TEST_AUTHORITY)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, listing) = response_json(listing).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listing["obligations"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            listing["obligations"][0]["task"]["kind"],
+            "engineering_supervisor"
+        );
+        let mut malicious = json!({"command_id":"authority-injection", "intent":"test"});
+        malicious["contract"] = json!({"authority":["publish"]});
+        assert_eq!(
+            engineering_post(application, "/engineering/outcomes", malicious, true)
+                .await
+                .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn engineering_cancellation_is_fenced_replay_safe_and_waits_for_cessation() {
+        use crate::engineering::*;
+        let temp = TempDir::new().unwrap();
+        let database = temp.path().join("engineering-cancel.sqlite");
+        let now = SystemClock.now();
+        let mut store = Store::open(&database).unwrap();
+        let created = store
+            .engineering_command(
+                EngineeringActor::Operator {
+                    name: "local operator".into(),
+                },
+                EngineeringCommandEnvelope {
+                    command_id: "create-cancellation-test".into(),
+                    expected: None,
+                    command: EngineeringCommand::CreateOutcome {
+                        contract: engineering_test_contract(),
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        let before_claim = store
+            .engineering_outcome(&created.outcome_id)
+            .unwrap()
+            .unwrap()
+            .precondition();
+        let claim = store
+            .claim_due_engineering(EngineeringRole::Supervisor, now, 600, 1)
+            .unwrap()
+            .remove(0);
+        let expected = store
+            .engineering_outcome(&created.outcome_id)
+            .unwrap()
+            .unwrap()
+            .precondition();
+        let application = test_router(database);
+        let uri = format!("/engineering/outcomes/{}/cancel", created.outcome_id);
+        let body = json!({"command_id":"cancel-outcome", "expected":expected});
+        assert_eq!(
+            engineering_post(application.clone(), &uri, body.clone(), false)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            engineering_post(
+                application.clone(),
+                &uri,
+                json!({"command_id":"stale-cancel", "expected":before_claim}),
+                true
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        let (status, saved) = engineering_post(application.clone(), &uri, body.clone(), true).await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        assert_eq!(
+            engineering_post(application.clone(), &uri, body, true)
+                .await
+                .1,
+            saved
+        );
+        assert_eq!(
+            engineering_post(
+                application,
+                &uri,
+                json!({"command_id":"second-stale-cancel", "expected":expected}),
+                true
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        let cancelling = store
+            .engineering_outcome(&created.outcome_id)
+            .unwrap()
+            .unwrap();
+        assert!(cancelling.cancellation_requested);
+        assert_eq!(cancelling.root.state, crate::ObligationState::Attention);
+        assert!(cancelling.executions[0].fenced);
+        assert!(!cancelling.executions[0].cessation_verified);
+        for (command_id, boundary) in [
+            ("observe-cancel", None),
+            ("reap-cancel", Some("test-contained-boundary".to_owned())),
+        ] {
+            let expected = store
+                .engineering_outcome(&created.outcome_id)
+                .unwrap()
+                .unwrap()
+                .precondition();
+            store
+                .engineering_command(
+                    EngineeringActor::Reconciler {
+                        adapter_id: "test-adapter".into(),
+                    },
+                    EngineeringCommandEnvelope {
+                        command_id: command_id.into(),
+                        expected: Some(expected),
+                        command: EngineeringCommand::RecordReconciliation(
+                            EngineeringReconciliationInput {
+                                execution_id: claim.execution_id.clone(),
+                                runtime_identity: "test-runtime".into(),
+                                observation: "cancellation reconciliation observation".into(),
+                                evidence_digest: "b".repeat(64),
+                                reaped_boundary: boundary.clone(),
+                                recovered_submission: None,
+                            },
+                        ),
+                    },
+                    now,
+                )
+                .unwrap();
+            let current = store
+                .engineering_outcome(&created.outcome_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                current.root.state,
+                if boundary.is_some() {
+                    crate::ObligationState::Cancelled
+                } else {
+                    crate::ObligationState::Attention
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn engineering_intake_requires_trusted_configuration() {
+        let temp = TempDir::new().unwrap();
+        let database = temp.path().join("engineering.sqlite");
+        drop(Store::open(&database).unwrap());
+        let (status, response) = engineering_post(
+            test_router(database),
+            "/engineering/outcomes",
+            json!({"command_id":"create", "intent":"Build something"}),
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response["error"]["code"], "engineering_not_configured");
     }
 
     fn test_router(database: PathBuf) -> Router {
@@ -1216,7 +1803,10 @@ mod tests {
         let (_, bootstrap) = response_json(bootstrap).await;
         assert_eq!(bootstrap["mutation_token"], TEST_TOKEN);
         assert_eq!(bootstrap["service"]["api_contract_version"], 1);
-        assert_eq!(bootstrap["service"]["schema_version"], 10);
+        assert_eq!(
+            bootstrap["service"]["schema_version"],
+            bokkie_operator_api::SUPPORTED_SCHEMA_VERSION
+        );
         assert_eq!(bootstrap["service"]["session_id"], "test-session");
 
         for path in ["/health", "/operator/snapshot"] {
@@ -2083,7 +2673,10 @@ mod tests {
         assert_eq!(page.changes.len(), 1);
         assert_eq!(page.requested_after, 0);
         assert!(page.next_after.is_some());
-        assert_eq!(page.service.schema_version, 10);
+        assert_eq!(
+            page.service.schema_version,
+            bokkie_operator_api::SUPPORTED_SCHEMA_VERSION
+        );
     }
 
     #[tokio::test]
@@ -2160,7 +2753,10 @@ mod tests {
         let affected: bokkie_operator_api::OperatorObligationProjection =
             serde_json::from_slice(&body).unwrap();
         assert_eq!(affected.service.session_id, "test-session");
-        assert_eq!(affected.service.schema_version, 10);
+        assert_eq!(
+            affected.service.schema_version,
+            bokkie_operator_api::SUPPORTED_SCHEMA_VERSION
+        );
         assert!(affected.watermark > 0);
         assert_eq!(affected.obligation.id, "affected");
 

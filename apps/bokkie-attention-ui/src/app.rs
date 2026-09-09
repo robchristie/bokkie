@@ -159,6 +159,15 @@ impl ActionKey for LifecycleAction {
 #[derive(Clone, Debug, PartialEq)]
 enum OperatorIntent {
     Refresh,
+    ComposeEngineering,
+    CancelEngineering {
+        expected: bokkie_operator_api::EngineeringOutcomePrecondition,
+    },
+    FollowUpEngineering {
+        expected: bokkie_operator_api::EngineeringOutcomePrecondition,
+        question_id: Option<String>,
+        prompt: Option<String>,
+    },
     Select {
         obligation_id: String,
         destination: Option<PaneId>,
@@ -213,7 +222,21 @@ fn projection_refresh_plan(
     }
 }
 
+#[derive(Clone, Debug)]
+struct EngineeringDraft {
+    cancellation: bool,
+    text: String,
+    expected: Option<bokkie_operator_api::EngineeringOutcomePrecondition>,
+    question_id: Option<String>,
+    prompt: Option<String>,
+    /// A failed or unacknowledged request is retried byte-for-byte.
+    pending: Option<ApiRequest>,
+    error: Option<String>,
+}
+
 pub struct AttentionApp {
+    engineering_draft: Option<EngineeringDraft>,
+    engineering_saved_notice: bool,
     workspace: Workspace,
     collection: PaneId,
     model: AppModel,
@@ -279,6 +302,8 @@ impl AttentionApp {
             model.mark_stale(error);
         }
         let mut app = Self {
+            engineering_draft: None,
+            engineering_saved_notice: false,
             workspace: operator_workspace(),
             collection: INBOX_PANE_ID,
             model,
@@ -322,6 +347,106 @@ impl AttentionApp {
         }
     }
 
+    fn show_engineering_compose(&mut self, context: &egui::Context, nodes: &mut Vec<UiNode>) {
+        let Some(mut draft) = self.engineering_draft.clone() else {
+            return;
+        };
+        let mut submit = false;
+        let mut close = false;
+        let current = draft.expected.as_ref().and_then(|expected| {
+            self.model
+                .snapshot
+                .as_ref()?
+                .obligations
+                .iter()
+                .filter_map(|o| o.task.as_ref()?.engineering.as_ref())
+                .find(|view| view.expected.outcome_id == expected.outcome_id)
+        });
+        let precondition_current = draft.expected.as_ref().is_none_or(|expected| {
+            current.is_some_and(|view| view.expected == *expected && view.accepts_follow_up)
+        });
+        let safe = self.session.is_some()
+            && self.model.connection.decisions_safe()
+            && !self.model.action_busy
+            && !self.model.snapshot_busy;
+        let window = egui::Window::new(if draft.cancellation { "Confirm outcome cancellation" } else if draft.expected.is_some() { "Follow up with Bokkie" } else { "Ask Bokkie to take responsibility" })
+            .id(egui::Id::new("bokkie.engineering.compose"))
+            .default_width(520.0).max_width((context.content_rect().width() - 32.0).max(240.0))
+            .max_height((context.content_rect().height() - 48.0).max(200.0)).vscroll(true).resizable(true).show(context, |ui| {
+                ui.label(if draft.cancellation { "Cancel this outcome and all its work packages? Bokkie will fence further work and retain reconciliation responsibility until all active writers are proven stopped." } else if draft.expected.is_some() { "Add context, change the request, or answer the displayed decision." } else { "Describe the engineering outcome in your own words. Bokkie will retain it and formalise the acceptance criteria." });
+                if let Some(prompt) = &draft.prompt { ui.label(prompt); ui.label("Your answer is retained for the supervisor. It does not grant authority beyond the configured contract."); }
+                if !draft.cancellation {
+                let response = ui.add_enabled(draft.pending.is_none() && !self.model.action_busy, egui::TextEdit::multiline(&mut draft.text).id_salt("engineering-intent").desired_rows(7).desired_width(f32::INFINITY).hint_text("What should Bokkie achieve?"));
+                observe_engineering_control(&response, "bokkie.engineering.text", "Engineering intent or follow-up", false, nodes);
+                }
+                if let Some(error) = &draft.error { ui.colored_label(egui::Color32::from_rgb(210, 90, 70), error); }
+                if !precondition_current && draft.pending.is_none() {
+                    ui.label("The outcome changed. Review its current state before sending this retained text.");
+                    if let Some(current) = current {
+                        ui.label(&current.next_action);
+                        if engineering_button(ui, "bokkie.engineering.review-current", "Use reviewed current outcome", safe, nodes) {
+                            draft.expected = Some(current.expected.clone());
+                            draft.error = None;
+                        }
+                    }
+                }
+                let valid = draft.cancellation || (!draft.text.trim().is_empty() && draft.text.chars().count() <= 16_384);
+                ui.horizontal(|ui| {
+                    submit = engineering_button(ui, "bokkie.engineering.save", if draft.pending.is_some() { "Retry durable save" } else if draft.cancellation { "Confirm cancellation" } else { "Save request" }, safe && valid && (precondition_current || draft.pending.is_some()), nodes);
+                    close = engineering_button(ui, "bokkie.engineering.discard", "Discard draft", !self.model.action_busy && draft.pending.is_none(), nodes);
+                });
+                if draft.pending.is_some() { ui.label("This request may already be saved. Retrying uses its original identity to avoid duplicate work."); }
+                if !safe { ui.label("A current Bokkie session and refreshed state are required to send."); }
+            });
+        if let Some(window) = window {
+            let mut node = UiNode::container(
+                SemanticUiId::new("bokkie.engineering.compose"),
+                Some(SemanticUiId::root()),
+                UiRole::Section,
+                window.response.rect.into(),
+            );
+            node.name = "Engineering request".to_owned();
+            nodes.push(node);
+        }
+        if close {
+            self.engineering_draft = None;
+            return;
+        }
+        if submit {
+            let request = draft.pending.clone().unwrap_or_else(|| {
+                let command_id = engineering_command_id();
+                match &draft.expected {
+                    Some(expected) if draft.cancellation => ApiRequest::EngineeringCancel(
+                        bokkie_operator_api::EngineeringCancellationRequest {
+                            command_id,
+                            expected: expected.clone(),
+                        },
+                    ),
+                    Some(expected) => ApiRequest::EngineeringFollowUp(
+                        bokkie_operator_api::EngineeringFollowUpRequest {
+                            command_id,
+                            expected: expected.clone(),
+                            text: draft.text.clone(),
+                            question_id: draft.question_id.clone(),
+                        },
+                    ),
+                    None => ApiRequest::EngineeringIntake(
+                        bokkie_operator_api::EngineeringIntakeRequest {
+                            command_id,
+                            intent: draft.text.clone(),
+                        },
+                    ),
+                }
+            });
+            draft.pending = Some(request.clone());
+            draft.error = None;
+            self.engineering_draft = Some(draft);
+            self.dispatch(request, context);
+        } else {
+            self.engineering_draft = Some(draft);
+        }
+    }
+
     fn dispatch(&mut self, request: ApiRequest, context: &egui::Context) {
         let Some(transport) = &self.transport else {
             self.model.mark_stale("Transport is unavailable");
@@ -333,7 +458,11 @@ impl AttentionApp {
             | ApiRequest::Changes { .. }
             | ApiRequest::Obligation { .. } => self.model.snapshot_busy = true,
             ApiRequest::TopicPage { .. } => self.model.topic_busy = true,
-            ApiRequest::Act(_) | ApiRequest::ConfigureTask { .. } => self.model.action_busy = true,
+            ApiRequest::Act(_)
+            | ApiRequest::ConfigureTask { .. }
+            | ApiRequest::EngineeringIntake(_)
+            | ApiRequest::EngineeringFollowUp(_)
+            | ApiRequest::EngineeringCancel(_) => self.model.action_busy = true,
         }
         transport.send(
             request,
@@ -346,6 +475,44 @@ impl AttentionApp {
     fn poll_transport(&mut self, context: &egui::Context) {
         while let Ok(message) = self.receiver.try_recv() {
             match (message.request, message.result) {
+                (
+                    ApiRequest::EngineeringIntake(_)
+                    | ApiRequest::EngineeringFollowUp(_)
+                    | ApiRequest::EngineeringCancel(_),
+                    Ok(ApiPayload::EngineeringSaved(saved)),
+                ) => {
+                    self.model.action_busy = false;
+                    self.engineering_draft = None;
+                    self.engineering_saved_notice = true;
+                    self.model.status =
+                        "Saved durably. Bokkie retains responsibility for the next action."
+                            .to_owned();
+                    self.model.selected_obligation = Some(saved.root_obligation_id);
+                    self.collection = OBLIGATIONS_PANE_ID;
+                    self.workspace.active_pane = TIMELINE_PANE_ID;
+                    self.begin_full_rebuild(false, context);
+                }
+                (
+                    ApiRequest::EngineeringIntake(_)
+                    | ApiRequest::EngineeringFollowUp(_)
+                    | ApiRequest::EngineeringCancel(_),
+                    Err(error),
+                ) => {
+                    self.model.action_busy = false;
+                    if let Some(draft) = self.engineering_draft.as_mut() {
+                        draft.error = Some(error.to_string());
+                        // A definite rejection can be edited and resubmitted with a fresh receipt.
+                        if matches!(error, ApiFailure::Conflict(_) | ApiFailure::Rejected(_)) {
+                            draft.pending = None;
+                        }
+                    }
+                    if matches!(error, ApiFailure::SessionChanged(_)) {
+                        self.restart_session(&error.to_string(), context);
+                    } else if matches!(error, ApiFailure::Conflict(_)) {
+                        self.model.mark_stale(error.to_string());
+                        self.begin_full_rebuild(true, context);
+                    }
+                }
                 (ApiRequest::Bootstrap, Ok(ApiPayload::Bootstrap(session))) => {
                     self.session = Some(session);
                     self.begin_full_rebuild(false, context);
@@ -546,7 +713,12 @@ impl AttentionApp {
 
     fn request_is_current(&self, request: &ApiRequest) -> bool {
         match request {
-            ApiRequest::Bootstrap | ApiRequest::Act(_) | ApiRequest::ConfigureTask { .. } => true,
+            ApiRequest::Bootstrap
+            | ApiRequest::Act(_)
+            | ApiRequest::ConfigureTask { .. }
+            | ApiRequest::EngineeringIntake(_)
+            | ApiRequest::EngineeringFollowUp(_)
+            | ApiRequest::EngineeringCancel(_) => true,
             ApiRequest::SnapshotPage { generation, .. } => self
                 .snapshot_assembly
                 .as_ref()
@@ -902,6 +1074,49 @@ impl AttentionApp {
     fn apply_intents(&mut self, intents: Vec<OperatorIntent>, context: &egui::Context) {
         for intent in intents {
             match intent {
+                OperatorIntent::ComposeEngineering => {
+                    if self.engineering_draft.is_none() {
+                        self.engineering_draft = Some(EngineeringDraft {
+                            cancellation: false,
+                            text: String::new(),
+                            expected: None,
+                            question_id: None,
+                            prompt: None,
+                            pending: None,
+                            error: None,
+                        });
+                    }
+                }
+                OperatorIntent::CancelEngineering { expected } => {
+                    if self.engineering_draft.is_none() {
+                        self.engineering_draft = Some(EngineeringDraft {
+                            cancellation: true,
+                            text: String::new(),
+                            expected: Some(expected),
+                            question_id: None,
+                            prompt: None,
+                            pending: None,
+                            error: None,
+                        });
+                    }
+                }
+                OperatorIntent::FollowUpEngineering {
+                    expected,
+                    question_id,
+                    prompt,
+                } => {
+                    if self.engineering_draft.is_none() {
+                        self.engineering_draft = Some(EngineeringDraft {
+                            cancellation: false,
+                            text: String::new(),
+                            expected: Some(expected),
+                            question_id,
+                            prompt,
+                            pending: None,
+                            error: None,
+                        });
+                    }
+                }
                 OperatorIntent::Refresh => {
                     self.next_poll_at = None;
                     if self.session.is_some() {
@@ -1116,6 +1331,15 @@ impl eframe::App for AttentionApp {
             .show(root_ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.heading("Bokkie");
+                    if engineering_button(
+                        ui,
+                        "bokkie.engineering.new",
+                        "New task",
+                        !self.model.action_busy,
+                        &mut semantic_nodes,
+                    ) {
+                        intents.push(OperatorIntent::ComposeEngineering);
+                    }
                     ui.add_space(12.0);
                     if ui.max_rect().width() - 32.0 >= NARROW_WORKSPACE_WIDTH {
                         show_collection_tabs(
@@ -1192,6 +1416,23 @@ impl eframe::App for AttentionApp {
                     .inner_margin(16.0),
             )
             .show(root_ui, |ui| {
+                if self.engineering_saved_notice {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            "Saved durably. Bokkie retains responsibility for the next action.",
+                        );
+                        if engineering_button(
+                            ui,
+                            "bokkie.engineering.dismiss-saved",
+                            "Dismiss",
+                            true,
+                            &mut semantic_nodes,
+                        ) {
+                            self.engineering_saved_notice = false;
+                        }
+                    });
+                    ui.separator();
+                }
                 let narrow = ui.available_width() < NARROW_WORKSPACE_WIDTH;
                 if narrow {
                     show_collection_navigation(
@@ -1294,6 +1535,7 @@ impl eframe::App for AttentionApp {
                 virtualisation = presenter.virtualisation;
             });
 
+        self.show_engineering_compose(&context, &mut semantic_nodes);
         if let Some(draft) = self.model.settings.clone() {
             task_ui::show_settings(
                 &context,
@@ -2121,6 +2363,9 @@ fn show_detail_actions(
                         Some(DisabledReason::GardenerProposalRequiresExactDecision) => {
                             "exact-decision"
                         }
+                        Some(DisabledReason::EngineeringRequiresSupervisor) => {
+                            "engineering-supervisor"
+                        }
                         Some(DisabledReason::NotGardenerProposal) => "not-gardener-proposal",
                         None => "unavailable",
                     }
@@ -2515,6 +2760,8 @@ fn obligation_source(obligation: &OperatorObligation) -> &str {
     match obligation.task.as_ref().map(|task| task.kind) {
         Some(OperatorTaskKind::GardenerInspection) => "Code gardening · recurring inspection",
         Some(OperatorTaskKind::GardenerImplementation) => "Code gardening · implementation",
+        Some(OperatorTaskKind::EngineeringSupervisor) => "Engineering supervision",
+        Some(OperatorTaskKind::EngineeringWorker) => "Engineering work package",
         Some(OperatorTaskKind::Simulated) => "Simulated execution",
         None => "Bokkie obligation",
     }
@@ -3184,6 +3431,67 @@ fn current_unix_seconds() -> i64 {
 #[cfg(target_arch = "wasm32")]
 fn current_unix_seconds() -> i64 {
     (js_sys::Date::now() / 1_000.0) as i64
+}
+
+fn engineering_command_id() -> String {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(target_arch = "wasm32"))]
+    let identity = format!(
+        "{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    #[cfg(target_arch = "wasm32")]
+    let identity = format!("{}-{}", js_sys::Date::now(), js_sys::Math::random());
+    format!("operator-{identity}-{sequence}")
+}
+
+fn observe_engineering_control(
+    response: &egui::Response,
+    id: &str,
+    label: &str,
+    button: bool,
+    nodes: &mut Vec<UiNode>,
+) {
+    if button {
+        record_native_text_control(response, NativeTextControlKind::Button);
+    }
+    let parent = if id == "bokkie.engineering.new" || id == "bokkie.engineering.dismiss-saved" {
+        SemanticUiId::root()
+    } else {
+        SemanticUiId::new("bokkie.engineering.compose")
+    };
+    let mut node = UiNode::container(
+        SemanticUiId::new(id),
+        Some(parent),
+        if button {
+            UiRole::Button
+        } else {
+            UiRole::Section
+        },
+        response.rect.into(),
+    );
+    node.name = label.to_owned();
+    node.enabled = response.enabled();
+    node.focused = response.has_focus();
+    nodes.push(node);
+}
+fn engineering_button(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    enabled: bool,
+    nodes: &mut Vec<UiNode>,
+) -> bool {
+    let response = ui
+        .push_id(id, |ui| ui.add_enabled(enabled, egui::Button::new(label)))
+        .inner;
+    observe_engineering_control(&response, id, label, true, nodes);
+    response.clicked()
 }
 
 #[cfg(test)]
@@ -4199,9 +4507,122 @@ mod tests {
         }
     }
 
+    #[test]
+    fn engineering_compose_controls_are_observable_at_desktop_and_narrow_widths() {
+        for width in [1280.0, 400.0] {
+            let mut app = test_app();
+            app.engineering_draft = Some(EngineeringDraft {
+                cancellation: false,
+                text: "Keep this intent".into(),
+                expected: None,
+                question_id: None,
+                prompt: None,
+                pending: None,
+                error: None,
+            });
+            let context = egui::Context::default();
+            let mut nodes = Vec::new();
+            for _ in 0..3 {
+                nodes.clear();
+                context
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 800.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            app.show_engineering_compose(ui.ctx(), &mut nodes);
+                        },
+                    )
+                    .textures_delta
+                    .clear();
+            }
+            for id in [
+                "bokkie.engineering.compose",
+                "bokkie.engineering.text",
+                "bokkie.engineering.save",
+                "bokkie.engineering.discard",
+            ] {
+                assert!(
+                    nodes.iter().any(|node| node.id == SemanticUiId::new(id)),
+                    "missing {id} at {width}"
+                );
+            }
+            assert_eq!(
+                app.engineering_draft.as_ref().unwrap().text,
+                "Keep this intent"
+            );
+        }
+    }
+
+    #[test]
+    fn engineering_cancellation_opens_a_separate_confirmation_without_dispatch() {
+        let mut app = test_app();
+        let expected = bokkie_operator_api::EngineeringOutcomePrecondition {
+            outcome_id: "outcome".into(),
+            contract_revision: 2,
+            state_revision: 9,
+        };
+        app.apply_intents(
+            vec![OperatorIntent::CancelEngineering {
+                expected: expected.clone(),
+            }],
+            &egui::Context::default(),
+        );
+        let draft = app.engineering_draft.as_ref().unwrap();
+        assert!(draft.cancellation);
+        assert_eq!(draft.expected.as_ref(), Some(&expected));
+        assert!(draft.pending.is_none());
+        assert!(!app.model.action_busy);
+    }
+
+    #[test]
+    fn engineering_failed_save_preserves_text_and_exact_replay_identity() {
+        let mut app = test_app();
+        let request =
+            ApiRequest::EngineeringIntake(bokkie_operator_api::EngineeringIntakeRequest {
+                command_id: "stable-save".into(),
+                intent: "Keep this intent".into(),
+            });
+        app.engineering_draft = Some(EngineeringDraft {
+            cancellation: false,
+            text: "Keep this intent".into(),
+            expected: None,
+            question_id: None,
+            prompt: None,
+            pending: Some(request.clone()),
+            error: None,
+        });
+        app.sender
+            .send(ApiMessage {
+                request: request.clone(),
+                result: Err(ApiFailure::Other("lost acknowledgement".into())),
+            })
+            .unwrap();
+        app.poll_transport(&egui::Context::default());
+        let draft = app.engineering_draft.as_ref().unwrap();
+        assert_eq!(draft.text, "Keep this intent");
+        assert_eq!(draft.pending, Some(request.clone()));
+        app.sender
+            .send(ApiMessage {
+                request,
+                result: Err(ApiFailure::Rejected("invalid intent".into())),
+            })
+            .unwrap();
+        app.poll_transport(&egui::Context::default());
+        let draft = app.engineering_draft.as_ref().unwrap();
+        assert_eq!(draft.text, "Keep this intent");
+        assert!(draft.pending.is_none());
+    }
+
     fn test_app() -> AttentionApp {
         let (sender, receiver) = mpsc::channel();
         AttentionApp {
+            engineering_draft: None,
+            engineering_saved_notice: false,
             workspace: operator_workspace(),
             collection: INBOX_PANE_ID,
             model: AppModel::default(),
@@ -4230,6 +4651,7 @@ mod tests {
         let mut task = fixture(1);
         task.state = OperatorObligationState::Pending;
         task.task = Some(bokkie_operator_api::OperatorTask {
+            engineering: None,
             kind: bokkie_operator_api::OperatorTaskKind::GardenerInspection,
             title: "Garden Bokkie".to_owned(), parent_task_id: None, proposal_instance_id: None,
             configuration: Some(serde_json::from_value(serde_json::json!({

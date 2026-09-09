@@ -1,8 +1,8 @@
 # Engineering supervision contract
 
-Status: proposed backend contract pending live protocol calibration. This document
-defines Store semantics; it does not claim that runtime dispatch is implemented
-or qualified. The programme and acceptance owner is
+Status: backend contract implemented; integrated runtime qualification pending.
+This document defines Store semantics and does not claim fixture or dogfood
+acceptance. The live protocol calibration selected the broker/containment profile. The programme and acceptance owner is
 [`plans/active/engineering-supervision.md`](plans/active/engineering-supervision.md).
 Protocol evidence belongs in `docs/supervision-evidence/`.
 
@@ -14,8 +14,11 @@ worker package obligation. Do not reuse the gardener registration, approvals or
 execution lane. A package's submission is evidence awaiting assessment, not
 successful completion of its obligation.
 
-The following are typed records, with foreign keys and append-only guards on
-immutable rows. Mutable pointers are projections of immutable events.
+The following typed records are retained in immutable, bounded aggregate snapshot
+revisions. Relational tables bind outcomes, obligations, immutable dispatches and
+workspace reservations; receipts retain the full typed envelope and trusted actor.
+Foreign keys and append-only guards protect these rows. Mutable pointers select
+the current revision; obligation state remains in the existing lifecycle tables.
 
 | Record | Required identity and content |
 |---|---|
@@ -26,7 +29,7 @@ immutable rows. Mutable pointers are projections of immutable events.
 | Dependency | Dependent package ID and prerequisite package ID; prerequisite must have acceptance under the current contract |
 | Execution | ID, obligation occurrence and attempt, lease generation, contract revision, role, package if worker, durable dispatch key, selected instruction/context/profile identities, workspace identity/reservation, consumed budget |
 | Execution checkpoint | Execution ID, increasing sequence, external runtime identity when known, external request/turn identity, protocol cursor, bounded progress summary, evidence reference and timestamp |
-| Question | ID, execution ID, contract revision, stable runtime request identity (broker process generation, thread, turn, item and request ID), kind (`Routine` or `NewAuthority`), bounded prompt/options and precise requested decision |
+| Question | ID, execution ID, contract revision, stable runtime request identity (broker process generation, thread, turn, item and request ID), kind (`Routine`, `MissingInformation` or `NewAuthority`), bounded prompt/options and precise requested decision |
 | Resolution | Question ID, exact contract revision, actor role, answer, supporting existing authority/criterion references; new authority requires an operator decision and a new contract revision |
 | Submission | ID, execution/package/outcome IDs, exact contract revision, immutable artefact revisions, per-criterion evidence, claimed limitations and cessation evidence reference |
 | Assessment | ID, exact submission ID and digest, contract revision, assessor execution ID, criterion verdicts, independent review evidence identity, decision (`Accept` or `Repair`) |
@@ -35,8 +38,8 @@ immutable rows. Mutable pointers are projections of immutable events.
 | Reconciliation observation | Execution ID, adapter identity, observed runtime state, evidence, optional cessation proof, observation time and next action |
 | Command receipt | Stable command ID, canonical typed payload digest, authority/precondition digest, immutable bounded response, resulting event sequence |
 
-IDs are distinct Rust newtypes. A digest is a validated SHA-256 identity, never
-an unchecked label. A Git artefact names repository identity, exact commit and
+IDs are bounded strings; generated durable record IDs use UUIDs. A digest is a
+validated SHA-256 identity, never an unchecked label. A Git artefact names repository identity, exact commit and
 tree; a file artefact names an approved store identity, relative path, byte
 length and digest. A mutable worktree path, branch name or runtime thread ID
 alone cannot identify a deliverable. Validation evidence includes the exact
@@ -45,8 +48,9 @@ digest. Evidence acquisition happens outside SQLite transactions.
 
 Containment and prerequisites have different meanings. Parent links form a tree
 within an outcome; dependency links form a separate directed acyclic graph.
-Reject missing, cross-outcome, self and cyclic links atomically. Dependencies
-must name accepted immutable results, never provisional checkpoints. Cancel an
+Reject missing, cross-outcome, self and cyclic links atomically. Dependency dispatch requires accepted results, never provisional checkpoints.
+Edges are immutable creation-time references to existing same-outcome packages;
+there is no mutable dependency operation that can introduce a cycle. Cancel an
 outcome or parent by requesting cancellation of its owned descendants; do not
 cancel an unrelated prerequisite or dependent through a dependency edge.
 Failed/cancelled prerequisites block dispatch and wake the supervisor to repair,
@@ -56,68 +60,24 @@ children to be accepted or explicitly superseded by a contract-bound repair.
 ## Adapter-ready Store surface
 
 Use one typed command boundary so HTTP, CLI and runtime adapters share replay,
-revision and authority checks. These are proposed public Rust signatures;
-payload types correspond to the records and constraints above. No command
-accepts SQL, shell text for execution, arbitrary JSON transitions or an adapter
-supplied lifecycle state.
+revision and authority checks. The executable definitions are
+[`src/engineering.rs`](../src/engineering.rs) and the
+[Store extension](../src/store/engineering.rs). `engineering_command` takes its
+trusted actor separately from the serialised envelope; model/HTTP JSON cannot
+select that actor. `claim_due_engineering` claims role-specific work;
+`engineering_outcome`, `engineering_outcome_ids` and `engineering_history_page`
+provide bounded read access.
 
-```rust
-impl Store {
-    pub fn engineering_command(
-        &mut self,
-        envelope: EngineeringCommandEnvelope,
-        now: i64,
-    ) -> Result<EngineeringCommandReceipt, StoreError>;
+The closed command set supports outcome creation and follow-up, operator contract
+revision, supervisor criterion formalisation, packages, checkpoints, questions
+and resolutions, submissions, assessment, linked repair, supervisor yield,
+cancellation, trusted reconciliation and final acceptance. It accepts no SQL,
+arbitrary lifecycle state or general-purpose execution command.
 
-    pub fn claim_due_engineering(
-        &mut self,
-        role: EngineeringRole,
-        now: i64,
-        lease_seconds: i64,
-        limit: usize,
-    ) -> Result<Vec<EngineeringClaim>, StoreError>;
-
-    pub fn engineering_outcome(
-        &self,
-        id: &OutcomeId,
-    ) -> Result<Option<EngineeringOutcomeSnapshot>, StoreError>;
-
-    pub fn engineering_history_page(
-        &self,
-        id: &OutcomeId,
-        cursor: Option<&str>,
-        limit: Option<usize>,
-    ) -> Result<ReadPage<EngineeringHistoryItem>, StoreError>;
-}
-
-pub struct EngineeringCommandEnvelope {
-    pub command_id: CommandId,
-    pub actor: EngineeringActor,
-    pub expected: EngineeringPrecondition,
-    pub command: EngineeringCommand,
-}
-
-pub enum EngineeringCommand {
-    CreateOutcome(NewEngineeringOutcome),
-    ReviseContract(ContractRevisionInput),
-    CreatePackage(NewEngineeringPackage),
-    RecordCheckpoint(ExecutionCheckpointInput),
-    AskQuestion(QuestionInput),
-    ResolveQuestion(QuestionResolutionInput),
-    SubmitResult(SubmissionInput),
-    AssessResult(AssessmentInput),
-    CreateRepair(RepairInput),
-    YieldSupervisor(SupervisorContinuation),
-    RequestCancellation(CancellationTarget),
-    RecordReconciliation(ReconciliationInput),
-    ResumeExecution(ResumeExecutionInput),
-    FinishOutcome(OutcomeAcceptanceInput),
-}
-```
-
-`EngineeringPrecondition` is `Create` only for outcome creation; otherwise it
-contains the outcome ID, expected contract revision and reviewed obligation
-occurrence/state revision. Runtime mutations additionally require execution ID
+`EngineeringPrecondition` is absent only for outcome creation; otherwise it
+contains the outcome ID, expected contract revision and outcome state watermark.
+The watermark includes incoming evidence and operator messages, so new input
+fences decisions made from an older snapshot. Runtime mutations additionally require execution ID
 and the current claim token/generation. The execution identity and all referenced
 record ownership must agree. A claim carries the existing `Claim`, execution ID,
 exact contract/instruction/context references, remaining budget and reserved
@@ -242,9 +202,10 @@ question or answer. A resolution is durable before protocol delivery; delivery
 acknowledgement is a checkpoint, so reconnect can reconcile an unanswered request
 without silently inventing a second answer.
 
-Every contract and package specifies finite maximum turns, runtime per turn,
-wall-clock deadline, recovery attempts, repairs, concurrent workers and total
-packages/checkpoints/questions. Charge dispatch budget in the intent transaction
+Contracts specify finite maximum turns, runtime per turn, wall-clock deadline,
+recovery attempts, repairs, concurrent workers and total packages/checkpoints/
+questions. Package turn counts, turn duration and deadline also limit that
+package; the other counters apply to the aggregate outcome. Charge dispatch budget in the intent transaction
 and charge retries/recovery monotonically; replay is free. Bound requested
 limits and reject overflow. Budget exhaustion creates recoverable attention with
 consumption and next decision. An operator budget increase is a contract revision.
@@ -264,5 +225,10 @@ Deterministic tests must cover receipt replay/conflict, stale contract/lease
 fences, dependency cycles and failure, result-to-supervisor atomic handover,
 generic-route exclusion, cancellation with an unproven writer, offline result
 import, repair deduplication, exact-revision acceptance and budget exhaustion.
-Runtime/transport implementation starts only after live calibration records the
-dispatch/reconnect/question/cessation mechanisms this contract depends on.
+Runtime/transport implementation follows the selected live calibration.
+The bounded initial outcome-ID list has a 500-row cap and no cursor; canonical
+audit history uses existing keyset pages. There is no generic resume command:
+trusted cessation may import offline evidence or permit a new execution, while
+unreaped reservations remain held. Ordinary post-reap imports currently retain
+the same recovered-submission attribution as offline imports; protocol evidence
+distinguishes their actual observation history.

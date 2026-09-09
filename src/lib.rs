@@ -9,6 +9,8 @@ pub mod app_server;
 pub mod db_executor;
 pub mod doctor;
 pub mod domain;
+pub mod engineering;
+pub mod engineering_runtime;
 pub mod events;
 pub mod execution_lane;
 pub mod gardener;

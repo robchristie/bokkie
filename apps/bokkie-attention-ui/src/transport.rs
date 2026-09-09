@@ -25,6 +25,9 @@ pub struct ActionRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApiRequest {
     Bootstrap,
+    EngineeringIntake(bokkie_operator_api::EngineeringIntakeRequest),
+    EngineeringFollowUp(bokkie_operator_api::EngineeringFollowUpRequest),
+    EngineeringCancel(bokkie_operator_api::EngineeringCancellationRequest),
     SnapshotPage {
         generation: u64,
         cursor: Option<String>,
@@ -60,6 +63,7 @@ pub enum ApiPayload {
     Changes(ProjectionChangePage),
     Obligation(Box<OperatorObligationProjection>),
     ActionAccepted,
+    EngineeringSaved(bokkie_operator_api::EngineeringSaved),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,6 +73,7 @@ pub enum ApiFailure {
     InvalidCursor(String),
     SessionChanged(String),
     Other(String),
+    Rejected(String),
 }
 
 impl std::fmt::Display for ApiFailure {
@@ -78,6 +83,7 @@ impl std::fmt::Display for ApiFailure {
             | Self::ProjectionGap(message)
             | Self::InvalidCursor(message)
             | Self::SessionChanged(message)
+            | Self::Rejected(message)
             | Self::Other(message) => formatter.write_str(message),
         }
     }
@@ -205,13 +211,26 @@ impl Transport {
             | ApiRequest::TopicPage { .. }
             | ApiRequest::Changes { .. }
             | ApiRequest::Obligation { .. } => Ok(ehttp::Request::get(endpoint)),
-            ApiRequest::Act(_) | ApiRequest::ConfigureTask { .. } => {
+            ApiRequest::Act(_)
+            | ApiRequest::ConfigureTask { .. }
+            | ApiRequest::EngineeringIntake(_)
+            | ApiRequest::EngineeringFollowUp(_)
+            | ApiRequest::EngineeringCancel(_) => {
                 let session = session.ok_or_else(|| {
                     ApiFailure::SessionChanged(
                         "A current Bokkie mutation session is required".to_owned(),
                     )
                 })?;
                 let body = match request {
+                    ApiRequest::EngineeringIntake(request) => {
+                        serde_json::to_vec(request).expect("serialisable intent")
+                    }
+                    ApiRequest::EngineeringCancel(request) => {
+                        serde_json::to_vec(request).expect("serialisable cancellation")
+                    }
+                    ApiRequest::EngineeringFollowUp(request) => {
+                        serde_json::to_vec(request).expect("serialisable follow-up")
+                    }
                     ApiRequest::Act(action) => action_body(action),
                     ApiRequest::ConfigureTask { update, .. } => {
                         serde_json::to_vec(update).expect("serialisable settings")
@@ -234,6 +253,15 @@ impl Transport {
 
     fn endpoint(&self, request: &ApiRequest) -> String {
         let path = match request {
+            ApiRequest::EngineeringIntake(_) => "/engineering/outcomes".to_owned(),
+            ApiRequest::EngineeringCancel(request) => format!(
+                "/engineering/outcomes/{}/cancel",
+                encode_path_segment(&request.expected.outcome_id)
+            ),
+            ApiRequest::EngineeringFollowUp(request) => format!(
+                "/engineering/outcomes/{}/messages",
+                encode_path_segment(&request.expected.outcome_id)
+            ),
             ApiRequest::Bootstrap => "/bootstrap".to_owned(),
             ApiRequest::SnapshotPage {
                 cursor, watermark, ..
@@ -357,6 +385,9 @@ fn decode(
             (_, Some("invalid_request")) if request.is_projection_read() => {
                 Err(ApiFailure::InvalidCursor(message))
             }
+            (400 | 422, _) | (_, Some("engineering_not_configured")) => {
+                Err(ApiFailure::Rejected(message))
+            }
             (409, _) => Err(ApiFailure::Conflict(message)),
             (403, Some("mutation_token_required" | "mutation_token_invalid")) => {
                 Err(ApiFailure::SessionChanged(message))
@@ -407,6 +438,13 @@ fn decode(
                 )?;
                 Ok(ApiPayload::Obligation(Box::new(projection)))
             }),
+        ApiRequest::EngineeringIntake(_)
+        | ApiRequest::EngineeringFollowUp(_)
+        | ApiRequest::EngineeringCancel(_) => {
+            let saved = decode_json::<bokkie_operator_api::EngineeringSaved>(&response)?;
+            validate_response_identity(Some(&saved.service), expected_session, "engineering save")?;
+            Ok(ApiPayload::EngineeringSaved(saved))
+        }
         ApiRequest::Act(_) => Ok(ApiPayload::ActionAccepted),
         ApiRequest::ConfigureTask { .. } => {
             decode_json::<bokkie_operator_api::GardenerTaskConfiguration>(&response)

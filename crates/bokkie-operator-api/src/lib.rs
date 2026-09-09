@@ -6,7 +6,7 @@ use serde_json::Value;
 /// Version of the HTTP contract consumed by the bundled operator UI.
 pub const API_CONTRACT_VERSION: u32 = 1;
 /// Exact SQLite migration version understood by this build of the UI.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 10;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 11;
 /// Stable package identity; the per-process session ID distinguishes restarts.
 pub const BOKKIE_BUILD_ID: &str = concat!("bokkie/", env!("CARGO_PKG_VERSION"));
 
@@ -135,6 +135,7 @@ pub enum DisabledReason {
     TerminalObligation,
     GardenerProposalRequiresExactDecision,
     NotGardenerProposal,
+    EngineeringRequiresSupervisor,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -197,6 +198,8 @@ pub enum OperatorTaskKind {
     GardenerInspection,
     GardenerImplementation,
     Simulated,
+    EngineeringSupervisor,
+    EngineeringWorker,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -224,6 +227,8 @@ pub struct GardenerTaskConfiguration {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OperatorTask {
+    #[serde(default)]
+    pub engineering: Option<EngineeringView>,
     pub kind: OperatorTaskKind,
     pub title: String,
     pub parent_task_id: Option<String>,
@@ -435,4 +440,69 @@ mod tests {
         assert!(precondition.gardener_source_inspection_id.is_none());
         assert!(precondition.gardener_generation.is_none());
     }
+}
+
+/// Plain operator intent. Execution scope and authority come from service configuration.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineeringIntakeRequest {
+    pub command_id: String,
+    pub intent: String,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineeringOutcomePrecondition {
+    pub outcome_id: String,
+    pub contract_revision: u64,
+    pub state_revision: u64,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineeringCancellationRequest {
+    pub command_id: String,
+    pub expected: EngineeringOutcomePrecondition,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineeringFollowUpRequest {
+    pub command_id: String,
+    pub expected: EngineeringOutcomePrecondition,
+    pub text: String,
+    /// An explicit reply to the displayed decision; omitted for general follow-ups.
+    pub question_id: Option<String>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EngineeringQuestionView {
+    pub id: String,
+    pub prompt: String,
+    pub needs_operator: bool,
+    pub answer: Option<String>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EngineeringMessageView {
+    pub text: String,
+    pub actor: String,
+    pub at: i64,
+}
+/// Bounded read projection; lifecycle authority remains in Store.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EngineeringView {
+    pub intent: String,
+    pub expected: EngineeringOutcomePrecondition,
+    pub responsibility: String,
+    pub next_action: String,
+    pub acceptance: String,
+    pub criteria: Vec<String>,
+    pub messages: Vec<EngineeringMessageView>,
+    pub earlier_messages: usize,
+    pub questions: Vec<EngineeringQuestionView>,
+    pub earlier_questions: usize,
+    pub accepts_follow_up: bool,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EngineeringSaved {
+    pub service: ServiceIdentity,
+    pub command_id: String,
+    pub outcome_id: String,
+    pub root_obligation_id: String,
 }

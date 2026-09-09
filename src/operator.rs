@@ -1014,8 +1014,9 @@ impl Store {
             }
             ObligationState::Completed | ObligationState::Cancelled => unreachable!(),
         };
-        let task = match self.gardener_obligation_kind(&obligation.id)? {
+        let mut task = match self.gardener_obligation_kind(&obligation.id)? {
             Some(crate::GardenerObligationKind::Inspection) => OperatorTask {
+                engineering: None,
                 kind: OperatorTaskKind::GardenerInspection,
                 title: "Garden Bokkie".to_owned(),
                 parent_task_id: None,
@@ -1027,6 +1028,7 @@ impl Store {
                     "SELECT i.obligation_id FROM gardener_inspections i JOIN gardener_proposal_instances pi ON pi.source_inspection_id = i.id WHERE pi.implementation_obligation_id = ?1 LIMIT 1",
                     [&obligation.id], |row| row.get(0)).optional()?;
                 OperatorTask {
+                    engineering: None,
                     kind: OperatorTaskKind::GardenerImplementation,
                     title: implementation_task_title(proposal.map(|value| value.prompt.as_str())),
                     parent_task_id,
@@ -1035,6 +1037,7 @@ impl Store {
                 }
             }
             None => OperatorTask {
+                engineering: None,
                 kind: OperatorTaskKind::Simulated,
                 title: obligation.description.clone(),
                 parent_task_id: None,
@@ -1042,6 +1045,36 @@ impl Store {
                 proposal_instance_id: None,
             },
         };
+        let engineering_id = self
+            .engineering_binding(&obligation.id)?
+            .map(|binding| binding.0);
+        let mut projected_capabilities = capabilities(obligation, proposal, state_revision);
+        if let Some(id) = engineering_id {
+            let outcome = self
+                .engineering_outcome(&id)?
+                .ok_or_else(|| StoreError::NotFound(id.clone()))?;
+            let is_root = outcome.root.id == obligation.id;
+            task.kind = if is_root {
+                OperatorTaskKind::EngineeringSupervisor
+            } else {
+                OperatorTaskKind::EngineeringWorker
+            };
+            task.title = implementation_task_title(Some(&obligation.description));
+            task.parent_task_id = (!is_root).then(|| outcome.root.id.clone());
+            task.engineering = Some(engineering_view(&outcome, captured_at));
+            for action in [
+                &mut projected_capabilities.approve,
+                &mut projected_capabilities.reject,
+                &mut projected_capabilities.retry,
+                &mut projected_capabilities.cancel,
+                &mut projected_capabilities.approve_gardener_proposal,
+                &mut projected_capabilities.reject_gardener_proposal,
+            ] {
+                action.available = false;
+                action.disabled_reason = Some(DisabledReason::EngineeringRequiresSupervisor);
+                action.precondition = None;
+            }
+        }
         Ok(OperatorObligation {
             task: Some(task),
             id: obligation.id.clone(),
@@ -1064,7 +1097,7 @@ impl Store {
             updated_at: obligation.updated_at,
             exception,
             liveness,
-            capabilities: capabilities(obligation, proposal, state_revision),
+            capabilities: projected_capabilities,
         })
     }
 
@@ -1519,6 +1552,127 @@ impl From<ObligationState> for OperatorObligationState {
             ObligationState::Completed => Self::Completed,
             ObligationState::Cancelled => Self::Cancelled,
         }
+    }
+}
+
+/// Keep list/detail payloads bounded while retaining full evidence in the durable Store.
+pub(crate) fn engineering_view(
+    outcome: &crate::engineering::EngineeringOutcomeSnapshot,
+    captured_at: i64,
+) -> bokkie_operator_api::EngineeringView {
+    use crate::engineering::EngineeringQuestionKind;
+    use bokkie_operator_api::{
+        EngineeringMessageView, EngineeringOutcomePrecondition, EngineeringQuestionView,
+        EngineeringView,
+    };
+    let open_decision = outcome.questions.iter().find(|q| {
+        q.resolution.is_none()
+            && q.kind.needs_operator()
+            && (q.contract_revision == outcome.contract_revision
+                || q.kind == EngineeringQuestionKind::NewAuthority)
+    });
+    let (responsibility, next_action) = if outcome.root.state.is_terminal() {
+        ("No further action".to_owned(), "Outcome closed".to_owned())
+    } else if let Some(question) = open_decision {
+        ("Operator".to_owned(), question.prompt.clone())
+    } else if outcome.root.state == ObligationState::Running
+        && outcome
+            .root
+            .lease_expires_at
+            .is_some_and(|expiry| expiry <= captured_at)
+    {
+        (
+            "Runtime reconciliation".to_owned(),
+            "Reconcile the expired execution before replacing its writer".to_owned(),
+        )
+    } else if outcome.root.state == ObligationState::Attention {
+        (
+            "Operator / runtime reconciliation".to_owned(),
+            outcome
+                .root
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "Review the attention condition".to_owned()),
+        )
+    } else {
+        (
+            "Bokkie supervisor".to_owned(),
+            if outcome.root.state == ObligationState::Running {
+                "Supervising bounded engineering work".to_owned()
+            } else {
+                "Continue supervision at the durable wake-up".to_owned()
+            },
+        )
+    };
+    let messages = outcome
+        .messages
+        .iter()
+        .rev()
+        .take(30)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|m| EngineeringMessageView {
+            text: m.text.clone(),
+            actor: m.actor.clone(),
+            at: m.at,
+        })
+        .collect();
+    let questions: Vec<_> = outcome
+        .questions
+        .iter()
+        .filter(|q| {
+            q.contract_revision == outcome.contract_revision
+                || (q.kind == EngineeringQuestionKind::NewAuthority && q.resolution.is_none())
+        })
+        .collect();
+    EngineeringView {
+        intent: outcome.contract().intent.clone(),
+        expected: EngineeringOutcomePrecondition {
+            outcome_id: outcome.id.clone(),
+            contract_revision: outcome.contract_revision,
+            state_revision: outcome.state_revision,
+        },
+        responsibility,
+        next_action,
+        acceptance: outcome
+            .acceptance
+            .as_ref()
+            .map(|a| {
+                format!(
+                    "Accepted against contract revision {} at {}",
+                    a.contract_revision, a.at
+                )
+            })
+            .unwrap_or_else(|| {
+                if outcome.root.state == ObligationState::Cancelled {
+                    "Cancelled without final acceptance".to_owned()
+                } else {
+                    "Acceptance pending; a worker result is not final acceptance".to_owned()
+                }
+            }),
+        criteria: outcome
+            .contract()
+            .criteria
+            .iter()
+            .take(64)
+            .map(|c| format!("{}: {}", c.id, c.description))
+            .collect(),
+        messages,
+        earlier_messages: outcome.messages.len().saturating_sub(30),
+        earlier_questions: questions.len().saturating_sub(64),
+        questions: questions
+            .into_iter()
+            .rev()
+            .take(64)
+            .map(|q| EngineeringQuestionView {
+                id: q.id.clone(),
+                prompt: q.prompt.clone(),
+                needs_operator: q.kind.needs_operator(),
+                answer: q.resolution.as_ref().map(|r| r.answer.clone()),
+            })
+            .collect(),
+        accepts_follow_up: !outcome.root.state.is_terminal() && !outcome.cancellation_requested,
     }
 }
 

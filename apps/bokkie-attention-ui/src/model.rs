@@ -892,6 +892,9 @@ pub fn disabled_reason(capability: &ActionCapability) -> &'static str {
         Some(DisabledReason::GardenerProposalRequiresExactDecision) => {
             "Use the exact gardener proposal decision"
         }
+        Some(DisabledReason::EngineeringRequiresSupervisor) => {
+            "Engineering work is managed through its supervisor"
+        }
         Some(DisabledReason::NotGardenerProposal) => "This is not a gardener proposal",
         None if capability.available => "",
         None => "The backend did not authorise this action",
@@ -1250,6 +1253,7 @@ mod tests {
         use bokkie_operator_api::{OperatorTask, OperatorTaskKind};
         let mut parent = obligation("ordinary-id", OperatorObligationState::Pending);
         parent.task = Some(OperatorTask {
+            engineering: None,
             kind: OperatorTaskKind::GardenerInspection,
             title: "Garden Bokkie".to_owned(),
             parent_task_id: None,
@@ -1261,6 +1265,7 @@ mod tests {
             OperatorObligationState::AwaitingApproval,
         );
         child.task = Some(OperatorTask {
+            engineering: None,
             kind: OperatorTaskKind::GardenerImplementation,
             title: "Review a proposal".to_owned(),
             parent_task_id: Some(parent.id.clone()),
@@ -1302,6 +1307,7 @@ mod tests {
         use bokkie_operator_api::{OperatorTask, OperatorTaskKind};
         let mut task = obligation("inspection", OperatorObligationState::Pending);
         task.task = Some(OperatorTask {
+            engineering: None,
             kind: OperatorTaskKind::GardenerInspection,
             title: "Garden Bokkie".to_owned(),
             parent_task_id: None,

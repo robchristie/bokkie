@@ -46,8 +46,8 @@ not started. No live Bokkie database or global configuration was changed.
 | Increment | Owner / consumer revision | Evidence | State |
 |---|---|---|---|
 | Contract and execution calibration | Bokkie starting revision above | [Selected evidence](../../supervision-evidence/calibration.md) | selected |
-| Durable backend and runtime | Bokkie / operator contract | Lifecycle and protocol tests | backend and runtime active |
-| Conversational operator entry | Bokkie UI / backend | Canonical checks and UI inspection | queued |
+| Durable backend and runtime | Bokkie / operator contract | Lifecycle and protocol tests | implemented; canonical backend passes |
+| Conversational operator entry | Bokkie UI / backend | Canonical checks and UI inspection | implemented; visual qualification pending |
 | Complete isolated fixture | Bokkie runtime | Live questions, repair, recovery, acceptance | queued |
 | Reading calibration and application | Polyorama / local app | Reader probes and canonical checks | after fixture |
 | Authentic dogfood and repairs | Final owner revisions | Runtime identities and acceptance | queued |
@@ -99,4 +99,4 @@ under the selected explicit client-reviewer profile. Product execution/recovery 
 must be explicit before fixture qualification. Exhaustion leaves recoverable
 state and explanation; a changed approach must retain its evidence.
 
-- Next action: Integrate backend/runtime operations and conversational operator adapters, then qualify the isolated fixture before submitting Pagefold.
+- Next action: Qualify the integrated candidate with the isolated live fixture, repair observed infrastructure failures, then submit Pagefold through Bokkie.
