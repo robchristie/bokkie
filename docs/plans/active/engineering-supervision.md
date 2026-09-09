@@ -47,8 +47,8 @@ not started. No live Bokkie database or global configuration was changed.
 |---|---|---|---|
 | Contract and execution calibration | Bokkie starting revision above | [Selected evidence](../../supervision-evidence/calibration.md) | selected |
 | Durable backend and runtime | Bokkie / operator contract | Lifecycle and protocol tests | implemented; canonical backend passes |
-| Conversational operator entry | Bokkie UI / backend | Canonical checks and UI inspection | implemented; visual qualification pending |
-| Complete isolated fixture | Bokkie `80f8612` | [Attempts](../../supervision-evidence/fixture-attempts.md); run e active | qualifying |
+| Conversational operator entry | Bokkie UI / backend | Canonical checks and UI inspection | qualified; 65 UI tests and opened captures |
+| Complete isolated fixture | Bokkie `465b1d0` | [Attempts](../../supervision-evidence/fixture-attempts.md); run f active | qualifying |
 | Reading calibration and application | Polyorama / local app | Reader probes and canonical checks | after fixture |
 | Authentic dogfood and repairs | Final owner revisions | Runtime identities and acceptance | queued |
 | Integrated closeout | Bokkie | Reviews, checks, landing and usage | queued |

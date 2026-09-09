@@ -1,0 +1,37 @@
+{
+  "source_revision": "0034a5eb236e135b2bc3606e289dca9a04045d68",
+  "evidence_kind": "synthetic production HTTP/Store and actual rendered UI; no Codex turn",
+  "viewport_sizes": [
+    [
+      1440,
+      900
+    ],
+    [
+      480,
+      720
+    ]
+  ],
+  "journeys": [
+    "plain intent saved durably",
+    "authoritative responsibility and next action",
+    "follow-up persisted",
+    "explicit cancellation confirmation and cancelled outcome"
+  ],
+  "ui_tests": 65,
+  "checks": [
+    "tools/qualify-ui.sh browser and native passed",
+    "Lantern body overflow findings zero in four views",
+    "five relevant PNGs opened by UI reviewer; root additionally opened desktop composer and narrow detail"
+  ],
+  "files": {
+    "lantern-engineering-compose-desktop.png": "129728178bacd2382ddcbed7ac7a20cbe680c19a3e32f2d8732e56c52028aff1",
+    "lantern-engineering-compose-narrow.png": "3b939381265bfea5901255d3ae3862635c224a887f58462634498d6f4fa5401f",
+    "lantern-engineering-detail-desktop.png": "0e5bdfdd53ac263d1212fb13e91f2cf77673822146aa12bb5fb938377678e994",
+    "lantern-engineering-detail-narrow.png": "79bbe9d906c322a2f8ae97bd89149e7966e10408753b205cbccb58e30e075d9d",
+    "browser-engineering-cancel-confirmation.png": "1e342e7c4726ee29cb7cdcc5d3801b1c1bf5052a4cb0f00c53929035a6c81a2c",
+    "lantern-engineering-compose-desktop-layout.json": "c0bd2844bfdb551758f1f1d3c27aaf63327b01bf25f58a03c7ae425c245eed23",
+    "lantern-engineering-compose-narrow-layout.json": "70720cc0c5c3ac1165356ca33618fe17426e2fdca4c37abbae188eb76029bbfe",
+    "lantern-engineering-detail-desktop-layout.json": "c0bd2844bfdb551758f1f1d3c27aaf63327b01bf25f58a03c7ae425c245eed23",
+    "lantern-engineering-detail-narrow-layout.json": "70720cc0c5c3ac1165356ca33618fe17426e2fdca4c37abbae188eb76029bbfe"
+  }
+}
