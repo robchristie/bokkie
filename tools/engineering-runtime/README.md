@@ -63,6 +63,15 @@ seams. Broker roots must remain private and disjoint from writable workspaces.
 
 ## Protocol and evidence
 
+`bokkie_file` and `bokkie_inspect` read and hash every file byte. UTF-8 text
+without NUL bytes is returned in full, subject to the explicit response-paging
+protocol below. Other files return compact `content_kind: binary` metadata with
+their verified identity and a retained raw-evidence digest; they are never
+lossily decoded or automatically dumped as base64. Binary identity inspection
+does not establish semantic suitability: assess provenance, licence, integration
+and relevant validation evidence. Explicit binary ranges remain available for
+specific diagnostic questions, without requiring wholesale byte inspection.
+
 Each execution has a durable dispatch manifest, an exclusive broker lock and a
 fsynced `launch_committed` marker before external spawn. A later broker finding
 that marker never launches a replacement, including after an ambiguous start
@@ -93,6 +102,10 @@ explicit digest-based paging descriptor; larger responses and request errors
 receive durable bounded errors. Once reaping
 is proved, unfinished tool requests cannot delay cessation reconciliation or
 acquire authority to mutate the outcome after execution has stopped.
+Reconciliation retains the exact journal bytes it parsed, including terminal
+failure and reaping records. Journal exhaustion records the interruption and
+verified cessation; continuation remains subject to the existing finite budget,
+without treating diagnostic failure as acceptance or new human authority.
 
 `bokkie_question` works in Default mode and waits for a durable supervisor answer.
 Built-in requestUserInput groups are also supported. Unsupported approval requests

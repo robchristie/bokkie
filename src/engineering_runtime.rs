@@ -396,9 +396,12 @@ fn observed_reviews(log: &[Event]) -> Vec<ObservedReview<'_>> {
 }
 
 fn events(directory: &Path) -> RuntimeResult<Vec<Event>> {
+    Ok(read_events(directory)?.0)
+}
+fn read_events(directory: &Path) -> RuntimeResult<(Vec<Event>, Vec<u8>)> {
     let path = directory.join("events.jsonl");
     if !path.exists() {
-        return Ok(vec![]);
+        return Ok((vec![], vec![]));
     }
     let bytes = bounded_read(&path, MAX_SPOOL)?;
     let mut result = vec![];
@@ -414,7 +417,24 @@ fn events(directory: &Path) -> RuntimeResult<Vec<Event>> {
         }
         result.push(event);
     }
-    Ok(result)
+    Ok((result, bytes))
+}
+fn file_inspection(artefact: EngineeringArtefact, bytes: &[u8]) -> Value {
+    match std::str::from_utf8(bytes) {
+        Ok(text) if !bytes.contains(&0) => {
+            json!({"artefact":artefact,"content_kind":"text","encoding":"utf8","content":text})
+        }
+        text => {
+            let reason = if text.is_err() {
+                "not_utf8"
+            } else {
+                "contains_nul"
+            };
+            json!({"artefact":artefact,"content_kind":"binary","content":null,
+                "identity_verified":true,"binary_reason":reason,"raw_evidence_digest":sha(bytes),
+                "inspection_note":"All bytes were read and their length and SHA-256 verified. Assess binary assets through provenance, exact identities and relevant validation; do not read their raw bytes wholesale. Explicit byte-range access remains available through bokkie_evidence when required."})
+        }
+    }
 }
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({"type":"function", "name":name, "description":description,
@@ -442,13 +462,13 @@ fn dynamic_tools() -> Vec<Value> {
         ),
         tool(
             "bokkie_file",
-            "Inspect an exact relative workspace file: returns actual digest, size and content, retaining bytes as evidence. No invented hashes.",
+            "Inspect an exact relative workspace file. Read and retain all bytes; return actual digest/size plus complete UTF-8 text or compact binary identity metadata. Binary assets need provenance and validation, not wholesale raw-byte reading; explicit ranges remain available through bokkie_evidence. No invented hashes.",
             json!({"path":{"type":"string"}}),
             &["path"],
         ),
         tool(
             "bokkie_inspect",
-            "Verify and inspect an exact EngineeringArtefact (file or Git commit/tree). File bytes and Git metadata are retained; read source through normal read-only tools as well.",
+            "Verify an exact EngineeringArtefact (file or Git commit/tree). File identity is checked against all bytes. Return complete UTF-8 text or compact binary metadata without lossy decoding. Inspect binary provenance and relevant validation, not wholesale font/image bytes. Textual source/review still requires exact content inspection.",
             json!({"artefact":{"type":"object"}}),
             &["artefact"],
         ),
@@ -653,7 +673,7 @@ impl EngineeringRuntime {
                 if &actual != artefact {
                     return Err("source file no longer matches submission".into());
                 }
-                Ok(json!({"artefact": actual,"content":String::from_utf8_lossy(&bytes)}))
+                Ok(file_inspection(actual, &bytes))
             }
             EngineeringArtefact::Git {
                 repository,
@@ -1165,7 +1185,7 @@ impl EngineeringRuntime {
             "bokkie_command" => self.command(store, directory, execution, key, args.clone(), now),
             "bokkie_file" => {
                 let (artefact, bytes) = self.file(args["path"].as_str().ok_or("missing path")?)?;
-                Ok(json!({"artefact":artefact,"content":String::from_utf8_lossy(&bytes)}))
+                Ok(file_inspection(artefact, &bytes))
             }
             "bokkie_inspect" => self.inspect(&serde_json::from_value(args["artefact"].clone())?),
             "bokkie_evidence" => self.evidence_page(args),
@@ -1574,7 +1594,7 @@ impl EngineeringRuntime {
             }
             return Ok(());
         }
-        let log = events(&directory)?;
+        let (log, journal_bytes) = read_events(&directory)?;
         let reaped = log.iter().find(|e| e.kind == "boundary_reaped");
         if execution.fenced
             || initial.cancellation_requested
@@ -1737,10 +1757,16 @@ impl EngineeringRuntime {
             } else {
                 None
             };
-            let hash = self.blob(&serde_json::to_vec(&log)?)?;
+            // Retain exactly the bounded journal we parsed. Re-encoding a full
+            // journal can exceed its byte bound and obscure the retained proof.
+            let hash = self.blob(&journal_bytes)?;
+            let journal_exhausted = log.iter().any(|event| {
+                event.kind == "failure"
+                    && event.value["message"] == "event spool exhausted; stop and reconcile"
+            });
             self.activity(store,&directory,execution,"reaped",EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
                 execution_id:execution.id.clone(),runtime_identity:execution.id.clone(),
-                observation:if let Some(error)=validation_error { format!("Broker reaped namespace; submission rejected: {error}") } else if submission.is_some(){"Broker reaped the namespace; import exact offline submission for assessment".into()}else{"Broker reaped the namespace; supervisor must decide the next bounded action".into()},
+                observation:if let Some(error)=validation_error { format!("Broker reaped namespace; submission rejected: {error}") } else if submission.is_some(){"Broker reaped the namespace; import exact offline submission for assessment".into()}else if journal_exhausted {"Broker journal exhausted; namespace reaped; supervisor retains the next decision within the remaining finite budget".into()}else{"Broker reaped the namespace; supervisor must decide the next bounded action".into()},
                 runtime_failure, not_started:false, evidence_digest:hash,reaped_boundary:Some(boundary.value["boundary"].as_str().ok_or("missing reaping identity")?.into()),recovered_submission:submission }),true,now)?;
         } else {
             let output = Command::new("python3")
@@ -2056,7 +2082,7 @@ mod tests {
     fn expanded_reply_and_bad_request_do_not_block_later_requests_or_reaping() {
         let mut f = Fixture::new();
         // Raw source fits its 2 MiB bound, but nested JSON escaping does not.
-        let text = "\"\\\0".repeat(180_000);
+        let text = "\"\\\n".repeat(270_000);
         assert!((text.len() as u64) < MAX_FILE);
         fs::write(f.runtime.profile.workspace.join("large.txt"), &text).unwrap();
         fs::write(
@@ -2154,6 +2180,165 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn binary_asset_inspection_verifies_all_bytes_without_dumping_content() {
+        let mut f = Fixture::new();
+        let bytes = [0, 0xff, 0x80, b'A'].repeat(262_144);
+        let path = "font.zlib2";
+        fs::write(f.runtime.profile.workspace.join(path), &bytes).unwrap();
+        let (artefact, _) = f.runtime.file(path).unwrap();
+        let inspected = f.runtime.inspect(&artefact).unwrap();
+        assert_eq!(inspected["artefact"], json!(artefact));
+        assert_eq!(inspected["content_kind"], "binary");
+        assert_eq!(inspected["identity_verified"], true);
+        assert_eq!(inspected["binary_reason"], "not_utf8");
+        assert!(inspected["content"].is_null());
+        assert!(serde_json::to_vec(&inspected).unwrap().len() < 2048);
+        let directory = f.directory(&f.supervisor);
+        let discovered = f
+            .runtime
+            .dynamic(
+                &mut f.store,
+                &directory,
+                &f.supervisor,
+                "binary-file",
+                &json!({"tool":"bokkie_file","arguments":{"path":path}}),
+                &[],
+                105,
+            )
+            .unwrap();
+        assert_eq!(discovered, inspected);
+        let reply_path = directory.join("replies/binary.json");
+        f.runtime
+            .tool_reply(&reply_path, &json!(1), Ok(inspected.clone()))
+            .unwrap();
+        assert!(fs::metadata(&reply_path).unwrap().len() < 4096);
+        let (_, reply) = read_reply(&directory, "binary");
+        assert!(reply.get("response_paged").is_none());
+        assert_eq!(reply, inspected);
+        let digest = inspected["raw_evidence_digest"].as_str().unwrap();
+        assert_eq!(digest, sha(&bytes));
+        let page = f
+            .runtime
+            .evidence_page(&json!({"digest":digest,"byte_offset":1234,"max_bytes":16}))
+            .unwrap();
+        assert_eq!(page["encoding"], "base64");
+        assert_eq!(
+            STANDARD.decode(page["content"].as_str().unwrap()).unwrap(),
+            bytes[1234..1250]
+        );
+        let mut changed = bytes.clone();
+        changed[500_000] ^= 1;
+        fs::write(f.runtime.profile.workspace.join(path), &changed).unwrap();
+        assert!(
+            f.runtime
+                .inspect(&artefact)
+                .unwrap_err()
+                .to_string()
+                .contains("no longer matches")
+        );
+        fs::write(f.runtime.profile.workspace.join(path), b"\0font").unwrap();
+        let (nul_artefact, _) = f.runtime.file(path).unwrap();
+        assert_eq!(
+            f.runtime.inspect(&nul_artefact).unwrap()["binary_reason"],
+            "contains_nul"
+        );
+    }
+
+    #[test]
+    fn textual_asset_content_remains_exact_even_with_a_binary_filename() {
+        let f = Fixture::new();
+        let text = "Licence and provenance 🦘\n\tReview every line.\r\n";
+        fs::write(f.runtime.profile.workspace.join("font.woff2"), text).unwrap();
+        let (artefact, _) = f.runtime.file("font.woff2").unwrap();
+        let inspected = f.runtime.inspect(&artefact).unwrap();
+        assert_eq!(inspected["content_kind"], "text");
+        assert_eq!(inspected["encoding"], "utf8");
+        assert_eq!(inspected["content"], text);
+    }
+
+    #[test]
+    fn exhausted_large_journal_retains_exact_cessation_and_bounded_continuation() {
+        let mut f = Fixture::new();
+        let directory = f.directory(&f.supervisor);
+        let mut journal = vec![];
+        for sequence in 1..=2046 {
+            let (kind, value) = match sequence {
+                1 => ("thread_identity", json!({"thread_id":"root-thread"})),
+                2 => (
+                    "turn_identity",
+                    json!({"thread_id":"root-thread","turn_id":"root-turn"}),
+                ),
+                2045 => (
+                    "failure",
+                    json!({"type":"ValueError","message":"event spool exhausted; stop and reconcile"}),
+                ),
+                2046 => (
+                    "boundary_reaped",
+                    json!({"boundary":"fixture:exhausted","exit_code":-9}),
+                ),
+                _ => ("item/completed", json!({"diagnostic":"x".repeat(7500)})),
+            };
+            journal.extend(
+                serde_json::to_vec(&Event {
+                    sequence,
+                    kind: kind.into(),
+                    value,
+                })
+                .unwrap(),
+            );
+            journal.push(b'\n');
+        }
+        assert!(journal.len() as u64 > 14 * 1024 * 1024);
+        assert!((journal.len() as u64) < MAX_SPOOL);
+        fs::write(directory.join("events.jsonl"), &journal).unwrap();
+        let before = snapshot(&f.store, &f.id).unwrap();
+        f.runtime
+            .reconcile(&mut f.store, &before, &f.supervisor, 105)
+            .unwrap();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        assert!(
+            state
+                .executions
+                .iter()
+                .find(|e| e.id == f.supervisor.id)
+                .unwrap()
+                .cessation_verified
+        );
+        assert!(state.acceptance.is_none());
+        assert_eq!(state.root.state, crate::ObligationState::Pending);
+        assert_eq!(state.turns_used, before.turns_used);
+        let input = &state.reconciliations.last().unwrap().input;
+        assert!(input.observation.contains("journal exhausted"));
+        assert!(input.runtime_failure.is_none());
+        assert_eq!(input.reaped_boundary.as_deref(), Some("fixture:exhausted"));
+        assert_eq!(input.evidence_digest, sha(&journal));
+        let tail = f
+            .runtime
+            .evidence_page(&json!({"digest":input.evidence_digest,"byte_offset":journal.len()-512}))
+            .unwrap();
+        assert_eq!(tail["total_bytes"], journal.len());
+        assert!(
+            tail["content"]
+                .as_str()
+                .unwrap()
+                .contains("boundary_reaped")
+        );
+        f.runtime
+            .reconcile(&mut f.store, &state, &f.supervisor, 106)
+            .unwrap();
+        assert_eq!(snapshot(&f.store, &f.id).unwrap().reconciliations.len(), 1);
+        let claims = f
+            .store
+            .claim_due_engineering(EngineeringRole::Supervisor, 107, 600, 1)
+            .unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(
+            snapshot(&f.store, &f.id).unwrap().turns_used,
+            before.turns_used + 1
         );
     }
 
