@@ -207,6 +207,12 @@ pub struct EngineeringAssessmentInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EngineeringReconciliationInput {
+    /// Trusted adapter failure; parks responsibility until new evidence or configuration.
+    #[serde(default)]
+    pub runtime_failure: Option<String>,
+    /// Trusted proof that dispatch did not create an external boundary.
+    #[serde(default)]
+    pub not_started: bool,
     pub execution_id: String,
     pub runtime_identity: String,
     pub observation: String,

@@ -707,13 +707,27 @@ fn dependencies_ready(
     package: &EngineeringPackage,
 ) -> Result<bool, StoreError> {
     for dependency in &package.input.dependencies {
-        let prerequisite = state
+        let mut prerequisite = state
             .packages
             .iter()
             .find(|p| p.id == *dependency)
             .ok_or_else(|| conflict("missing prerequisite"))?;
+        // Repair preserves the prerequisite's criteria and relationship identity.
+        // Follow the bounded immutable replacement chain to its current owner.
+        for _ in 0..state.packages.len() {
+            let Some(next) = &prerequisite.superseded_by else {
+                break;
+            };
+            prerequisite = state
+                .packages
+                .iter()
+                .find(|p| p.id == *next)
+                .ok_or_else(|| conflict("missing prerequisite repair"))?;
+        }
         let obligation = require_obligation(tx, &prerequisite.obligation_id)?;
-        if !package_accepted(state, dependency) || obligation.state != ObligationState::Completed {
+        if !package_accepted(state, &prerequisite.id)
+            || obligation.state != ObligationState::Completed
+        {
             return Ok(false);
         }
     }
@@ -1456,6 +1470,54 @@ fn apply_command(
             if state.reconciliations.len() >= 512 {
                 return Err(conflict("reconciliation record bound reached"));
             }
+            if let Some(failure) = &input.runtime_failure {
+                if input.recovered_submission.is_some() {
+                    return Err(conflict("failed runtime cannot also submit a result"));
+                }
+                let position = state
+                    .executions
+                    .iter()
+                    .position(|e| e.id == execution.id)
+                    .expect("execution found");
+                state.executions[position].fenced = true;
+                state.executions[position].recovery_required = true;
+                if !execution.recovery_charged
+                    && state.recoveries_used < state.contract().budget.max_recoveries
+                {
+                    state.recoveries_used += 1;
+                    state.executions[position].recovery_charged = true;
+                }
+                // Retain actual cessation even when no recovery budget remains.
+                if input.reaped_boundary.is_some() || input.not_started {
+                    state.executions[position].cessation_verified = true;
+                    tx.execute(
+                        "DELETE FROM engineering_writers WHERE execution_id = ?1",
+                        [&input.execution_id],
+                    )?;
+                }
+                state.reconciliations.push(EngineeringReconciliation {
+                    adapter_id: adapter_id.clone(),
+                    input: input.clone(),
+                    at: now,
+                });
+                let reason = format!(
+                    "runtime failed; changed evidence or configuration required before retry: {failure}"
+                );
+                if !require_obligation(tx, &execution.obligation_id)?
+                    .state
+                    .is_terminal()
+                {
+                    apply_engineering_transition(
+                        tx,
+                        &execution.obligation_id,
+                        EngineeringTransition::Attention { reason: &reason },
+                        now,
+                    )?;
+                }
+                attention(tx, state, &reason, now)?;
+                settle_cancellation(tx, state, now)?;
+                return Ok(None);
+            }
             let charge_recovery = execution.recovery_required && !execution.recovery_charged;
             if charge_recovery && state.recoveries_used >= state.contract().budget.max_recoveries {
                 attention(
@@ -1479,7 +1541,7 @@ fn apply_command(
                     input: input.clone(),
                     at: now,
                 });
-                if input.reaped_boundary.is_some() {
+                if input.reaped_boundary.is_some() || input.not_started {
                     let position = state
                         .executions
                         .iter()
@@ -1493,15 +1555,32 @@ fn apply_command(
                     )?;
                     if let Some(submission) = &input.recovered_submission {
                         // Offline import is a reconciler operation, never stale worker authority.
-                        if state.executions.iter().any(|e| {
-                            e.obligation_id == execution.obligation_id
-                                && e.claim.lease_generation > execution.claim.lease_generation
-                        }) {
-                            return Err(StoreError::Fenced);
+                        let stale = input.not_started
+                            || state.cancellation_requested
+                            || execution.contract_revision != state.contract_revision
+                            || state.executions.iter().any(|e| {
+                                e.obligation_id == execution.obligation_id
+                                    && e.claim.lease_generation > execution.claim.lease_generation
+                            })
+                            || execution.package_id.as_ref().is_some_and(|id| {
+                                state.packages.iter().any(|p| {
+                                    p.id == *id
+                                        && (p.cancellation_requested || p.superseded_by.is_some())
+                                })
+                            });
+                        if !stale {
+                            let id = submit(tx, state, &input.execution_id, submission, true, now)?;
+                            settle_cancellation(tx, state, now)?;
+                            return Ok(Some(id));
                         }
-                        let id = submit(tx, state, &input.execution_id, submission, true, now)?;
-                        settle_cancellation(tx, state, now)?;
-                        return Ok(Some(id));
+                        // A stale result is rejected independently of the valid cessation proof.
+                        state
+                            .reconciliations
+                            .last_mut()
+                            .expect("retained reconciliation")
+                            .input
+                            .observation
+                            .push_str("; rejected stale result import");
                     }
                     let cancelled = state.cancellation_requested
                         || execution.package_id.as_ref().is_some_and(|id| {
@@ -2000,6 +2079,9 @@ fn validate_envelope(
             validate_bounded_text("question prompt", prompt, 16_384, false)?;
         }
         EngineeringCommand::RecordReconciliation(input) => {
+            if let Some(failure) = &input.runtime_failure {
+                validate_bounded_text("runtime failure", failure, 4096, false)?;
+            }
             identifier(&input.execution_id)?;
             identifier(&input.runtime_identity)?;
             hash(&input.evidence_digest)?;
@@ -2196,6 +2278,8 @@ mod tests {
                 adapter_id: "test-adapter".into(),
             },
             EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
+                runtime_failure: None,
+                not_started: false,
                 execution_id: c.execution_id.clone(),
                 runtime_identity: "runtime-1".into(),
                 observation: "private PID namespace reaped".into(),
@@ -2522,6 +2606,8 @@ mod tests {
             &store,
             &id,
             EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
+                runtime_failure: None,
+                not_started: false,
                 execution_id: worker.execution_id.clone(),
                 runtime_identity: "runtime-1".into(),
                 observation: "done".into(),
@@ -2530,16 +2616,27 @@ mod tests {
                 recovered_submission: Some(submission()),
             }),
         );
-        assert!(matches!(
-            store.engineering_command(
+        let receipt = store
+            .engineering_command(
                 EngineeringActor::Reconciler {
-                    adapter_id: "test-adapter".into()
+                    adapter_id: "test-adapter".into(),
                 },
                 env,
-                106
-            ),
-            Err(StoreError::Fenced)
-        ));
+                106,
+            )
+            .unwrap();
+        assert!(receipt.record_id.is_none());
+        let retained = store.engineering_outcome(&id).unwrap().unwrap();
+        assert!(retained.submissions.is_empty());
+        assert!(
+            retained
+                .reconciliations
+                .last()
+                .unwrap()
+                .input
+                .observation
+                .contains("rejected stale")
+        );
     }
     #[test]
     fn cancellation_owns_descendants_not_dependency_neighbours_and_retains_writers() {
@@ -2635,22 +2732,177 @@ mod tests {
         );
     }
     #[test]
+    fn cancelled_package_rejects_offline_result_without_losing_cessation() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = create(&mut store);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        let package = new_package(&mut store, &root, 101);
+        let worker = claim(&mut store, EngineeringRole::Worker, 102);
+        command(
+            &mut store,
+            &id,
+            op(),
+            EngineeringCommand::RequestCancellation {
+                package_id: Some(package),
+            },
+            103,
+        );
+        reconcile(&mut store, &worker, Some(submission()), 104);
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert!(
+            state
+                .executions
+                .iter()
+                .find(|e| e.id == worker.execution_id)
+                .unwrap()
+                .cessation_verified
+        );
+        assert!(state.submissions.is_empty());
+        assert_eq!(
+            store
+                .get(&worker.claim.obligation_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            ObligationState::Cancelled
+        );
+        assert!(
+            state
+                .reconciliations
+                .last()
+                .unwrap()
+                .input
+                .observation
+                .contains("rejected stale")
+        );
+    }
+    #[test]
+    fn trusted_not_started_proof_settles_cancelled_dispatch_without_fake_reap() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = create(&mut store);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        command(
+            &mut store,
+            &id,
+            op(),
+            EngineeringCommand::RequestCancellation { package_id: None },
+            101,
+        );
+        command(
+            &mut store,
+            &id,
+            EngineeringActor::Reconciler {
+                adapter_id: "test-adapter".into(),
+            },
+            EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
+                runtime_failure: None,
+                not_started: true,
+                execution_id: root.execution_id.clone(),
+                runtime_identity: "runtime-1".into(),
+                observation: "no dispatch manifest under exclusive controller ownership".into(),
+                evidence_digest: sha("no spawn"),
+                reaped_boundary: None,
+                recovered_submission: None,
+            }),
+            102,
+        );
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert_eq!(state.root.state, ObligationState::Cancelled);
+        assert!(state.executions[0].cessation_verified);
+        assert!(state.reconciliations[0].input.reaped_boundary.is_none());
+    }
+
+    #[test]
+    fn failed_runtime_reaps_and_parks_without_repeating_even_at_budget_limit() {
+        for exhausted in [false, true] {
+            let mut store = Store::open_in_memory().unwrap();
+            let id = create(&mut store);
+            let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+            if exhausted {
+                let tx = store.connection.transaction().unwrap();
+                let mut state = load(&tx, &id).unwrap();
+                state.recoveries_used = state.contract().budget.max_recoveries;
+                save(&tx, &mut state, 101, "test_budget").unwrap();
+                tx.commit().unwrap();
+            }
+            let input = EngineeringReconciliationInput {
+                runtime_failure: Some("invalid task-scoped transport configuration".into()),
+                not_started: false,
+                execution_id: root.execution_id.clone(),
+                runtime_identity: "runtime-1".into(),
+                observation: "startup failed and namespace reaped".into(),
+                evidence_digest: sha("proof"),
+                reaped_boundary: Some("boundary-1".into()),
+                recovered_submission: None,
+            };
+            let env = envelope(&store, &id, EngineeringCommand::RecordReconciliation(input));
+            let reconciler = EngineeringActor::Reconciler {
+                adapter_id: "test-adapter".into(),
+            };
+            store
+                .engineering_command(reconciler.clone(), env.clone(), 102)
+                .unwrap();
+            store.engineering_command(reconciler, env, 103).unwrap();
+            let state = store.engineering_outcome(&id).unwrap().unwrap();
+            assert!(state.executions[0].cessation_verified);
+            assert_eq!(state.root.state, ObligationState::Attention);
+            assert!(
+                state
+                    .root
+                    .last_error
+                    .as_ref()
+                    .unwrap()
+                    .contains("invalid task-scoped")
+            );
+            assert!(
+                store
+                    .claim_due_engineering(EngineeringRole::Supervisor, 104, 600, 1)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                state.recoveries_used,
+                if exhausted {
+                    state.contract().budget.max_recoveries
+                } else {
+                    1
+                }
+            );
+        }
+    }
+
+    #[test]
     fn repair_is_atomic_deduplicated_and_cannot_drop_criteria() {
         let mut store = Store::open_in_memory().unwrap();
         let id = create(&mut store);
         let root = claim(&mut store, EngineeringRole::Supervisor, 100);
         new_package(&mut store, &root, 101);
+        let original = store.engineering_outcome(&id).unwrap().unwrap().packages[0]
+            .id
+            .clone();
+        let mut dependent = package();
+        dependent.dependencies = vec![original];
+        dependent.workspace = "other-workspace".into();
+        let dependent_id = command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::CreatePackage(dependent),
+            101,
+        )
+        .record_id
+        .unwrap();
         let worker = claim(&mut store, EngineeringRole::Worker, 102);
         let mut incomplete = submission();
         incomplete.evidence.clear();
         incomplete.limitations = "missing check".into();
         reconcile(&mut store, &worker, Some(incomplete), 103);
-        let assessment = assessment(&store, &id, EngineeringVerdict::Repair);
+        let repair_assessment = assessment(&store, &id, EngineeringVerdict::Repair);
         let assessment_id = command(
             &mut store,
             &id,
             actor(&root),
-            EngineeringCommand::AssessResult(assessment),
+            EngineeringCommand::AssessResult(repair_assessment),
             104,
         )
         .record_id
@@ -2686,7 +2938,7 @@ mod tests {
         );
         let state = store.engineering_outcome(&id).unwrap().unwrap();
         assert_eq!(state.repairs.len(), 1);
-        assert_eq!(state.packages.len(), 2);
+        assert_eq!(state.packages.len(), 3);
         let env = envelope(
             &store,
             &id,
@@ -2696,13 +2948,24 @@ mod tests {
             },
         );
         assert!(store.engineering_command(actor(&root), env, 106).is_err());
-        assert_eq!(
-            store
-                .claim_due_engineering(EngineeringRole::Worker, 106, 600, 2)
-                .unwrap()
-                .len(),
-            1
+        let replacements = store
+            .claim_due_engineering(EngineeringRole::Worker, 106, 600, 2)
+            .unwrap();
+        assert_eq!(replacements.len(), 1);
+        reconcile(&mut store, &replacements[0], Some(submission()), 107);
+        let accepted = assessment(&store, &id, EngineeringVerdict::Accept);
+        command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::AssessResult(accepted),
+            108,
         );
+        let ready = store
+            .claim_due_engineering(EngineeringRole::Worker, 200, 600, 2)
+            .unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].package_id.as_deref(), Some(dependent_id.as_str()));
     }
     #[test]
     fn package_relationships_require_current_same_outcome_and_budget_exhaustion_is_durable() {
@@ -2898,6 +3161,8 @@ mod tests {
             &store,
             &id,
             EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
+                runtime_failure: None,
+                not_started: false,
                 execution_id: worker.execution_id,
                 runtime_identity: "runtime-1".into(),
                 observation: "late old result".into(),
@@ -2906,16 +3171,27 @@ mod tests {
                 recovered_submission: Some(submission()),
             }),
         );
-        assert!(matches!(
-            store.engineering_command(
+        let receipt = store
+            .engineering_command(
                 EngineeringActor::Reconciler {
-                    adapter_id: "test-adapter".into()
+                    adapter_id: "test-adapter".into(),
                 },
                 env,
-                106
-            ),
-            Err(StoreError::Fenced)
-        ));
+                106,
+            )
+            .unwrap();
+        assert!(receipt.record_id.is_none());
+        let retained = store.engineering_outcome(&id).unwrap().unwrap();
+        assert!(retained.submissions.is_empty());
+        assert!(
+            retained
+                .reconciliations
+                .last()
+                .unwrap()
+                .input
+                .observation
+                .contains("rejected stale")
+        );
         assert!(
             store
                 .engineering_outcome(&id)

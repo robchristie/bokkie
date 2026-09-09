@@ -596,6 +596,42 @@ impl EngineeringRuntime {
         }
         Ok(())
     }
+    fn execution_limits(
+        &self,
+        state: &EngineeringOutcomeSnapshot,
+        execution: &EngineeringExecution,
+        now: i64,
+    ) -> RuntimeResult<(i64, i64)> {
+        let budget = if let Some(id) = &execution.package_id {
+            &state
+                .packages
+                .iter()
+                .find(|p| p.id == *id)
+                .ok_or("missing execution package")?
+                .input
+                .budget
+        } else {
+            &state.contract().budget
+        };
+        // The initial claim reserves the complete bounded turn. A delayed
+        // dispatch or reconnect must never reset its start time.
+        let deadline = budget
+            .deadline
+            .min(state.contract().budget.deadline)
+            .min(execution.claim.lease_expires_at);
+        let profile_seconds = if execution.role == EngineeringRole::Worker {
+            self.profile.worker_seconds
+        } else {
+            self.profile.supervisor_seconds
+        };
+        let seconds = profile_seconds
+            .min(budget.turn_seconds)
+            .min(deadline.saturating_sub(now));
+        if seconds <= 0 {
+            return Err("execution deadline exhausted before dispatch".into());
+        }
+        Ok((seconds, deadline))
+    }
     fn dispatch(
         &self,
         state: &EngineeringOutcomeSnapshot,
@@ -619,12 +655,7 @@ impl EngineeringRuntime {
             {
                 return Err("execution instruction/profile identity mismatch".into());
             }
-            let seconds = if worker {
-                self.profile.worker_seconds
-            } else {
-                self.profile.supervisor_seconds
-            };
-            let deadline = state.contract().budget.deadline;
+            let (seconds, deadline) = self.execution_limits(state, execution, now)?;
             let params = json!({"cwd":self.profile.workspace,"model":self.profile.model,
                 "allowProviderModelFallback":false,"approvalPolicy":"on-request","approvalsReviewer":"user",
                 "sandbox":if worker {"workspace-write"} else {"read-only"},
@@ -886,7 +917,8 @@ impl EngineeringRuntime {
             decision.command,
             EngineeringCommand::FormaliseContract { .. }
                 | EngineeringCommand::AskQuestion {
-                    kind: EngineeringQuestionKind::NewAuthority,
+                    kind: EngineeringQuestionKind::NewAuthority
+                        | EngineeringQuestionKind::MissingInformation,
                     ..
                 }
                 | EngineeringCommand::YieldSupervisor { .. }
@@ -1016,6 +1048,29 @@ impl EngineeringRuntime {
                 let artefact: EngineeringArtefact =
                     serde_json::from_value(args["artefact"].clone())?;
                 self.inspect(&artefact)?;
+                let sources = ["item/started", "item/completed"].map(|phase| {
+                    log.iter().find(|event| event.kind == "command_source"
+                        && event.value["phase"] == phase && event.value["item_id"] == item_id
+                        && event.value["thread_id"] == item.value["threadId"]
+                        && event.value["turn_id"] == item.value["turnId"])
+                        .map(|event| &event.value["source"])
+                });
+                let [Some(before), Some(after)] = sources else {
+                    return Err("validation requires broker source identities at command start and completion; rerun the check".into());
+                };
+                if before != after || before.get("unavailable").is_some() {
+                    return Err("source changed during validation or its identity is unavailable".into());
+                }
+                let matches = match &artefact {
+                    EngineeringArtefact::File { path, sha256, bytes, .. } =>
+                        before["files"][path]["sha256"] == *sha256
+                            && before["files"][path]["byte_length"] == *bytes,
+                    EngineeringArtefact::Git { commit, tree, .. } =>
+                        before["clean"] == true && before["commit"] == *commit && before["tree"] == *tree,
+                };
+                if !matches {
+                    return Err("validation command did not observe the submitted source revision".into());
+                }
                 let command = item.value["item"]["command"]
                     .as_str()
                     .ok_or("missing actual command")?;
@@ -1246,8 +1301,31 @@ impl EngineeringRuntime {
             return Ok(());
         }
         if !directory.join("dispatch.json").exists() {
-            if !execution.fenced && !initial.cancellation_requested {
+            if !execution.fenced
+                && !initial.cancellation_requested
+                && initial.contract_revision == execution.contract_revision
+                && execution.claim.lease_expires_at > now
+            {
                 self.dispatch(initial, execution, now)?;
+            } else {
+                // The controller lock excludes another dispatcher. No manifest
+                // means no broker launch was possible for this immutable intent.
+                let evidence_digest = self.blob(&serde_json::to_vec(&json!({
+                    "execution_id":execution.id,"dispatch_manifest_absent":true,
+                    "controller_lock_held":true
+                }))?)?;
+                store.engineering_command(EngineeringActor::Reconciler {
+                    adapter_id: execution.instructions.adapter_id.clone(),
+                }, EngineeringCommandEnvelope {
+                    command_id:format!("{}:not-started",execution.id),
+                    expected:Some(initial.precondition()),
+                    command:EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
+                        execution_id:execution.id.clone(),runtime_identity:execution.id.clone(),
+                        observation:"Controller recovered an expired or fenced intent without a dispatch manifest; no broker was started".into(),
+                        evidence_digest,reaped_boundary:None,recovered_submission:None,
+                        runtime_failure:None,not_started:true,
+                    }),
+                },now)?;
             }
             return Ok(());
         }
@@ -1263,7 +1341,12 @@ impl EngineeringRuntime {
             )?;
         } else if reaped.is_none() {
             // A renewed kernel lease never extends the broker's fixed deadline.
-            if store.renew_lease(&execution.claim, now, 120).is_err() {
+            let manifest: Value = read_json(&directory.join("dispatch.json"))?;
+            let deadline = manifest["deadline"]
+                .as_i64()
+                .unwrap_or(execution.claim.lease_expires_at);
+            let remaining = deadline.saturating_sub(now).min(120);
+            if remaining <= 0 || store.renew_lease(&execution.claim, now, remaining).is_err() {
                 atomic(
                     &directory.join("cancel.json"),
                     &json!({"reason":"lease renewal refused; stop and reconcile"}),
@@ -1352,8 +1435,20 @@ impl EngineeringRuntime {
                 }
             }
             let current = snapshot(store, &initial.id)?;
+            let package_ineligible = execution.package_id.as_ref().is_some_and(|id| {
+                current
+                    .packages
+                    .iter()
+                    .any(|p| p.id == *id && (p.cancellation_requested || p.superseded_by.is_some()))
+            });
+            let newer_execution = current.executions.iter().any(|other| {
+                other.obligation_id == execution.obligation_id
+                    && other.claim.lease_generation > execution.claim.lease_generation
+            });
             if current.cancellation_requested
                 || current.contract_revision != execution.contract_revision
+                || package_ineligible
+                || newer_execution
             {
                 submission = None;
             }
@@ -1364,11 +1459,40 @@ impl EngineeringRuntime {
                     submission = None;
                 }
             }
+            let intentional_stop = directory.join("cancel.json").exists()
+                || current.cancellation_requested
+                || package_ineligible
+                || newer_execution
+                || current.contract_revision != execution.contract_revision;
+            let failed_turn = log.iter().any(|event| {
+                event.kind == "turn/completed" && event.value["turn"]["status"] == "failed"
+            });
+            let runtime_failure = if !intentional_stop
+                && ((!log.iter().any(|event| event.kind == "turn_identity")
+                    && log.iter().any(|event| event.kind == "failure"))
+                    || failed_turn)
+            {
+                let diagnostic = log
+                    .iter()
+                    .find(|event| event.kind == "stderr_diagnostic")
+                    .map(|event| event.value.to_string())
+                    .unwrap_or_else(|| "no stderr diagnostic".into());
+                let failure = log
+                    .iter()
+                    .find(|event| event.kind == "failure")
+                    .map(|event| event.value.to_string())
+                    .unwrap_or_else(|| "root turn failed".into());
+                Some(format!(
+                    "Codex execution failed without a usable result; repair the runtime/profile before retry. {failure}; {diagnostic}"
+                ))
+            } else {
+                None
+            };
             let hash = self.blob(&serde_json::to_vec(&log)?)?;
             self.activity(store,&directory,execution,"reaped",EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
                 execution_id:execution.id.clone(),runtime_identity:execution.id.clone(),
                 observation:if let Some(error)=validation_error { format!("Broker reaped namespace; submission rejected: {error}") } else if submission.is_some(){"Broker reaped the namespace; import exact offline submission for assessment".into()}else{"Broker reaped the namespace; supervisor must decide the next bounded action".into()},
-                evidence_digest:hash,reaped_boundary:Some(boundary.value["boundary"].as_str().ok_or("missing reaping identity")?.into()),recovered_submission:submission }),true,now)?;
+                runtime_failure, not_started:false, evidence_digest:hash,reaped_boundary:Some(boundary.value["boundary"].as_str().ok_or("missing reaping identity")?.into()),recovered_submission:submission }),true,now)?;
         } else {
             let output = Command::new("python3")
                 .arg(&self.profile.broker)
@@ -1385,11 +1509,11 @@ impl EngineeringRuntime {
                 self.activity(store,&directory,execution,"uncertain",EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
                     execution_id:execution.id.clone(),runtime_identity:execution.id.clone(),
                     observation:if log.iter().any(|e| e.kind == "not_started") {
-                        "Broker proved it did not start a boundary. Store reservation remains pending reconciliation because the current backend has no not-started release proof; no running child is claimed.".into()
+                        "Broker proved it did not start a boundary; release this dispatch reservation using explicit not-started evidence. No running child or namespace reap is claimed.".into()
                     } else {
                         "Broker died without a retained namespace reap receipt. Ownership uncertain; do not replace this writer. Operator must establish boundary cessation.".into()
                     },
-                    evidence_digest:hash,reaped_boundary:None,recovered_submission:None }),true,now)?;
+                    runtime_failure:None,not_started:log.iter().any(|e| e.kind == "not_started"),evidence_digest:hash,reaped_boundary:None,recovered_submission:None }),true,now)?;
             }
         }
         Ok(())
@@ -1572,6 +1696,163 @@ mod tests {
             .unwrap();
             file.sync_all().unwrap();
         }
+    }
+    #[test]
+    fn dispatch_limits_honour_package_deadline_and_original_claim() {
+        let f = Fixture::new();
+        let mut state = snapshot(&f.store, &f.id).unwrap();
+        state.packages[0].input.budget.turn_seconds = 30;
+        state.packages[0].input.budget.deadline = 120;
+        assert_eq!(
+            f.runtime.execution_limits(&state, &f.worker, 105).unwrap(),
+            (15, 120)
+        );
+        assert!(f.runtime.execution_limits(&state, &f.worker, 120).is_err());
+        state.packages[0].input.budget.deadline = 999999;
+        assert_eq!(
+            f.runtime
+                .execution_limits(&state, &f.worker, 105)
+                .unwrap()
+                .1,
+            f.worker.claim.lease_expires_at
+        );
+    }
+    #[test]
+    fn renewal_near_fixed_deadline_does_not_cancel_early() {
+        let mut f = Fixture::new();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        let now = f.worker.claim.lease_expires_at - 30;
+        f.runtime
+            .reconcile(&mut f.store, &state, &f.worker, now)
+            .unwrap();
+        assert!(!f.directory(&f.worker).join("cancel.json").exists());
+    }
+    #[test]
+    fn expired_claim_without_manifest_has_not_started_proof() {
+        let mut f = Fixture::new();
+        fs::remove_file(f.directory(&f.worker).join("dispatch.json")).unwrap();
+        let now = f.worker.claim.lease_expires_at + 1;
+        f.store.recover_expired_leases(now).unwrap();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        let worker = state
+            .executions
+            .iter()
+            .find(|e| e.id == f.worker.id)
+            .unwrap()
+            .clone();
+        f.runtime
+            .reconcile(&mut f.store, &state, &worker, now)
+            .unwrap();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        assert!(
+            state
+                .executions
+                .iter()
+                .find(|e| e.id == worker.id)
+                .unwrap()
+                .cessation_verified
+        );
+        let proof = &state.reconciliations.last().unwrap().input;
+        assert!(proof.not_started);
+        assert!(proof.reaped_boundary.is_none());
+    }
+    #[test]
+    fn failed_pre_turn_start_parks_attention_and_charges_once() {
+        let mut f = Fixture::new();
+        f.event(
+            &f.supervisor,
+            1,
+            "failure",
+            json!({"type":"EOFError","message":"transport closed"}),
+        );
+        f.event(
+            &f.supervisor,
+            2,
+            "stderr_diagnostic",
+            json!({"classes":["invalid_mcp_transport_configuration"]}),
+        );
+        f.event(
+            &f.supervisor,
+            3,
+            "boundary_reaped",
+            json!({"boundary":"supervisor:reaped"}),
+        );
+        let state = snapshot(&f.store, &f.id).unwrap();
+        f.runtime
+            .reconcile(&mut f.store, &state, &f.supervisor, 105)
+            .unwrap();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        assert_eq!(state.root.state, crate::ObligationState::Attention);
+        assert_eq!(state.recoveries_used, 1);
+        assert!(
+            state
+                .reconciliations
+                .last()
+                .unwrap()
+                .input
+                .runtime_failure
+                .as_ref()
+                .unwrap()
+                .contains("invalid_mcp_transport_configuration")
+        );
+        f.runtime
+            .reconcile(&mut f.store, &state, &f.supervisor, 106)
+            .unwrap();
+        assert_eq!(snapshot(&f.store, &f.id).unwrap().recoveries_used, 1);
+        assert!(
+            f.store
+                .claim_due_engineering(EngineeringRole::Supervisor, 107, 600, 1)
+                .unwrap()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn validation_rejects_checks_run_against_an_older_source() {
+        let mut f = Fixture::new();
+        fs::write(f.runtime.profile.workspace.join("reader.txt"), "new").unwrap();
+        let (artefact, _) = f.runtime.file("reader.txt").unwrap();
+        let mut log = vec![Event {
+            sequence: 1,
+            kind: "item/completed".into(),
+            value: json!({"threadId":"thread","turnId":"turn","item":{"id":"check","type":"commandExecution","command":"test reader","aggregatedOutput":"PASS","exitCode":0}}),
+        }];
+        for phase in ["item/started", "item/completed"] {
+            log.push(Event { sequence:log.len() as u64 + 1,kind:"command_source".into(),
+                value:json!({"phase":phase,"item_id":"check","thread_id":"thread","turn_id":"turn","source":{"files":{"reader.txt":{"sha256":sha(b"old"),"byte_length":3}}}})});
+        }
+        let directory = f.directory(&f.worker);
+        let params = json!({"tool":"bokkie_validation","arguments":{"item_id":"check","artefact":artefact,"criterion_id":"reader"}});
+        assert!(
+            f.runtime
+                .dynamic(
+                    &mut f.store,
+                    &directory,
+                    &f.worker,
+                    "old-check",
+                    &params,
+                    &log,
+                    105
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("submitted source revision")
+        );
+        for event in log.iter_mut().skip(1) {
+            event.value["source"]["files"]["reader.txt"]["sha256"] = json!(sha(b"new"));
+        }
+        assert!(
+            f.runtime
+                .dynamic(
+                    &mut f.store,
+                    &directory,
+                    &f.worker,
+                    "current-check",
+                    &params,
+                    &log,
+                    105
+                )
+                .is_ok()
+        );
     }
     #[test]
     fn profile_rejects_infinite_bounds_and_overlapping_storage() {

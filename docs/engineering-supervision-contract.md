@@ -232,3 +232,11 @@ trusted cessation may import offline evidence or permit a new execution, while
 unreaped reservations remain held. Ordinary post-reap imports currently retain
 the same recovered-submission attribution as offline imports; protocol evidence
 distinguishes their actual observation history.
+
+Runtime startup failures retain a bounded, typed adapter explanation and park the
+responsible obligation until changed evidence or configuration supports another
+attempt. Verified cessation is retained even when the recovery budget is exhausted.
+A trusted `not_started` proof covers the pre-manifest crash window and failed
+workspace-lock acquisition; it does not invent a process-reaping observation.
+An inadmissible offline result cannot roll back an otherwise valid cessation proof.
+Dependency readiness follows immutable repair chains to the current accepted owner.

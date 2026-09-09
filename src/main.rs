@@ -944,7 +944,12 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         .map(|profile| {
             profile
                 .contract_template(SystemClock.now())
-                .map(|contract_template| Arc::new(EngineeringIntakeConfig { contract_template }))
+                .map(|contract_template| {
+                    Arc::new(EngineeringIntakeConfig {
+                        contract_template,
+                        deadline_seconds: profile.deadline_seconds,
+                    })
+                })
         })
         .transpose()
         .map_err(|error| AppError::Configuration(error.to_string()))?;

@@ -125,8 +125,8 @@ broker's marker continues to block replacement after its OS lock disappears;
 cancellation or deleting a spool does not discharge that ownership. An operator
 must establish cessation before any explicit recovery of an uncertain marker.
 Read-only supervisors do not reserve workspace writer ownership. A failed lock
-acquisition records `not_started`, without claiming a child exists; the current
-Store contract conservatively retains its reservation for reconciliation.
+acquisition records `not_started`, without claiming a child exists; the trusted
+Store reconciliation records this distinct proof and releases its reservation.
 
 Before opening SQLite, both runtime entrypoints validate an absolute canonical
 database path outside the mutable workspace (including its scratch directory).
@@ -137,3 +137,21 @@ projection is retained from `config/read`; inherited credentials are excluded.
 Supervisor `bokkie_question` supports `missing_information` for unavailable facts,
 separately from `new_authority`. Workers ask routine questions first so the
 supervisor can answer from existing evidence or route a precise missing fact.
+
+
+Startup failures before a root turn identity, and explicit failed root turns,
+carry a trusted runtime-failure reconciliation. Store charges recovery once and
+parks actionable attention until repair or new evidence; unchanged startup
+configuration is not retried automatically. Intentional cancellation,
+formalisation and supersession do not become startup failures. A transport
+loss after a turn identity remains ordinary reconciliation, with expired-lease
+recovery accounted for separately. Bounded stderr diagnostics retain recognised
+failure classes, byte counts and a digest, never raw text or credentials.
+
+Validation registration requires broker source observations at command start and
+completion. File evidence must match the observed digest and length; Git evidence
+must match the same clean commit/tree. Observations are bounded to 2,048 source
+files, 2 MiB per file and 16 MiB total; unavailable or changing identities reject
+registration and require another bounded check. These are app-server event
+observations, not a synchronous hook into command execution. Historical commands
+without those observations cannot be attached to a newly inspected revision.

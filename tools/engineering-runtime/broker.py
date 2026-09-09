@@ -177,6 +177,9 @@ class Broker:
         self.turn = None
         self.completed = False
         self.buffer = b''
+        self.stderr_prefix = bytearray()
+        self.stderr_bytes = 0
+        self.stderr_hash = hashlib.sha256()
         if not 0 < self.manifest['turn_seconds'] <= 2700:
             raise ValueError('turn bound exceeded')
         self.deadline = self.clock() + self.manifest['turn_seconds']
@@ -230,6 +233,52 @@ class Broker:
                        p.get('threadId', self.thread), p.get('turnId', self.turn),
                        p.get('itemId'), message['id']])
 
+    def source_snapshot(self):
+        workspace = Path(self.manifest['workspace'])
+        try:
+            git = ['/usr/bin/git', '--no-optional-locks', '-c', 'core.fsmonitor=false',
+                   '-c', 'core.hooksPath=/dev/null', '-C', str(workspace)]
+            def query(args):
+                result = subprocess.run(git + args, stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+                if result.returncode or len(result.stdout) > MAX_MESSAGE:
+                    raise ValueError('source metadata unavailable')
+                return result.stdout
+            try:
+                paths = query(['ls-files', '-z', '--cached', '--others', '--exclude-standard']).split(b'\0')
+                paths = [os.fsdecode(path) for path in paths if path]
+                commit = query(['rev-parse', 'HEAD']).decode().strip()
+                tree = query(['rev-parse', 'HEAD^{tree}']).decode().strip()
+                clean = not query(['status', '--porcelain', '--untracked-files=normal'])
+            except ValueError:
+                paths = []
+                for parent, directories, names in os.walk(workspace, followlinks=False):
+                    directories[:] = [name for name in directories if name != '.git']
+                    paths += [str((Path(parent) / name).relative_to(workspace)) for name in names]
+                    if len(paths) > 2048:
+                        raise ValueError('source file count exceeded')
+                commit = tree = None
+                clean = False
+            if len(paths) > 2048:
+                raise ValueError('source file count exceeded')
+            files = {}
+            total = 0
+            for relative in sorted(set(paths)):
+                path = workspace / relative
+                if path.is_symlink() or not path.resolve().is_relative_to(workspace.resolve()):
+                    raise ValueError('source symlink cannot be attested')
+                size = path.stat().st_size
+                total += size
+                if size > MAX_MESSAGE or total > MAX_SPOOL:
+                    raise ValueError('source byte bound exceeded')
+                raw = path.read_bytes()
+                if len(raw) != size:
+                    raise ValueError('source changed while being observed')
+                files[relative] = {'sha256': hashlib.sha256(raw).hexdigest(), 'byte_length': size}
+            return {'files': files, 'commit': commit, 'tree': tree, 'clean': clean}
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return {'unavailable': 'bounded source identity could not be established'}
+
     def observe(self, message):
         method = message.get('method')
         if 'id' in message and not method:
@@ -261,8 +310,12 @@ class Broker:
             elif method not in ('item/tool/call', 'item/tool/requestUserInput'):
                 atomic(self.root / 'replies' / (key + '.json'),
                        {'id': message['id'], 'error': {'code': -32601, 'message': 'Unsupported escalation; consult Bokkie'}})
-        elif method in ('thread/started', 'turn/started', 'turn/completed', 'item/completed', 'thread/status/changed', 'error'):
+        elif method in ('thread/started', 'turn/started', 'turn/completed', 'item/started', 'item/completed', 'thread/status/changed', 'error'):
             params = message.get('params', {})
+            if method in ('item/started', 'item/completed') and params.get('item', {}).get('type') == 'commandExecution':
+                self.event('command_source', {'phase': method, 'item_id': params['item']['id'],
+                           'thread_id': params.get('threadId'), 'turn_id': params.get('turnId'),
+                           'source': self.source_snapshot()})
             self.event(method, params)
             if method == 'turn/started' and params.get('threadId') == self.thread:
                 self.turn = params['turn']['id']
@@ -286,6 +339,36 @@ class Broker:
             self.event('response_written', {'key': key, 'digest': digest(reply)})
             del self.pending[key]
 
+    def read_stderr(self):
+        try:
+            chunk = os.read(self.child.stderr.fileno(), 65536)
+        except BlockingIOError:
+            return None
+        if not chunk:
+            return False
+        self.stderr_bytes += len(chunk)
+        self.stderr_hash.update(chunk)
+        self.stderr_prefix.extend(chunk[:max(0, 8192 - len(self.stderr_prefix))])
+        return True
+
+    def stderr_diagnostic(self):
+        # Stderr can contain URLs, environment values or tokens. Classify known
+        # failure signatures without retaining any untrusted literal text.
+        prefix = bytes(self.stderr_prefix).lower()
+        classes = []
+        for needles, label in [
+            ((b'transport', b'untagged enum mcp'), 'invalid_mcp_transport_configuration'),
+            ((b'config',), 'configuration_error'),
+            ((b'permission denied', b'operation not permitted'), 'os_permission_denied'),
+            ((b'bwrap:', b'bubblewrap'), 'containment_startup_error'),
+            ((b'not found', b'no such file'), 'required_path_unavailable'),
+        ]:
+            if any(needle in prefix for needle in needles):
+                classes.append(label)
+        return {'classes': classes or ['unclassified_stderr'], 'byte_count': self.stderr_bytes,
+                'sha256': self.stderr_hash.hexdigest(), 'classified_prefix_bytes': len(self.stderr_prefix),
+                'raw_text_retained': False}
+
     def pump(self):
         if self.stop or (self.root / 'cancel.json').exists():
             raise InterruptedError('cancellation requested; cessation still required')
@@ -294,6 +377,10 @@ class Broker:
         self.deliver()
         ready = self.selector.select(0.1)
         for key, _ in ready:
+            if key.fileobj is self.child.stderr:
+                if self.read_stderr() is False:
+                    self.selector.unregister(key.fileobj)
+                continue
             chunk = os.read(key.fd, 65536)
             if not chunk:
                 raise EOFError('app-server transport lost; start will not be replayed')
@@ -319,10 +406,10 @@ class Broker:
             'agents.max_threads': m['max_subagents'], 'agents.max_depth': 1,
             'agents.default_subagent_model': m['subagent_model'],
             'agents.default_subagent_reasoning_effort': m['subagent_effort'],
-            'features.apps': False, 'mcp_servers': {}, 'web_search': 'disabled',
+            'features.apps': False, 'web_search': 'disabled',
         }
-        # Disable each inherited MCP by name; an empty table alone can merge
-        # with inherited entries. Read only tool names, never credentials.
+        # Override only enabled: replacing the MCP table destroys inherited
+        # transport configuration. Read only server names, never credentials.
         config_home = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex')))
         configs = [config_home / 'config.toml', Path('/etc/codex/config.toml')]
         configs += [p / '.codex' / 'config.toml' for p in [Path(m['workspace']), *Path(m['workspace']).parents]]
@@ -401,12 +488,14 @@ class Broker:
             if m.get('worker_scratch') and m['role'] == 'worker':
                 environment['TMPDIR'] = m['worker_scratch']
             self.child = self.spawn(self.command(), cwd=m['workspace'], env=environment, stdin=subprocess.PIPE,
-                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     start_new_session=True)
             os.set_blocking(self.child.stdin.fileno(), False)
             os.set_blocking(self.child.stdout.fileno(), False)
+            os.set_blocking(self.child.stderr.fileno(), False)
             self.event('boundary_started', {'pid': self.child.pid, 'generation': self.generation})
             self.selector.register(self.child.stdout, selectors.EVENT_READ)
+            self.selector.register(self.child.stderr, selectors.EVENT_READ)
             self.rpc('initialize', {'clientInfo': {'name': 'bokkie_engineering', 'version': '1'},
                                    'capabilities': {'experimentalApi': True}})
             self.send({'method': 'initialized', 'params': {}})
@@ -465,6 +554,12 @@ class Broker:
                 if self.child.poll() is None:
                     os.killpg(self.child.pid, signal.SIGKILL)
                 code = self.child.wait(timeout=10)
+                # The exact child is gone; drain its bounded pipe remainder.
+                while self.read_stderr():
+                    pass
+                if self.stderr_bytes:
+                    self.event('stderr_diagnostic', self.stderr_diagnostic(), terminal=True)
+                self.child.stderr.close()
                 self.child.stdin.close()
                 self.child.stdout.close()
                 self.event('boundary_reaped', {'generation': self.generation, 'pid': self.child.pid,

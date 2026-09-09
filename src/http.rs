@@ -28,6 +28,7 @@ use bokkie_operator_api::ActionPrecondition;
 
 #[derive(Debug, Clone)]
 pub struct EngineeringIntakeConfig {
+    pub deadline_seconds: i64,
     /// Trusted, explicitly enabled service profile. Never accepted from HTTP JSON.
     pub contract_template: crate::engineering::EngineeringContract,
 }
@@ -1203,17 +1204,14 @@ async fn engineering_intake(
     request: Result<Json<bokkie_operator_api::EngineeringIntakeRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let Json(request) = request.map_err(invalid_json)?;
-    let mut contract = state
-        .engineering_intake
-        .as_ref()
-        .ok_or_else(|| ApiError {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            code: "engineering_not_configured",
-            message: "Engineering supervision requires an explicitly configured runtime profile"
-                .to_owned(),
-        })?
-        .contract_template
-        .clone();
+    let config = state.engineering_intake.as_ref().ok_or_else(|| ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        code: "engineering_not_configured",
+        message: "Engineering supervision requires an explicitly configured runtime profile"
+            .to_owned(),
+    })?;
+    let mut contract = config.contract_template.clone();
+    contract.budget.deadline = SystemClock.now().saturating_add(config.deadline_seconds);
     contract.intent = request.intent;
     engineering_mutation(
         &state,
@@ -1459,7 +1457,12 @@ mod tests {
                 executor,
                 runtime: test_runtime(),
                 engineering_intake: Some(Arc::new(EngineeringIntakeConfig {
-                    contract_template: engineering_test_contract(),
+                    deadline_seconds: 3600,
+                    contract_template: {
+                        let mut template = engineering_test_contract();
+                        template.budget.deadline = 1;
+                        template
+                    },
                 })),
             },
             None,
@@ -1495,6 +1498,7 @@ mod tests {
                 executor: DbExecutor::start(database.clone()).unwrap(),
                 runtime: test_runtime(),
                 engineering_intake: Some(Arc::new(EngineeringIntakeConfig {
+                    deadline_seconds: 3600,
                     contract_template: changed_template,
                 })),
             },
@@ -1720,6 +1724,8 @@ mod tests {
                         expected: Some(expected),
                         command: EngineeringCommand::RecordReconciliation(
                             EngineeringReconciliationInput {
+                                runtime_failure: None,
+                                not_started: false,
                                 execution_id: claim.execution_id.clone(),
                                 runtime_identity: "test-runtime".into(),
                                 observation: "cancellation reconciliation observation".into(),

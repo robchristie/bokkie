@@ -258,6 +258,45 @@ for line in sys.stdin:
         with self.assertRaisesRegex(ValueError, 'differs from task profile'):
             broker.verify_capability_config(config)
 
+    def test_mcp_overrides_preserve_inherited_transport_and_never_copy_credentials(self):
+        config_home = self.root / 'account'
+        config_home.mkdir()
+        (config_home / 'config.toml').write_text('[mcp_servers.openaiDeveloperDocs]\nurl="https://docs.example.invalid/mcp"\nbearer_token_env_var="SECRET_TOKEN"\n')
+        with patch.dict(os.environ, {'CODEX_HOME': str(config_home)}):
+            config = self.broker().configuration()
+        self.assertNotIn('mcp_servers', config)
+        self.assertFalse(config['mcp_servers."openaiDeveloperDocs".enabled'])
+        self.assertNotIn('SECRET_TOKEN', json.dumps(config))
+        self.assertNotIn('docs.example.invalid', json.dumps(config))
+
+    def test_failed_start_retains_bounded_classified_stderr_without_secrets(self):
+        broker = self.broker()
+        script = 'import sys; sys.stderr.write("invalid transport config SECRET_TOKEN=do-not-retain\\n"); sys.exit(2)'
+        broker.spawn = lambda *args, **kwargs: subprocess.Popen([sys.executable, '-c', script], **kwargs)
+        broker.run()
+        diagnostic = next(event['value'] for event in broker.spool.events if event['kind'] == 'stderr_diagnostic')
+        self.assertIn('invalid_mcp_transport_configuration', diagnostic['classes'])
+        self.assertNotIn('do-not-retain', json.dumps(broker.spool.events))
+        self.assertLessEqual(diagnostic['classified_prefix_bytes'], 8192)
+        self.assertTrue(broker.spool.has('boundary_reaped'))
+        self.assertFalse(broker.spool.has('turn_identity'))
+
+    def test_command_started_and_completed_retain_actual_source_changes(self):
+        workspace = self.root / 'source'
+        workspace.mkdir()
+        path = workspace / 'reader.txt'
+        path.write_text('before')
+        broker = self.broker()
+        broker.manifest['workspace'] = str(workspace)
+        for method in ['item/started', 'item/completed']:
+            broker.observe({'method': method, 'params': {'threadId': 't', 'turnId': 'turn',
+                            'item': {'id': 'check', 'type': 'commandExecution', 'command': 'check'}}})
+            path.write_text('after')
+        retained = [event['value']['source'] for event in broker.spool.events if event['kind'] == 'command_source']
+        self.assertEqual(len(retained), 2)
+        self.assertNotEqual(retained[0], retained[1])
+        self.assertTrue(broker.spool.has('item/started'))
+
     def test_profile_contains_required_pid_namespace_and_client_reviewer(self):
         command = self.broker().command()
         for arg in ['--die-with-parent', '--unshare-pid', '--new-session', '--proc', 'approvals_reviewer="user"']:
