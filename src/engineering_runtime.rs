@@ -40,6 +40,11 @@ pub struct EngineeringRuntimeProfile {
     pub max_repairs: u32,
     pub max_recoveries: u32,
     pub max_turns: u32,
+    /// Remaining aggregate allowances for a bounded continuation intake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_questions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_checkpoints: Option<u32>,
     pub deadline_seconds: i64,
     /// Optional absolute ceiling retained across delayed continuation intake.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,6 +97,8 @@ impl EngineeringRuntimeProfile {
             (self.max_repairs, 16),
             (self.max_recoveries, 16),
             (self.max_turns, 128),
+            (self.max_questions.unwrap_or(64), 64),
+            (self.max_checkpoints.unwrap_or(512), 512),
         ] {
             if value == 0 || value > cap {
                 return Err("finite profile count outside bounds".into());
@@ -187,8 +194,8 @@ impl EngineeringRuntimeProfile {
             max_packages: self.max_packages,
             max_repairs: self.max_repairs,
             max_recoveries: self.max_recoveries,
-            max_checkpoints: 512,
-            max_questions: 64,
+            max_checkpoints: self.max_checkpoints.unwrap_or(512),
+            max_questions: self.max_questions.unwrap_or(64),
             max_concurrent_workers: self.concurrency,
             turn_seconds: if worker {
                 self.worker_seconds
@@ -1879,6 +1886,8 @@ mod tests {
                 max_repairs: 3,
                 max_recoveries: 3,
                 max_turns: 24,
+                max_questions: None,
+                max_checkpoints: None,
                 deadline_seconds: 14400,
                 deadline_at: None,
                 worker_network_access: false,
@@ -2375,6 +2384,52 @@ mod tests {
             snapshot(&f.store, &f.id).unwrap().turns_used,
             before.turns_used + 1
         );
+    }
+
+    #[test]
+    fn continuation_question_and_checkpoint_caps_reach_intake_without_changing_legacy_identity() {
+        let mut f = Fixture::new();
+        let legacy_bytes = serde_json::to_vec(&f.runtime.profile).unwrap();
+        let mut profile_json: Value = serde_json::from_slice(&legacy_bytes).unwrap();
+        assert!(profile_json.get("max_questions").is_none());
+        assert!(profile_json.get("max_checkpoints").is_none());
+        let legacy: EngineeringRuntimeProfile =
+            serde_json::from_value(profile_json.clone()).unwrap();
+        assert_eq!(serde_json::to_vec(&legacy).unwrap(), legacy_bytes);
+        assert_eq!(legacy.budget(100, false).max_questions, 64);
+        assert_eq!(legacy.budget(100, false).max_checkpoints, 512);
+
+        profile_json["max_questions"] = json!(13);
+        profile_json["max_checkpoints"] = json!(100);
+        let profile: EngineeringRuntimeProfile = serde_json::from_value(profile_json).unwrap();
+        profile.validate().unwrap();
+        assert_ne!(serde_json::to_vec(&profile).unwrap(), legacy_bytes);
+        let saved = intake(
+            &mut f.store,
+            &profile,
+            "Continue within the original remaining allowances".into(),
+            "continuation-caps".into(),
+            110,
+        )
+        .unwrap();
+        let state = snapshot(&f.store, &saved.outcome_id).unwrap();
+        assert_eq!(state.contract().budget.max_questions, 13);
+        assert_eq!(state.contract().budget.max_checkpoints, 100);
+        assert_eq!(profile.budget(110, true).max_questions, 13);
+        assert_eq!(profile.budget(110, true).max_checkpoints, 100);
+
+        for (questions, checkpoints) in [(0, 100), (65, 100), (13, 0), (13, 513)] {
+            let mut invalid = profile.clone();
+            invalid.max_questions = Some(questions);
+            invalid.max_checkpoints = Some(checkpoints);
+            assert!(invalid.validate().is_err());
+        }
+        for (questions, checkpoints) in [(1, 1), (64, 512)] {
+            let mut valid = profile.clone();
+            valid.max_questions = Some(questions);
+            valid.max_checkpoints = Some(checkpoints);
+            valid.validate().unwrap();
+        }
     }
 
     #[test]

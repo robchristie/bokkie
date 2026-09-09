@@ -21,7 +21,14 @@ import zlib
 
 
 def dump(path, value):
-    path.write_text(json.dumps(value, indent=2) + '\n')
+    temporary = path.with_name(path.name + f'.pending-{time.time_ns()}')
+    with temporary.open('x') as handle:
+        handle.write(json.dumps(value, indent=2) + '\n')
+        handle.flush(); os.fsync(handle.fileno())
+    temporary.replace(path)
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try: os.fsync(descriptor)
+    finally: os.close(descriptor)
 
 
 def hashes(root):
@@ -132,6 +139,37 @@ def continuation_profile(profile, state):
     return remaining
 
 
+def prepare_continuation(root, profile, state, previous_outcome, intervention):
+    """Persist the exact dispatch capsule before intake; replay never retunes it."""
+    capsule_path = root / f'pending-continuation-{previous_outcome}.json'
+    if capsule_path.exists():
+        capsule = json.loads(capsule_path.read_text())
+        if capsule['previous_outcome_id'] != previous_outcome:
+            raise ValueError('pending continuation predecessor changed')
+        profile_path = retained_path(root, capsule, 'profile_file', '')
+        intent_path = retained_path(root, capsule, 'intent_file', '')
+        for field, path in [('profile_sha256', profile_path), ('intent_sha256', intent_path)]:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != capsule[field]:
+                raise ValueError('pending continuation input identity changed')
+        return json.loads(profile_path.read_text()), profile_path, intent_path, capsule
+    profile = continuation_profile(profile, state)
+    identity = time.time_ns()
+    profile_path = root / f'profile-continuation-{identity}.json'
+    intent_path = root / f'submitted-intent-continuation-{identity}.json'
+    intent = json.loads((root / 'submitted-intent.json').read_text())['intent']
+    intent += f'\nContinuation context: the repository now contains retained work from interrupted outcome {previous_outcome}, which did not reach final product acceptance. Continue the same milestone from the existing repository and its evidence; preserve useful work. The infrastructure remedy is recorded at {intervention}. No acceptance criterion or authority boundary is waived. This intake uses only the preceding attempt’s remaining execution, package, repair and recovery budgets and its original absolute deadline.\n'
+    dump(profile_path, profile)
+    dump(intent_path, {'intent': intent})
+    capsule = {'previous_outcome_id':previous_outcome,
+               'command_id':'pagefold-continuation-' + previous_outcome,
+               'profile_file':profile_path.name,'intent_file':intent_path.name,
+               'profile_sha256':hashlib.sha256(profile_path.read_bytes()).hexdigest(),
+               'intent_sha256':hashlib.sha256(intent_path.read_bytes()).hexdigest(),
+               'intervention_sha256':hashlib.sha256(intervention.read_bytes()).hexdigest()}
+    dump(capsule_path, capsule)
+    return profile, profile_path, intent_path, capsule
+
+
 def retained_run(root, workspace, allow_cancelled=False):
     """Validate a continuation without rewriting intent, source, profile or budget."""
     history = json.loads((root / 'journey.json').read_text())
@@ -188,9 +226,8 @@ def main():
                 parser.error('continuation requires a retained infrastructure intervention')
             previous_outcome = outcome
             previous_state = read_snapshot(root / 'supervision.sqlite', outcome)
-            profile = continuation_profile(profile, previous_state)
-            profile_path = root / f'profile-continuation-{time.time_ns()}.json'
-            dump(profile_path, profile)
+            profile, profile_path, intent_path, capsule = prepare_continuation(
+                root, profile, previous_state, previous_outcome, intervention)
             outcome = None
     else:
         if root.exists() or workspace.exists():
@@ -239,13 +276,10 @@ def main():
         if args.resume:
             record('runtime_resumed', outcome_id=outcome, source_revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip(), profile_sha256=hashlib.sha256(profile_path.read_bytes()).hexdigest(), intervention_sha256=hashlib.sha256(intervention.read_bytes()).hexdigest() if intervention.exists() else None, operator_url=base+'/ui/', controller_log=log_name)
         elif continuing:
-            intent = json.loads((root / 'submitted-intent.json').read_text())['intent']
-            intent += f'\nContinuation context: the repository now contains retained work from interrupted outcome {previous_outcome}, which did not reach final product acceptance. Continue the same milestone from the existing repository and its evidence; preserve useful work. The infrastructure remedy is recorded at {intervention}. No acceptance criterion or authority boundary is waived. This intake uses only the preceding attempt’s remaining execution, package, repair and recovery budgets and its original absolute deadline.\n'
-            intent_path = root / f'submitted-intent-continuation-{time.time_ns()}.json'
-            dump(intent_path, {'intent': intent})
-            receipt = call('/engineering/outcomes', {'command_id': 'pagefold-continuation-' + previous_outcome, 'intent': intent})
+            intent = json.loads(intent_path.read_text())['intent']
+            receipt = call('/engineering/outcomes', {'command_id': capsule['command_id'], 'intent': intent})
             outcome = receipt['outcome_id']
-            record('continuation_intake_saved', receipt=receipt, previous_outcome_id=previous_outcome, source_revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip(), profile_file=profile_path.name, intent_file=intent_path.name, profile_sha256=hashlib.sha256(profile_path.read_bytes()).hexdigest(), intervention_sha256=hashlib.sha256(intervention.read_bytes()).hexdigest(), remaining_budgets={key:profile[key] for key in ('max_turns','max_packages','max_repairs','max_recoveries','deadline_at')}, operator_url=base+'/ui/')
+            record('continuation_intake_saved', receipt=receipt, previous_outcome_id=previous_outcome, source_revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip(), profile_file=profile_path.name, intent_file=intent_path.name, profile_sha256=hashlib.sha256(profile_path.read_bytes()).hexdigest(), intervention_sha256=capsule['intervention_sha256'], remaining_budgets={key:profile[key] for key in ('max_turns','max_packages','max_repairs','max_recoveries','deadline_at')}, operator_url=base+'/ui/')
         else:
             intent = (source/'docs/supervision-evidence/knowledge-workspace-intent.md').read_text().split('## Qualification ownership')[0]
             intent += f'\nThe empty local application repository is {workspace}. Prepared synthetic source knowledge is at {knowledge}; use it for reading calibration without changing those supplied files. Tests may create their own isolated copies to simulate external changes. Store derived state separately. Polyorama is available at /nvme/development/polyorama. The provisional name is Pagefold.\n'

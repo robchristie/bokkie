@@ -121,6 +121,27 @@ class ContinuationBudgetTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'cancelled'):
             DRIVER.continuation_profile({},state)
 
+    def test_lost_intake_acknowledgement_reuses_exact_pending_capsule(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            DRIVER.dump(root/'submitted-intent.json',{'intent':'Original milestone'})
+            intervention=root/'repair.json';DRIVER.dump(intervention,{'repair':'adapter'})
+            state=self.state()
+            first=DRIVER.prepare_continuation(root,{'workspace':'app'},state,'old',intervention)
+            # Simulate the server saving intake and the HTTP response being lost:
+            # history was not advanced, and retry happens thirty seconds later.
+            saved_request=(first[3]['command_id'],first[2].read_bytes(),first[1].read_bytes())
+            before=DRIVER.hashes(root)
+            with patch.object(DRIVER.time,'time',return_value=time.time()+30):
+                replay=DRIVER.prepare_continuation(root,{'workspace':'app'},state,'old',intervention)
+            self.assertEqual((replay[3]['command_id'],replay[2].read_bytes(),replay[1].read_bytes()),saved_request)
+            self.assertEqual(first,replay)
+            self.assertEqual(DRIVER.hashes(root),before)
+            DRIVER.dump(replay[1],{'workspace':'tampered'})
+            with self.assertRaisesRegex(ValueError,'identity changed'):
+                DRIVER.prepare_continuation(root,{},state,'old',intervention)
+
     def test_continuation_chain_rejects_forks_and_loops(self):
         start={'kind':'intent_saved','receipt':{'outcome_id':'a'}}
         next_event={'kind':'continuation_intake_saved','previous_outcome_id':'a',
