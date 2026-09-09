@@ -38,11 +38,15 @@ limitations. Completion, exit zero and your final message never accept an outcom
 
 For machine-attributed independent review, ask the bounded read-only reviewer to
 return bare JSON with `artefacts` (the exact EngineeringArtefact list), `verdict`
-(`pass` or `repair`), and `findings` (a list of strings). Call bokkie_review with
-its actual `reviewer_thread_id`; Bokkie reads the completed collaboration event,
-retains the report and returns EngineeringReviewEvidence. Preserve that returned
+(`pass` or `repair`), and `findings` (a list of strings). After the reviewer
+finishes, call bokkie_commands and read reviewer_candidates. Use its observed
+reviewer_thread_id and reviewer_turn_id with bokkie_review. A canonical task name
+such as /root/review is not the runtime thread ID; do not search account files or
+ask the reviewer to discover it. Bokkie reads its recorded parent/child link,
+final report and completed turn, retains the report and returns
+EngineeringReviewEvidence. Preserve that returned
 identity for the supervisor. A caller-written report or invented thread ID is
 not acceptable independent review evidence.
 
-Call bokkie_commands to discover actual completed command item IDs before using
-bokkie_validation. Do not substitute a shell chunk ID or invent an item ID.
+Call bokkie_commands and read its commands array to discover actual completed
+command item IDs before using bokkie_validation. Do not substitute a shell chunk ID or invent an item ID.

@@ -155,3 +155,15 @@ files, 2 MiB per file and 16 MiB total; unavailable or changing identities rejec
 registration and require another bounded check. These are app-server event
 observations, not a synchronous hook into command execution. Historical commands
 without those observations cannot be attached to a newly inspected revision.
+
+
+`bokkie_commands` returns an object with `commands` and `reviewer_candidates`;
+`bokkie_snapshot` also exposes those reviewer candidates. Each candidate names an
+observed thread ID, optional exact turn ID, task path where available and report
+digest. A task path such as `/root/review` is a label, not a thread ID. Pass the
+observed IDs to `bokkie_review`. Current app-server review attribution requires
+the root's `subAgentActivity` parent link, the child's `final_answer`, and a
+successful completion of that same child turn. The adapter retains those source
+events as provenance and reads the report from them, never from caller text.
+Older completed `agentsStates` receipts remain supported when they belong to
+the root. Child contexts cannot acquire the root's Bokkie tool authority.

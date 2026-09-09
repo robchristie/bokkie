@@ -289,6 +289,108 @@ struct Event {
     kind: String,
     value: Value,
 }
+#[derive(Serialize)]
+struct ObservedReview<'a> {
+    reviewer_thread_id: &'a str,
+    reviewer_turn_id: Option<&'a str>,
+    agent_path: Option<&'a str>,
+    report_digest: String,
+    #[serde(skip)]
+    message: &'a str,
+    #[serde(skip)]
+    provenance: Vec<&'a Event>,
+}
+
+fn observed_reviews(log: &[Event]) -> Vec<ObservedReview<'_>> {
+    let Some(root) = log
+        .iter()
+        .find(|event| event.kind == "thread_identity")
+        .and_then(|event| event.value["thread_id"].as_str())
+    else {
+        return vec![];
+    };
+    let mut reviews = vec![];
+    for completed in log.iter().rev().filter(|event| {
+        event.kind == "turn/completed" && event.value["turn"]["status"] == "completed"
+    }) {
+        let (Some(thread), Some(turn)) = (
+            completed.value["threadId"].as_str(),
+            completed.value["turn"]["id"].as_str(),
+        ) else {
+            continue;
+        };
+        if thread == root {
+            continue;
+        }
+        let Some(parent) = log.iter().find(|event| {
+            matches!(event.kind.as_str(), "item/started" | "item/completed")
+                && event.value["threadId"] == root
+                && event.value["item"]["type"] == "subAgentActivity"
+                && event.value["item"]["kind"] == "started"
+                && event.value["item"]["agentThreadId"] == thread
+                && event.sequence < completed.sequence
+        }) else {
+            continue;
+        };
+        let Some(final_item) = log.iter().rev().find(|event| {
+            event.kind == "item/completed"
+                && event.value["threadId"] == thread
+                && event.value["turnId"] == turn
+                && event.value["item"]["type"] == "agentMessage"
+                && event.value["item"]["phase"] == "final_answer"
+                && event.sequence > parent.sequence
+                && event.sequence < completed.sequence
+        }) else {
+            continue;
+        };
+        let Some(message) = final_item.value["item"]["text"].as_str() else {
+            continue;
+        };
+        reviews.push(ObservedReview {
+            reviewer_thread_id: thread,
+            reviewer_turn_id: Some(turn),
+            agent_path: parent.value["item"]["agentPath"].as_str(),
+            report_digest: sha(message.as_bytes()),
+            message,
+            provenance: vec![parent, final_item, completed],
+        });
+    }
+    // Older app-server versions include the completed child's own report in
+    // the root's collaboration receipt instead of separate child turn events.
+    for event in log.iter().rev().filter(|event| {
+        event.kind == "item/completed"
+            && event.value["threadId"] == root
+            && event.value["item"]["type"] == "collabAgentToolCall"
+    }) {
+        let Some(states) = event.value["item"]["agentsStates"].as_object() else {
+            continue;
+        };
+        for (thread, state) in states {
+            if thread == root
+                || state["status"] != "completed"
+                || reviews
+                    .iter()
+                    .any(|review| review.reviewer_thread_id == thread)
+            {
+                continue;
+            }
+            let Some(message) = state["message"].as_str() else {
+                continue;
+            };
+            reviews.push(ObservedReview {
+                reviewer_thread_id: thread,
+                reviewer_turn_id: None,
+                agent_path: None,
+                report_digest: sha(message.as_bytes()),
+                message,
+                provenance: vec![event],
+            });
+        }
+    }
+    reviews.truncate(64);
+    reviews
+}
+
 fn events(directory: &Path) -> RuntimeResult<Vec<Event>> {
     let path = directory.join("events.jsonl");
     if !path.exists() {
@@ -354,13 +456,13 @@ fn dynamic_tools() -> Vec<Value> {
         ),
         tool(
             "bokkie_review",
-            "Register an actual completed independent subagent review by reviewer_thread_id. Its final message must be bare JSON with exact artefacts, verdict (pass or repair), and findings (string list). Report text comes from actual collaboration events.",
-            json!({"reviewer_thread_id":{"type":"string"}}),
+            "Discover observed reviewer IDs with bokkie_commands, then register by reviewer_thread_id and optional reviewer_turn_id. Canonical task paths such as /root/review are not thread IDs. Its final message must be bare JSON with exact artefacts, verdict (pass or repair), and findings (string list). Report text comes from actual collaboration events.",
+            json!({"reviewer_thread_id":{"type":"string"},"reviewer_turn_id":{"type":"string"}}),
             &["reviewer_thread_id"],
         ),
         tool(
             "bokkie_commands",
-            "List this execution's actual completed command item IDs, commands and exit codes so validation can name the observed protocol item.",
+            "Return commands (actual completed command item IDs, commands and exit codes) and reviewer_candidates (observed independent thread/turn IDs and task paths). Use these actual protocol identities for validation and review registration.",
             json!({}),
             &[],
         ),
@@ -968,7 +1070,7 @@ impl EngineeringRuntime {
                     }
                 }
                 Ok(
-                    json!({"snapshot":state,"expected":state.precondition(),"registered_reviews":reviews}),
+                    json!({"snapshot":state,"expected":state.precondition(),"registered_reviews":reviews,"reviewer_candidates":observed_reviews(log)}),
                 )
             }
             "bokkie_command" => self.command(store, directory, execution, key, args.clone(), now),
@@ -985,22 +1087,12 @@ impl EngineeringRuntime {
                 let reviewer = args["reviewer_thread_id"]
                     .as_str()
                     .ok_or("missing independent thread identity")?;
-                let message = log
-                    .iter()
-                    .rev()
-                    .filter(|e| {
-                        e.kind == "item/completed"
-                            && e.value["item"]["type"] == "collabAgentToolCall"
-                    })
-                    .find_map(|e| {
-                        let state = &e.value["item"]["agentsStates"][reviewer];
-                        if state["status"] == "completed" {
-                            state["message"].as_str()
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or("independent reviewer has no observed completed report")?;
+                let candidates = observed_reviews(log);
+                let selected_turn = args["reviewer_turn_id"].as_str();
+                let candidate = candidates.iter().find(|candidate| candidate.reviewer_thread_id == reviewer
+                    && selected_turn.is_none_or(|turn| candidate.reviewer_turn_id == Some(turn)))
+                    .ok_or_else(|| format!("Independent reviewer has no observed completed report for that identity. Use bokkie_commands reviewer_candidates; observed candidates: {}",serde_json::to_string(&candidates).unwrap_or_default()))?;
+                let message = candidate.message;
                 #[derive(Deserialize)]
                 #[serde(deny_unknown_fields)]
                 struct ReviewReport {
@@ -1019,8 +1111,19 @@ impl EngineeringRuntime {
                 for artefact in &report.artefacts {
                     self.inspect(artefact)?;
                 }
+                let provenance_digest = self.blob(&serde_json::to_vec(&candidate.provenance)?)?;
+                atomic(
+                    &directory
+                        .join("receipts")
+                        .join(format!("review-provenance-{key}.json")),
+                    &json!({"reviewer_thread_id":reviewer,"reviewer_turn_id":candidate.reviewer_turn_id,
+                        "report_digest":candidate.report_digest,"provenance_digest":provenance_digest}),
+                )?;
                 let review = EngineeringReviewEvidence {
-                    reviewer_identity: format!("codex-thread:{reviewer}"),
+                    reviewer_identity: candidate.reviewer_turn_id.map_or_else(
+                        || format!("codex-thread:{reviewer}"),
+                        |turn| format!("codex-thread:{reviewer}:turn:{turn}"),
+                    ),
                     artefacts: report.artefacts,
                     evidence_digest: self.blob(message.as_bytes())?,
                 };
@@ -1034,7 +1137,9 @@ impl EngineeringRuntime {
                 )?;
                 Ok(json!(review))
             }
-            "bokkie_commands" => Ok(json!(log.iter().filter(|e|e.kind=="item/completed" && e.value["item"]["type"]=="commandExecution").map(|e|json!({"item_id":e.value["item"]["id"],"command":e.value["item"]["command"],"exit_code":e.value["item"]["exitCode"]})).collect::<Vec<_>>())),
+            "bokkie_commands" => Ok(
+                json!({"commands":log.iter().filter(|e|e.kind=="item/completed" && e.value["item"]["type"]=="commandExecution").map(|e|json!({"item_id":e.value["item"]["id"],"command":e.value["item"]["command"],"exit_code":e.value["item"]["exitCode"]})).collect::<Vec<_>>(),"reviewer_candidates":observed_reviews(log)}),
+            ),
             "bokkie_validation" => {
                 let item_id = args["item_id"].as_str().ok_or("missing command item ID")?;
                 let item = log
@@ -1049,27 +1154,44 @@ impl EngineeringRuntime {
                     serde_json::from_value(args["artefact"].clone())?;
                 self.inspect(&artefact)?;
                 let sources = ["item/started", "item/completed"].map(|phase| {
-                    log.iter().find(|event| event.kind == "command_source"
-                        && event.value["phase"] == phase && event.value["item_id"] == item_id
-                        && event.value["thread_id"] == item.value["threadId"]
-                        && event.value["turn_id"] == item.value["turnId"])
+                    log.iter()
+                        .find(|event| {
+                            event.kind == "command_source"
+                                && event.value["phase"] == phase
+                                && event.value["item_id"] == item_id
+                                && event.value["thread_id"] == item.value["threadId"]
+                                && event.value["turn_id"] == item.value["turnId"]
+                        })
                         .map(|event| &event.value["source"])
                 });
                 let [Some(before), Some(after)] = sources else {
                     return Err("validation requires broker source identities at command start and completion; rerun the check".into());
                 };
                 if before != after || before.get("unavailable").is_some() {
-                    return Err("source changed during validation or its identity is unavailable".into());
+                    return Err(
+                        "source changed during validation or its identity is unavailable".into(),
+                    );
                 }
                 let matches = match &artefact {
-                    EngineeringArtefact::File { path, sha256, bytes, .. } =>
+                    EngineeringArtefact::File {
+                        path,
+                        sha256,
+                        bytes,
+                        ..
+                    } => {
                         before["files"][path]["sha256"] == *sha256
-                            && before["files"][path]["byte_length"] == *bytes,
-                    EngineeringArtefact::Git { commit, tree, .. } =>
-                        before["clean"] == true && before["commit"] == *commit && before["tree"] == *tree,
+                            && before["files"][path]["byte_length"] == *bytes
+                    }
+                    EngineeringArtefact::Git { commit, tree, .. } => {
+                        before["clean"] == true
+                            && before["commit"] == *commit
+                            && before["tree"] == *tree
+                    }
                 };
                 if !matches {
-                    return Err("validation command did not observe the submitted source revision".into());
+                    return Err(
+                        "validation command did not observe the submitted source revision".into(),
+                    );
                 }
                 let command = item.value["item"]["command"]
                     .as_str()
@@ -2188,6 +2310,154 @@ mod tests {
                 .contains("teal")
         );
     }
+    fn child_review_log(message: &str) -> Vec<Event> {
+        vec![
+            Event {
+                sequence: 1,
+                kind: "thread_identity".into(),
+                value: json!({"thread_id":"root-thread"}),
+            },
+            Event {
+                sequence: 2,
+                kind: "item/started".into(),
+                value: json!({"threadId":"root-thread","turnId":"root-turn","item":{"id":"spawn","type":"subAgentActivity","kind":"started","agentPath":"/root/review","agentThreadId":"child-thread"}}),
+            },
+            Event {
+                sequence: 3,
+                kind: "item/completed".into(),
+                value: json!({"threadId":"root-thread","turnId":"root-turn","item":{"id":"spawn","type":"subAgentActivity","kind":"started","agentPath":"/root/review","agentThreadId":"child-thread"}}),
+            },
+            Event {
+                sequence: 4,
+                kind: "item/completed".into(),
+                value: json!({"threadId":"child-thread","turnId":"child-turn","item":{"id":"report","type":"agentMessage","phase":"final_answer","text":message}}),
+            },
+            Event {
+                sequence: 5,
+                kind: "turn/completed".into(),
+                value: json!({"threadId":"child-thread","turn":{"id":"child-turn","status":"completed"}}),
+            },
+            Event {
+                sequence: 6,
+                kind: "item/completed".into(),
+                value: json!({"threadId":"root-thread","turnId":"root-turn","item":{"type":"collabAgentToolCall","tool":"wait","agentsStates":{},"receiverThreadIds":[]}}),
+            },
+        ]
+    }
+    #[test]
+    fn actual_child_review_is_discoverable_and_retains_exact_turn_provenance() {
+        let mut f = Fixture::new();
+        fs::write(f.runtime.profile.workspace.join("reader.txt"), "page").unwrap();
+        let (artefact, _) = f.runtime.file("reader.txt").unwrap();
+        let message = json!({"artefacts":[artefact],"verdict":"repair","findings":["Missing required multiplication"]}).to_string();
+        let log = child_review_log(&message);
+        let directory = f.directory(&f.worker);
+        let discovered = f
+            .runtime
+            .dynamic(
+                &mut f.store,
+                &directory,
+                &f.worker,
+                "discover",
+                &json!({"tool":"bokkie_commands","arguments":{}}),
+                &log,
+                105,
+            )
+            .unwrap();
+        assert!(discovered["commands"].is_array());
+        assert_eq!(
+            discovered["reviewer_candidates"][0]["reviewer_thread_id"],
+            "child-thread"
+        );
+        assert_eq!(
+            discovered["reviewer_candidates"][0]["reviewer_turn_id"],
+            "child-turn"
+        );
+        assert_eq!(
+            discovered["reviewer_candidates"][0]["agent_path"],
+            "/root/review"
+        );
+        let error = f
+            .runtime
+            .dynamic(
+                &mut f.store,
+                &directory,
+                &f.worker,
+                "bad-alias",
+                &json!({"tool":"bokkie_review","arguments":{"reviewer_thread_id":"/root/review"}}),
+                &log,
+                105,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("child-thread"));
+        let registered = f.runtime.dynamic(&mut f.store,&directory,&f.worker,"child-review",
+            &json!({"tool":"bokkie_review","arguments":{"reviewer_thread_id":"child-thread","reviewer_turn_id":"child-turn","message":"invented replacement text"}}),&log,105).unwrap();
+        let review: EngineeringReviewEvidence = serde_json::from_value(registered).unwrap();
+        assert_eq!(
+            review.reviewer_identity,
+            "codex-thread:child-thread:turn:child-turn"
+        );
+        assert_eq!(review.evidence_digest, sha(message.as_bytes()));
+        f.runtime.verify_review(&review, &f.supervisor).unwrap();
+        let provenance: Value =
+            read_json(&directory.join("receipts/review-provenance-child-review.json")).unwrap();
+        let bytes = f
+            .runtime
+            .evidence(provenance["provenance_digest"].as_str().unwrap())
+            .unwrap();
+        let retained: Vec<Event> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(retained.len(), 3);
+        assert_eq!(retained[2].kind, "turn/completed");
+        fs::write(f.runtime.profile.workspace.join("reader.txt"), "changed").unwrap();
+        assert!(f.runtime.verify_review(&review, &f.supervisor).is_err());
+    }
+    #[test]
+    fn child_review_rejects_missing_parent_failed_turn_and_mismatched_final() {
+        let base = child_review_log("{}");
+        assert_eq!(observed_reviews(&base).len(), 1);
+        let mut missing_parent = base.clone();
+        missing_parent.retain(|e| e.value["item"]["type"] != "subAgentActivity");
+        assert!(observed_reviews(&missing_parent).is_empty());
+        for (event_index, field, replacement) in
+            [(4, "status", "failed"), (4, "id", "different-turn")]
+        {
+            let mut log = base.clone();
+            log[event_index].value["turn"][field] = json!(replacement);
+            assert!(observed_reviews(&log).is_empty());
+        }
+        let mut wrong_thread = base.clone();
+        wrong_thread[3].value["threadId"] = json!("unrelated-thread");
+        assert!(observed_reviews(&wrong_thread).is_empty());
+        let mut commentary = base.clone();
+        commentary[3].value["item"]["phase"] = json!("commentary");
+        assert!(observed_reviews(&commentary).is_empty());
+        let mut self_review = base.clone();
+        self_review[1].value["item"]["agentThreadId"] = json!("root-thread");
+        self_review[2].value["item"]["agentThreadId"] = json!("root-thread");
+        self_review[3].value["threadId"] = json!("root-thread");
+        self_review[4].value["threadId"] = json!("root-thread");
+        assert!(observed_reviews(&self_review).is_empty());
+    }
+    #[test]
+    fn child_review_discovery_does_not_grant_root_tools_to_the_child() {
+        let mut f = Fixture::new();
+        let log = child_review_log("{}");
+        let directory = f.directory(&f.worker);
+        let request = Event {
+            sequence: 7,
+            kind: "request".into(),
+            value: json!({"key":"a".repeat(64),"message":{"id":12,"method":"item/tool/call","params":{"threadId":"child-thread","turnId":"child-turn","tool":"bokkie_review","arguments":{"reviewer_thread_id":"child-thread"}}}}),
+        };
+        let error = f
+            .runtime
+            .request(&mut f.store, &directory, &f.worker, &request, &log, 105)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("nested agent cannot inherit root Bokkie authority")
+        );
+    }
     #[test]
     fn independent_review_requires_observed_subagent_report() {
         let mut f = Fixture::new();
@@ -2200,11 +2470,18 @@ mod tests {
             evidence_digest: f.runtime.blob(message.as_bytes()).unwrap(),
         };
         assert!(f.runtime.verify_review(&guessed, &f.supervisor).is_err());
-        let log = vec![Event {
-            sequence: 1,
-            kind: "item/completed".into(),
-            value: json!({"item":{"type":"collabAgentToolCall","agentsStates":{"review-thread":{"status":"completed","message":message}}}}),
-        }];
+        let log = vec![
+            Event {
+                sequence: 1,
+                kind: "thread_identity".into(),
+                value: json!({"thread_id":"root-thread"}),
+            },
+            Event {
+                sequence: 2,
+                kind: "item/completed".into(),
+                value: json!({"threadId":"root-thread","item":{"type":"collabAgentToolCall","agentsStates":{"review-thread":{"status":"completed","message":message}}}}),
+            },
+        ];
         let directory = f.directory(&f.worker);
         let registered = f
             .runtime

@@ -12,6 +12,8 @@ This is qualification evidence, not a claim of product acceptance.
 
 | 20260909-d | `15272fc62bc72b91657d531b2f660c179777377a` | Real supervisor formalisation and worker dispatch succeeded; restart and lost-ack replay passed. Rejected because the outer qualification driver matched its offline marker inside a snapshot tool event rather than a shell execution and disconnected too early. Driver now matches command-execution events only; the affected journey must repeat. |
 
+| 20260909-e | `80f86121ad348cde97c3fbfa51fc154a18efe70f` | Restart/replay and autonomous routine answer passed. An actual independent child reviewed the incomplete arithmetic files and returned a repair verdict. Rejected at evidence registration: current Codex emits the child completion on its own thread/turn, while the adapter expected a populated legacy collaboration-state map. The outer agent stopped qualification for an adapter repair; no acceptance was substituted. |
+
 Historical retained synthetic evidence owner:
 `/nvme/development/bokkie-supervision-fixture-20260909-a` contains the SQLite
 records, private broker journals, exact profile, fixture revision
