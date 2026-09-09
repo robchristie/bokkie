@@ -431,7 +431,7 @@ class Broker:
     @staticmethod
     def capability_config(config):
         return {
-            'agents': {key: config.get('agents', {}).get(key) for key in
+            'agents': {key: config.get('agents', {}).get('max_concurrent_threads_per_session', config.get('agents', {}).get(key)) if key == 'max_threads' else config.get('agents', {}).get(key) for key in
                        ('max_threads', 'max_depth', 'default_subagent_model', 'default_subagent_reasoning_effort')},
             'apps': config.get('features', {}).get('apps'),
             'web_search': config.get('web_search'),

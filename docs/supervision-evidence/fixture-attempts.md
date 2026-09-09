@@ -8,6 +8,8 @@ This is qualification evidence, not a claim of product acceptance.
 
 | 20260909-b | `9812f2256f4c7ed1fa176198931f5d596b5bff56` | Rejected before a model turn: quoted MCP override name created a literal key. One failed dispatch parked durable attention with a sanitised configuration diagnostic; no repeated model starts. Direct account-neutral app-server startup verified the supported unquoted override. Outer agent interrupted qualification and HTTP cleanup reconciled every boundary. |
 
+| 20260909-c | `76d766c7d085d486722968d8941109c262f389ea` | Rejected before a turn: effective configuration verification expected the CLI concurrency alias rather than the canonical `config/read` field. A no-model configuration probe verified `max_concurrent_threads_per_session=2`; capability comparison was repaired without changing the effective limit. Cancellation reconciled the failed boundary. |
+
 Historical retained synthetic evidence owner:
 `/nvme/development/bokkie-supervision-fixture-20260909-a` contains the SQLite
 records, private broker journals, exact profile, fixture revision

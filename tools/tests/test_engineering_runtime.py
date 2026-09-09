@@ -264,6 +264,10 @@ for line in sys.stdin:
         os.mkfifo(workspace / 'untracked-pipe')
         self.assertIn('unavailable', broker.source_snapshot())
 
+    def test_installed_schema_projects_canonical_concurrency_field(self):
+        config = {'agents': {'max_concurrent_threads_per_session': 2}}
+        self.assertEqual(b.Broker.capability_config(config)['agents']['max_threads'], 2)
+
     def test_mcp_overrides_preserve_inherited_transport_and_never_copy_credentials(self):
         config_home = self.root / 'account'
         config_home.mkdir()

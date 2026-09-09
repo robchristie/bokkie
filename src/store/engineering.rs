@@ -1557,7 +1557,8 @@ fn apply_command(
                     )?;
                     if let Some(submission) = &input.recovered_submission {
                         // Offline import is a reconciler operation, never stale worker authority.
-                        let stale = input.not_started
+                        let stale = recovery_exhausted
+                            || input.not_started
                             || state.cancellation_requested
                             || execution.contract_revision != state.contract_revision
                             || state.executions.iter().any(|e| {
@@ -1582,7 +1583,11 @@ fn apply_command(
                             .expect("retained reconciliation")
                             .input
                             .observation
-                            .push_str("; rejected stale result import");
+                            .push_str(if recovery_exhausted {
+                                "; result import held: recovery budget exhausted"
+                            } else {
+                                "; rejected stale result import"
+                            });
                     }
                     let cancelled = state.cancellation_requested
                         || execution.package_id.as_ref().is_some_and(|id| {
@@ -2982,6 +2987,48 @@ mod tests {
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].package_id.as_deref(), Some(dependent_id.as_str()));
     }
+    #[test]
+    fn exhausted_recovery_retains_offline_evidence_without_import_or_continuation() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = create(&mut store);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        new_package(&mut store, &root, 101);
+        let worker = claim(&mut store, EngineeringRole::Worker, 102);
+        store.recover_expired_leases(703).unwrap();
+        let tx = store.connection.transaction().unwrap();
+        let mut state = load(&tx, &id).unwrap();
+        state.recoveries_used = state.contract().budget.max_recoveries;
+        save(&tx, &mut state, 704, "test_budget").unwrap();
+        tx.commit().unwrap();
+        reconcile(&mut store, &worker, Some(submission()), 705);
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert!(state.submissions.is_empty());
+        assert!(
+            state
+                .executions
+                .iter()
+                .find(|e| e.id == worker.execution_id)
+                .unwrap()
+                .cessation_verified
+        );
+        assert!(
+            state
+                .reconciliations
+                .last()
+                .unwrap()
+                .input
+                .recovered_submission
+                .is_some()
+        );
+        assert_eq!(state.root.state, ObligationState::Attention);
+        assert!(
+            store
+                .claim_due_engineering(EngineeringRole::Supervisor, 706, 600, 1)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn required_child_acceptance_follows_successive_repairs() {
         let mut store = Store::open_in_memory().unwrap();
