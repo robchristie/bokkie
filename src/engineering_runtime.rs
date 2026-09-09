@@ -963,6 +963,7 @@ impl EngineeringRuntime {
             EngineeringCommand::SubmitResult(input)
                 if execution.role == EngineeringRole::Worker =>
             {
+                store.engineering_submission_preflight(&state.id, &execution.id, input)?;
                 self.verify_submission(input)?;
                 // Durable result intent is separate from a successful Store result.
                 atomic(&directory.join("submission.json"), input)?;
@@ -1576,7 +1577,11 @@ impl EngineeringRuntime {
             }
             let mut validation_error = None;
             if let Some(input) = &submission {
-                if let Err(error) = self.verify_submission(input) {
+                let validation: RuntimeResult<()> = (|| {
+                    store.engineering_submission_preflight(&current.id, &execution.id, input)?;
+                    self.verify_submission(input)
+                })();
+                if let Err(error) = validation {
                     validation_error = Some(error.to_string());
                     submission = None;
                 }

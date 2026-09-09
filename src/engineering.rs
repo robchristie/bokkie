@@ -179,7 +179,9 @@ pub struct EngineeringCriterionEvidence {
 #[serde(deny_unknown_fields)]
 pub struct EngineeringSubmissionInput {
     pub artefacts: Vec<EngineeringArtefact>,
+    /// Distinct observations may support the same criterion.
     pub evidence: Vec<EngineeringCriterionEvidence>,
+    /// Empty when delivery is complete; excludes success summaries and review metadata.
     pub limitations: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

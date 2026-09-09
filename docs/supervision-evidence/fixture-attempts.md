@@ -14,6 +14,8 @@ This is qualification evidence, not a claim of product acceptance.
 
 | 20260909-e | `80f86121ad348cde97c3fbfa51fc154a18efe70f` | Restart/replay and autonomous routine answer passed. An actual independent child reviewed the incomplete arithmetic files and returned a repair verdict. Rejected at evidence registration: current Codex emits the child completion on its own thread/turn, while the adapter expected a populated legacy collaboration-state map. The outer agent stopped qualification for an adapter repair; no acceptance was substituted. |
 
+| 20260909-f | `465b1d050d8b1fe440ac93bbc8a633dbff5ba7bb` | Actual offline completion, incomplete assessment and linked repair succeeded. The fresh repair passed tests and independent review. Rejected because distinct observations for one criterion were rejected only during Store import, after the worker was reaped. Repairs allow distinct evidence per criterion, preflight submissions before stopping workers, retain cessation independently of invalid import, and clarify that completed delivery uses empty limitations. The repaired runtime subsequently reconciled every boundary and completed cancellation; `post-repair-cleanup.json` retains the observation. |
+
 Historical retained synthetic evidence owner:
 `/nvme/development/bokkie-supervision-fixture-20260909-a` contains the SQLite
 records, private broker journals, exact profile, fixture revision

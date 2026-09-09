@@ -241,6 +241,31 @@ fn validate_actor(
 }
 
 impl Store {
+    pub fn engineering_submission_preflight(
+        &self,
+        outcome_id: &str,
+        execution_id: &str,
+        input: &EngineeringSubmissionInput,
+    ) -> Result<(), StoreError> {
+        let state = load(&self.connection, outcome_id)?;
+        let execution = state
+            .executions
+            .iter()
+            .find(|e| e.id == execution_id)
+            .ok_or(StoreError::Fenced)?;
+        validate_envelope(
+            &EngineeringCommandEnvelope {
+                command_id: "submission-preflight".into(),
+                expected: Some(state.precondition()),
+                command: EngineeringCommand::SubmitResult(input.clone()),
+            },
+            &EngineeringActor::Worker {
+                execution_id: execution_id.into(),
+                claim: execution.claim.clone(),
+            },
+        )?;
+        validate_submission_for_execution(&state, execution_id, input).map(|_| ())
+    }
     pub fn engineering_outcome(
         &self,
         id: &str,
@@ -797,13 +822,10 @@ fn make_package(
     });
     Ok(id)
 }
-fn submit(
-    tx: &Transaction<'_>,
-    state: &mut EngineeringOutcomeSnapshot,
+fn validate_submission_for_execution(
+    state: &EngineeringOutcomeSnapshot,
     execution_id: &str,
     input: &EngineeringSubmissionInput,
-    recovered: bool,
-    now: i64,
 ) -> Result<String, StoreError> {
     validate_submission(input)?;
     let execution = state
@@ -841,8 +863,25 @@ fn submit(
             "submission evidence names a criterion outside its package",
         ));
     }
+    Ok(package_id.clone())
+}
+fn submit(
+    tx: &Transaction<'_>,
+    state: &mut EngineeringOutcomeSnapshot,
+    execution_id: &str,
+    input: &EngineeringSubmissionInput,
+    recovered: bool,
+    now: i64,
+) -> Result<String, StoreError> {
+    let package_id = validate_submission_for_execution(state, execution_id, input)?;
+    let execution = state
+        .executions
+        .iter()
+        .find(|e| e.id == execution_id)
+        .expect("validated execution")
+        .clone();
     let id = fresh_id();
-    let submission_digest = digest(&(execution_id, package_id, state.contract_revision, input))?;
+    let submission_digest = digest(&(execution_id, &package_id, state.contract_revision, input))?;
     state.submissions.push(EngineeringSubmission {
         id: id.clone(),
         execution_id: execution_id.into(),
@@ -1572,22 +1611,48 @@ fn apply_command(
                                 })
                             });
                         if !stale {
-                            let id = submit(tx, state, &input.execution_id, submission, true, now)?;
-                            settle_cancellation(tx, state, now)?;
-                            return Ok(Some(id));
+                            match validate_submission_for_execution(
+                                state,
+                                &input.execution_id,
+                                submission,
+                            ) {
+                                Ok(_) => {
+                                    let id = submit(
+                                        tx,
+                                        state,
+                                        &input.execution_id,
+                                        submission,
+                                        true,
+                                        now,
+                                    )?;
+                                    settle_cancellation(tx, state, now)?;
+                                    return Ok(Some(id));
+                                }
+                                Err(error) => {
+                                    state
+                                        .reconciliations
+                                        .last_mut()
+                                        .expect("retained reconciliation")
+                                        .input
+                                        .observation
+                                        .push_str(&format!("; result rejected: {error}"));
+                                }
+                            }
                         }
                         // A stale result is rejected independently of the valid cessation proof.
-                        state
-                            .reconciliations
-                            .last_mut()
-                            .expect("retained reconciliation")
-                            .input
-                            .observation
-                            .push_str(if recovery_exhausted {
-                                "; result import held: recovery budget exhausted"
-                            } else {
-                                "; rejected stale result import"
-                            });
+                        if stale {
+                            state
+                                .reconciliations
+                                .last_mut()
+                                .expect("retained reconciliation")
+                                .input
+                                .observation
+                                .push_str(if recovery_exhausted {
+                                    "; result import held: recovery budget exhausted"
+                                } else {
+                                    "; rejected stale result import"
+                                });
+                        }
                     }
                     let cancelled = state.cancellation_requested
                         || execution.package_id.as_ref().is_some_and(|id| {
@@ -1997,10 +2062,9 @@ fn validate_submission(value: &EngineeringSubmissionInput) -> Result<(), StoreEr
         validate_artefact(&evidence.artefact)?;
         hash(&evidence.command_digest)?;
         hash(&evidence.output_digest)?;
-        if !value.artefacts.contains(&evidence.artefact) || !criteria.insert(&evidence.criterion_id)
-        {
+        if !value.artefacts.contains(&evidence.artefact) || !criteria.insert(encode(evidence)?) {
             return Err(conflict(
-                "criterion evidence must uniquely name a submitted exact artefact",
+                "criterion evidence must be distinct and name a submitted exact artefact",
             ));
         }
     }
@@ -2107,9 +2171,6 @@ fn validate_envelope(
             hash(&input.evidence_digest)?;
             if let Some(boundary) = &input.reaped_boundary {
                 identifier(boundary)?;
-            }
-            if let Some(submission) = &input.recovered_submission {
-                validate_submission(submission)?;
             }
         }
         EngineeringCommand::SubmitResult(input) => validate_submission(input)?,
@@ -2987,6 +3048,97 @@ mod tests {
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].package_id.as_deref(), Some(dependent_id.as_str()));
     }
+    #[test]
+    fn submission_preflight_allows_distinct_evidence_per_criterion_and_rejects_duplicates() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = create(&mut store);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        new_package(&mut store, &root, 101);
+        let worker = claim(&mut store, EngineeringRole::Worker, 102);
+        let mut result = submission();
+        let mut other = artefact();
+        if let EngineeringArtefact::File { path, .. } = &mut other {
+            *path = "another.txt".into();
+        }
+        result.artefacts.push(other.clone());
+        let mut evidence = result.evidence[0].clone();
+        evidence.artefact = other;
+        result.evidence.push(evidence.clone());
+        store
+            .engineering_submission_preflight(&id, &worker.execution_id, &result)
+            .unwrap();
+        result.evidence.push(evidence);
+        assert!(
+            store
+                .engineering_submission_preflight(&id, &worker.execution_id, &result)
+                .is_err()
+        );
+        assert!(
+            store
+                .engineering_outcome(&id)
+                .unwrap()
+                .unwrap()
+                .submissions
+                .is_empty()
+        );
+        result.evidence.pop();
+        let mut oversized = result.clone();
+        oversized.limitations = "x".repeat(16_385);
+        assert!(
+            store
+                .engineering_submission_preflight(&id, &worker.execution_id, &oversized)
+                .is_err()
+        );
+        reconcile(&mut store, &worker, Some(result), 103);
+        assert_eq!(
+            store
+                .engineering_outcome(&id)
+                .unwrap()
+                .unwrap()
+                .submissions
+                .len(),
+            1
+        );
+    }
+    #[test]
+    fn invalid_offline_result_never_discards_valid_cessation() {
+        for unknown_criterion in [false, true] {
+            let mut store = Store::open_in_memory().unwrap();
+            let id = create(&mut store);
+            let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+            new_package(&mut store, &root, 101);
+            let worker = claim(&mut store, EngineeringRole::Worker, 102);
+            let mut result = submission();
+            if unknown_criterion {
+                result.evidence[0].criterion_id = "outside-package".into();
+            } else {
+                result.evidence.push(result.evidence[0].clone());
+            }
+            reconcile(&mut store, &worker, Some(result), 103);
+            let state = store.engineering_outcome(&id).unwrap().unwrap();
+            assert!(state.submissions.is_empty());
+            assert!(
+                state
+                    .executions
+                    .iter()
+                    .find(|e| e.id == worker.execution_id)
+                    .unwrap()
+                    .cessation_verified
+            );
+            assert!(
+                state
+                    .reconciliations
+                    .last()
+                    .unwrap()
+                    .input
+                    .observation
+                    .contains("result rejected")
+            );
+            let tx = store.connection.unchecked_transaction().unwrap();
+            assert!(!has_writer(&tx, &worker.execution_id).unwrap());
+        }
+    }
+
     #[test]
     fn exhausted_recovery_retains_offline_evidence_without_import_or_continuation() {
         let mut store = Store::open_in_memory().unwrap();

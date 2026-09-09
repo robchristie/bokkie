@@ -50,3 +50,11 @@ not acceptable independent review evidence.
 
 Call bokkie_commands and read its commands array to discover actual completed
 command item IDs before using bokkie_validation. Do not substitute a shell chunk ID or invent an item ID.
+
+The `limitations` field is only for unmet product requirements or unresolved
+limitations. Set it to the empty string when delivery is complete; do not put a
+success summary, review identity or completed repair history there. Retain those
+in ordinary documentation/evidence. A complete submission needs successful
+recorded evidence for every assigned criterion, including any fixture-history
+criteria; the supervisor additionally checks that history against durable state.
+Multiple distinct evidence records may support the same criterion.
