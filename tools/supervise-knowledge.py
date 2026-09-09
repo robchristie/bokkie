@@ -7,6 +7,7 @@ state; it never answers supervisor questions or supplies subsequent worker brief
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import signal
@@ -84,14 +85,58 @@ def read_snapshot(database, outcome):
         return value
 
 
-def retained_run(root, workspace):
+def retained_intake(history):
+    original = [event for event in history if event['kind'] == 'intent_saved']
+    if len(original) != 1:
+        raise ValueError('resume requires exactly one retained intake')
+    current = original[0]
+    seen = {current['receipt']['outcome_id']}
+    for event in history:
+        if event['kind'] != 'continuation_intake_saved':
+            continue
+        if event['previous_outcome_id'] != current['receipt']['outcome_id']:
+            raise ValueError('continuation provenance does not form one chain')
+        if event['receipt']['outcome_id'] in seen:
+            raise ValueError('duplicate continuation outcome')
+        seen.add(event['receipt']['outcome_id'])
+        current = event
+    return current
+
+
+def retained_path(root, intake, field, default):
+    name = intake.get(field, default)
+    if Path(name).name != name:
+        raise ValueError('retained input path must remain in the run directory')
+    return root / name
+
+
+def continuation_profile(profile, state):
+    if state['observed_root_state'] != 'cancelled' or state.get('acceptance'):
+        raise ValueError('replacement intake requires a cancelled, unaccepted attempt')
+    if any(not e['cessation_verified'] for e in state['executions']):
+        raise ValueError('previous execution responsibility is not reconciled')
+    budget = state['contracts'][-1]['contract']['budget']
+    remaining = dict(profile)
+    consumed = {'max_turns': state['turns_used'], 'max_packages': len(state['packages']),
+                'max_repairs': len(state['repairs']), 'max_recoveries': state['recoveries_used'],
+                'max_questions': len(state['questions']),
+                'max_checkpoints': sum(len(e['checkpoints']) for e in state['executions'])}
+    for field, used in consumed.items():
+        remaining[field] = budget[field] - used
+        if remaining[field] <= 0:
+            raise ValueError(f'original {field} budget exhausted; no reset is permitted')
+    remaining['deadline_at'] = budget['deadline']
+    remaining['deadline_seconds'] = max(1, int(budget['deadline'] - time.time()))
+    if budget['deadline'] <= time.time():
+        raise ValueError('original outcome deadline exhausted')
+    return remaining
+
+
+def retained_run(root, workspace, allow_cancelled=False):
     """Validate a continuation without rewriting intent, source, profile or budget."""
     history = json.loads((root / 'journey.json').read_text())
-    intakes = [event for event in history if event['kind'] == 'intent_saved']
-    if len(intakes) != 1:
-        raise ValueError('resume requires exactly one retained intake')
-    intake = intakes[0]
-    raw_profile = (root / 'profile.json').read_bytes()
+    intake = retained_intake(history)
+    raw_profile = retained_path(root, intake, 'profile_file', 'profile.json').read_bytes()
     profile = json.loads(raw_profile)
     if (profile['workspace'] != str(workspace)
             or profile['broker_root'] != str(root / 'brokers')
@@ -101,10 +146,10 @@ def retained_run(root, workspace):
         raise ValueError('retained application workspace is absent')
     outcome = intake['receipt']['outcome_id']
     state = read_snapshot(root / 'supervision.sqlite', outcome)
-    intent = json.loads((root / 'submitted-intent.json').read_text())['intent']
+    intent = json.loads(retained_path(root, intake, 'intent_file', 'submitted-intent.json').read_text())['intent']
     if state['contracts'][0]['contract']['intent'] != intent:
         raise ValueError('retained original intent does not match the outcome')
-    if state['observed_root_state'] in ('completed', 'cancelled'):
+    if state['observed_root_state'] == 'completed' or (state['observed_root_state'] == 'cancelled' and not allow_cancelled):
         raise ValueError('resume requires a non-terminal outcome')
     if state['contracts'][-1]['contract']['budget']['deadline'] <= time.time():
         raise ValueError('original outcome deadline exhausted; resume cannot reset it')
@@ -119,14 +164,34 @@ def main():
     parser.add_argument('--run-live', action='store_true', required=True)
     parser.add_argument('--runtime-root', type=Path, required=True)
     parser.add_argument('--workspace', type=Path, required=True)
-    parser.add_argument('--resume', action='store_true', help='resume the retained outcome after a recorded infrastructure repair; preserve its original deadline')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--resume', action='store_true', help='resume the retained non-terminal outcome without a new intake')
+    modes.add_argument('--continue-after-interruption', action='store_true', help='replace a previously cancelled qualification attempt using only its remaining budgets')
+    parser.add_argument('--intervention', type=Path, help='retained infrastructure intervention record inside the runtime root')
     args = parser.parse_args()
     source = Path(__file__).resolve().parents[1]
     root, workspace = args.runtime_root.resolve(), args.workspace.resolve()
     profile_path = root / 'profile.json'
-    if args.resume:
-        profile, history, initial_hashes, outcome = retained_run(root, workspace)
+    continuing = args.continue_after_interruption
+    retained = args.resume or continuing
+    intervention = args.intervention.resolve() if args.intervention else root / 'infrastructure-intervention.json'
+    if args.intervention and (not intervention.is_file() or not intervention.is_relative_to(root)):
+        parser.error('intervention must be an existing record inside the runtime root')
+    previous_outcome = None
+    if retained:
+        profile, history, initial_hashes, outcome = retained_run(root, workspace, allow_cancelled=continuing)
+        intake = retained_intake(history)
+        profile_path = retained_path(root, intake, 'profile_file', 'profile.json')
         knowledge = root / 'knowledge'
+        if continuing:
+            if not intervention.is_file():
+                parser.error('continuation requires a retained infrastructure intervention')
+            previous_outcome = outcome
+            previous_state = read_snapshot(root / 'supervision.sqlite', outcome)
+            profile = continuation_profile(profile, previous_state)
+            profile_path = root / f'profile-continuation-{time.time_ns()}.json'
+            dump(profile_path, profile)
+            outcome = None
     else:
         if root.exists() or workspace.exists():
             parser.error('both runtime root and application workspace must be new')
@@ -160,7 +225,7 @@ def main():
         return json.load(urllib.request.urlopen(urllib.request.Request(base+path, data=None if body is None else json.dumps(body).encode(), headers=headers), timeout=10))
     def snapshot(outcome):
         return read_snapshot(database, outcome)
-    log_name = f'controller-resume-{time.time_ns()}.log' if args.resume else 'controller.log'
+    log_name = f'controller-resume-{time.time_ns()}.log' if retained else 'controller.log'
     log = (root / log_name).open('x')
     process = subprocess.Popen([str(source/'target/debug/bokkie'), '--database', str(database), 'serve', '--bind', f'127.0.0.1:{port}', '--poll-ms', '500', '--engineering-profile', str(profile_path), '--ui-dir', str(source/'apps/bokkie-attention-ui/web')], stdout=log, stderr=log, start_new_session=True)
     accepted = False
@@ -172,8 +237,15 @@ def main():
             except OSError: time.sleep(.2)
         else: raise TimeoutError('controller startup')
         if args.resume:
-            intervention = root / 'infrastructure-intervention.json'
             record('runtime_resumed', outcome_id=outcome, source_revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip(), profile_sha256=hashlib.sha256(profile_path.read_bytes()).hexdigest(), intervention_sha256=hashlib.sha256(intervention.read_bytes()).hexdigest() if intervention.exists() else None, operator_url=base+'/ui/', controller_log=log_name)
+        elif continuing:
+            intent = json.loads((root / 'submitted-intent.json').read_text())['intent']
+            intent += f'\nContinuation context: the repository now contains retained work from interrupted outcome {previous_outcome}, which did not reach final product acceptance. Continue the same milestone from the existing repository and its evidence; preserve useful work. The infrastructure remedy is recorded at {intervention}. No acceptance criterion or authority boundary is waived. This intake uses only the preceding attempt’s remaining execution, package, repair and recovery budgets and its original absolute deadline.\n'
+            intent_path = root / f'submitted-intent-continuation-{time.time_ns()}.json'
+            dump(intent_path, {'intent': intent})
+            receipt = call('/engineering/outcomes', {'command_id': 'pagefold-continuation-' + previous_outcome, 'intent': intent})
+            outcome = receipt['outcome_id']
+            record('continuation_intake_saved', receipt=receipt, previous_outcome_id=previous_outcome, source_revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip(), profile_file=profile_path.name, intent_file=intent_path.name, profile_sha256=hashlib.sha256(profile_path.read_bytes()).hexdigest(), intervention_sha256=hashlib.sha256(intervention.read_bytes()).hexdigest(), remaining_budgets={key:profile[key] for key in ('max_turns','max_packages','max_repairs','max_recoveries','deadline_at')}, operator_url=base+'/ui/')
         else:
             intent = (source/'docs/supervision-evidence/knowledge-workspace-intent.md').read_text().split('## Qualification ownership')[0]
             intent += f'\nThe empty local application repository is {workspace}. Prepared synthetic source knowledge is at {knowledge}; use it for reading calibration without changing those supplied files. Tests may create their own isolated copies to simulate external changes. Store derived state separately. Polyorama is available at /nvme/development/polyorama. The provisional name is Pagefold.\n'
@@ -210,19 +282,31 @@ def main():
     except BaseException as error:
         record('qualification_interrupted',error=str(error));raise
     finally:
-        if outcome and not accepted and process.poll() is None:
-            try:
-                state=snapshot(outcome)
-                if state['observed_root_state'] not in ('completed','cancelled'):
-                    call('/engineering/outcomes/'+outcome+'/cancel',{'command_id':'pagefold-cleanup-cancel','expected':{'outcome_id':outcome,'contract_revision':state['contract_revision'],'state_revision':state['state_revision']}})
-                    drain=time.monotonic()+30
-                    while time.monotonic()<drain and not all(e['cessation_verified'] for e in snapshot(outcome)['executions']):time.sleep(.5)
-                    record('cleanup_observed',reconciled=all(e['cessation_verified'] for e in snapshot(outcome)['executions']))
-            except Exception as error:record('cleanup_requires_reconciliation',error=str(error))
+        # Stopping a qualification observer must not cancel its product outcome.
+        # Stop scheduling first, then request bounded external cessation. The next
+        # runtime reconciles broker proof through the authoritative Store path.
         if process.poll() is None:
             process.send_signal(signal.SIGTERM)
             try:process.wait(timeout=15)
             except subprocess.TimeoutExpired:process.kill();process.wait();record('controller_forced_stop')
+        if outcome and not accepted:
+            try:
+                state = snapshot(outcome)
+                pending = [e['id'] for e in state['executions'] if not e['cessation_verified']]
+                for execution in pending:
+                    directory = Path(profile['broker_root']) / execution
+                    if not directory.is_dir():
+                        continue
+                    temporary = directory / f'.observer-stop-{time.time_ns()}'
+                    with temporary.open('x') as handle:
+                        json.dump({'reason':'qualification observer interrupted; preserve outcome'}, handle)
+                        handle.flush(); os.fsync(handle.fileno())
+                    temporary.replace(directory / 'cancel.json')
+                record('interruption_retained', outcome_id=outcome,
+                       state=state['observed_root_state'],
+                       executions_requiring_reconciliation=pending,
+                       outcome_cancelled_by_observer=False)
+            except Exception as error:record('cleanup_requires_reconciliation',error=str(error))
         log.close()
 
 if __name__=='__main__':main()

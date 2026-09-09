@@ -89,5 +89,48 @@ class RetainedRunTests(unittest.TestCase):
             DRIVER.retained_run(self.root, self.workspace)
 
 
+class ContinuationBudgetTests(unittest.TestCase):
+    def state(self):
+        return {'observed_root_state':'cancelled', 'acceptance':None,
+                'contracts':[{'contract':{'budget':{'max_turns':24,
+                'max_packages':8,'max_repairs':3,'max_recoveries':3,
+                'max_questions':64,'max_checkpoints':512,
+                'deadline':int(time.time())+600}}}],
+                'turns_used':11,'recoveries_used':1,'packages':[1,2,3],
+                'repairs':[], 'questions':[1],
+                'executions':[{'cessation_verified':True,'checkpoints':[1,2]}]}
+
+    def test_all_consumable_budgets_and_absolute_deadline_are_conserved(self):
+        state = self.state()
+        profile = DRIVER.continuation_profile({'workspace':'unchanged'},state)
+        self.assertEqual({k:profile[k] for k in ('max_turns','max_packages',
+                         'max_repairs','max_recoveries','max_questions','max_checkpoints')},
+                         dict(max_turns=13,max_packages=5,max_repairs=3,
+                              max_recoveries=2,max_questions=63,max_checkpoints=510))
+        self.assertEqual(profile['deadline_at'],state['contracts'][0]['contract']['budget']['deadline'])
+        self.assertEqual(profile['workspace'],'unchanged')
+
+    def test_replacement_requires_proven_cessation_and_remaining_budget(self):
+        state = self.state(); state['executions'][0]['cessation_verified']=False
+        with self.assertRaisesRegex(ValueError,'not reconciled'):
+            DRIVER.continuation_profile({},state)
+        state=self.state();state['turns_used']=24
+        with self.assertRaisesRegex(ValueError,'budget exhausted'):
+            DRIVER.continuation_profile({},state)
+        state=self.state();state['observed_root_state']='pending'
+        with self.assertRaisesRegex(ValueError,'cancelled'):
+            DRIVER.continuation_profile({},state)
+
+    def test_continuation_chain_rejects_forks_and_loops(self):
+        start={'kind':'intent_saved','receipt':{'outcome_id':'a'}}
+        next_event={'kind':'continuation_intake_saved','previous_outcome_id':'a',
+                    'receipt':{'outcome_id':'b'}}
+        self.assertEqual(DRIVER.retained_intake([start,next_event]),next_event)
+        with self.assertRaisesRegex(ValueError,'one chain'):
+            DRIVER.retained_intake([start,next_event,next_event])
+        with self.assertRaisesRegex(ValueError,'duplicate'):
+            DRIVER.retained_intake([start,{**next_event,'receipt':{'outcome_id':'a'}}])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -42,3 +42,30 @@ outcome, profile, intent, source inventory and deadline. The affected
 implementation-acceptance journey must repeat under the repaired runtime,
 followed by final UI qualification and product acceptance. This record does
 not treat the interrupted attempt as a successful final dogfood run.
+
+The same outcome resumed at `6a0b08ad8bb12b0c973fae0108a83673c9357389`.
+The driver verified the original profile hash, intent and source inventory, and
+kept the existing deadline. Normal Store reconciliation verified the stopped
+supervisor's cessation and charged one recovery within the existing budget;
+fresh supervisor `73791f25-717c-426d-944f-618be7bc0388` owns the repeated
+implementation assessment. No routine decision was supplied by the outer agent.
+
+That repeated assessment succeeded: Bokkie accepted the implementation and
+commissioned UI qualification in worker `6da0c3a6-bb3c-455a-b6eb-0551dea97712`.
+The worker completed browser journeys and verification, but its final source
+inventory exceeded the adapter's 16 MiB aggregate capture limit by 100,686 bytes.
+Supervisor `1d7a099e-a6e0-44b8-b970-76d7546cddcd` diagnosed the limit from
+recorded evidence and raised a precise missing-information escalation because
+adapter changes lay outside its application scope. The outer agent did not
+answer the routine worker question or alter the application.
+
+The observation driver's failure cleanup incorrectly cancelled this recoverable
+attempt. All eleven execution boundaries were reconciled; no writer remains.
+This is a second infrastructure failure, not a successful product acceptance.
+The repair separates the 32 MiB source-capture limit from the unchanged 16 MiB
+journal limit, retains per-file/count limits and exact evidence binding, and
+changes observer interruption to preserve outcomes and pending reconciliation.
+A replacement intake must retain the original intent and application evidence,
+use only the remaining consumable budgets, and keep absolute deadline
+`1788957904`. It requires proven cessation of every prior execution. The new
+supervisor must requalify the deliverable; prior summaries confer no acceptance.

@@ -41,6 +41,9 @@ pub struct EngineeringRuntimeProfile {
     pub max_recoveries: u32,
     pub max_turns: u32,
     pub deadline_seconds: i64,
+    /// Optional absolute ceiling retained across delayed continuation intake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_at: Option<i64>,
     /// Explicit task decision: ordinary dependency downloads and local UI/CDP
     /// need network access. This does not grant publication or deployment.
     pub worker_network_access: bool,
@@ -97,6 +100,7 @@ impl EngineeringRuntimeProfile {
         if !(1..=600).contains(&self.supervisor_seconds)
             || !(1..=2700).contains(&self.worker_seconds)
             || !(1..=14400).contains(&self.deadline_seconds)
+            || self.deadline_at.is_some_and(|deadline| deadline <= 0)
         {
             return Err("finite profile time outside bounds".into());
         }
@@ -191,7 +195,9 @@ impl EngineeringRuntimeProfile {
             } else {
                 self.supervisor_seconds
             },
-            deadline: now.saturating_add(self.deadline_seconds),
+            deadline: now
+                .saturating_add(self.deadline_seconds)
+                .min(self.deadline_at.unwrap_or(i64::MAX)),
         }
     }
     fn instructions(&self, worker: bool) -> RuntimeResult<EngineeringInstructions> {
@@ -436,6 +442,34 @@ fn file_inspection(artefact: EngineeringArtefact, bytes: &[u8]) -> Value {
         }
     }
 }
+fn captured_command_source<'a>(log: &'a [Event], item: &Event, phase: &str) -> Option<&'a Value> {
+    log.iter()
+        .find(|event| {
+            event.kind == "command_source"
+                && event.value["phase"] == phase
+                && event.value["item_id"] == item.value["item"]["id"]
+                && event.value["thread_id"] == item.value["threadId"]
+                && event.value["turn_id"] == item.value["turnId"]
+        })
+        .map(|event| &event.value["source"])
+}
+fn source_capture_summary(source: Option<&Value>) -> Value {
+    match source {
+        None => json!({"status":"missing"}),
+        Some(source) if source.get("unavailable").is_some() => {
+            json!({"status":"unavailable","error":source["unavailable"],"capture":source["capture"]})
+        }
+        Some(source) => json!({"status":"available","capture":source["capture"],
+            "file_count":source["files"].as_object().map(|files|files.len()),
+            "commit":source["commit"],"tree":source["tree"],"clean":source["clean"]}),
+    }
+}
+fn command_capture_summary(log: &[Event], item: &Event) -> Value {
+    let before = captured_command_source(log, item, "item/started");
+    let after = captured_command_source(log, item, "item/completed");
+    json!({"start":source_capture_summary(before),"completion":source_capture_summary(after),
+        "unchanged":before.is_some_and(|source|source.get("unavailable").is_none()) && before == after})
+}
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({"type":"function", "name":name, "description":description,
         "inputSchema":{"type":"object", "properties":properties, "required":required,"additionalProperties":false}})
@@ -486,7 +520,7 @@ fn dynamic_tools() -> Vec<Value> {
         ),
         tool(
             "bokkie_commands",
-            "Return commands (actual completed command item IDs, commands and exit codes) and reviewer_candidates (observed independent thread/turn IDs and task paths). Use these actual protocol identities for validation and review registration.",
+            "Return completed commands, exit codes and source_capture status for start/completion (actual resource failures, limits and available binding metadata), plus observed reviewer_candidates. Use these actual protocol identities for validation and review registration; inspect source_capture before retrying unavailable evidence.",
             json!({}),
             &[],
         ),
@@ -1244,7 +1278,7 @@ impl EngineeringRuntime {
                 Ok(json!(review))
             }
             "bokkie_commands" => Ok(
-                json!({"commands":log.iter().filter(|e|e.kind=="item/completed" && e.value["item"]["type"]=="commandExecution").map(|e|json!({"item_id":e.value["item"]["id"],"command":e.value["item"]["command"],"exit_code":e.value["item"]["exitCode"]})).collect::<Vec<_>>(),"reviewer_candidates":observed_reviews(log)}),
+                json!({"commands":log.iter().filter(|e|e.kind=="item/completed" && e.value["item"]["type"]=="commandExecution").map(|e|json!({"item_id":e.value["item"]["id"],"command":e.value["item"]["command"],"exit_code":e.value["item"]["exitCode"],"source_capture":command_capture_summary(log,e)})).collect::<Vec<_>>(),"reviewer_candidates":observed_reviews(log)}),
             ),
             "bokkie_validation" => {
                 let item_id = args["item_id"].as_str().ok_or("missing command item ID")?;
@@ -1259,24 +1293,24 @@ impl EngineeringRuntime {
                 let artefact: EngineeringArtefact =
                     serde_json::from_value(args["artefact"].clone())?;
                 self.inspect(&artefact)?;
-                let sources = ["item/started", "item/completed"].map(|phase| {
-                    log.iter()
-                        .find(|event| {
-                            event.kind == "command_source"
-                                && event.value["phase"] == phase
-                                && event.value["item_id"] == item_id
-                                && event.value["thread_id"] == item.value["threadId"]
-                                && event.value["turn_id"] == item.value["turnId"]
-                        })
-                        .map(|event| &event.value["source"])
-                });
+                let sources = ["item/started", "item/completed"]
+                    .map(|phase| captured_command_source(log, item, phase));
                 let [Some(before), Some(after)] = sources else {
                     return Err("validation requires broker source identities at command start and completion; rerun the check".into());
                 };
-                if before != after || before.get("unavailable").is_some() {
-                    return Err(
-                        "source changed during validation or its identity is unavailable".into(),
-                    );
+                if before.get("unavailable").is_some() || after.get("unavailable").is_some() {
+                    return Err(format!(
+                        "validation source capture unavailable: {}",
+                        command_capture_summary(log, item)
+                    )
+                    .into());
+                }
+                if before != after {
+                    return Err(format!(
+                        "source changed during validation: {}",
+                        command_capture_summary(log, item)
+                    )
+                    .into());
                 }
                 let matches = match &artefact {
                     EngineeringArtefact::File {
@@ -1846,6 +1880,7 @@ mod tests {
                 max_recoveries: 3,
                 max_turns: 24,
                 deadline_seconds: 14400,
+                deadline_at: None,
                 worker_network_access: false,
                 worker_scratch: None,
                 supervisor_tools: dynamic_tools()
@@ -2339,6 +2374,142 @@ mod tests {
         assert_eq!(
             snapshot(&f.store, &f.id).unwrap().turns_used,
             before.turns_used + 1
+        );
+    }
+
+    #[test]
+    fn absolute_profile_deadline_survives_delayed_intake_without_changing_legacy_identity() {
+        let mut f = Fixture::new();
+        let legacy = serde_json::to_value(&f.runtime.profile).unwrap();
+        assert!(legacy.get("deadline_at").is_none());
+        let restored: EngineeringRuntimeProfile = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(restored.deadline_at.is_none());
+        assert_eq!(serde_json::to_value(restored).unwrap(), legacy);
+        f.runtime.profile.deadline_at = Some(200);
+        f.runtime.profile.validate().unwrap();
+        assert_eq!(f.runtime.profile.budget(100, true).deadline, 200);
+        for now in [150, 190] {
+            let saved = intake(
+                &mut f.store,
+                &f.runtime.profile,
+                "Continue the original bounded outcome".into(),
+                format!("delayed-{now}"),
+                now,
+            )
+            .unwrap();
+            assert_eq!(
+                snapshot(&f.store, &saved.outcome_id)
+                    .unwrap()
+                    .contract()
+                    .budget
+                    .deadline,
+                200
+            );
+        }
+        // An expired cap does not prevent configuration inspection/startup, but
+        // Store rejects a fresh intake whose budget has already elapsed.
+        f.runtime.profile.validate().unwrap();
+        assert!(
+            intake(
+                &mut f.store,
+                &f.runtime.profile,
+                "Too late".into(),
+                "expired".into(),
+                201
+            )
+            .is_err()
+        );
+        f.runtime.profile.deadline_at = Some(0);
+        assert!(f.runtime.profile.validate().is_err());
+        f.runtime.profile.deadline_at = Some(100_000);
+        assert_eq!(f.runtime.profile.budget(100, false).deadline, 14_500);
+    }
+
+    #[test]
+    fn source_capture_failures_and_available_bindings_are_exposed_to_tools() {
+        let mut f = Fixture::new();
+        fs::write(f.runtime.profile.workspace.join("reader.txt"), "page").unwrap();
+        let (artefact, _) = f.runtime.file("reader.txt").unwrap();
+        let unavailable = json!({"unavailable":{"code":"total_byte_limit","message":"aggregate source capture byte limit exceeded", "observed_bytes":33554433,"limit_bytes":33554432,"path":"last.bin"},
+            "capture":{"limits":{"max_total_bytes":33554432,"max_file_bytes":2097152,"max_files":2048}}});
+        let mut log = vec![Event {
+            sequence: 1,
+            kind: "item/completed".into(),
+            value: json!({"threadId":"root","turnId":"turn","item":{"id":"check","type":"commandExecution","command":"test reader","aggregatedOutput":"PASS","exitCode":0}}),
+        }];
+        for phase in ["item/started", "item/completed"] {
+            log.push(Event {sequence:log.len() as u64+1,kind:"command_source".into(),value:json!({"phase":phase,"thread_id":"root","turn_id":"turn","item_id":"check","source":unavailable})});
+        }
+        let directory = f.directory(&f.worker);
+        let commands = f
+            .runtime
+            .dynamic(
+                &mut f.store,
+                &directory,
+                &f.worker,
+                "commands",
+                &json!({"tool":"bokkie_commands","arguments":{}}),
+                &log,
+                105,
+            )
+            .unwrap();
+        let capture = &commands["commands"][0]["source_capture"];
+        assert_eq!(capture["start"]["status"], "unavailable");
+        assert_eq!(capture["completion"]["error"]["code"], "total_byte_limit");
+        assert_eq!(capture["completion"]["error"]["observed_bytes"], 33554433);
+        assert_eq!(capture["unchanged"], false);
+        let args = json!({"tool":"bokkie_validation","arguments":{"item_id":"check","artefact":artefact,"criterion_id":"reader"}});
+        let error = f
+            .runtime
+            .dynamic(
+                &mut f.store,
+                &directory,
+                &f.worker,
+                "invalid-binding",
+                &args,
+                &log,
+                105,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("total_byte_limit")
+                && error.contains("33554433")
+                && error.contains("33554432"),
+            "{error}"
+        );
+        let available = json!({"files":{"reader.txt":{"sha256":sha(b"page"),"byte_length":4}},"capture":{"total_bytes":4,"file_count":1,"limits":{"max_total_bytes":33554432,"max_file_bytes":2097152,"max_files":2048}}});
+        for event in log.iter_mut().skip(1) {
+            event.value["source"] = available.clone();
+        }
+        let commands = f
+            .runtime
+            .dynamic(
+                &mut f.store,
+                &directory,
+                &f.worker,
+                "available-commands",
+                &json!({"tool":"bokkie_commands","arguments":{}}),
+                &log,
+                105,
+            )
+            .unwrap();
+        let capture = &commands["commands"][0]["source_capture"];
+        assert_eq!(capture["start"]["status"], "available");
+        assert_eq!(capture["start"]["capture"]["total_bytes"], 4);
+        assert_eq!(capture["unchanged"], true);
+        assert!(
+            f.runtime
+                .dynamic(
+                    &mut f.store,
+                    &directory,
+                    &f.worker,
+                    "valid-binding",
+                    &args,
+                    &log,
+                    105
+                )
+                .is_ok()
         );
     }
 

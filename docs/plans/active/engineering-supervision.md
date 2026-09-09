@@ -53,7 +53,7 @@ active. No live Bokkie database or global configuration was changed.
 | Conversational operator entry | Bokkie UI / backend | Canonical checks and UI inspection | qualified; 65 UI tests and opened captures |
 | Complete isolated fixture | Bokkie `381fc81` | [Qualified fixture](../../supervision-evidence/fixture-j.json) | passed |
 | Reading calibration and application | Polyorama / local app | Reader probes and canonical checks | supervised worker queued |
-| Authentic dogfood and repairs | Final owner revisions | [Intervention and acceptance](../../supervision-evidence/pagefold.md) | paused for binary-inspection repair; same outcome retained |
+| Authentic dogfood and repairs | Final owner revisions | [Intervention and acceptance](../../supervision-evidence/pagefold.md) | implementation accepted; source-capture interruption requires budget-preserving continuation |
 | Integrated closeout | Bokkie | Reviews, checks, landing and usage | queued |
 
 ## Acceptance
@@ -102,4 +102,4 @@ under the selected explicit client-reviewer profile. Product execution/recovery 
 must be explicit before fixture qualification. Exhaustion leaves recoverable
 state and explanation; a changed approach must retain its evidence.
 
-- Next action: Repair binary artefact inspection, resume the same Pagefold outcome without changing its inputs or deadline, repeat implementation acceptance and complete supervised UI qualification; then qualify and land the integrated result.
+- Next action: Review the source-capture and interruption repair, submit the retained milestone with remaining budgets and the original deadline, then observe Bokkie requalification and final acceptance before integrated landing.

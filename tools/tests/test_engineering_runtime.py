@@ -250,6 +250,7 @@ for line in sys.stdin:
         broker.manifest['readonly_mcp_servers'] = ['openaiDeveloperDocs']
         broker.verify_capability_config(config)
         self.assertNotIn('secret', json.dumps(broker.spool.events))
+        self.assertEqual(broker.spool.events[-1]['value']['source_capture_limits'], b.source_capture_limits())
         config['mcp_servers']['openaiDeveloperDocs']['enabled'] = False
         with self.assertRaisesRegex(ValueError, 'differs from task profile'):
             broker.verify_capability_config(config)
@@ -262,7 +263,59 @@ for line in sys.stdin:
         broker = self.broker()
         workspace = Path(broker.manifest['workspace'])
         os.mkfifo(workspace / 'untracked-pipe')
-        self.assertIn('unavailable', broker.source_snapshot())
+        self.assertEqual(broker.source_snapshot()['unavailable']['code'], 'not_regular_file')
+
+    def source_workspace(self, name):
+        workspace = self.root / name
+        workspace.mkdir()
+        subprocess.run(['/usr/bin/git', 'init', '--quiet', str(workspace)], check=True)
+        subprocess.run(['/usr/bin/git', '-C', str(workspace), '-c', 'user.name=Fixture',
+                        '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgSign=false',
+                        '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '--allow-empty',
+                        '-m', 'Initialise source fixture'], check=True)
+        broker = self.broker()
+        broker.manifest['workspace'] = str(workspace)
+        return broker, workspace
+
+    def test_complete_git_source_capture_above_journal_limit_is_exact(self):
+        broker, workspace = self.source_workspace('representative')
+        total_bytes = 16_877_902
+        expected = {}
+        for index in range(224):
+            size = total_bytes // 224 + (1 if index < total_bytes % 224 else 0)
+            raw = bytes([index]) * size
+            name = f'part-{index:03}.bin'
+            (workspace / name).write_bytes(raw)
+            expected[name] = {'byte_length': size, 'sha256': b.hashlib.sha256(raw).hexdigest()}
+        before = broker.source_snapshot()
+        self.assertNotIn('unavailable', before)
+        self.assertEqual(before['files'], expected)
+        self.assertEqual(before['capture'], {'total_bytes': total_bytes, 'file_count': 224,
+                                            'limits': b.source_capture_limits()})
+        self.assertGreater(total_bytes, b.MAX_SPOOL)
+        self.assertLess(total_bytes, b.MAX_SOURCE_BYTES)
+        self.assertEqual(before, broker.source_snapshot())
+        self.assertEqual(b.MAX_SPOOL, 16 * 1024 * 1024)
+        self.assertEqual(b.MAX_MESSAGE, 2 * 1024 * 1024)
+
+    def test_source_capture_reports_resource_failure_without_partial_binding(self):
+        for name, count, size, code, observed, limit in [
+            ('aggregate', 17, 2 * 1024 * 1024, 'total_byte_limit', 'observed_bytes', b.MAX_SOURCE_BYTES),
+            ('individual', 1, 2 * 1024 * 1024 + 1, 'file_byte_limit', 'observed_bytes', b.MAX_SOURCE_FILE_BYTES),
+            ('count', 2049, 0, 'file_count_limit', 'observed_files', b.MAX_SOURCE_FILES),
+        ]:
+            with self.subTest(name=name):
+                broker, workspace = self.source_workspace(name)
+                for index in range(count):
+                    with (workspace / f'file-{index:04}').open('wb') as stream:
+                        stream.truncate(size)
+                snapshot = broker.source_snapshot()
+                self.assertNotIn('files', snapshot)
+                error = snapshot['unavailable']
+                self.assertEqual(error['code'], code)
+                self.assertGreater(error[observed], limit)
+                self.assertEqual(error['limit_files' if observed == 'observed_files' else 'limit_bytes'], limit)
+                self.assertEqual(snapshot['capture']['limits'], b.source_capture_limits())
 
     def test_installed_schema_projects_canonical_concurrency_field(self):
         config = {'agents': {'max_concurrent_threads_per_session': 2}}

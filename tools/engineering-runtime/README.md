@@ -43,6 +43,11 @@ cargo run --locked --bin bokkie-engineering -- \
 The intake receipt is replayable even after restart changes the calculated
 deadline. Reusing its ID with different intent fails. The database must be
 outside the worker's writable workspace. `validate` and `intake` start no model.
+An optional positive Unix timestamp `deadline_at` caps every new intake at
+`min(now + deadline_seconds, deadline_at)`, so delayed continuation cannot extend
+an original absolute deadline. Omitting it preserves existing profile identity
+and behaviour. Expired caps remain valid for startup and read-only inspection;
+Store rejects new intake after the cap.
 The following commands use the configured Codex account and require the task's
 fixture/account authority:
 
@@ -88,6 +93,16 @@ before mutation and replayed exactly. Dynamic read replies are also retained:
 reconnect does not silently replace the snapshot a decision actually saw.
 Routine activity can retry a failed precondition at most three times; model
 acceptance decisions never receive that retry treatment.
+
+Source capture has a separate 32 MiB aggregate byte budget, a 2 MiB per-file
+limit and a 2,048-file limit. Every selected file must be captured; exceeding a
+limit produces an unavailable binding with the actual resource, observed value,
+limit and affected path instead of a partial file map. Effective capability
+evidence records these limits. `bokkie_commands` exposes start/completion capture
+status, measured totals, available binding metadata and precise errors;
+`bokkie_validation` reports capture failures separately from changed source.
+The event-journal budget and exact before/after source-binding checks remain
+unchanged.
 
 `bokkie_evidence` returns digest-verified pages of up to 32 KiB from retained
 blobs, including journals within the existing 16 MiB bound. Its optional

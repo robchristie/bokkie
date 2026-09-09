@@ -25,7 +25,21 @@ import uuid
 MAX_MESSAGE = 2 * 1024 * 1024
 MAX_SPOOL = 16 * 1024 * 1024
 MAX_EVENTS = 2048
+MAX_SOURCE_BYTES = 32 * 1024 * 1024
+MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
+MAX_SOURCE_FILES = 2048
 RESERVE = 8192
+
+
+def source_capture_limits():
+    return {'max_total_bytes': MAX_SOURCE_BYTES, 'max_file_bytes': MAX_SOURCE_FILE_BYTES,
+            'max_files': MAX_SOURCE_FILES}
+
+
+class SourceCaptureError(Exception):
+    def __init__(self, code, message, **facts):
+        super().__init__(message)
+        self.details = {'code': code, 'message': message, **facts}
 
 
 def encoded(value):
@@ -241,7 +255,10 @@ class Broker:
             def query(args):
                 result = subprocess.run(git + args, stdin=subprocess.DEVNULL,
                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
-                if result.returncode or len(result.stdout) > MAX_MESSAGE:
+                if len(result.stdout) > MAX_MESSAGE:
+                    raise SourceCaptureError('metadata_byte_limit', 'source metadata byte limit exceeded',
+                                             observed_bytes=len(result.stdout), limit_bytes=MAX_MESSAGE)
+                if result.returncode:
                     raise ValueError('source metadata unavailable')
                 return result.stdout
             try:
@@ -255,34 +272,47 @@ class Broker:
                 for parent, directories, names in os.walk(workspace, followlinks=False):
                     directories[:] = [name for name in directories if name != '.git']
                     paths += [str((Path(parent) / name).relative_to(workspace)) for name in names]
-                    if len(paths) > 2048:
-                        raise ValueError('source file count exceeded')
+                    if len(paths) > MAX_SOURCE_FILES:
+                        raise SourceCaptureError('file_count_limit', 'source file count exceeded',
+                                                 observed_files=len(paths), limit_files=MAX_SOURCE_FILES)
                 commit = tree = None
                 clean = False
-            if len(paths) > 2048:
-                raise ValueError('source file count exceeded')
+            if len(paths) > MAX_SOURCE_FILES:
+                raise SourceCaptureError('file_count_limit', 'source file count exceeded',
+                                         observed_files=len(paths), limit_files=MAX_SOURCE_FILES)
             files = {}
             total = 0
             for relative in sorted(set(paths)):
                 path = workspace / relative
                 if path.is_symlink() or not path.resolve().is_relative_to(workspace.resolve()):
-                    raise ValueError('source symlink cannot be attested')
+                    raise SourceCaptureError('unsafe_path', 'source symlink or outside-workspace path cannot be attested', path=relative)
                 fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
                 with os.fdopen(fd, 'rb') as stream:
                     metadata = os.fstat(stream.fileno())
                     if not stat.S_ISREG(metadata.st_mode):
-                        raise ValueError('source must be a regular file')
+                        raise SourceCaptureError('not_regular_file', 'source must be a regular file', path=relative)
                     size = metadata.st_size
                     total += size
-                    if size > MAX_MESSAGE or total > MAX_SPOOL:
-                        raise ValueError('source byte bound exceeded')
-                    raw = stream.read(MAX_MESSAGE + 1)
+                    if size > MAX_SOURCE_FILE_BYTES:
+                        raise SourceCaptureError('file_byte_limit', 'individual source file byte limit exceeded',
+                                                 path=relative, observed_bytes=size, limit_bytes=MAX_SOURCE_FILE_BYTES)
+                    if total > MAX_SOURCE_BYTES:
+                        raise SourceCaptureError('total_byte_limit', 'aggregate source capture byte limit exceeded',
+                                                 path=relative, observed_bytes=total, limit_bytes=MAX_SOURCE_BYTES)
+                    raw = stream.read(MAX_SOURCE_FILE_BYTES + 1)
                     if len(raw) != size:
-                        raise ValueError('source changed while being observed')
+                        raise SourceCaptureError('changed_during_capture', 'source changed while being observed',
+                                                 path=relative, expected_bytes=size, observed_bytes=len(raw))
                 files[relative] = {'sha256': hashlib.sha256(raw).hexdigest(), 'byte_length': size}
-            return {'files': files, 'commit': commit, 'tree': tree, 'clean': clean}
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            return {'unavailable': 'bounded source identity could not be established'}
+            return {'files': files, 'commit': commit, 'tree': tree, 'clean': clean,
+                    'capture': {'total_bytes': total, 'file_count': len(files), 'limits': source_capture_limits()}}
+        except SourceCaptureError as error:
+            return {'unavailable': error.details, 'capture': {'limits': source_capture_limits()}}
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+            detail = str(error)
+            return {'unavailable': {'code': type(error).__name__,
+                                    'message': detail if len(detail) <= 1024 else 'Source capture failed; diagnostic exceeded 1024 characters'},
+                    'capture': {'limits': source_capture_limits()}}
 
     def observe(self, message):
         method = message.get('method')
@@ -452,6 +482,7 @@ class Broker:
         self.event('effective_capabilities', {
             **actual, 'dynamic_tools': [tool['name'] for tool in m['thread_params'].get('dynamicTools', [])],
             'worker_scratch': m.get('worker_scratch') if m['role'] == 'worker' else None,
+            'source_capture_limits': source_capture_limits(),
         })
 
     def command(self):
