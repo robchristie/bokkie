@@ -149,9 +149,9 @@ ownership records to force replacement. No persistent service, deployment or
 publication is enabled by these commands.
 
 The [supervision contract](docs/engineering-supervision-contract.md) defines
-backend constraints. The [active delivery plan](docs/plans/active/engineering-supervision.md)
-and [fixture attempt evidence](docs/supervision-evidence/fixture-attempts.md) track
-live qualification; implementation alone does not establish dogfood acceptance.
+backend constraints. The [completed delivery plan](docs/plans/completed/engineering-supervision.md)
+links the qualified fixture, operator UI and [accepted Pagefold milestone](docs/supervision-evidence/pagefold.md), including infrastructure interventions and
+repeated qualification.
 
 ## Attention UI
 

@@ -6,8 +6,10 @@ Bokkie communicates through private fsynced request/reply files. Bokkie can stop
 and restart without killing the broker or requiring the originating chat.
 The [qualified live fixture](../../docs/supervision-evidence/fixture-j.json)
 proves the complete local supervision loop alongside deterministic Store and
-protocol coverage. Authentic Pagefold dogfooding is active; product acceptance
-remains pending in the [execution plan](../../docs/plans/active/engineering-supervision.md).
+protocol coverage. The [Pagefold milestone](../../docs/supervision-evidence/pagefold.md) was accepted
+through this runtime after recorded infrastructure repairs and repeated
+qualification; the [completed plan](../../docs/plans/completed/engineering-supervision.md)
+links the final evidence.
 
 ## Start an isolated instance
 

@@ -3,7 +3,7 @@
 Status: backend contract implemented; integrated runtime qualification pending.
 This document defines Store semantics and does not claim fixture or dogfood
 acceptance. The live protocol calibration selected the broker/containment profile. The programme and acceptance owner is
-[`plans/active/engineering-supervision.md`](plans/active/engineering-supervision.md).
+[`plans/completed/engineering-supervision.md`](plans/completed/engineering-supervision.md).
 Protocol evidence belongs in `docs/supervision-evidence/`.
 
 ## Ownership and durable records
