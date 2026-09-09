@@ -10,6 +10,8 @@ This is qualification evidence, not a claim of product acceptance.
 
 | 20260909-c | `76d766c7d085d486722968d8941109c262f389ea` | Rejected before a turn: effective configuration verification expected the CLI concurrency alias rather than the canonical `config/read` field. A no-model configuration probe verified `max_concurrent_threads_per_session=2`; capability comparison was repaired without changing the effective limit. Cancellation reconciled the failed boundary. |
 
+| 20260909-d | `15272fc62bc72b91657d531b2f660c179777377a` | Real supervisor formalisation and worker dispatch succeeded; restart and lost-ack replay passed. Rejected because the outer qualification driver matched its offline marker inside a snapshot tool event rather than a shell execution and disconnected too early. Driver now matches command-execution events only; the affected journey must repeat. |
+
 Historical retained synthetic evidence owner:
 `/nvme/development/bokkie-supervision-fixture-20260909-a` contains the SQLite
 records, private broker journals, exact profile, fixture revision

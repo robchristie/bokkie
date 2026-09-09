@@ -124,7 +124,7 @@ Before your first final submission, after evidence and review are ready, run pyt
                 replay = call('/engineering/outcomes', body)
                 if {k:v for k,v in replay.items() if k != 'service'} != {k:v for k,v in receipt.items() if k != 'service'}: raise AssertionError('intake replay changed saved receipt')
                 record('lost_ack_replay_passed'); restarted = True
-            if not offline and any(e['role'] == 'worker' and v['kind'] == 'item/started' and 'bokkie-offline-window' in json.dumps(v) for e, v in logs_now):
+            if not offline and any(e['role'] == 'worker' and v['kind'] == 'item/started' and v['value'].get('item', {}).get('type') == 'commandExecution' and 'bokkie-offline-window' in v['value']['item'].get('command', '') for e, v in logs_now):
                 stop(); record('controller_unavailable_during_worker')
                 offline_until = time.monotonic() + 120
                 while time.monotonic() < offline_until:
