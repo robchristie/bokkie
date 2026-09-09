@@ -710,7 +710,12 @@ fn quiet_supervisor_wait(
     let Some(saved) = &state.supervisor_wait_digest else {
         return Ok(false);
     };
-    if saved != &supervisor_decision_digest(state)? {
+    if saved != &supervisor_decision_digest(state)?
+        || state
+            .questions
+            .iter()
+            .any(|q| q.contract_revision == state.contract_revision && q.resolution.is_none())
+    {
         return Ok(false);
     }
     let mut active = false;
@@ -1562,11 +1567,10 @@ fn apply_command(
                             .iter()
                             .any(|a| a.input.submission_id == s.id)
                 });
-            state.supervisor_wait_digest = if incoming {
-                None
-            } else {
-                Some(supervisor_decision_digest(state)?)
-            };
+            // Yield acknowledges the exact current inputs, including submissions
+            // awaiting delegated review. It never accepts those submissions.
+            // Unanswered questions still prevent quiet coalescing at claim time.
+            state.supervisor_wait_digest = Some(supervisor_decision_digest(state)?);
             apply_engineering_transition(
                 tx,
                 &state.root.id,
@@ -3732,6 +3736,193 @@ mod tests {
         assert!(state.root.last_error.unwrap().contains("budget exhausted"));
         assert_eq!(state.turns_used, 1);
     }
+    #[test]
+    fn acknowledged_submission_waits_for_review_without_consuming_quiet_turns() {
+        for event in ["review_result", "question", "followup"] {
+            let mut store = Store::open_in_memory().unwrap();
+            let (id, reviewer) = waiting_for_submission_review(&mut store);
+            let before = store.engineering_outcome(&id).unwrap().unwrap();
+            assert_eq!(before.submissions.len(), 1);
+            assert!(before.assessments.is_empty());
+            assert!(before.supervisor_wait_digest.is_some());
+            for now in [108, 168, 228] {
+                assert!(
+                    store
+                        .claim_due_engineering(EngineeringRole::Supervisor, now, 600, 1)
+                        .unwrap()
+                        .is_empty()
+                );
+                let state = store.engineering_outcome(&id).unwrap().unwrap();
+                assert_eq!(state.turns_used, before.turns_used);
+                assert_eq!(state.executions.len(), before.executions.len());
+                assert_eq!(state.root.attempts_made, before.root.attempts_made);
+                assert_eq!(state.root.next_wake_at, Some(now + 60));
+                assert!(state.assessments.is_empty());
+            }
+            match event {
+                "review_result" => {
+                    reconcile(&mut store, &reviewer, Some(submission()), 229);
+                }
+                "question" => {
+                    command(
+                        &mut store,
+                        &id,
+                        actor(&reviewer),
+                        EngineeringCommand::AskQuestion {
+                            request_key: "broker/review/thread/question".into(),
+                            kind: EngineeringQuestionKind::Routine,
+                            prompt: "Which acceptance case needs review?".into(),
+                            options: vec![],
+                        },
+                        229,
+                    );
+                }
+                "followup" => {
+                    command(
+                        &mut store,
+                        &id,
+                        op(),
+                        EngineeringCommand::FollowUp {
+                            text: "Review the Unicode case as well".into(),
+                        },
+                        229,
+                    );
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                store
+                    .claim_due_engineering(EngineeringRole::Supervisor, 229, 600, 1)
+                    .unwrap()
+                    .len(),
+                1,
+                "{event}"
+            );
+            let state = store.engineering_outcome(&id).unwrap().unwrap();
+            assert_eq!(state.turns_used, before.turns_used + 1);
+            assert!(state.acceptance.is_none());
+        }
+    }
+
+    fn waiting_for_submission_review(store: &mut Store) -> (String, EngineeringClaim) {
+        let id = create(store);
+        let root = claim(store, EngineeringRole::Supervisor, 100);
+        new_package(store, &root, 101);
+        let worker = claim(store, EngineeringRole::Worker, 102);
+        reconcile(store, &worker, Some(submission()), 103);
+        new_package(store, &root, 104);
+        command(
+            store,
+            &id,
+            actor(&root),
+            EngineeringCommand::YieldSupervisor {
+                next_wake_at: 500,
+                reason: "submission awaits the delegated independent review".into(),
+                processed_message_count: 1,
+            },
+            105,
+        );
+        reconcile(store, &root, None, 106);
+        let reviewer = claim(store, EngineeringRole::Worker, 107);
+        (id, reviewer)
+    }
+
+    #[test]
+    fn acknowledged_submission_without_active_review_resumes_supervisor() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (id, reviewer) = waiting_for_submission_review(&mut store);
+        reconcile(&mut store, &reviewer, None, 108);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 109);
+        command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::YieldSupervisor {
+                next_wake_at: 500,
+                reason: "submission still needs assessment".into(),
+                processed_message_count: 1,
+            },
+            110,
+        );
+        reconcile(&mut store, &root, None, 111);
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert!(state.supervisor_wait_digest.is_some());
+        assert_eq!(
+            store
+                .claim_due_engineering(EngineeringRole::Supervisor, 112, 600, 1)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn yielded_unanswered_question_resumes_even_with_another_healthy_worker() {
+        let mut store = Store::open_in_memory().unwrap();
+        let (id, worker) = waiting_workers(&mut store);
+        command(
+            &mut store,
+            &id,
+            actor(&worker),
+            EngineeringCommand::AskQuestion {
+                request_key: "broker/thread/blocked-question".into(),
+                kind: EngineeringQuestionKind::Routine,
+                prompt: "Which source should I use?".into(),
+                options: vec![],
+            },
+            105,
+        );
+        let root = claim(&mut store, EngineeringRole::Supervisor, 106);
+        command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::YieldSupervisor {
+                next_wake_at: 500,
+                reason: "another worker remains active".into(),
+                processed_message_count: 1,
+            },
+            107,
+        );
+        reconcile(&mut store, &root, None, 108);
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert!(state.supervisor_wait_digest.is_some());
+        assert!(state.questions[0].resolution.is_none());
+        assert_eq!(
+            store
+                .claim_due_engineering(EngineeringRole::Supervisor, 109, 600, 1)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn stale_yield_cannot_acknowledge_a_new_submission() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = create(&mut store);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        new_package(&mut store, &root, 101);
+        let worker = claim(&mut store, EngineeringRole::Worker, 102);
+        let stale = envelope(
+            &store,
+            &id,
+            EngineeringCommand::YieldSupervisor {
+                next_wake_at: 500,
+                reason: "waiting for worker".into(),
+                processed_message_count: 1,
+            },
+        );
+        reconcile(&mut store, &worker, Some(submission()), 103);
+        assert!(matches!(
+            store.engineering_command(actor(&root), stale, 104),
+            Err(StoreError::Fenced)
+        ));
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert!(state.supervisor_wait_digest.is_none());
+        assert!(state.assessments.is_empty());
+    }
+
     #[test]
     fn supervisor_quiet_wait_survives_reopen_progress_and_lease_renewals() {
         let temporary = tempfile::tempdir().unwrap();

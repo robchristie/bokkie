@@ -93,6 +93,14 @@ exact contract/instruction/context references, remaining budget and reserved
 workspace identity. Claims atomically create dispatch intent and reserve budget
 and writer ownership before returning; dispatch happens afterwards.
 
+A successful supervisor yield acknowledges its exact current decision inputs,
+including submissions awaiting delegated review; it does not assess or accept
+them. While healthy workers remain active, unchanged acknowledged inputs may
+retain a bounded durable wake-up without consuming another supervisor turn.
+Unresolved current questions always require a supervisor decision and prevent
+this coalescing. New evidence or messages invalidate the wait, and no active
+worker means the supervisor must resume the decision itself.
+
 `EngineeringActor` separates operator commands, supervisor claims, worker claims
 and adapter reconciliation observations. Adapters construct actors from their
 trusted call path; an HTTP payload cannot self-select supervisor, worker or
