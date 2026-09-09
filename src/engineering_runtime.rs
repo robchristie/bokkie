@@ -1,5 +1,6 @@
 //! Codex adapter and durable broker reconciliation, outside the obligation kernel.
 use crate::{Store, StoreError, engineering::*};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -13,6 +14,9 @@ use std::process::{Command, Stdio};
 pub type RuntimeResult<T> = Result<T, Box<dyn std::error::Error>>;
 const MAX_FILE: u64 = 2 * 1024 * 1024;
 const MAX_SPOOL: u64 = 16 * 1024 * 1024;
+const MAX_EVIDENCE_PAGE: u64 = 32 * 1024;
+// Leave room for the broker's wire framing as well as JSON encoding.
+const MAX_TOOL_REPLY: u64 = MAX_FILE - 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -450,8 +454,8 @@ fn dynamic_tools() -> Vec<Value> {
         ),
         tool(
             "bokkie_evidence",
-            "Read retained validation or independent review bytes by SHA-256 digest. Assessment requires inspected evidence.",
-            json!({"digest":{"type":"string"}}),
+            "Read an exact bounded page of retained evidence by SHA-256 digest. Optional byte_offset defaults to 0 and max_bytes to 32768 (range 4..32768). Follow next_byte_offset until null; partial pages are not complete evidence. The encoding is utf8 or base64, with exact byte length and total size. Assessment requires inspecting all relevant evidence.",
+            json!({"digest":{"type":"string"},"byte_offset":{"type":"integer","minimum":0},"max_bytes":{"type":"integer","minimum":4,"maximum":MAX_EVIDENCE_PAGE}}),
             &["digest"],
         ),
         tool(
@@ -524,14 +528,95 @@ impl EngineeringRuntime {
         Ok(hash)
     }
     fn evidence(&self, hash: &str) -> RuntimeResult<Vec<u8>> {
+        self.evidence_with_bound(hash, MAX_FILE)
+    }
+    fn evidence_with_bound(&self, hash: &str, bound: u64) -> RuntimeResult<Vec<u8>> {
         if hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
             return Err("invalid evidence digest".into());
         }
-        let bytes = bounded_read(&self.profile.broker_root.join("blobs").join(hash), MAX_FILE)?;
+        let bytes = bounded_read(&self.profile.broker_root.join("blobs").join(hash), bound)?;
         if sha(&bytes) != hash {
             return Err("evidence digest mismatch".into());
         }
         Ok(bytes)
+    }
+    fn evidence_page(&self, args: &Value) -> RuntimeResult<Value> {
+        let hash = args["digest"].as_str().ok_or("missing digest")?;
+        let number = |name: &str, default: u64| -> RuntimeResult<u64> {
+            args.get(name)
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .ok_or_else(|| format!("{name} must be a non-negative integer").into())
+                })
+                .unwrap_or(Ok(default))
+        };
+        let offset = number("byte_offset", 0)?;
+        let limit = number("max_bytes", MAX_EVIDENCE_PAGE)?;
+        if !(4..=MAX_EVIDENCE_PAGE).contains(&limit) {
+            return Err("max_bytes must be between 4 and 32768".into());
+        }
+        // Broker journals already have a 16 MiB retention bound. Verify the
+        // complete identity before returning any page, without widening the
+        // ordinary full-record or source artefact limits.
+        let bytes = self.evidence_with_bound(hash, MAX_SPOOL)?;
+        if offset > bytes.len() as u64 {
+            return Err("byte_offset exceeds retained evidence length".into());
+        }
+        let start = offset as usize;
+        let mut end = bytes.len().min(start + limit as usize);
+        let (encoding, content) = if let Ok(text) = std::str::from_utf8(&bytes) {
+            if !text.is_char_boundary(start) {
+                let mut boundary = start;
+                while !text.is_char_boundary(boundary) {
+                    boundary -= 1;
+                }
+                return Err(
+                    format!("byte_offset splits UTF-8; retry with byte_offset {boundary}").into(),
+                );
+            }
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            ("utf8", text[start..end].to_owned())
+        } else {
+            ("base64", STANDARD.encode(&bytes[start..end]))
+        };
+        Ok(json!({"digest":hash,"encoding":encoding,"content":content,
+            "byte_offset":start,"byte_length":end-start,"total_bytes":bytes.len(),
+            "partial":start != 0 || end != bytes.len(),
+            "next_byte_offset":if end < bytes.len() {Some(end)} else {None}}))
+    }
+    fn tool_reply(
+        &self,
+        path: &Path,
+        id: &Value,
+        result: RuntimeResult<Value>,
+    ) -> RuntimeResult<()> {
+        let (mut success, body) = match result {
+            Ok(value) => (true, value),
+            Err(error) => (false, json!({"error":error.to_string()})),
+        };
+        let bytes = serde_json::to_vec(&body)?;
+        let response = |success, text: String| {
+            json!({"id":id,"result":{"success":success,
+            "contentItems":[{"type":"inputText","text":text}]}})
+        };
+        let mut reply = response(success, body.to_string());
+        if serde_json::to_vec(&reply)?.len() as u64 > MAX_TOOL_REPLY {
+            let descriptor = if bytes.len() as u64 <= MAX_SPOOL {
+                json!({"response_paged":true,"digest":self.blob(&bytes)?,"total_bytes":bytes.len(),
+                    "instruction":"Complete tool response retained. Read it with bokkie_evidence using this digest and follow next_byte_offset until null. A mutation may already be committed; inspect the retained result before retrying."})
+            } else {
+                success = false;
+                json!({"error":"Tool response exceeds the retained record bound. Request a smaller result; no partial response was returned. A mutation may already be committed; inspect its durable state before retrying."})
+            };
+            reply = response(success, descriptor.to_string());
+        }
+        if serde_json::to_vec(&reply)?.len() as u64 > MAX_TOOL_REPLY {
+            return Err("request identity leaves no room for a bounded tool reply".into());
+        }
+        atomic(path, &reply)
     }
     fn file(&self, relative: &str) -> RuntimeResult<(EngineeringArtefact, Vec<u8>)> {
         let path = Path::new(relative);
@@ -1083,10 +1168,7 @@ impl EngineeringRuntime {
                 Ok(json!({"artefact":artefact,"content":String::from_utf8_lossy(&bytes)}))
             }
             "bokkie_inspect" => self.inspect(&serde_json::from_value(args["artefact"].clone())?),
-            "bokkie_evidence" => {
-                let bytes = self.evidence(args["digest"].as_str().ok_or("missing digest")?)?;
-                Ok(json!({"content":String::from_utf8_lossy(&bytes)}))
-            }
+            "bokkie_evidence" => self.evidence_page(args),
             "bokkie_review" => {
                 let reviewer = args["reviewer_thread_id"]
                     .as_str()
@@ -1245,6 +1327,50 @@ impl EngineeringRuntime {
         if key.len() != 64 || !key.bytes().all(|c| c.is_ascii_hexdigit()) {
             return Err("invalid broker request key".into());
         }
+        if let Err(error) = self.request_inner(store, directory, execution, event, log, now) {
+            let reply = directory.join("replies").join(format!("{key}.json"));
+            // Preserve a reply committed before a receipt-write failure.
+            if !reply.exists() {
+                let message = &event.value["message"];
+                if message["method"] == "item/tool/call" {
+                    self.tool_reply(&reply, &message["id"], Err(error))?;
+                } else {
+                    let detail = error.to_string();
+                    let diagnostic = if detail.len() <= 4096 {
+                        detail
+                    } else {
+                        "Adapter request failed; diagnostic exceeds the bounded error limit".into()
+                    };
+                    atomic(
+                        &reply,
+                        &json!({"id":message["id"],"error":{"code":-32602,"message":diagnostic}}),
+                    )?;
+                }
+            }
+            atomic(
+                &directory
+                    .join("receipts")
+                    .join(format!("request-{key}.json")),
+                &json!({"handled":true}),
+            )?;
+        }
+        Ok(())
+    }
+    fn request_inner(
+        &self,
+        store: &mut Store,
+        directory: &Path,
+        execution: &EngineeringExecution,
+        event: &Event,
+        log: &[Event],
+        now: i64,
+    ) -> RuntimeResult<()> {
+        let key = event.value["key"]
+            .as_str()
+            .ok_or("request missing stable key")?;
+        if key.len() != 64 || !key.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Err("invalid broker request key".into());
+        }
         let message = &event.value["message"];
         let method = message["method"].as_str().ok_or("request missing method")?;
         let reply = directory.join("replies").join(format!("{key}.json"));
@@ -1279,14 +1405,7 @@ impl EngineeringRuntime {
                 log,
                 now,
             );
-            let (success, body) = match result {
-                Ok(value) => (true, value),
-                Err(error) => (false, json!({"error":error.to_string()})),
-            };
-            atomic(
-                &reply,
-                &json!({"id":message["id"],"result":{"success":success,"contentItems":[{"type":"inputText","text":body.to_string()}]}}),
-            )?;
+            self.tool_reply(&reply, &message["id"], result)?;
             atomic(&done, &json!({"handled":true}))?;
             return Ok(());
         }
@@ -1507,7 +1626,7 @@ impl EngineeringRuntime {
         for event in log.iter().filter(|e| e.kind == "request") {
             // Completed replies are immutable and replayable. Expired requests
             // stay in the spool and must not acquire fresh worker authority.
-            if !execution.fenced && !initial.cancellation_requested {
+            if !execution.fenced && !initial.cancellation_requested && reaped.is_none() {
                 if let Err(error) = self.request(store, &directory, execution, event, &log, now) {
                     atomic(
                         &directory.join("request-error.json"),
@@ -1827,6 +1946,217 @@ mod tests {
             file.sync_all().unwrap();
         }
     }
+    #[test]
+    fn large_evidence_pages_preserve_exact_bytes_and_bound_encoded_replies() {
+        let f = Fixture::new();
+        let bytes = "🦘\\\"\n\0".repeat(270_000).into_bytes();
+        assert!(bytes.len() as u64 > MAX_FILE);
+        let digest = f.runtime.blob(&bytes).unwrap();
+        let path = f.directory(&f.supervisor).join("replies/page.json");
+        let mut offset = 0;
+        let mut restored = Vec::new();
+        loop {
+            let page = f
+                .runtime
+                .evidence_page(&json!({"digest":digest,"byte_offset":offset,"max_bytes":32767}))
+                .unwrap();
+            assert_eq!(page["digest"], digest);
+            assert_eq!(page["encoding"], "utf8");
+            assert_eq!(page["total_bytes"], bytes.len());
+            assert_eq!(page["byte_offset"], offset);
+            assert_eq!(page["partial"], true);
+            let content = page["content"].as_str().unwrap();
+            assert_eq!(page["byte_length"], content.len());
+            restored.extend_from_slice(content.as_bytes());
+            f.runtime
+                .tool_reply(&path, &json!(1), Ok(page.clone()))
+                .unwrap();
+            assert!(fs::metadata(&path).unwrap().len() < MAX_TOOL_REPLY);
+            let reply: Value = read_json(&path).unwrap();
+            let decoded: Value =
+                serde_json::from_str(reply["result"]["contentItems"][0]["text"].as_str().unwrap())
+                    .unwrap();
+            assert_eq!(decoded, page);
+            match page["next_byte_offset"].as_u64() {
+                Some(next) => {
+                    assert!(next > offset);
+                    offset = next;
+                }
+                None => break,
+            }
+        }
+        assert_eq!(restored, bytes);
+        assert_eq!(sha(&restored), digest);
+        // Direct tail access need not read all preceding diagnostic pages.
+        let tail = f
+            .runtime
+            .evidence_page(&json!({"digest":digest,"byte_offset":bytes.len()-8}))
+            .unwrap();
+        assert_eq!(tail["content"], "🦘\\\"\n\0");
+        assert!(tail["next_byte_offset"].is_null());
+        assert!(
+            f.runtime
+                .evidence_page(&json!({"digest":digest,"byte_offset":1}))
+                .unwrap_err()
+                .to_string()
+                .contains("retry with byte_offset 0")
+        );
+        assert!(
+            f.runtime
+                .evidence_page(&json!({"digest":digest,"byte_offset":u64::MAX}))
+                .is_err()
+        );
+        assert!(
+            f.runtime
+                .evidence_page(&json!({"digest":digest,"max_bytes":MAX_FILE}))
+                .is_err()
+        );
+        fs::write(
+            f.runtime.profile.broker_root.join("blobs").join(&digest),
+            b"changed",
+        )
+        .unwrap();
+        assert!(
+            f.runtime
+                .evidence_page(&json!({"digest":digest}))
+                .unwrap_err()
+                .to_string()
+                .contains("digest mismatch")
+        );
+    }
+
+    #[test]
+    fn binary_evidence_pages_are_lossless_and_explicitly_encoded() {
+        let f = Fixture::new();
+        let bytes = [0xff, 0x00, 0xfe, 0x80, 0x01, 0x02];
+        let digest = f.runtime.blob(&bytes).unwrap();
+        let mut restored = vec![];
+        for offset in [0, 4] {
+            let page = f
+                .runtime
+                .evidence_page(&json!({"digest":digest,"byte_offset":offset,"max_bytes":4}))
+                .unwrap();
+            assert_eq!(page["encoding"], "base64");
+            restored.extend(STANDARD.decode(page["content"].as_str().unwrap()).unwrap());
+        }
+        assert_eq!(restored, bytes);
+    }
+
+    fn read_reply(directory: &Path, key: &str) -> (Value, Value) {
+        let path = directory.join("replies").join(format!("{key}.json"));
+        assert!(fs::metadata(&path).unwrap().len() < MAX_FILE);
+        let reply: Value = read_json(&path).unwrap();
+        let body =
+            serde_json::from_str(reply["result"]["contentItems"][0]["text"].as_str().unwrap())
+                .unwrap();
+        (reply, body)
+    }
+
+    #[test]
+    fn expanded_reply_and_bad_request_do_not_block_later_requests_or_reaping() {
+        let mut f = Fixture::new();
+        // Raw source fits its 2 MiB bound, but nested JSON escaping does not.
+        let text = "\"\\\0".repeat(180_000);
+        assert!((text.len() as u64) < MAX_FILE);
+        fs::write(f.runtime.profile.workspace.join("large.txt"), &text).unwrap();
+        fs::write(
+            f.runtime.profile.workspace.join("small.txt"),
+            "next request works",
+        )
+        .unwrap();
+        f.event(
+            &f.worker,
+            1,
+            "thread_identity",
+            json!({"thread_id":"root-thread"}),
+        );
+        for (sequence, tool, args) in [
+            (2, "bokkie_file", json!({"path":"large.txt"})),
+            (3, "bokkie_question", json!({"kind":"invalid"})),
+            (4, "bokkie_file", json!({"path":"small.txt"})),
+        ] {
+            f.event(&f.worker, sequence, "request", json!({"key":format!("{sequence:064x}"),"message":{
+                "id":sequence,"method":"item/tool/call","params":{"threadId":"root-thread","tool":tool,"arguments":args}}}));
+        }
+        let state = snapshot(&f.store, &f.id).unwrap();
+        f.runtime
+            .reconcile(&mut f.store, &state, &f.worker, 105)
+            .unwrap();
+        let directory = f.directory(&f.worker);
+        let (reply, paged) = read_reply(&directory, &format!("{:064x}", 2));
+        assert_eq!(reply["result"]["success"], true);
+        assert_eq!(paged["response_paged"], true);
+        let full = f
+            .runtime
+            .evidence_with_bound(paged["digest"].as_str().unwrap(), MAX_SPOOL)
+            .unwrap();
+        let full: Value = serde_json::from_slice(&full).unwrap();
+        assert_eq!(full["content"], text);
+        let (reply, error) = read_reply(&directory, &format!("{:064x}", 3));
+        assert_eq!(reply["result"]["success"], false);
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .contains("unsupported question kind")
+        );
+        let (reply, next) = read_reply(&directory, &format!("{:064x}", 4));
+        assert_eq!(reply["result"]["success"], true);
+        assert_eq!(next["content"], "next request works");
+        for sequence in [2, 3, 4] {
+            assert!(
+                directory
+                    .join("receipts")
+                    .join(format!("request-{sequence:064x}.json"))
+                    .exists()
+            );
+        }
+        fs::write(
+            f.runtime.profile.workspace.join("large.txt"),
+            "changed after response",
+        )
+        .unwrap();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        f.runtime
+            .reconcile(&mut f.store, &state, &f.worker, 106)
+            .unwrap();
+        assert_eq!(read_reply(&directory, &format!("{:064x}", 2)).1, paged);
+        // Even an unserviceable pending request cannot obstruct proven cessation.
+        f.event(
+            &f.worker,
+            5,
+            "request",
+            json!({"key":"invalid","message":{"id":5}}),
+        );
+        f.event(
+            &f.worker,
+            6,
+            "boundary_reaped",
+            json!({"boundary":"fixture:namespace"}),
+        );
+        let state = snapshot(&f.store, &f.id).unwrap();
+        f.runtime
+            .reconcile(&mut f.store, &state, &f.worker, 107)
+            .unwrap();
+        assert!(!directory.join("request-error.json").exists());
+        let state = snapshot(&f.store, &f.id).unwrap();
+        assert!(
+            state
+                .executions
+                .iter()
+                .find(|e| e.id == f.worker.id)
+                .unwrap()
+                .cessation_verified
+        );
+        assert_eq!(
+            f.store
+                .claim_due_engineering(EngineeringRole::Worker, 108, 600, 1)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     #[test]
     fn dispatch_limits_honour_package_deadline_and_original_claim() {
         let f = Fixture::new();
@@ -2524,13 +2854,20 @@ mod tests {
             kind: "request".into(),
             value: json!({"key":"a".repeat(64),"message":{"id":12,"method":"item/tool/call","params":{"threadId":"child-thread","turnId":"child-turn","tool":"bokkie_review","arguments":{"reviewer_thread_id":"child-thread"}}}}),
         };
-        let error = f
-            .runtime
+        f.runtime
             .request(&mut f.store, &directory, &f.worker, &request, &log, 105)
-            .unwrap_err();
+            .unwrap();
+        let reply: Value = read_json(
+            &directory
+                .join("replies")
+                .join(format!("{}.json", "a".repeat(64))),
+        )
+        .unwrap();
+        assert_eq!(reply["result"]["success"], false);
         assert!(
-            error
-                .to_string()
+            reply["result"]["contentItems"][0]["text"]
+                .as_str()
+                .unwrap()
                 .contains("nested agent cannot inherit root Bokkie authority")
         );
     }

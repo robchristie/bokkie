@@ -78,6 +78,20 @@ reconnect does not silently replace the snapshot a decision actually saw.
 Routine activity can retry a failed precondition at most three times; model
 acceptance decisions never receive that retry treatment.
 
+`bokkie_evidence` returns digest-verified pages of up to 32 KiB from retained
+blobs, including journals within the existing 16 MiB bound. Its optional
+`byte_offset` and `max_bytes` arguments select a range; replies include exact
+offset/length, total size, `partial`, encoding (`utf8` or lossless `base64`) and
+`next_byte_offset`. Use continuation offsets for sequential reading or seek a
+relevant diagnostic range. A partial page is not a complete review or artefact.
+Full source artefacts and ordinary adapter records retain their 2 MiB limits.
+Tool replies are bounded after JSON encoding, including nested escaping. An
+oversized response within the blob limit is retained in full and replaced by an
+explicit digest-based paging descriptor; larger responses and request errors
+receive durable bounded errors. Once reaping
+is proved, unfinished tool requests cannot delay cessation reconciliation or
+acquire authority to mutate the outcome after execution has stopped.
+
 `bokkie_question` works in Default mode and waits for a durable supervisor answer.
 Built-in requestUserInput groups are also supported. Unsupported approval requests
 are durably declined and projected as actionable authority questions. An explicit

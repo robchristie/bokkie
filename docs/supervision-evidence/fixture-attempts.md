@@ -18,6 +18,10 @@ This is qualification evidence, not a claim of product acceptance.
 
 | 20260909-g | `83cbd5c4495c531d63565fd3bc33b99ff3e69783` | Offline completion, autonomous routine answer, incomplete assessment, linked repair and separate product-submission acceptance succeeded. Final closeout failed: an auxiliary review package retained historical source artefacts changed by the repair, and the supervisor could neither assess it as current nor cancel obsolete delegated work. It escalated visibly; driver cancellation reconciled every execution. Also exposed repeated unchanged worker-wait turns; durable wait coalescing passed canonical checks and independent review at `0c6e2b0ce344ea1c1d1ad699054b364adcbb963f`. Delegated-package cancellation is being repaired before a fresh qualifying run. No outer routine decision or worker instruction was supplied. |
 
+| 20260909-h | `47415616772a687067bf7bda63f754dc08111f5b` | Retained: complete fixture passed, including independent repair acceptance, obsolete auxiliary retirement, one actionable authority escalation and all execution boundaries reconciled. [Compact identities and observations](fixture-h.json). Used 19 of 24 execution turns; pending-review waiting still caused redundant decisions, repaired and independently reviewed at `9ab88eb1e90acd830dc85cd403ef70c5e02fc791`. Run i repeats on that source before application dogfooding. |
+
+| 20260909-i | `9ab88eb1e90acd830dc85cd403ef70c5e02fc791` | Restart/replay, routine resolution, offline import and linked repair passed; waiting used seven turns through final assessment. Rejected when retrieval of a large repair recovery journal exceeded the encoded adapter reply limit and repeatedly left the tool request pending. The outer agent interrupted qualification for bounded evidence retrieval/response repair. Driver cancellation reconciled every execution. No product acceptance or routine outer decision was substituted. |
+
 Historical retained synthetic evidence owner:
 `/nvme/development/bokkie-supervision-fixture-20260909-a` contains the SQLite
 records, private broker journals, exact profile, fixture revision
