@@ -16,12 +16,7 @@ This is qualification evidence, not a claim of product acceptance.
 
 | 20260909-f | `465b1d050d8b1fe440ac93bbc8a633dbff5ba7bb` | Actual offline completion, incomplete assessment and linked repair succeeded. The fresh repair passed tests and independent review. Rejected because distinct observations for one criterion were rejected only during Store import, after the worker was reaped. Repairs allow distinct evidence per criterion, preflight submissions before stopping workers, retain cessation independently of invalid import, and clarify that completed delivery uses empty limitations. The repaired runtime subsequently reconciled every boundary and completed cancellation; `post-repair-cleanup.json` retains the observation. |
 
-Run `20260909-g` at `83cbd5c4495c531d63565fd3bc33b99ff3e69783` is provisional.
-It has retained offline completion, an autonomous routine answer, a substantive
-incomplete assessment and linked repair. Repeated unchanged worker-wait decisions
-consume supervisor turns; a durable scheduling repair is in progress before the
-longer application run. This is an outer infrastructure intervention, not a
-substituted supervisor decision. Final acceptance remains pending.
+| 20260909-g | `83cbd5c4495c531d63565fd3bc33b99ff3e69783` | Offline completion, autonomous routine answer, incomplete assessment, linked repair and separate product-submission acceptance succeeded. Final closeout failed: an auxiliary review package retained historical source artefacts changed by the repair, and the supervisor could neither assess it as current nor cancel obsolete delegated work. It escalated visibly; driver cancellation reconciled every execution. Also exposed repeated unchanged worker-wait turns; durable wait coalescing passed canonical checks and independent review at `0c6e2b0ce344ea1c1d1ad699054b364adcbb963f`. Delegated-package cancellation is being repaired before a fresh qualifying run. No outer routine decision or worker instruction was supplied. |
 
 Historical retained synthetic evidence owner:
 `/nvme/development/bokkie-supervision-fixture-20260909-a` contains the SQLite

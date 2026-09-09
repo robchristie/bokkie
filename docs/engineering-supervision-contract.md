@@ -57,6 +57,15 @@ Failed/cancelled prerequisites block dispatch and wake the supervisor to repair,
 replan or surface attention. Acceptance of a parent requires all its required
 children to be accepted or explicitly superseded by a contract-bound repair.
 
+A supervisor may request cancellation of a named delegated package under the
+current contract. Only the operator may cancel the whole outcome. Cancellation
+retains fencing and writer responsibility until verified cessation. Final
+acceptance may omit explicitly cancelled packages, but their assessments cannot
+cover outcome criteria or satisfy surviving parent/dependency requirements.
+Every current outcome criterion still requires evidence from another current,
+accepted package and exact independent review. Cancelling an obsolete auxiliary
+review does not waive inspection of the surviving source artefacts.
+
 ## Adapter-ready Store surface
 
 Use one typed command boundary so HTTP, CLI and runtime adapters share replay,

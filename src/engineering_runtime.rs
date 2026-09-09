@@ -426,7 +426,7 @@ fn dynamic_tools() -> Vec<Value> {
         ),
         tool(
             "bokkie_command",
-            "Issue a typed engineering command with the exact precondition you read. No actor field. Worker submit_result queues a submission and stops this execution; completion is never acceptance. Supervisor may formalise_contract, create_package, resolve_question, assess_result, create_repair, yield_supervisor, finish_outcome or ask_question.",
+            "Issue a typed engineering command with the exact precondition you read. No actor field. Worker submit_result queues a submission and stops this execution; completion is never acceptance. Supervisor may formalise_contract, create_package, resolve_question, assess_result, create_repair, request_cancellation for a current-contract package_id, yield_supervisor, finish_outcome or ask_question. Whole-outcome cancellation requires the operator.",
             json!({"expected":{"type":"object"},"command":{"type":"object"}}),
             &["expected", "command"],
         ),
@@ -978,6 +978,9 @@ impl EngineeringRuntime {
             EngineeringCommand::AskQuestion { .. } => {}
             EngineeringCommand::FormaliseContract { .. }
             | EngineeringCommand::ResolveQuestion { .. }
+            | EngineeringCommand::RequestCancellation {
+                package_id: Some(_),
+            }
             | EngineeringCommand::YieldSupervisor { .. }
                 if execution.role == EngineeringRole::Supervisor => {}
             EngineeringCommand::CreatePackage(input)
@@ -2052,6 +2055,74 @@ mod tests {
         );
         assert!(state.contract().authority.is_empty());
     }
+    #[test]
+    fn supervisor_adapter_cancels_delegated_package_but_not_outcome() {
+        let mut f = Fixture::new();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        let directory = f.directory(&f.supervisor);
+        let cancel = |package_id: Option<String>| {
+            json!({
+                "expected": state.precondition(),
+                "command": {"kind":"request_cancellation", "input":{"package_id":package_id}},
+            })
+        };
+        let error = f
+            .runtime
+            .command(
+                &mut f.store,
+                &directory,
+                &f.supervisor,
+                "cancel-outcome",
+                cancel(None),
+                105,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("adapter authority"));
+        let worker_directory = f.directory(&f.worker);
+        let error = f
+            .runtime
+            .command(
+                &mut f.store,
+                &worker_directory,
+                &f.worker,
+                "worker-cancel",
+                cancel(f.worker.package_id.clone()),
+                105,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("adapter authority"));
+        f.runtime
+            .command(
+                &mut f.store,
+                &directory,
+                &f.supervisor,
+                "cancel-package",
+                cancel(f.worker.package_id.clone()),
+                105,
+            )
+            .unwrap();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        assert!(!state.cancellation_requested);
+        assert!(state.packages[0].cancellation_requested);
+        assert_eq!(state.root.state, crate::ObligationState::Running);
+        assert!(
+            state
+                .executions
+                .iter()
+                .find(|e| e.id == f.worker.id)
+                .unwrap()
+                .fenced
+        );
+        assert!(
+            !state
+                .executions
+                .iter()
+                .find(|e| e.id == f.worker.id)
+                .unwrap()
+                .cessation_verified
+        );
+    }
+
     #[test]
     fn stale_model_decision_cannot_refresh_its_snapshot() {
         let mut f = Fixture::new();

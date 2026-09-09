@@ -798,6 +798,14 @@ fn attention(
     )
 }
 fn package_accepted(state: &EngineeringOutcomeSnapshot, package: &str) -> bool {
+    if !state.packages.iter().any(|p| {
+        p.id == package
+            && p.contract_revision == state.contract_revision
+            && !p.cancellation_requested
+            && p.superseded_by.is_none()
+    }) {
+        return false;
+    }
     state.assessments.iter().any(|a| {
         a.contract_revision == state.contract_revision
             && a.input.verdict == EngineeringVerdict::Accept
@@ -1570,11 +1578,23 @@ fn apply_command(
             )?;
         }
         EngineeringCommand::RequestCancellation { package_id } => {
-            if !matches!(
-                actor,
-                EngineeringActor::Operator { .. } | EngineeringActor::Supervisor { .. }
-            ) {
-                return Err(conflict("operator or supervisor authority required"));
+            match actor {
+                EngineeringActor::Operator { .. } => {}
+                EngineeringActor::Supervisor { .. } => {
+                    let id = package_id.as_ref().ok_or_else(|| {
+                        conflict("only the operator may cancel the whole outcome")
+                    })?;
+                    if !state
+                        .packages
+                        .iter()
+                        .any(|p| p.id == *id && p.contract_revision == state.contract_revision)
+                    {
+                        return Err(conflict(
+                            "supervisor cancellation requires a current-contract package",
+                        ));
+                    }
+                }
+                _ => return Err(conflict("operator or supervisor authority required")),
             }
             cancel_packages(tx, state, package_id.as_deref(), now)?;
         }
@@ -1827,12 +1847,21 @@ fn apply_command(
             {
                 return Err(conflict("unreconciled execution blocks acceptance"));
             }
-            if state.packages.iter().any(|p| {
+            for package in state.packages.iter().filter(|p| {
                 p.contract_revision == state.contract_revision
                     && p.superseded_by.is_none()
-                    && !package_accepted(state, &p.id)
+                    && !p.cancellation_requested
             }) {
-                return Err(conflict("required package remains unaccepted"));
+                if !package_accepted(state, &package.id) {
+                    return Err(conflict("required package remains unaccepted"));
+                }
+                if !children_accepted(state, &package.id)
+                    || !dependencies_ready(tx, state, package)?
+                {
+                    return Err(conflict(
+                        "required children or prerequisites remain unaccepted",
+                    ));
+                }
             }
             let mut covered = BTreeSet::new();
             let mut artefacts = vec![];
@@ -1854,6 +1883,11 @@ fn apply_command(
                     .iter()
                     .find(|s| s.id == assessment.input.submission_id)
                     .expect("assessed submission");
+                if !package_accepted(state, &submission.package_id) {
+                    return Err(conflict(
+                        "final evidence must belong to a current accepted, uncancelled package",
+                    ));
+                }
                 excluded.push(&submission.execution_id);
                 for evidence in &submission.input.evidence {
                     if evidence.exit_code == 0 {
@@ -2842,13 +2876,15 @@ mod tests {
         command(
             &mut store,
             &id,
-            op(),
+            actor(&root),
             EngineeringCommand::RequestCancellation {
                 package_id: Some(parent.clone()),
             },
             105,
         );
         let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert!(!state.cancellation_requested);
+        assert_eq!(state.root.state, ObligationState::Running);
         assert!(
             state
                 .packages
@@ -2866,6 +2902,10 @@ mod tests {
                 .cancellation_requested
         );
         for worker in &workers {
+            assert!(store.renew_lease(&worker.claim, 106, 100).is_err());
+            let tx = store.connection.unchecked_transaction().unwrap();
+            assert!(has_writer(&tx, &worker.execution_id).unwrap());
+            drop(tx);
             assert_eq!(
                 store
                     .get(&worker.claim.obligation_id)
@@ -2899,6 +2939,316 @@ mod tests {
             ObligationState::Cancelled
         );
     }
+    #[test]
+    fn supervisor_cannot_cancel_whole_outcome_or_old_contract_package() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = create(&mut store);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        let package_id = new_package(&mut store, &root, 101);
+        let env = envelope(
+            &store,
+            &id,
+            EngineeringCommand::RequestCancellation { package_id: None },
+        );
+        let error = store
+            .engineering_command(actor(&root), env, 102)
+            .unwrap_err();
+        assert!(error.to_string().contains("only the operator"));
+        assert!(
+            !store
+                .engineering_outcome(&id)
+                .unwrap()
+                .unwrap()
+                .cancellation_requested
+        );
+        command(
+            &mut store,
+            &id,
+            op(),
+            EngineeringCommand::ReviseContract {
+                contract: contract(),
+            },
+            103,
+        );
+        reconcile(&mut store, &root, None, 104);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 105);
+        let env = envelope(
+            &store,
+            &id,
+            EngineeringCommand::RequestCancellation {
+                package_id: Some(package_id),
+            },
+        );
+        let error = store
+            .engineering_command(actor(&root), env, 106)
+            .unwrap_err();
+        assert!(error.to_string().contains("current-contract package"));
+    }
+
+    #[test]
+    fn cancelled_auxiliary_can_close_only_with_uncancelled_criterion_coverage() {
+        for scenario in [
+            "redundant",
+            "live_redundant",
+            "uncovered",
+            "cancelled_assessment",
+        ] {
+            let redundant = scenario == "redundant" || scenario == "live_redundant";
+            let mut store = Store::open_in_memory().unwrap();
+            let mut contract = contract();
+            if !redundant {
+                contract.criteria.push(EngineeringCriterion {
+                    id: "attachments".into(),
+                    description: "attachments remain unchanged".into(),
+                });
+            }
+            let id = store
+                .engineering_command(
+                    op(),
+                    EngineeringCommandEnvelope {
+                        command_id: fresh_id(),
+                        expected: None,
+                        command: EngineeringCommand::CreateOutcome { contract },
+                    },
+                    100,
+                )
+                .unwrap()
+                .outcome_id;
+            let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+            new_package(&mut store, &root, 101);
+            let worker = claim(&mut store, EngineeringRole::Worker, 102);
+            reconcile(&mut store, &worker, Some(submission()), 103);
+            let accepted = assessment(&store, &id, EngineeringVerdict::Accept);
+            let mut assessment_ids = vec![
+                command(
+                    &mut store,
+                    &id,
+                    actor(&root),
+                    EngineeringCommand::AssessResult(accepted),
+                    104,
+                )
+                .record_id
+                .unwrap(),
+            ];
+            let mut auxiliary = package();
+            if !redundant {
+                auxiliary.criteria = vec!["attachments".into()];
+            }
+            let auxiliary_id = command(
+                &mut store,
+                &id,
+                actor(&root),
+                EngineeringCommand::CreatePackage(auxiliary),
+                105,
+            )
+            .record_id
+            .unwrap();
+            let worker = claim(&mut store, EngineeringRole::Worker, 106);
+            let mut result = submission();
+            if !redundant {
+                result.evidence[0].criterion_id = "attachments".into();
+            }
+            if scenario != "live_redundant" {
+                reconcile(&mut store, &worker, Some(result), 107);
+            }
+            if scenario == "cancelled_assessment" {
+                let accepted = assessment(&store, &id, EngineeringVerdict::Accept);
+                assessment_ids.push(
+                    command(
+                        &mut store,
+                        &id,
+                        actor(&root),
+                        EngineeringCommand::AssessResult(accepted),
+                        108,
+                    )
+                    .record_id
+                    .unwrap(),
+                );
+            }
+            command(
+                &mut store,
+                &id,
+                actor(&root),
+                EngineeringCommand::RequestCancellation {
+                    package_id: Some(auxiliary_id.clone()),
+                },
+                109,
+            );
+            let state = store.engineering_outcome(&id).unwrap().unwrap();
+            assert!(!package_accepted(&state, &auxiliary_id));
+            if scenario == "live_redundant" {
+                let env = envelope(
+                    &store,
+                    &id,
+                    EngineeringCommand::FinishOutcome {
+                        assessment_ids: assessment_ids.clone(),
+                        review: review(),
+                        processed_message_count: 1,
+                    },
+                );
+                assert!(
+                    store
+                        .engineering_command(actor(&root), env, 110)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("unreconciled execution")
+                );
+                reconcile(&mut store, &worker, None, 111);
+            }
+            let env = envelope(
+                &store,
+                &id,
+                EngineeringCommand::FinishOutcome {
+                    assessment_ids,
+                    review: review(),
+                    processed_message_count: 1,
+                },
+            );
+            let result = store.engineering_command(actor(&root), env, 112);
+            if redundant {
+                result.unwrap();
+                assert_eq!(
+                    store.engineering_outcome(&id).unwrap().unwrap().root.state,
+                    ObligationState::Completed
+                );
+            } else {
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains(if scenario == "uncovered" {
+                        "every current contract criterion"
+                    } else {
+                        "uncancelled package"
+                    }),
+                    "{error}"
+                );
+                assert!(
+                    store
+                        .engineering_outcome(&id)
+                        .unwrap()
+                        .unwrap()
+                        .acceptance
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cancelled_accepted_prerequisite_blocks_dispatch_and_surviving_dependent_closeout() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = create(&mut store);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        let prerequisite = new_package(&mut store, &root, 101);
+        let worker = claim(&mut store, EngineeringRole::Worker, 102);
+        reconcile(&mut store, &worker, Some(submission()), 103);
+        let accepted = assessment(&store, &id, EngineeringVerdict::Accept);
+        command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::AssessResult(accepted),
+            104,
+        );
+        let mut dependent = package();
+        dependent.dependencies = vec![prerequisite.clone()];
+        command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::CreatePackage(dependent.clone()),
+            105,
+        );
+        let worker = claim(&mut store, EngineeringRole::Worker, 106);
+        reconcile(&mut store, &worker, Some(submission()), 107);
+        let accepted = assessment(&store, &id, EngineeringVerdict::Accept);
+        let accepted_id = command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::AssessResult(accepted),
+            108,
+        )
+        .record_id
+        .unwrap();
+        command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::CreatePackage(dependent),
+            108,
+        );
+        command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::RequestCancellation {
+                package_id: Some(prerequisite),
+            },
+            109,
+        );
+        let finish = envelope(
+            &store,
+            &id,
+            EngineeringCommand::FinishOutcome {
+                assessment_ids: vec![accepted_id],
+                review: review(),
+                processed_message_count: 1,
+            },
+        );
+        assert!(
+            store
+                .engineering_command(actor(&root), finish, 110)
+                .unwrap_err()
+                .to_string()
+                .contains("prerequisites remain unaccepted")
+        );
+        assert!(
+            store
+                .claim_due_engineering(EngineeringRole::Worker, 112, 600, 1)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn cancelling_required_child_does_not_permit_parent_acceptance() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = create(&mut store);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        let parent = new_package(&mut store, &root, 101);
+        let worker = claim(&mut store, EngineeringRole::Worker, 102);
+        reconcile(&mut store, &worker, Some(submission()), 103);
+        let mut child = package();
+        child.parent_id = Some(parent);
+        let child_id = command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::CreatePackage(child),
+            104,
+        )
+        .record_id
+        .unwrap();
+        command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::RequestCancellation {
+                package_id: Some(child_id),
+            },
+            105,
+        );
+        let accepted = assessment(&store, &id, EngineeringVerdict::Accept);
+        let env = envelope(&store, &id, EngineeringCommand::AssessResult(accepted));
+        assert!(
+            store
+                .engineering_command(actor(&root), env, 106)
+                .unwrap_err()
+                .to_string()
+                .contains("required children")
+        );
+    }
+
     #[test]
     fn cancelled_package_rejects_offline_result_without_losing_cessation() {
         let mut store = Store::open_in_memory().unwrap();
