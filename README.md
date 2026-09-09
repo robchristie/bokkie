@@ -88,8 +88,7 @@ binding. Every request must name the exact configured literal loopback
 authority. Browser requests must also be same-origin, and every HTTP mutation
 requires a high-entropy per-process token obtained from the same-origin
 `/bootstrap` contract. This is CSRF and DNS-rebinding protection for a local
-single-user service, not user authentication or authorisation. It remains
-fake-only unless the operator supplies
+single-user service, not user authentication or authorisation. The coding gardener remains disabled unless the operator supplies
 `--enable-coding-gardener` and an existing absolute
 `--gardener-worktree-root`. Enabling the runtime does not register a checkout,
 approve work, merge a pull request, deploy, or restart Bokkie.
@@ -113,6 +112,46 @@ The gardener-specific [threat model](docs/gardener-threat-model.md) describes
 the environment, executable, Git, credential, worktree, candidate-code and
 draft/check/ready publication boundaries. Its worker service profile is a
 separate, non-installed example and does not replace the kernel service.
+
+## Engineering supervision
+
+The task-scoped engineering adapter extends the same Store lifecycle with durable
+outcome contracts, work packages, execution ownership, questions, submissions,
+acceptance and linked repairs. A completed worker leaves acceptance pending.
+The supervisor reads the saved intent and evidence in a fresh Codex execution;
+it does not depend on the chat that originated the request.
+
+Prepare an isolated workspace, private database outside it, and an explicit
+profile using the [runtime guide](tools/engineering-runtime/README.md). Then start
+one local instance with the built attention UI:
+
+```sh
+cargo run --locked --bin bokkie -- \
+  --database /absolute/private/engineering.sqlite serve \
+  --bind 127.0.0.1:7744 --engineering-profile /absolute/private/profile.json \
+  --ui-dir /absolute/bokkie/apps/bokkie-attention-ui/web
+```
+
+Open the same origin at `/ui/`, choose **New task**, and describe the outcome in
+ordinary language. The saved acknowledgement identifies the durable task. Its
+detail shows responsibility, the next action and acceptance, and supports linked
+follow-up messages and cancellation. The operator configures execution scope and
+finite budgets once in the profile; ordinary intake does not require a worker
+prompt or JSON manifest. This adapter is explicitly enabled independently of the
+coding gardener and retains its separate safety boundaries.
+
+Stopping this controller does not cancel detached workers. Restart with the same
+database and profile to ingest retained events and results. Use outcome
+cancellation to request termination; responsibility remains visible until the
+broker proves cessation. Budget exhaustion and uncertain ownership remain
+recoverable attention conditions. Do not delete broker spools or workspace
+ownership records to force replacement. No persistent service, deployment or
+publication is enabled by these commands.
+
+The [supervision contract](docs/engineering-supervision-contract.md) defines
+backend constraints. The [completed delivery plan](docs/plans/completed/engineering-supervision.md)
+links the qualified fixture, operator UI and [accepted Pagefold milestone](docs/supervision-evidence/pagefold.md), including infrastructure interventions and
+repeated qualification.
 
 ## Attention UI
 

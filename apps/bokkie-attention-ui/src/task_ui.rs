@@ -94,6 +94,142 @@ pub(super) fn show_task_detail(
             presentation,
         );
     }
+    if let Some(engineering) = &task.engineering {
+        presentation.heading(ui, "engineering-heading", "Engineering outcome");
+        presentation.property_row(
+            ui,
+            "engineering-owner",
+            "Responsibility",
+            &engineering.responsibility,
+        );
+        full_text(
+            ui,
+            "engineering-next",
+            &engineering.next_action,
+            presentation,
+        );
+        full_text(
+            ui,
+            "engineering-acceptance",
+            &engineering.acceptance,
+            presentation,
+        );
+        egui::CollapsingHeader::new("Current request")
+            .id_salt(("engineering-intent", &obligation.id))
+            .show(ui, |ui| {
+                full_text(ui, "engineering-intent", &engineering.intent, presentation);
+            });
+        if engineering.criteria.is_empty() {
+            body(
+                ui,
+                "engineering-criteria-pending",
+                "Bokkie will formalise the acceptance criteria from your intent.",
+                presentation,
+            );
+        }
+        for (index, criterion) in engineering.criteria.iter().enumerate() {
+            full_text(
+                ui,
+                &format!("engineering-criterion-{index}"),
+                criterion,
+                presentation,
+            );
+        }
+        let enabled = read.connection.decisions_safe()
+            && !read.action_busy
+            && !read.snapshot_busy
+            && engineering.accepts_follow_up;
+        if button(
+            ui,
+            "bokkie.engineering.follow-up",
+            "Follow up or change request",
+            enabled,
+            presentation,
+        ) {
+            intents.push(OperatorIntent::FollowUpEngineering {
+                expected: engineering.expected.clone(),
+                question_id: None,
+                prompt: None,
+            });
+        }
+        if button(
+            ui,
+            "bokkie.engineering.cancel",
+            "Cancel outcome…",
+            enabled,
+            presentation,
+        ) {
+            intents.push(OperatorIntent::CancelEngineering {
+                expected: engineering.expected.clone(),
+            });
+        }
+        if engineering.earlier_questions > 0 {
+            body(
+                ui,
+                "engineering-earlier-questions",
+                &format!(
+                    "{} earlier questions retained in the durable record",
+                    engineering.earlier_questions
+                ),
+                presentation,
+            );
+        }
+        for question in &engineering.questions {
+            full_text(
+                ui,
+                &format!("engineering-question-{}", question.id),
+                &question.prompt,
+                presentation,
+            );
+            if let Some(answer) = &question.answer {
+                full_text(
+                    ui,
+                    &format!("engineering-answer-{}", question.id),
+                    answer,
+                    presentation,
+                );
+            } else if question.needs_operator {
+                if button(
+                    ui,
+                    &format!("bokkie.engineering.answer.{}", question.id),
+                    "Answer this decision",
+                    enabled,
+                    presentation,
+                ) {
+                    intents.push(OperatorIntent::FollowUpEngineering {
+                        expected: engineering.expected.clone(),
+                        question_id: Some(question.id.clone()),
+                        prompt: Some(question.prompt.clone()),
+                    });
+                }
+            } else {
+                body(
+                    ui,
+                    &format!("engineering-routine-{}", question.id),
+                    "Bokkie supervisor is responsible for this question.",
+                    presentation,
+                );
+            }
+        }
+        egui::CollapsingHeader::new("Conversation")
+            .id_salt(("engineering-conversation", &obligation.id))
+            .show(ui, |ui| {
+                if engineering.earlier_messages > 0 {
+                    ui.label(format!(
+                        "{} earlier messages retained in the durable record",
+                        engineering.earlier_messages
+                    ));
+                }
+                for (index, message) in engineering.messages.iter().enumerate() {
+                    full_text(
+                        ui,
+                        &format!("engineering-message-{index}"),
+                        &format!("{}: {}", message.actor, message.text),
+                        presentation,
+                    );
+                }
+            });
+    }
     if let Some(configuration) = &task.configuration {
         ui.separator();
         presentation.heading(ui, "settings-heading", "Task settings");
@@ -325,7 +461,7 @@ pub(super) fn show_task_detail(
             );
         }
         show_results(ui, read, presentation);
-    } else {
+    } else if task.kind == OperatorTaskKind::Simulated {
         body(
             ui,
             "simulated-execution",

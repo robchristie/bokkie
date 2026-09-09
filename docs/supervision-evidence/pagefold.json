@@ -1,0 +1,100 @@
+{
+  "status": "accepted",
+  "runtime_revision": "c156da91eafc6097b9bd6d1beea657ace9db6b3d",
+  "outcome_id": "20a8e12c-7e60-46c9-8b27-bc8d3ce61d20",
+  "predecessor_outcome_id": "d311030a-ebfc-4495-b60d-0db71ef3fd61",
+  "contract_revision": 2,
+  "package_id": "cfc23196-fc31-4d23-8d2f-26ca5d67be3b",
+  "worker_id": "26d76e4d-c009-469f-89ed-bf630f1ba85c",
+  "result_id": "fa374fa1-30f0-4e3b-96b8-edf38eae4313",
+  "result_digest": "355112d7bc90c3e5f097fce8076651f0f54eaf7093461311cc2242a0e37d5a01",
+  "result_recovered": true,
+  "assessor_id": "7c3ecdb0-2999-44c5-99d2-79a89042d3bd",
+  "assessment_ids": [
+    "4e217492-1646-4530-a60c-33cdb70eb0a9"
+  ],
+  "accepted_at": 1788952684,
+  "reviewer_identity": "codex-thread:01a085cf-cfc8-7683-b8f9-78c318a62cf7:turn:01a085db-a5ae-7a82-85b4-bff2909908c3",
+  "review_evidence_digest": "398c7fe28a1f9a02188a3ca4fb819a32de15cce91509aabcb0787e141537c939",
+  "review_artefact_count": 51,
+  "manifest_artefact_count": 157,
+  "all_execution_boundaries_reconciled": true,
+  "turns_used": 7,
+  "budget": {
+    "max_turns": 13,
+    "max_packages": 5,
+    "max_repairs": 3,
+    "max_recoveries": 2,
+    "max_checkpoints": 501,
+    "max_questions": 62,
+    "max_concurrent_workers": 2,
+    "turn_seconds": 600,
+    "deadline": 1788957903
+  },
+  "routine_questions": [
+    {
+      "id": "dcd510c2-91cf-4515-b96c-228ccb160f72",
+      "execution_id": "26d76e4d-c009-469f-89ed-bf630f1ba85c",
+      "contract_revision": 2,
+      "request_key": "4bf68f3c72725b695a80b7b93a0282b9608fa36a4800b2e2b881f0a40861bcbc-0",
+      "kind": "routine",
+      "prompt": "Independent reviewer completed PASS for 157 exact artefacts (all source and current UI evidence); bokkie_commands observed thread 01a085cf-cfc8-7683-b8f9-78c318a62cf7 turn 01a085cf-cffd-7b12-bab1-ea9c36052d05, but bokkie_review returns 'invalid bounded independent review report'. Likely report byte/count bound. What is the registration limit? May I ask same reviewer to provide a bounded exact report over the 38 source artefacts plus exact manifest file that identifies all inspected evidence (preserving its complete inspection and PASS), then register that report? All seven criteria now have successful recorded command evidence; candidate unchanged.",
+      "options": [
+        "Use bounded source-plus-manifest review report",
+        "Provide precise broker registration constraints"
+      ],
+      "resolution": {
+        "answer": "Confirmed from read-only runtime source src/engineering_runtime.rs:1248\u20131256: report artefacts must contain 1\u201364 entries, findings at most 64, verdict pass or repair. Your 157-entry report exceeds the actual count limit. Yes: ask the same independent reviewer to return a bounded report covering every exact deliverable source/configuration/test/tool/document/licence/font artefact plus exact manifest(s) of the inspected qualification evidence. Preserve full evidence files and hashes for supervisor inspection; the manifest is an index, not a waiver of source/evidence inspection. Reviewer must inspect the manifest bytes, confirm they identify the evidence actually reviewed and unchanged candidate, and state coverage of all seven criteria in findings. Keep registered report and submission artefact lists exactly equal (including order) and <=64 entries; include every artefact referenced by criterion validation in this set, since verify_submission rejects absent validation sources. Use remaining entries for such evidence owners as necessary. Do not drop actual source/assets or any criterion to fit. Register the completed follow-up using newly observed turn ID through bokkie_commands/bokkie_review in your commissioning execution; preserve returned review metadata separately to avoid recursive report self-inclusion. Submit successful retained validation for all criteria. If this complete set cannot fit 64, ask routine with the counted categories before altering coverage. No new authority or product acceptance is granted.",
+        "actor": "supervisor:85100f7f-159d-4c5d-a8bc-8ec2f895cb51",
+        "authority_grants": [],
+        "contract_revision": 2,
+        "at": 1788952119
+      }
+    }
+  ],
+  "application_commit": "53118c0a53915a58dc6c57e02cf3c1d24d4b3b9e",
+  "application_tree": "415bb17fb65a35167ce0a1a6b37699ee7a2ae27c",
+  "application_remote": null,
+  "polyorama_revision": "fba3db87aaeb4a7a9f1bbfd0ba59fa0aac713b21",
+  "source_unchanged": true,
+  "retained_inputs": [
+    {
+      "path": "/nvme/development/pagefold-supervision-20260909-a/submitted-intent.json",
+      "bytes": 3461,
+      "sha256": "4912f8883f11c863dfe548f2371e28957fe7ec4b9257a4a9aec3252e002cb2d6"
+    },
+    {
+      "path": "/nvme/development/pagefold-supervision-20260909-a/profile-continuation-1788949839385673487.json",
+      "bytes": 1633,
+      "sha256": "fd3e7e62ff498376f6a8f84fbd098dd1acf01c47d10553e98a3085fa49c29a1f"
+    },
+    {
+      "path": "/nvme/development/pagefold-supervision-20260909-a/source-before.json",
+      "bytes": 454,
+      "sha256": "9b1a52b84170c5888922a12f7a97b42b79d2ffc331618955e5e4aebc44994343"
+    },
+    {
+      "path": "/nvme/development/pagefold-supervision-20260909-a/source-after.json",
+      "bytes": 454,
+      "sha256": "9b1a52b84170c5888922a12f7a97b42b79d2ffc331618955e5e4aebc44994343"
+    },
+    {
+      "path": "/nvme/development/pagefold-supervision-20260909-a/infrastructure-intervention.json",
+      "bytes": 597,
+      "sha256": "a792be43c4332c07e08e1932e82587f680f83a008d02c743fd9db166ed4e817b"
+    },
+    {
+      "path": "/nvme/development/pagefold-supervision-20260909-a/infrastructure-interventions/source-capture.json",
+      "bytes": 1170,
+      "sha256": "27535a1d268ff8b4ef05ddb07ebc9aa366f1b3e08125479fd19f1837306dfbde"
+    }
+  ],
+  "outer_interventions_before_final_continuation": [
+    "Binary inspection journal exhaustion: stop/reconcile supervisor, repair adapter and repeat implementation acceptance.",
+    "Source capture capacity and observer cleanup: repair adapter/driver; preserve remaining budgets and repeat whole milestone in linked intake."
+  ],
+  "outer_routine_decisions_during_final_continuation": [],
+  "outer_application_source_edits": [],
+  "autonomous_recovery": "Worker journal exhaustion proved cessation before fresh execution; source/verification retained.",
+  "autonomous_product_repair": "Independent review found stale-warning loss during navigation; worker repaired persistence and requalified browser navigation/search/recovery."
+}

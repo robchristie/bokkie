@@ -1,3 +1,5 @@
+mod engineering;
+
 use std::{
     path::Path,
     str::FromStr,
@@ -319,6 +321,7 @@ impl Store {
         if let Some(precondition) = precondition {
             validate_action_precondition(&transaction, id, precondition, None, None)?;
         }
+        engineering::reject_generic(&transaction, id)?;
         let is_gardener_proposal = transaction.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM gardener_proposal_instances
@@ -416,6 +419,7 @@ impl Store {
              WHERE o.state IN ('pending', 'retry_scheduled')
                AND o.next_wake_at <= ?1
                AND {binding_predicate}
+               AND NOT EXISTS (SELECT 1 FROM engineering_bindings e WHERE e.obligation_id = o.id)
                AND NOT EXISTS (
                    SELECT 1
                    FROM gardener_proposal_instances pi
@@ -2750,6 +2754,7 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        engineering::validate_renewal(&transaction, claim, now, lease_seconds)?;
         let superseded_gardener_instance: bool = transaction.query_row(
             "SELECT EXISTS(
                 SELECT 1
@@ -2786,6 +2791,7 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        engineering::reject_generic(&transaction, &claim.obligation_id)?;
         apply_transition(
             &transaction,
             Transition::Complete {
@@ -2820,6 +2826,7 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        engineering::reject_generic(&transaction, id)?;
         if proposal_instance_for_obligation(&transaction, id)?
             .is_some_and(|instance| instance.superseded_by.is_some())
         {
@@ -2857,6 +2864,7 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        engineering::reject_generic(&transaction, id)?;
         if let Some(precondition) = precondition {
             validate_action_precondition(&transaction, id, precondition, None, None)?;
         }
@@ -4989,7 +4997,9 @@ fn recover_expired_in_transaction(
             .collect::<Result<Vec<_>, _>>()?
     };
     for id in &ids {
-        apply_transition(transaction, Transition::LeaseExpired { id, now })?;
+        if !engineering::recover_expired(transaction, id, now)? {
+            apply_transition(transaction, Transition::LeaseExpired { id, now })?;
+        }
     }
     Ok(ids.len())
 }
@@ -5457,6 +5467,128 @@ where
     })
 }
 
+/// Specialised supervision transitions remain in the obligation lifecycle owner.
+#[derive(Clone, Copy)]
+enum EngineeringTransition<'a> {
+    Wake,
+    Pending { at: i64, reason: &'a str },
+    Attention { reason: &'a str },
+    HumanDecision { reason: &'a str },
+    Accepted,
+    Cancelled,
+}
+
+fn apply_engineering_transition(
+    tx: &Transaction<'_>,
+    id: &str,
+    transition: EngineeringTransition<'_>,
+    now: i64,
+) -> Result<(), StoreError> {
+    let old = require_obligation(tx, id)?;
+    if old.state.is_terminal() {
+        return match transition {
+            EngineeringTransition::Wake | EngineeringTransition::Cancelled => Ok(()),
+            _ => Err(StoreError::Conflict(
+                "engineering obligation is terminal".into(),
+            )),
+        };
+    }
+    let (state, wake, reason, event) = match transition {
+        EngineeringTransition::Wake => {
+            if matches!(
+                old.state,
+                ObligationState::Running | ObligationState::Attention
+            ) {
+                return Ok(());
+            }
+            (
+                ObligationState::Pending,
+                Some(now),
+                None,
+                "engineering_woken",
+            )
+        }
+        EngineeringTransition::Pending { at, reason } => (
+            ObligationState::Pending,
+            Some(at),
+            Some(reason),
+            "engineering_pending",
+        ),
+        EngineeringTransition::Attention { reason }
+        | EngineeringTransition::HumanDecision { reason } => (
+            ObligationState::Attention,
+            None,
+            Some(reason),
+            "engineering_attention",
+        ),
+        EngineeringTransition::Accepted => (
+            ObligationState::Completed,
+            None,
+            None,
+            "engineering_accepted",
+        ),
+        EngineeringTransition::Cancelled => (
+            ObligationState::Cancelled,
+            None,
+            Some("cancellation reconciled"),
+            "engineering_cancelled",
+        ),
+    };
+    let disposition = match state {
+        ObligationState::Attention
+            if matches!(transition, EngineeringTransition::HumanDecision { .. }) =>
+        {
+            Some(FailureDisposition::HumanDecision)
+        }
+        ObligationState::Attention => Some(FailureDisposition::NeedsReconciliation),
+        ObligationState::Cancelled => Some(FailureDisposition::Cancelled),
+        _ => None,
+    };
+    if old.state == ObligationState::Running {
+        tx.execute(
+            "UPDATE attempts SET completed_at = ?3, outcome = ?4, retryable = 0,
+                failure_disposition = ?5, error = ?6
+             WHERE obligation_id = ?1 AND lease_generation = ?2 AND completed_at IS NULL",
+            params![
+                id,
+                old.lease_generation,
+                now,
+                if disposition.is_some() {
+                    "failed"
+                } else {
+                    "succeeded"
+                },
+                disposition.map(|d| d.to_string()),
+                reason
+            ],
+        )?;
+    }
+    tx.execute(
+        "UPDATE obligations SET state = ?2, next_wake_at = ?3, lease_token = NULL,
+            lease_expires_at = NULL, last_error = ?4, failure_disposition = ?5, updated_at = ?6
+         WHERE id = ?1",
+        params![
+            id,
+            state.to_string(),
+            wake,
+            reason,
+            disposition.map(|d| d.to_string()),
+            now
+        ],
+    )?;
+    append_event(
+        tx,
+        id,
+        old.occurrence,
+        event,
+        now,
+        Some(old.state),
+        state,
+        json!({"reason": reason, "next_wake_at": wake}),
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "store_model_tests.rs"]
 mod model_tests;
@@ -5842,7 +5974,8 @@ mod tests {
                 (7, "0007_immutable_migration_manifest.sql".to_owned()),
                 (8, "0008_typed_failure_dispositions.sql".to_owned()),
                 (9, "0009_global_event_envelope.sql".to_owned()),
-                (10, "0010_gardener_task_configuration.sql".to_owned())
+                (10, "0010_gardener_task_configuration.sql".to_owned()),
+                (11, "0011_engineering_supervision.sql".to_owned())
             ]
         );
         drop(store);

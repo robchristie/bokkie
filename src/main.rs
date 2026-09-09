@@ -4,6 +4,11 @@ use std::{
     os::fd::AsRawFd,
     path::PathBuf,
     process::ExitCode,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
     time::Duration,
 };
 
@@ -11,7 +16,8 @@ use bokkie::{
     ApprovalDecision, CANONICAL_DEFAULT_BRANCH, CANONICAL_REPOSITORY, CommandExternalObserver,
     DbExecutor, DbExecutorError, DoctorError, DoctorOptions, GardenerRuntimeConfig, NewObligation,
     NewRepositoryRegistration, Recurrence, RetryPolicy, Store, StoreError, SystemClock, UnixClock,
-    http::{error_json, router_with_executor, router_with_ui_executor, validate_loopback},
+    engineering_runtime::{EngineeringRuntime, EngineeringRuntimeProfile},
+    http::{ApiState, EngineeringIntakeConfig, error_json, router_with_state, validate_loopback},
     http_security::ApiRuntime,
     migration_manifest, run_doctor,
     runtime_trust::{ChildEnvironment, GitHubCredential},
@@ -183,6 +189,9 @@ enum Command {
         /// Absolute wall-clock limit for each gardener child process.
         #[arg(long, default_value_t = 1_800_000)]
         gardener_process_timeout_ms: u64,
+        /// Explicit task-scoped engineering runtime profile; enables conversational supervision.
+        #[arg(long)]
+        engineering_profile: Option<PathBuf>,
         /// Explicit static UI asset directory served at /ui on this loopback origin.
         #[arg(long)]
         ui_dir: Option<PathBuf>,
@@ -391,6 +400,7 @@ struct ServeOptions {
     gardener_heartbeat_ms: u64,
     gardener_process_timeout_ms: u64,
     ui_dir: Option<PathBuf>,
+    engineering_profile: Option<PathBuf>,
 }
 
 impl From<FakeOutcomeArg> for ServiceFakeOutcome {
@@ -501,6 +511,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             gardener_codex_model,
             gardener_heartbeat_ms,
             gardener_process_timeout_ms,
+            engineering_profile,
             ui_dir,
         } => {
             serve(
@@ -526,6 +537,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                     gardener_codex_model,
                     gardener_heartbeat_ms,
                     gardener_process_timeout_ms,
+                    engineering_profile,
                     ui_dir,
                 },
             )
@@ -916,6 +928,32 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         }
     }
 
+    let engineering_profile = options
+        .engineering_profile
+        .as_deref()
+        .map(EngineeringRuntimeProfile::load)
+        .transpose()
+        .map_err(|error| AppError::Configuration(error.to_string()))?;
+    if let Some(profile) = &engineering_profile {
+        profile
+            .validate_database(&database)
+            .map_err(|error| AppError::Configuration(error.to_string()))?;
+    }
+    let engineering_intake = engineering_profile
+        .as_ref()
+        .map(|profile| {
+            profile
+                .contract_template(SystemClock.now())
+                .map(|contract_template| {
+                    Arc::new(EngineeringIntakeConfig {
+                        contract_template,
+                        deadline_seconds: profile.deadline_seconds,
+                    })
+                })
+        })
+        .transpose()
+        .map_err(|error| AppError::Configuration(error.to_string()))?;
+
     // Bind before starting the scheduler so a port conflict cannot execute work in a
     // process that immediately fails service start-up or mutate its database.
     let listener = tokio::net::TcpListener::bind(options.bind).await?;
@@ -1021,22 +1059,114 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         json!({"event": "listening", "address": local_address.to_string()})
     );
 
-    let application = match options.ui_dir {
-        Some(ui_dir) => {
-            router_with_ui_executor(database_executor.clone(), ui_dir, api_runtime.clone())
-        }
-        None => router_with_executor(database_executor.clone(), api_runtime),
-    };
+    let mut engineering_controller = engineering_profile
+        .map(|profile| EngineeringController::start(database.clone(), profile, options.poll_ms))
+        .transpose()?;
+    let application = router_with_state(
+        ApiState {
+            executor: database_executor.clone(),
+            runtime: api_runtime,
+            engineering_intake,
+        },
+        options.ui_dir,
+    );
+    let engineering_exit = engineering_controller
+        .as_mut()
+        .and_then(|controller| controller.exit.take());
+    let engineering_admission = admission.clone();
     let server_result = axum::serve(listener, application)
-        .with_graceful_shutdown(shutdown_signal(admission, scheduler_exit))
+        .with_graceful_shutdown(async move {
+            tokio::select! {
+                _ = shutdown_signal(admission, scheduler_exit) => {},
+                _ = async move {
+                    match engineering_exit {
+                        Some(exit) => { let _ = exit.await; },
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    engineering_admission.close();
+                    eprintln!("{}", json!({"event":"engineering_controller_stopped", "responsibility":"durable executions require controller restart and reconciliation"}));
+                }
+            }
+        })
         .await;
+    let engineering_result = engineering_controller
+        .as_mut()
+        .map(EngineeringController::shutdown)
+        .transpose();
     let scheduler_result = scheduler.shutdown();
     let database_result = database_executor.shutdown();
     server_result?;
+    engineering_result?;
     scheduler_result?;
     database_result?;
     eprintln!("{}", json!({"event": "stopped"}));
     Ok(())
+}
+
+/// The service owns the controller thread; accepted execution brokers own their
+/// finite lifetime separately, so a controller restart is not cancellation.
+struct EngineeringController {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<Result<(), String>>>,
+    exit: Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+impl EngineeringController {
+    fn start(
+        database: PathBuf,
+        profile: EngineeringRuntimeProfile,
+        poll_ms: u64,
+    ) -> Result<Self, AppError> {
+        let runtime = EngineeringRuntime::new(profile)
+            .map_err(|error| AppError::Configuration(error.to_string()))?;
+        let mut store = Store::open_compatible(database)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let (exit_send, exit) = tokio::sync::oneshot::channel();
+        let thread = thread::Builder::new().name("engineering-controller".into()).spawn(move || {
+            let result = (|| {
+            while !flag.load(Ordering::Acquire) {
+                match runtime.tick(&mut store, SystemClock.now()) {
+                    Ok(result) => {
+                        if result.get("errors").and_then(serde_json::Value::as_array).is_some_and(|errors| !errors.is_empty()) {
+                            eprintln!("{}", json!({"event":"engineering_reconciliation", "result":result}));
+                        }
+                    }
+                    Err(error) => return Err(error.to_string()),
+                }
+                thread::park_timeout(Duration::from_millis(poll_ms));
+            }
+            Ok(())
+            })();
+            let _ = exit_send.send(());
+            result
+        })?;
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+            exit: Some(exit),
+        })
+    }
+
+    fn shutdown(&mut self) -> Result<(), AppError> {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.thread.take() {
+            handle.thread().unpark();
+            handle.join().map_err(|_| AppError::Configuration("engineering controller panicked; durable executions require reconciliation".into()))?
+                .map_err(AppError::Configuration)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for EngineeringController {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = &self.thread {
+            handle.thread().unpark();
+        }
+    }
 }
 
 fn controlled_executable_path(paths: &[&PathBuf]) -> Result<Vec<PathBuf>, AppError> {
