@@ -4,8 +4,10 @@ This is a task-scoped, local Codex adapter. SQLite remains the obligation owner.
 The detached broker owns one contained Codex app-server over persistent stdio;
 Bokkie communicates through private fsynced request/reply files. Bokkie can stop
 and restart without killing the broker or requiring the originating chat.
-This implementation has deterministic fake-protocol coverage. It has **not**
-been qualified with live engineering fixture turns or authentic dogfood.
+The [qualified live fixture](../../docs/supervision-evidence/fixture-j.json)
+proves the complete local supervision loop alongside deterministic Store and
+protocol coverage. Authentic Pagefold dogfooding is active; product acceptance
+remains pending in the [execution plan](../../docs/plans/active/engineering-supervision.md).
 
 ## Start an isolated instance
 
@@ -126,9 +128,11 @@ tools/check.sh
 
 The tests use fake peers and temporary Store databases. They do not run Codex
 model turns, qualify actual UI journeys or establish authentic dogfood evidence.
-The broker relies on the separately calibrated Linux Bubblewrap PID namespace;
-its live profile and representative capabilities still need conductor fixture
-qualification on the actual installed Codex version.
+The broker relies on the separately calibrated Linux Bubblewrap PID namespace.
+The [calibration](../../docs/supervision-evidence/calibration.md) and
+[live fixture](../../docs/supervision-evidence/fixture-j.json) retain the actual
+Codex version, effective profile and observed capabilities; deterministic tests
+alone do not establish these runtime observations.
 
 Worker ownership also uses a stable OS lock keyed by canonical workspace under
 `~/.local/state/bokkie/workspace-locks` (the OS account home, independent of profile,

@@ -29,7 +29,10 @@ documents. Preserve gardener restrictions and existing workflow skill owners.
 
 ## Current phase
 
-Fixture qualification: calibration selected a private durable broker, one PID-contained
+Application dogfooding: fixture j passed the complete loop. The Pagefold intent
+was submitted through the implemented runtime; outcome
+`d311030a-ebfc-4495-b60d-0db71ef3fd61` owns product acceptance.
+Calibration selected a private durable broker, one PID-contained
 app-server per writer, and explicit client-routed approval review. Ten live turns
 proved guidance, question/answer, follow-up, disconnect/offline completion,
 interruption/runtime loss, independent review and actual bounded subagents.
@@ -38,8 +41,8 @@ identities, limits and protocol evidence. Baseline `tools/check.sh` passed.
 Backend, runtime and operator adapters implement the [typed contract](../../engineering-supervision-contract.md). Independent review drove repairs to recovery, source evidence, cancellation and relationships. The [attempt account](../../supervision-evidence/fixture-attempts.md) retains failed observations and reruns.
 The app child-context cap required a fresh local `codex exec` context for runtime
 implementation; its bounded capsule/output live in ignored `.supervision-build/`.
-The outer agent still coordinates infrastructure only; authentic dogfooding has
-not started. No live Bokkie database or global configuration was changed.
+The outer agent still coordinates infrastructure only; authentic dogfooding is
+active. No live Bokkie database or global configuration was changed.
 
 ## Delivery graph
 
@@ -48,9 +51,9 @@ not started. No live Bokkie database or global configuration was changed.
 | Contract and execution calibration | Bokkie starting revision above | [Selected evidence](../../supervision-evidence/calibration.md) | selected |
 | Durable backend and runtime | Bokkie / operator contract | Lifecycle and protocol tests | implemented; canonical backend passes |
 | Conversational operator entry | Bokkie UI / backend | Canonical checks and UI inspection | qualified; 65 UI tests and opened captures |
-| Complete isolated fixture | Bokkie `9ab88eb` | [Attempts](../../supervision-evidence/fixture-attempts.md); run h passed; run i exposed oversized evidence reply; adapter repair active | qualifying |
-| Reading calibration and application | Polyorama / local app | Reader probes and canonical checks | after fixture |
-| Authentic dogfood and repairs | Final owner revisions | Runtime identities and acceptance | queued |
+| Complete isolated fixture | Bokkie `381fc81` | [Qualified fixture](../../supervision-evidence/fixture-j.json) | passed |
+| Reading calibration and application | Polyorama / local app | Reader probes and canonical checks | supervised worker queued |
+| Authentic dogfood and repairs | Final owner revisions | Runtime identities and acceptance | active; outer observation only |
 | Integrated closeout | Bokkie | Reviews, checks, landing and usage | queued |
 
 ## Acceptance
@@ -99,4 +102,4 @@ under the selected explicit client-reviewer profile. Product execution/recovery 
 must be explicit before fixture qualification. Exhaustion leaves recoverable
 state and explanation; a changed approach must retain its evidence.
 
-- Next action: Qualify the integrated candidate with the isolated live fixture, repair observed infrastructure failures, then submit Pagefold through Bokkie.
+- Next action: Observe the Bokkie-supervised Pagefold milestone, retain interventions and repeat affected journeys if infrastructure needs repair; then qualify and land the integrated result.

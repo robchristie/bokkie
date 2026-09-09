@@ -1,6 +1,11 @@
 # Isolated supervision fixture
 
-Status: qualification specification; no passing runtime result is claimed.
+Status: qualified at `381fc8186322e8429e585225c265ffc071b50fd9`.
+[Run j](fixture-j.json) retains the passing live observations and identities;
+[attempts](fixture-attempts.md) retain prior failures and infrastructure repairs.
+Deterministic Store/protocol tests cover exact stale, cancellation, lease,
+relationship and exhausted-budget cases; the live run proves the complete
+question, restart, offline-result, independent-review, repair and acceptance journey.
 
 ## Question and exit condition
 

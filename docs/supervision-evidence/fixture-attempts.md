@@ -22,6 +22,8 @@ This is qualification evidence, not a claim of product acceptance.
 
 | 20260909-i | `9ab88eb1e90acd830dc85cd403ef70c5e02fc791` | Restart/replay, routine resolution, offline import and linked repair passed; waiting used seven turns through final assessment. Rejected when retrieval of a large repair recovery journal exceeded the encoded adapter reply limit and repeatedly left the tool request pending. The outer agent interrupted qualification for bounded evidence retrieval/response repair. Driver cancellation reconciled every execution. No product acceptance or routine outer decision was substituted. |
 
+| 20260909-j | `381fc8186322e8429e585225c265ffc071b50fd9` | Retained: complete fixture passed on reviewed paging runtime. Autonomous routine answer, restart/replay, offline completion, additional independent review, linked repair, obsolete auxiliary cancellation, separate acceptance and one genuine authority escalation all retained. Every boundary reconciled. [Identities and observations](fixture-j.json). This qualifies the supervision loop before Pagefold dogfooding. |
+
 Historical retained synthetic evidence owner:
 `/nvme/development/bokkie-supervision-fixture-20260909-a` contains the SQLite
 records, private broker journals, exact profile, fixture revision
