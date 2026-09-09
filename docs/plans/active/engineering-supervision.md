@@ -29,18 +29,24 @@ documents. Preserve gardener restrictions and existing workflow skill owners.
 
 ## Current phase
 
-Calibration before broad implementation. Fresh bounded agents own live Codex
-calibration and read-only kernel/Polyorama mapping. Detailed protocol evidence
-belongs in `docs/supervision-evidence/`. Local baseline is `gpt-6-astra` with
-medium reasoning, installed `codex-cli 0.153.4`; record effective settings and
-instruction identities per execution rather than copying global configuration.
+Implementation: calibration selected a private durable broker, one PID-contained
+app-server per writer, and explicit client-routed approval review. Ten live turns
+proved guidance, question/answer, follow-up, disconnect/offline completion,
+interruption/runtime loss, independent review and actual bounded subagents.
+The [calibration report](../../supervision-evidence/calibration.md) owns exact
+identities, limits and protocol evidence. Baseline `tools/check.sh` passed.
+Backend and runtime workers implement the [typed contract](../../engineering-supervision-contract.md).
+The app child-context cap required a fresh local `codex exec` context for runtime
+implementation; its bounded capsule/output live in ignored `.supervision-build/`.
+The outer agent still coordinates infrastructure only; authentic dogfooding has
+not started. No live Bokkie database or global configuration was changed.
 
 ## Delivery graph
 
 | Increment | Owner / consumer revision | Evidence | State |
 |---|---|---|---|
-| Contract and execution calibration | Bokkie starting revision above | Protocol and capability record | active |
-| Durable backend and runtime | Bokkie / operator contract | Lifecycle and protocol tests | queued |
+| Contract and execution calibration | Bokkie starting revision above | [Selected evidence](../../supervision-evidence/calibration.md) | selected |
+| Durable backend and runtime | Bokkie / operator contract | Lifecycle and protocol tests | backend and runtime active |
 | Conversational operator entry | Bokkie UI / backend | Canonical checks and UI inspection | queued |
 | Complete isolated fixture | Bokkie runtime | Live questions, repair, recovery, acceptance | queued |
 | Reading calibration and application | Polyorama / local app | Reader probes and canonical checks | after fixture |
@@ -85,9 +91,12 @@ branch `codex/engineering-supervision`. Polyorama source is at
 name/location follow workspace discovery and remain local-only. Record generated
 probe scratch and sanitised evidence with the calibration owner.
 
-Initial live calibration: eight turns maximum, concurrency two, ten minutes per
-turn, at most two repeats of the same failure. Product execution/recovery budgets
+Live calibration: ten turns maximum, concurrency two, ten minutes per
+turn, at most two repeats of the same failure. The original eight-turn probe
+proved recovery but exposed inherited automatic approval routing and did not
+exercise subagent delegation. Two additional turns qualify those specific gaps
+under the selected explicit client-reviewer profile. Product execution/recovery budgets
 must be explicit before fixture qualification. Exhaustion leaves recoverable
 state and explanation; a changed approach must retain its evidence.
 
-- Next action: Select the supervision contract from live calibration and mapping, then dispatch a fresh backend increment with deterministic acceptance tests.
+- Next action: Integrate backend/runtime operations and conversational operator adapters, then qualify the isolated fixture before submitting Pagefold.
