@@ -1417,7 +1417,7 @@ impl eframe::App for AttentionApp {
             )
             .show(root_ui, |ui| {
                 if self.engineering_saved_notice {
-                    ui.horizontal_wrapped(|ui| {
+                    ui.vertical(|ui| {
                         ui.label(
                             "Saved durably. Bokkie retains responsibility for the next action.",
                         );
@@ -2276,6 +2276,16 @@ fn action_is_relevant(action: LifecycleAction, obligation: &OperatorObligation) 
         )
 }
 
+fn shows_generic_no_actions(obligation: &OperatorObligation) -> bool {
+    !matches!(
+        obligation.task.as_ref().map(|task| task.kind),
+        Some(
+            bokkie_operator_api::OperatorTaskKind::EngineeringSupervisor
+                | bokkie_operator_api::OperatorTaskKind::EngineeringWorker
+        )
+    )
+}
+
 fn detail_presentation(
     ui: &mut egui::Ui,
     obligation: &OperatorObligation,
@@ -2399,9 +2409,10 @@ fn show_detail_actions(
             }
         }
     });
-    if !LifecycleAction::ALL
-        .into_iter()
-        .any(|action| action_is_relevant(action, obligation))
+    if shows_generic_no_actions(obligation)
+        && !LifecycleAction::ALL
+            .into_iter()
+            .any(|action| action_is_relevant(action, obligation))
     {
         presentation.content(
             ui,
@@ -3909,6 +3920,32 @@ mod tests {
             text.iter()
                 .any(|item| item.interaction == TextInteraction::Selectable)
         );
+    }
+
+    #[test]
+    fn engineering_details_do_not_use_generic_simulated_or_no_action_copy() {
+        use bokkie_operator_api::{OperatorTask, OperatorTaskKind};
+
+        let mut obligation = fixture(1);
+        obligation.task = Some(OperatorTask {
+            engineering: None,
+            kind: OperatorTaskKind::EngineeringSupervisor,
+            title: "Engineering outcome".to_owned(),
+            parent_task_id: None,
+            configuration: None,
+            proposal_instance_id: None,
+        });
+        assert!(!shows_generic_no_actions(&obligation));
+        assert_ne!(
+            obligation.task.as_ref().unwrap().kind,
+            OperatorTaskKind::Simulated
+        );
+
+        obligation.task.as_mut().unwrap().kind = OperatorTaskKind::EngineeringWorker;
+        assert!(!shows_generic_no_actions(&obligation));
+
+        obligation.task.as_mut().unwrap().kind = OperatorTaskKind::Simulated;
+        assert!(shows_generic_no_actions(&obligation));
     }
 
     #[test]

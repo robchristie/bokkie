@@ -461,7 +461,7 @@ pub(super) fn show_task_detail(
             );
         }
         show_results(ui, read, presentation);
-    } else {
+    } else if task.kind == OperatorTaskKind::Simulated {
         body(
             ui,
             "simulated-execution",

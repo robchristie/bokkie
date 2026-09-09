@@ -9,7 +9,7 @@ const execute = promisify(execFile);
 /** Physical task navigation and configuration against a fixture-owned database. */
 export async function qualifyTaskJourney({
   page, evidence, startFixture, waitCurrent, snapshot, node, clickId,
-  clickAction, selectCollection, pointFor, audit, observations, json,
+  clickAction, selectCollection, pointFor, audit, observations, json, setFocusedTextAgentValue,
 }) {
   const parent = 'gardener:inspect:robchristie/bokkie';
   const url = await startFixture('tasks');
@@ -83,7 +83,7 @@ export async function qualifyTaskJourney({
       ['page', ['page']],
       ['layout', ['layout', '--container-selector', 'body']],
       ['flow', ['flow', '--timeout-ms', '10000', '--quiet-ms', '300']],
-      ['screenshot', ['screenshot', '--output', join(evidence, 'lantern-task-desktop.png')]],
+      ['screenshot', ['screenshot', '--output', join(evidence, 'lantern-task-desktop.png'), '--overwrite']],
     ]) {
       const { stdout } = await execute('lantern', [...args, ...shared]);
       const result = JSON.parse(stdout);
@@ -98,7 +98,7 @@ export async function qualifyTaskJourney({
   if (lanternShared) {
     for (const [name, args] of [
       ['layout', ['layout', '--container-selector', 'body']],
-      ['screenshot', ['screenshot', '--output', join(evidence, 'lantern-task-narrow.png')]],
+      ['screenshot', ['screenshot', '--output', join(evidence, 'lantern-task-narrow.png'), '--overwrite']],
     ]) {
       const { stdout } = await execute('lantern', [...args, ...lanternShared]);
       if (!JSON.parse(stdout).ok) throw new Error(`Lantern narrow ${name} did not complete`);
@@ -121,8 +121,7 @@ export async function qualifyTaskJourney({
   const instructions = 'Prioritise deterministic scheduler recovery tests.';
   for (const [field, value] of [['instructions', instructions], ['actor', 'task-qualification']]) {
     await clickId(page, `bokkie.task.settings.${field}`);
-    await page.keyboard.press('ControlOrMeta+A');
-    await page.keyboard.type(value, { delay: 15 });
+    await setFocusedTextAgentValue(page, value);
   }
   await page.setViewportSize({ width: 480, height: 720 });
   await page.waitForTimeout(250);
@@ -180,7 +179,7 @@ export async function qualifyTaskJourney({
 
   observations.journeys.push({
     name: 'configured task, settings, proposal approval and verified follow-on work',
-    classification: 'physical pointer/keyboard actions against synthetic Store-owned fixture state; no runner or publication',
+    classification: 'physical pointer and browser IME text-input actions against synthetic Store-owned fixture state; no runner or publication',
     parent, pending_proposal: proposal.id, completed_work: completed.id,
     old_configuration_revision: configured.task.configuration.revision,
     saved_configuration: configuration,

@@ -13,12 +13,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use bokkie::engineering::{
+    EngineeringActor, EngineeringBudget, EngineeringCommand, EngineeringCommandEnvelope,
+    EngineeringContract, EngineeringInstructions,
+};
 use bokkie::{
     ApprovalDecision, Completion, DbExecutor, GardenerCandidateQualification,
     GardenerVerificationVerdict, InspectionResult, NewGardenerImplementationRun,
     NewGardenerInspection, NewObligation, NewRepositoryRegistration, Recurrence, RetryPolicy,
-    Store, http::router_with_ui_executor, http_security::ApiRuntime,
+    Store, SystemClock, UnixClock,
+    http::{ApiState, EngineeringIntakeConfig, router_with_state},
+    http_security::ApiRuntime,
 };
+use std::sync::Arc;
 use uuid::Uuid;
 
 const NOW: i64 = 1_788_381_000;
@@ -52,10 +59,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     if !matches!(
         variant.as_str(),
-        "experience" | "tasks" | "full" | "empty" | "empty-inbox" | "large"
+        "engineering" | "experience" | "tasks" | "full" | "empty" | "empty-inbox" | "large"
     ) {
         return Err(
-            "--variant must be experience, tasks, full, empty, empty-inbox, or large".into(),
+            "--variant must be engineering, experience, tasks, full, empty, empty-inbox, or large"
+                .into(),
         );
     }
 
@@ -66,6 +74,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let database = root.0.join("fixture.sqlite");
     let mut store = Store::open(&database)?;
     match variant.as_str() {
+        "engineering" => seed_engineering_outcome(&mut store)?,
         "experience" => seed_experience(&mut store)?,
         "tasks" => seed_task_journey(&mut store, &root.0)?,
         "full" => seed_full(&mut store, &root.0)?,
@@ -101,13 +110,74 @@ async fn main() -> Result<(), Box<dyn Error>> {
     io::stdout().flush()?;
     axum::serve(
         listener,
-        router_with_ui_executor(database_executor.clone(), ui_dir, runtime),
+        router_with_state(
+            ApiState {
+                executor: database_executor.clone(),
+                runtime,
+                engineering_intake: Some(Arc::new(EngineeringIntakeConfig {
+                    deadline_seconds: 3_600,
+                    contract_template: engineering_contract_template(),
+                })),
+            },
+            Some(ui_dir),
+        ),
     )
     .with_graceful_shutdown(async {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await?;
     database_executor.shutdown()?;
+    Ok(())
+}
+
+fn engineering_contract_template() -> EngineeringContract {
+    let instructions = EngineeringInstructions {
+        text: "Fixture-only supervisor instructions; no runtime is enabled.".to_owned(),
+        digest: "fcfb3441d1bc548eea9bb0715471c49f8cbe10fa68b02274855c11c5ac359b17".to_owned(),
+        context_digests: vec![],
+        profile_digest: "b".repeat(64),
+        adapter_id: "ui-qualification-fixture".to_owned(),
+    };
+    EngineeringContract {
+        intent: "fixture template".to_owned(),
+        criteria: vec![],
+        permitted_scope: vec!["temporary fixture database".to_owned()],
+        prohibited_effects: vec!["runtime dispatch".to_owned(), "publication".to_owned()],
+        authority: vec![],
+        supervisor: instructions.clone(),
+        worker: instructions,
+        budget: EngineeringBudget {
+            max_turns: 4,
+            max_packages: 2,
+            max_repairs: 1,
+            max_recoveries: 1,
+            max_checkpoints: 8,
+            max_questions: 4,
+            max_concurrent_workers: 1,
+            turn_seconds: 30,
+            deadline: FUTURE,
+        },
+    }
+}
+
+/// Retain one real outcome before the UI creates another through its HTTP intake.
+/// This is a Store-owned fixture record only: no engineering controller or Codex
+/// runtime is configured by this executable.
+fn seed_engineering_outcome(store: &mut Store) -> Result<(), Box<dyn Error>> {
+    let mut contract = engineering_contract_template();
+    contract.intent = "Retain a local reading workspace request for later supervision".to_owned();
+    contract.budget.deadline = SystemClock.now().saturating_add(3_600);
+    store.engineering_command(
+        EngineeringActor::Operator {
+            name: "fixture operator".to_owned(),
+        },
+        EngineeringCommandEnvelope {
+            command_id: "fixture-existing-engineering-outcome".to_owned(),
+            expected: None,
+            command: EngineeringCommand::CreateOutcome { contract },
+        },
+        SystemClock.now(),
+    )?;
     Ok(())
 }
 

@@ -29,13 +29,13 @@ documents. Preserve gardener restrictions and existing workflow skill owners.
 
 ## Current phase
 
-Implementation: calibration selected a private durable broker, one PID-contained
+Fixture qualification: calibration selected a private durable broker, one PID-contained
 app-server per writer, and explicit client-routed approval review. Ten live turns
 proved guidance, question/answer, follow-up, disconnect/offline completion,
 interruption/runtime loss, independent review and actual bounded subagents.
 The [calibration report](../../supervision-evidence/calibration.md) owns exact
 identities, limits and protocol evidence. Baseline `tools/check.sh` passed.
-Backend and runtime workers implement the [typed contract](../../engineering-supervision-contract.md).
+Backend, runtime and operator adapters implement the [typed contract](../../engineering-supervision-contract.md). Independent review drove repairs to recovery, source evidence, cancellation and relationships. The [attempt account](../../supervision-evidence/fixture-attempts.md) retains failed observations and reruns.
 The app child-context cap required a fresh local `codex exec` context for runtime
 implementation; its bounded capsule/output live in ignored `.supervision-build/`.
 The outer agent still coordinates infrastructure only; authentic dogfooding has
@@ -48,7 +48,7 @@ not started. No live Bokkie database or global configuration was changed.
 | Contract and execution calibration | Bokkie starting revision above | [Selected evidence](../../supervision-evidence/calibration.md) | selected |
 | Durable backend and runtime | Bokkie / operator contract | Lifecycle and protocol tests | implemented; canonical backend passes |
 | Conversational operator entry | Bokkie UI / backend | Canonical checks and UI inspection | implemented; visual qualification pending |
-| Complete isolated fixture | Bokkie runtime | Live questions, repair, recovery, acceptance | queued |
+| Complete isolated fixture | Bokkie `80f8612` | [Attempts](../../supervision-evidence/fixture-attempts.md); run e active | qualifying |
 | Reading calibration and application | Polyorama / local app | Reader probes and canonical checks | after fixture |
 | Authentic dogfood and repairs | Final owner revisions | Runtime identities and acceptance | queued |
 | Integrated closeout | Bokkie | Reviews, checks, landing and usage | queued |

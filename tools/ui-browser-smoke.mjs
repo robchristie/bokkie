@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { captureSettled } from './ui-capture-settling.mjs';
+import { qualifyEngineeringJourney } from './ui-engineering-journey.mjs';
 import { qualifyTaskJourney } from './ui-task-journey.mjs';
 
 const root = process.cwd();
@@ -29,6 +30,10 @@ const json = value => JSON.stringify(
 );
 
 async function startFixture(variant, port = null) {
+  // A completed UI mutation may have scheduled its bounded projection rebuild.
+  // Fixture replacement deliberately tears down that origin; classify only this
+  // known disconnect until the next page reaches a current frame.
+  if (fixture) expectingDisconnect = true;
   await stopFixture();
   fixture = spawn('target/debug/bokkie-ui-fixture', [
     '--ui-dir', 'apps/bokkie-attention-ui/web', '--variant', variant,
@@ -95,7 +100,10 @@ async function waitCurrent(page) {
       }
     });
     if (last.value?.interaction?.connection === 'current'
-        && !last.value.ui_snapshot.semantic_audit.length) return;
+        && !last.value.ui_snapshot.semantic_audit.length) {
+      expectingDisconnect = false;
+      return;
+    }
     if (last.value?.interaction?.connection === 'loading' && !observations.states.loading) {
       observations.states.loading = {
         nodes: last.value.ui_snapshot.nodes.length,
@@ -127,6 +135,31 @@ async function clickId(page, id) {
   await page.waitForTimeout(50);
   point = await pointFor(page, id);
   await page.mouse.click(point.x, point.y);
+}
+
+// eframe receives browser text through its focused, hidden IME input. Chromium's
+// CDP key dispatch reports key events but does not mutate that 1px input after
+// eframe takes keyboard focus, so Playwright's keyboard.type cannot qualify the
+// text path. Feed the browser input event that a platform IME supplies instead.
+// Keep the physical pointer focus step separate and fail if a different element
+// has focus: this is deliberately not a model-level shortcut.
+async function setFocusedTextAgentValue(page, value) {
+  const result = await page.evaluate(nextValue => {
+    const input = document.activeElement;
+    if (!(input instanceof HTMLInputElement)) {
+      return { ok: false, active: input?.tagName ?? null };
+    }
+    input.value = nextValue;
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      data: nextValue,
+      inputType: 'insertText',
+    }));
+    return { ok: input.value === nextValue, active: input.tagName };
+  }, value);
+  if (!result.ok) {
+    throw new Error(`focused browser text agent did not accept input: ${json(result)}`);
+  }
 }
 
 async function clickAction(page, action, pane = null) {
@@ -191,7 +224,8 @@ try {
   page.on('console', message => {
     if (message.type() !== 'error') return;
     const failure = `console: ${message.text()}`;
-    if (expectingDisconnect && failure.includes('ERR_CONNECTION_REFUSED')) {
+    if (expectingDisconnect
+        && (failure.includes('ERR_CONNECTION_REFUSED') || failure.includes('TypeError: Failed to fetch'))) {
       observations.states.disconnected_console = failure;
     } else {
       unexpected.push(failure);
@@ -254,7 +288,7 @@ try {
   }
 
   await clickId(page, 'bokkie.obligation-search');
-  await page.keyboard.type('nonretryable', { delay: 30 });
+  await setFocusedTextAgentValue(page, 'nonretryable');
   await page.waitForFunction(() => {
     const rows = window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().ui_snapshot.nodes
       .filter(candidate => candidate.id.startsWith('bokkie.inbox-row.'));
@@ -270,7 +304,7 @@ try {
     .filter(candidate => candidate.id.startsWith('bokkie.inbox-row.')).length >= 5);
   observations.journeys.push({
     name: 'attention search and failure detail',
-    classification: 'physical pointer, keyboard typing, selection and search clearing',
+    classification: 'physical pointer focus, browser IME text-input, selection and search clearing',
     query: 'nonretryable', matched_obligation: 'attention-nonretryable',
   });
 
@@ -697,9 +731,14 @@ try {
   };
 
   await page.setViewportSize({ width: 1440, height: 900 });
+  await qualifyEngineeringJourney({
+    page, evidence, startFixture, waitCurrent, snapshot, node, clickId,
+    setFocusedTextAgentValue, audit, observations, json,
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await qualifyTaskJourney({
     page, evidence, startFixture, waitCurrent, snapshot, node, clickId,
-    clickAction, selectCollection, pointFor, audit, observations, json,
+    clickAction, selectCollection, pointFor, audit, observations, json, setFocusedTextAgentValue,
   });
   const largeRequestStart = operatorRequests.length;
   url = await startFixture('large');
