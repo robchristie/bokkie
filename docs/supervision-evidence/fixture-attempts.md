@@ -6,6 +6,8 @@ This is qualification evidence, not a claim of product acceptance.
 |---|---|---|
 | 20260909-a | `7b40bcc79e053598a3614ef1d63f26f367c43af9` | Rejected before a model turn. App-server rejected an MCP override with an invalid transport. Twenty-four bounded supervisor dispatch attempts exhausted the outcome turn budget. The outer agent diagnosed infrastructure; no routine supervisor answer or worker instruction was supplied. HTTP cancellation completed and every execution had verified cessation. |
 
+| 20260909-b | `9812f2256f4c7ed1fa176198931f5d596b5bff56` | Rejected before a model turn: quoted MCP override name created a literal key. One failed dispatch parked durable attention with a sanitised configuration diagnostic; no repeated model starts. Direct account-neutral app-server startup verified the supported unquoted override. Outer agent interrupted qualification and HTTP cleanup reconciled every boundary. |
+
 Historical retained synthetic evidence owner:
 `/nvme/development/bokkie-supervision-fixture-20260909-a` contains the SQLite
 records, private broker journals, exact profile, fixture revision

@@ -258,6 +258,12 @@ for line in sys.stdin:
         with self.assertRaisesRegex(ValueError, 'differs from task profile'):
             broker.verify_capability_config(config)
 
+    def test_source_observation_rejects_fifo_without_waiting_for_a_writer(self):
+        broker = self.broker()
+        workspace = Path(broker.manifest['workspace'])
+        os.mkfifo(workspace / 'untracked-pipe')
+        self.assertIn('unavailable', broker.source_snapshot())
+
     def test_mcp_overrides_preserve_inherited_transport_and_never_copy_credentials(self):
         config_home = self.root / 'account'
         config_home.mkdir()
@@ -265,7 +271,7 @@ for line in sys.stdin:
         with patch.dict(os.environ, {'CODEX_HOME': str(config_home)}):
             config = self.broker().configuration()
         self.assertNotIn('mcp_servers', config)
-        self.assertFalse(config['mcp_servers."openaiDeveloperDocs".enabled'])
+        self.assertFalse(config['mcp_servers.openaiDeveloperDocs.enabled'])
         self.assertNotIn('SECRET_TOKEN', json.dumps(config))
         self.assertNotIn('docs.example.invalid', json.dumps(config))
 

@@ -738,11 +738,18 @@ fn children_accepted(state: &EngineeringOutcomeSnapshot, parent: &str) -> bool {
         .packages
         .iter()
         .filter(|p| p.input.parent_id.as_deref() == Some(parent))
-        .all(|p| {
-            package_accepted(state, &p.id)
-                || p.superseded_by
-                    .as_ref()
-                    .is_some_and(|id| package_accepted(state, id))
+        .all(|child| {
+            let mut current = child;
+            for _ in 0..state.packages.len() {
+                let Some(next) = &current.superseded_by else {
+                    break;
+                };
+                let Some(replacement) = state.packages.iter().find(|p| p.id == *next) else {
+                    return false;
+                };
+                current = replacement;
+            }
+            package_accepted(state, &current.id)
         })
 }
 fn has_writer(tx: &Transaction<'_>, execution: &str) -> Result<bool, StoreError> {
@@ -1519,15 +1526,10 @@ fn apply_command(
                 return Ok(None);
             }
             let charge_recovery = execution.recovery_required && !execution.recovery_charged;
-            if charge_recovery && state.recoveries_used >= state.contract().budget.max_recoveries {
-                attention(
-                    tx,
-                    state,
-                    "recovery budget exhausted; retained writers require operator budget decision",
-                    now,
-                )?;
-            } else {
-                if charge_recovery {
+            let recovery_exhausted =
+                charge_recovery && state.recoveries_used >= state.contract().budget.max_recoveries;
+            {
+                if charge_recovery && !recovery_exhausted {
                     state.recoveries_used += 1;
                     state
                         .executions
@@ -1594,7 +1596,11 @@ fn apply_command(
                         e.obligation_id == execution.obligation_id
                             && e.claim.lease_generation > execution.claim.lease_generation
                     });
-                    if !cancelled && newest && !obligation.state.is_terminal() {
+                    if !recovery_exhausted
+                        && !cancelled
+                        && newest
+                        && !obligation.state.is_terminal()
+                    {
                         if execution.role == EngineeringRole::Supervisor {
                             if !waiting_for_operator(state) {
                                 apply_engineering_transition(
@@ -1623,7 +1629,16 @@ fn apply_command(
                 } else if input.recovered_submission.is_some() {
                     return Err(conflict("offline import requires verified cessation"));
                 }
-                if execution.role == EngineeringRole::Worker || execution.recovery_required {
+                if recovery_exhausted
+                    && !require_obligation(tx, &state.root.id)?.state.is_terminal()
+                {
+                    attention(
+                        tx,
+                        state,
+                        "recovery budget exhausted; cessation evidence retained, operator budget decision required",
+                        now,
+                    )?;
+                } else if execution.role == EngineeringRole::Worker || execution.recovery_required {
                     wake(tx, state, now)?;
                 }
             }
@@ -2968,6 +2983,86 @@ mod tests {
         assert_eq!(ready[0].package_id.as_deref(), Some(dependent_id.as_str()));
     }
     #[test]
+    fn required_child_acceptance_follows_successive_repairs() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = create(&mut store);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        let mut parent_input = package();
+        parent_input.workspace = "other-workspace".into();
+        let parent = command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::CreatePackage(parent_input),
+            101,
+        )
+        .record_id
+        .unwrap();
+        let mut child_input = package();
+        child_input.parent_id = Some(parent.clone());
+        let child = command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::CreatePackage(child_input.clone()),
+            101,
+        )
+        .record_id
+        .unwrap();
+        let claims = store
+            .claim_due_engineering(EngineeringRole::Worker, 102, 600, 2)
+            .unwrap();
+        let mut worker = claims
+            .into_iter()
+            .find(|c| c.package_id.as_ref() == Some(&child))
+            .unwrap();
+        for round in 0..2 {
+            let now = 103 + round * 5;
+            let mut incomplete = submission();
+            incomplete.limitations = "criterion needs repair".into();
+            reconcile(&mut store, &worker, Some(incomplete), now);
+            let assess = assessment(&store, &id, EngineeringVerdict::Repair);
+            let assessment_id = command(
+                &mut store,
+                &id,
+                actor(&root),
+                EngineeringCommand::AssessResult(assess),
+                now + 1,
+            )
+            .record_id
+            .unwrap();
+            command(
+                &mut store,
+                &id,
+                actor(&root),
+                EngineeringCommand::CreateRepair {
+                    assessment_id,
+                    replacement: child_input.clone(),
+                },
+                now + 2,
+            );
+            worker = claim(&mut store, EngineeringRole::Worker, now + 3);
+            assert!(!children_accepted(
+                &store.engineering_outcome(&id).unwrap().unwrap(),
+                &parent
+            ));
+        }
+        reconcile(&mut store, &worker, Some(submission()), 114);
+        let assess = assessment(&store, &id, EngineeringVerdict::Accept);
+        command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::AssessResult(assess),
+            115,
+        );
+        assert!(children_accepted(
+            &store.engineering_outcome(&id).unwrap().unwrap(),
+            &parent
+        ));
+    }
+
+    #[test]
     fn package_relationships_require_current_same_outcome_and_budget_exhaustion_is_durable() {
         let mut store = Store::open_in_memory().unwrap();
         let id = create(&mut store);
@@ -3205,7 +3300,7 @@ mod tests {
         tx.commit().unwrap();
     }
     #[test]
-    fn cancellation_recovery_budget_can_be_increased_without_reviving_authority() {
+    fn cancellation_retains_cessation_even_when_recovery_budget_is_exhausted() {
         let mut store = Store::open_in_memory().unwrap();
         let mut original = contract();
         original.budget.max_recoveries = 1;
@@ -3238,26 +3333,12 @@ mod tests {
         reconcile(&mut store, &root, None, 706);
         assert_eq!(
             store.engineering_outcome(&id).unwrap().unwrap().root.state,
-            ObligationState::Attention
+            ObligationState::Cancelled
         );
-        original.budget.max_recoveries = 2;
-        command(
-            &mut store,
-            &id,
-            op(),
-            EngineeringCommand::ReviseContract { contract: original },
-            707,
-        );
-        assert!(
-            store
-                .claim_due_engineering(EngineeringRole::Supervisor, 708, 600, 1)
-                .unwrap()
-                .is_empty()
-        );
-        reconcile(&mut store, &root, None, 708);
         let state = store.engineering_outcome(&id).unwrap().unwrap();
         assert_eq!(state.root.state, ObligationState::Cancelled);
-        assert_eq!(state.recoveries_used, 2);
+        assert!(state.executions.iter().all(|e| e.cessation_verified));
+        assert_eq!(state.recoveries_used, 1);
     }
     #[test]
     fn missing_information_waits_for_operator_and_fresh_followup_gets_one_reconsideration() {

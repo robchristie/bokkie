@@ -173,7 +173,7 @@ Before your first final submission, after evidence and review are ready, run pyt
                     time.sleep(.5)
                 outcome = authority_id
                 raise TimeoutError('final fixture boundaries did not reconcile')
-            if state['observed_root_state'] == 'attention' and (any(q['kind'] in ('new_authority', 'missing_information') and not q.get('resolution') for q in state['questions']) or state['turns_used'] >= profile['max_turns']):
+            if state['observed_root_state'] == 'attention' and ('runtime failed' in str(state['root'].get('last_error', '')) or any(q['kind'] in ('new_authority', 'missing_information') and not q.get('resolution') for q in state['questions']) or state['turns_used'] >= profile['max_turns']):
                 dump(root / 'attention-outcome.json', state)
                 record('unexpected_attention', outcome_id=outcome)
                 raise RuntimeError('fixture needs intervention; qualification did not pass')

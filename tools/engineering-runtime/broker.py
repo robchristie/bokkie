@@ -267,13 +267,18 @@ class Broker:
                 path = workspace / relative
                 if path.is_symlink() or not path.resolve().is_relative_to(workspace.resolve()):
                     raise ValueError('source symlink cannot be attested')
-                size = path.stat().st_size
-                total += size
-                if size > MAX_MESSAGE or total > MAX_SPOOL:
-                    raise ValueError('source byte bound exceeded')
-                raw = path.read_bytes()
-                if len(raw) != size:
-                    raise ValueError('source changed while being observed')
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+                with os.fdopen(fd, 'rb') as stream:
+                    metadata = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(metadata.st_mode):
+                        raise ValueError('source must be a regular file')
+                    size = metadata.st_size
+                    total += size
+                    if size > MAX_MESSAGE or total > MAX_SPOOL:
+                        raise ValueError('source byte bound exceeded')
+                    raw = stream.read(MAX_MESSAGE + 1)
+                    if len(raw) != size:
+                        raise ValueError('source changed while being observed')
                 files[relative] = {'sha256': hashlib.sha256(raw).hexdigest(), 'byte_length': size}
             return {'files': files, 'commit': commit, 'tree': tree, 'clean': clean}
         except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -418,7 +423,9 @@ class Broker:
                 with path.open('rb') as stream:
                     names = tomllib.load(stream).get('mcp_servers', {}).keys()
                 for name in names:
-                    config['mcp_servers.' + json.dumps(name) + '.enabled'] = name in m.get('readonly_mcp_servers', [])
+                    if not name or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in name):
+                        raise ValueError('MCP server name cannot be represented by supported runtime override')
+                    config['mcp_servers.' + name + '.enabled'] = name in m.get('readonly_mcp_servers', [])
         return config
 
     @staticmethod
