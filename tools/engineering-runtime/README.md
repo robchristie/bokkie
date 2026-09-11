@@ -199,7 +199,7 @@ failure classes, byte counts and a digest, never raw text or credentials.
 Validation registration requires broker source observations at command start and
 completion. File evidence must match the observed digest and length; Git evidence
 must match the same clean commit/tree. Observations are bounded to 2,048 source
-files, 2 MiB per file and 16 MiB total; unavailable or changing identities reject
+files, 2 MiB per file and 32 MiB total; unavailable or changing identities reject
 registration and require another bounded check. These are app-server event
 observations, not a synchronous hook into command execution. Historical commands
 without those observations cannot be attached to a newly inspected revision.
@@ -215,3 +215,11 @@ successful completion of that same child turn. The adapter retains those source
 events as provenance and reads the report from them, never from caller text.
 Older completed `agentsStates` receipts remain supported when they belong to
 the root. Child contexts cannot acquire the root's Bokkie tool authority.
+
+## Qualification admission
+
+Use the [qualification controls guide](../../docs/supervision-evidence/qualification-controls.md)
+for mandatory no-model preflight, focused repair probes, durable campaign budgets
+and comparison reports. The qualification runner prepares isolated fixture roots
+and binds successive databases to one campaign registry in the Git common
+directory. It preserves this guide's production safety and acceptance boundaries.
