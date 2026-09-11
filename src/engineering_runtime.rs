@@ -188,6 +188,23 @@ impl EngineeringRuntimeProfile {
             prohibited_effects:vec!["No deployment, release, remote publication, credentials, global configuration changes, destructive data operations or additional authority".into()],
             authority:vec![],supervisor:self.instructions(false)?,worker:self.instructions(true)?,budget:self.budget(now,false) })
     }
+    /// No-model qualification uses the exact production schemas and thread settings.
+    pub fn preflight_parameters(&self) -> RuntimeResult<Value> {
+        self.validate()?;
+        Ok(json!({"profile": self,
+            "supervisor": self.thread_parameters(false, &self.instructions(false)?.text),
+            "worker": self.thread_parameters(true, &self.instructions(true)?.text)}))
+    }
+
+    fn thread_parameters(&self, worker: bool, instructions: &str) -> Value {
+        json!({"cwd":self.workspace,"model":self.model,
+            "allowProviderModelFallback":false,"approvalPolicy":"on-request","approvalsReviewer":"user",
+            "sandbox":if worker {"workspace-write"} else {"read-only"},
+            "runtimeWorkspaceRoots":[self.workspace],
+            "config":{"model_reasoning_effort":self.effort},
+            "developerInstructions":instructions,"dynamicTools":dynamic_tools().into_iter().filter(|t|if worker {&self.worker_tools}else{&self.supervisor_tools}.iter().any(|name|t["name"]==name.as_str())).collect::<Vec<_>>()})
+    }
+
     pub fn budget(&self, now: i64, worker: bool) -> EngineeringBudget {
         EngineeringBudget {
             max_turns: self.max_turns,
@@ -904,12 +921,9 @@ impl EngineeringRuntime {
                 return Err("execution instruction/profile identity mismatch".into());
             }
             let (seconds, deadline) = self.execution_limits(state, execution, now)?;
-            let params = json!({"cwd":self.profile.workspace,"model":self.profile.model,
-                "allowProviderModelFallback":false,"approvalPolicy":"on-request","approvalsReviewer":"user",
-                "sandbox":if worker {"workspace-write"} else {"read-only"},
-                "runtimeWorkspaceRoots":[self.profile.workspace],
-                "config":{"model_reasoning_effort":self.profile.effort},
-                "developerInstructions":execution.instructions.text,"dynamicTools":dynamic_tools().into_iter().filter(|t|if worker {&self.profile.worker_tools}else{&self.profile.supervisor_tools}.iter().any(|name|t["name"]==name.as_str())).collect::<Vec<_>>()});
+            let params = self
+                .profile
+                .thread_parameters(worker, &execution.instructions.text);
             let prompt = json!({"role":execution.role,"execution_id":execution.id,"package_id":execution.package_id,
                 "snapshot":state,"expected":state.precondition(),"workspace":self.profile.workspace,
                 "worker_budget_template":self.profile.budget(now,true),"task_profile":self.profile,

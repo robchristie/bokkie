@@ -1,0 +1,241 @@
+{
+  "status": "passed",
+  "candidate": "dc5c3a248f26ec7e8f3ddb7bec35f7d64b094129",
+  "fixture_revision": "d15294c1f8dfd932e57ab2e1a9dbbd082c4f560a",
+  "profile_sha256": "c3d8a0ce0c828186259b5ad847724f2a3107d56765f6d800826a5afdb5b27974",
+  "runtime_identity": "735125d26b7b657243d6a460556057b4efe4c7b6ba0fba9ef560bb6efcec4045",
+  "environment_identity": "212062d51672819ad25885a97e44f572ffef20cfa356de9296670db6463dc3eb",
+  "workspace_identity": "bdf6eeaddd60a25a649972a6342d84b40faf35c4cf3b4eea4e526dc76199f71f",
+  "codex_version": "codex-cli 0.154.0",
+  "campaign_id": "qualification-controls-20260911",
+  "attempt_id": "0cdf0f54c96e4f368f2b768b163cb1a8",
+  "outcome_id": "773375ea-1320-4f2c-af76-9fb291ac46ea",
+  "contract_revision": 2,
+  "main_turns_used": 8,
+  "acceptance": {
+    "assessor_execution_id": "ef934c8b-68df-4298-b45d-5d00229469a8",
+    "contract_revision": 2,
+    "assessment_ids": [
+      "8e6037a2-0f63-4988-bdfb-8b5adb506418"
+    ],
+    "review": {
+      "reviewer_identity": "codex-thread:01a08f7a-48b8-7610-9701-af772977ea2c:turn:01a08f7a-48f2-7a91-a226-776eb0a73e5d",
+      "artefacts": [
+        {
+          "kind": "file",
+          "store": "/nvme/development/bokkie-qualification-20260911-a/workspace",
+          "path": "arithmetic.py",
+          "bytes": 332,
+          "sha256": "f5b71ed95b6dded14a6909f2a3502ba1498beeb94b6919fd70a19070ef8cb12f"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/bokkie-qualification-20260911-a/workspace",
+          "path": "tests/test_arithmetic.py",
+          "bytes": 770,
+          "sha256": "8e89cc13668fa58685e6d18619e91b75f70ba41d6cd4aab2cf672ab999dc032a"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/bokkie-qualification-20260911-a/workspace",
+          "path": "README.md",
+          "bytes": 908,
+          "sha256": "a8fb4d4e2fd69704bb3ab83966a56538f8f7f746ebd5b483edd879b8014f37ae"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/bokkie-qualification-20260911-a/workspace",
+          "path": "injection-consumed.txt",
+          "bytes": 164,
+          "sha256": "4e6acc501f6f81e5c46fc18eb1f835a6a241fba9c35f85ad327ff9c1196dd93d"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/bokkie-qualification-20260911-a/workspace",
+          "path": "initial-review.json",
+          "bytes": 4150,
+          "sha256": "d3ddc5e5f4baa82907a779ef5e076051308dcdef01da6893f86f1bb19a275f00"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/bokkie-qualification-20260911-a/workspace",
+          "path": "fixture-history.json",
+          "bytes": 14194,
+          "sha256": "625049623ed77ea1e8bb6cd0e2676cfbd471bf5542e3f8d5e9c69cc9813d5e83"
+        }
+      ],
+      "evidence_digest": "dbaca74b302c5db0624620e1745b544f79df5614b9bbe064cbf0ef319bb84947"
+    },
+    "at": 1789113661
+  },
+  "submission_ids": [
+    "71c9c2ed-aece-4ab7-a130-f50e30e87cc7",
+    "cb58dd96-64c9-417a-8dc0-0a6931a0832b",
+    "e28ae878-08cb-4d91-a3fb-92e3e63976f9"
+  ],
+  "repair_count": 1,
+  "journey_observations": [
+    "fixture_created",
+    "intake_saved",
+    "restart_after_dispatch",
+    "lost_ack_replay_passed",
+    "controller_unavailable_during_worker",
+    "worker_completed_offline",
+    "fixture_accepted",
+    "authority_intake_saved",
+    "actionable_authority_escalation",
+    "all_fixture_boundaries_reconciled"
+  ],
+  "all_cessation_verified": true,
+  "measurements": {
+    "limits": {
+      "application_dogfood": 1,
+      "complete_fixture": 3,
+      "contexts": 750,
+      "diagnosis_threshold": 2,
+      "final_headroom": 240,
+      "live_probe": 2
+    },
+    "stages": {
+      "complete_fixture": 1,
+      "live_probe": 0,
+      "application_dogfood": 0
+    },
+    "reserved_contexts": 240,
+    "charged_contexts": 240,
+    "observed_contexts": 12,
+    "contexts_complete": true,
+    "telemetry_complete": true,
+    "input_tokens_complete": true,
+    "cached_input_tokens_complete": true,
+    "output_tokens_complete": true,
+    "known_input_tokens": 4945794,
+    "known_cached_input_tokens": 4226560,
+    "known_uncached_tokens": 719234,
+    "known_output_tokens": 18346,
+    "known_model_responses": 81,
+    "pre_model_faults": 0,
+    "final_only_defects": 0,
+    "elapsed_seconds": 746.7597215175629,
+    "human_interventions": 0,
+    "outer_agent_interventions": 0,
+    "intervention_counts_complete": true,
+    "historical_baseline": {
+      "contexts": 91,
+      "approx_first_response_uncached_tokens": 3340000,
+      "approx_fixture_input_tokens": 4150000,
+      "savings_claim": null
+    },
+    "fresh_contexts_per_accepted_qualification": 12.0,
+    "uncached_tokens_per_accepted_qualification": 719234.0,
+    "observation_unknowns": []
+  },
+  "application_dogfood": {
+    "repeat": false,
+    "reason": "No Pagefold product, reader, intake or acceptance path change; complete synthetic fixture covers affected runtime integration."
+  },
+  "outer_implementation_contexts": {
+    "observed_fresh_contexts": 4,
+    "roles": [
+      "coordinator",
+      "runtime implementation",
+      "campaign implementation",
+      "independent review"
+    ],
+    "token_usage": null,
+    "scope": "Codex task orchestration; separate from live qualification telemetry"
+  },
+  "retained_artefacts": [
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/campaign-report.json",
+      "sha256": "66b1a043f19bbe3661b45dec760e720816e313bae287bb5274f323b4ae02a98c",
+      "bytes": 103732
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/preflight/preflight.json",
+      "sha256": "ff876a7a4705784944fd4a40bf71e5e062bf639fdf4e154eae216a6b7df97672",
+      "bytes": 3806
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/focused-probes.json",
+      "sha256": "6e940dda30aa26ed30020e2b62e33afafe0c99358ddbfb529532eb5abee43f58",
+      "bytes": 25340
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/journey.json",
+      "sha256": "410184f651bb4dcc4a18883a5f234b204efbd4c618c9c468445f4f2e68844609",
+      "bytes": 4830
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/accepted-outcome.json",
+      "sha256": "f7755c9cebc972807aa1c6c9bc2a0d37b64a3176bc608a7a5fd0cdf558f3535e",
+      "bytes": 148818
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/authority-outcome.json",
+      "sha256": "a82286137911cd45242a757fe60a35390f676dbb8dba7fa561316ce1a2530820",
+      "bytes": 24547
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/application-check.txt",
+      "sha256": "a6707d4eff38012da33ddc34bc6dc076a3b17151cfc9aef223c8790cbe64c3da",
+      "bytes": 100
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/observations.json",
+      "sha256": "d1544ba10a8d8d6526bccaa96d7477e61325cf204dfb097d1fc6fb71ed916599",
+      "bytes": 8074
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/final-outcomes.json",
+      "sha256": "b39719c9c7b59002a367be480ddac5e5fb83a47f2f85b63107f9882ad04fe7da",
+      "bytes": 176695
+    }
+  ],
+  "initial_context_breakdown": {
+    "unit": "UTF-8/JSON bytes, not tokens",
+    "observed_root_contexts": 9,
+    "unmeasured_child_contexts": 3,
+    "sums": {
+      "developer_instructions": 51333,
+      "guidance_files_bytes": 1905487,
+      "dynamic_tools_json": 43731,
+      "command_schema_utf8": 117441,
+      "outcome_history_json": 637940,
+      "remaining_envelope_json": 19680,
+      "prompt_utf8": 779183
+    },
+    "source_material": {
+      "direct_initial_content_bytes": 0,
+      "later_tool_content": "not attributed"
+    },
+    "retained_evidence": "Initial references share the outcome/history snapshot; later tool retrieval is not initial context",
+    "runtime_injected_content_bytes": null,
+    "overlap": "prompt_utf8 includes command schema, outcome/history and remaining envelope; do not add those fields twice",
+    "guidance_measure": "Discovered guidance and enabled skill file bytes; this is an inventory, not proof that full files were injected into initial context"
+  },
+  "verification": {
+    "canonical": "tools/check.sh passed at qualified candidate",
+    "python_tests": 86,
+    "rust_library_tests_passed": 254,
+    "rust_library_tests_ignored": 1,
+    "focused_probe_groups": 7,
+    "ci": "https://github.com/robchristie/bokkie/actions/runs/34576084925",
+    "independent_pre_live_review": "PASS dc5c3a248f26ec7e8f3ddb7bec35f7d64b094129 after four repaired findings",
+    "pre_live_regressions": [
+      "configuration and command schemas",
+      "child review attribution",
+      "submission and source binding",
+      "encoded reply paging",
+      "source capture boundaries",
+      "driver deadlines/acceptance/controller cessation",
+      "campaign admission and telemetry"
+    ]
+  },
+  "comparison_limits": [
+    "Supplied historical first-response baseline differs from current all-response usage; no measured savings claim",
+    "Counts and usage cover runtime-visible threads/events; hidden runtime work and exact quota charges are not established",
+    "Outer implementation/review contexts are separate; their token telemetry is unavailable",
+    "Final source changes after qualification are evidence/documentation only; runtime and qualification component identity stays exact"
+  ]
+}

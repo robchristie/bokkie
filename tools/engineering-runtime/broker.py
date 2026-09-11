@@ -179,6 +179,12 @@ class Broker:
         self.root = root
         self.spool = Spool(root)
         self.manifest = read(root / 'dispatch.json')
+        raw_limit = os.environ.get('BOKKIE_QUALIFICATION_CONTEXT_LIMIT')
+        if raw_limit is not None and (not raw_limit.isascii() or not raw_limit.isdecimal() or int(raw_limit) <= 0):
+            raise ValueError('BOKKIE_QUALIFICATION_CONTEXT_LIMIT must be a positive integer')
+        self.context_limit = int(raw_limit) if raw_limit is not None else None
+        self.context_threads = {event['value']['thread_id'] for event in self.spool.events
+                                if event['kind'] == 'context_observed'}
         self.generation = uuid.uuid4().hex
         self.child = None
         self.writer = None
@@ -314,10 +320,73 @@ class Broker:
                                     'message': detail if len(detail) <= 1024 else 'Source capture failed; diagnostic exceeded 1024 characters'},
                     'capture': {'limits': source_capture_limits()}}
 
+    def observe_context(self, thread_id, source):
+        """Qualification-only observed cap, not a predictive child-spawn limit.
+
+        Notifications can arrive after child activity starts; unreported children
+        remain unknown. The campaign must reserve in-flight concurrency slack.
+        Exceeding this cap raises into run()'s existing boundary reaping path.
+        """
+        if self.context_limit is None or not isinstance(thread_id, str) or not thread_id or thread_id in self.context_threads:
+            return
+        if len(thread_id) > 256:
+            raise ValueError('observed context identity exceeds bound')
+        self.context_threads.add(thread_id)
+        count = len(self.context_threads)
+        self.event('context_observed', {'thread_id': thread_id, 'source': source,
+                   'observed_count': count, 'limit': self.context_limit})
+        if count > self.context_limit:
+            self.event('context_limit', {'limit': self.context_limit, 'observed_count': count,
+                       'exceeded': True, 'enforcement': 'observed_events',
+                       'unreported_children': 'unknown'}, terminal=True)
+            raise RuntimeError('qualification observed context limit exceeded; stop and reconcile')
+
+    def context_input_bytes(self):
+        """Measured UTF-8/JSON byte contributions, never an inferred token count."""
+        params = self.manifest['thread_params']
+        prompt = self.manifest['prompt']
+        try:
+            envelope = json.loads(prompt)
+        except (ValueError, TypeError):
+            envelope = None
+        values = {'developer_instructions': len(params.get('developerInstructions', '').encode()),
+                  'dynamic_tools_json': len(encoded(params.get('dynamicTools', []))),
+                  'prompt_utf8': len(prompt.encode()), 'unit': 'bytes',
+                  'runtime_injected_schema_bytes': None}
+        if isinstance(envelope, dict):
+            snapshot = envelope.get('snapshot')
+            values['snapshot_json'] = len(encoded(snapshot)) if snapshot is not None else 0
+            # The snapshot is the full retained outcome history sent to the model.
+            values['outcome_history_json'] = values['snapshot_json']
+            schema = envelope.get('command_types', '')
+            values['command_schema_utf8'] = len(schema.encode()) if isinstance(schema, str) else len(encoded(schema))
+            remaining = {k: v for k, v in envelope.items() if k not in ('snapshot', 'command_types')}
+            values['remaining_envelope_json'] = len(encoded(remaining))
+        else:
+            values.update(snapshot_json=None, outcome_history_json=None, command_schema_utf8=None, remaining_envelope_json=None)
+        return values
+
     def observe(self, message):
         method = message.get('method')
         if 'id' in message and not method:
             self.responses[message['id']] = message
+        elif method == 'thread/tokenUsage/updated':
+            params = message.get('params', {})
+            usage = params.get('tokenUsage', {})
+            if not isinstance(usage, dict):
+                return
+            selected = {}
+            for scope in ('total', 'last'):
+                value = usage.get(scope, {})
+                if not isinstance(value, dict):
+                    value = {}
+                selected[scope] = {key: number for key in
+                    ('totalTokens', 'inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens')
+                    if isinstance((number := value.get(key)), int) and not isinstance(number, bool) and number >= 0}
+            identity = {key: params[key] for key in ('threadId', 'turnId')
+                        if isinstance(params.get(key), str) and len(params[key]) <= 256}
+            if identity.get('threadId') and selected['total']:
+                self.event('token_usage', {**identity, 'tokenUsage': selected})
         elif method and 'id' in message:
             key = self.request_key(message)
             if key in self.pending:
@@ -352,6 +421,17 @@ class Broker:
                            'thread_id': params.get('threadId'), 'turn_id': params.get('turnId'),
                            'source': self.source_snapshot()})
             self.event(method, params)
+            if method == 'thread/started':
+                self.observe_context(params.get('thread', {}).get('id'), method)
+            elif method == 'turn/started':
+                self.observe_context(params.get('threadId'), method)
+            elif method in ('item/started', 'item/completed'):
+                item = params.get('item', {})
+                if item.get('type') == 'subAgentActivity':
+                    self.observe_context(item.get('agentThreadId'), 'subAgentActivity')
+                elif item.get('type') == 'collabAgentToolCall':
+                    for thread_id in item.get('agentsStates', {}):
+                        self.observe_context(thread_id, 'collabAgentToolCall')
             if method == 'turn/started' and params.get('threadId') == self.thread:
                 self.turn = params['turn']['id']
             if method == 'turn/completed' and params.get('threadId') == self.thread:
@@ -485,6 +565,28 @@ class Broker:
             'source_capture_limits': source_capture_limits(),
         })
 
+    def verify_thread_settings(self, started):
+        m = self.manifest
+        effective = {key: started.get(key) for key in ('model', 'reasoningEffort', 'approvalPolicy',
+                      'approvalsReviewer', 'sandbox', 'instructionSources')}
+        self.event('effective_settings', effective)
+        if (started.get('approvalsReviewer') != 'user' or
+            started.get('approvalPolicy') != 'on-request' or started.get('model') != m['model'] or
+            started.get('reasoningEffort') != m['effort']):
+            raise ValueError('effective Codex profile differs from authorised profile')
+        expected_mode = 'readOnly' if m['role'] == 'supervisor' else 'workspaceWrite'
+        if started.get('sandbox', {}).get('type') != expected_mode:
+            raise ValueError('effective sandbox differs')
+        if m['role'] == 'worker':
+            sandbox = started['sandbox']
+            if sandbox.get('networkAccess') != m.get('worker_network_access', False) or not sandbox.get('excludeSlashTmp') or not sandbox.get('excludeTmpdirEnvVar'):
+                raise ValueError('effective worker sandbox broadens authority')
+        roots = started.get('sandbox', {}).get('writableRoots', [])
+        if any(Path(p).resolve() != Path(m['workspace']).resolve() for p in roots):
+            raise ValueError('effective writable roots broaden workspace authority')
+        if Path(started.get('cwd', '')).resolve() != Path(m['workspace']).resolve():
+            raise ValueError('effective cwd differs from registered workspace')
+
     def command(self):
         m = self.manifest
         config = self.configuration()
@@ -516,6 +618,10 @@ class Broker:
                    'broker_pid': os.getpid(), 'manifest_digest': digest(m),
                    'command': self.command()})
         try:
+            if self.context_limit is not None:
+                self.event('context_limit', {'limit': self.context_limit,
+                           'observed_count': len(self.context_threads), 'exceeded': False,
+                           'enforcement': 'observed_events', 'unreported_children': 'unknown'})
             if m['role'] == 'worker':
                 self.writer = WorkspaceWriter(m['workspace'], {
                     'execution_id': m['execution_id'], 'generation': self.generation,
@@ -540,31 +646,13 @@ class Broker:
             effective_config = self.rpc('config/read', {'cwd': m['workspace'], 'includeLayers': False})
             self.verify_capability_config(effective_config['config'])
             started = self.rpc('thread/start', m['thread_params'])
-            effective = {key: started.get(key) for key in ('model', 'reasoningEffort', 'approvalPolicy',
-                          'approvalsReviewer', 'sandbox', 'instructionSources')}
-            self.event('effective_settings', effective)
-            if (started.get('approvalsReviewer') != 'user' or
-                started.get('approvalPolicy') != 'on-request' or started.get('model') != m['model'] or
-                started.get('reasoningEffort') != m['effort']):
-                raise ValueError('effective Codex profile differs from authorised profile')
-            expected_mode = 'readOnly' if m['role'] == 'supervisor' else 'workspaceWrite'
-            if started.get('sandbox', {}).get('type') != expected_mode:
-                raise ValueError('effective sandbox differs')
-            if m['role'] == 'worker':
-                sandbox = started['sandbox']
-                if sandbox.get('networkAccess') != m.get('worker_network_access', False) or not sandbox.get('excludeSlashTmp') or not sandbox.get('excludeTmpdirEnvVar'):
-                    raise ValueError('effective worker sandbox broadens authority')
-            roots = started.get('sandbox', {}).get('writableRoots', [])
-            if any(Path(p).resolve() != Path(m['workspace']).resolve() for p in roots):
-                raise ValueError('effective writable roots broaden workspace authority')
-            if Path(started.get('cwd', '')).resolve() != Path(m['workspace']).resolve():
-                raise ValueError('effective cwd differs from registered workspace')
+            self.verify_thread_settings(started)
             sources = []
             for path in started.get('instructionSources', []):
                 raw = Path(path).read_bytes()
                 if len(raw) > MAX_MESSAGE:
                     raise ValueError('guidance identity input exceeded bound')
-                sources.append({'path': path, 'sha256': hashlib.sha256(raw).hexdigest()})
+                sources.append({'path': path, 'sha256': hashlib.sha256(raw).hexdigest(), 'byte_length': len(raw)})
             skills = self.rpc('skills/list', {'cwds': [m['workspace']], 'forceReload': True})
             for entry in skills.get('data', []):
                 for skill in entry.get('skills', []):
@@ -573,10 +661,12 @@ class Broker:
                         raw = Path(path).read_bytes()
                         if len(raw) > MAX_MESSAGE:
                             raise ValueError('skill identity input exceeded bound')
-                        sources.append({'path': path, 'sha256': hashlib.sha256(raw).hexdigest()})
+                        sources.append({'path': path, 'sha256': hashlib.sha256(raw).hexdigest(), 'byte_length': len(raw)})
             self.event('guidance_identities', sources)
             self.thread = started['thread']['id']
             self.event('thread_identity', {'thread_id': self.thread})
+            self.observe_context(self.thread, 'thread/start response')
+            self.event('context_input_bytes', self.context_input_bytes())
             result = self.rpc('turn/start', {'threadId': self.thread, 'model': m['model'],
                               'effort': m['effort'], 'input': [{'type': 'text', 'text': m['prompt']}]})
             self.turn = result['turn']['id']

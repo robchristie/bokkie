@@ -27,6 +27,8 @@ enum Action {
     },
     /// Validate the explicit task profile without starting Codex.
     Validate,
+    /// Inspect exact production thread parameters without starting a model or database.
+    PreflightParameters,
     /// Drive one reconciliation/dispatch iteration. Explicitly uses Codex account.
     Tick,
     /// Run bounded iterations until interrupted; brokers survive this controller.
@@ -40,6 +42,13 @@ fn main() -> RuntimeResult<()> {
     let profile = EngineeringRuntimeProfile::load(&cli.profile)?;
     if matches!(cli.command, Action::Validate) {
         println!("{}", serde_json::to_string_pretty(&profile)?);
+        return Ok(());
+    }
+    if matches!(cli.command, Action::PreflightParameters) {
+        println!(
+            "{}",
+            serde_json::to_string(&profile.preflight_parameters()?)?
+        );
         return Ok(());
     }
     profile.validate_database(&cli.db)?;
