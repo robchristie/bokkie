@@ -1,0 +1,158 @@
+{
+  "status": "corrected interpretation only; historical acceptance unchanged",
+  "original_pr": "https://github.com/robchristie/bokkie/pull/28",
+  "candidate": "dc5c3a248f26ec7e8f3ddb7bec35f7d64b094129",
+  "campaign_id": "qualification-controls-20260911",
+  "attempt_id": "0cdf0f54c96e4f368f2b768b163cb1a8",
+  "method": "Read-only recollection of retained journals and fixture snapshots; replay through a temporary campaign registry solely to interpret measurements. No historical ledger mutation or live execution.",
+  "original_evidence": [
+    {
+      "path": "docs/supervision-evidence/qualification-controls.json",
+      "sha256": "586726706d57d70f61c4f190d56a89c957c89b99462f20ca85f8e7889fad819d"
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/campaign-report.json",
+      "sha256": "66b1a043f19bbe3661b45dec760e720816e313bae287bb5274f323b4ae02a98c",
+      "bytes": 103732
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/observations.json",
+      "sha256": "d1544ba10a8d8d6526bccaa96d7477e61325cf204dfb097d1fc6fb71ed916599",
+      "bytes": 8074
+    }
+  ],
+  "recollection_inputs": [
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/fixture.sqlite",
+      "sha256": "36095633f00e0fafcaf1e695df4a67f36378a807339e2078e702b90675cef877"
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/brokers/1fb647ae-0b8c-495a-baa0-ca65d757ca3a/events.jsonl",
+      "sha256": "2112b847d0881acbb0be951fb9095860405bd932196af1467533a0a4d8a60331"
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/brokers/89ea6163-9d79-4b5d-b733-804436d60a66/events.jsonl",
+      "sha256": "18cc722423d576e4043174e925f0af05828a294131d215130196ecf01b002082"
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/brokers/8a5b0a33-2d74-4b8e-bae0-b4f65ab9404c/events.jsonl",
+      "sha256": "c012d29f56583b454cd7128318061e0863480136d225cd453a659a998ede9eb4"
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/brokers/9ff6d76b-83e4-4fee-b28d-aa974d50be4b/events.jsonl",
+      "sha256": "1dc506b0c136a4ebcc8bf9a9b3ac2948908ed6a84523f1409bebc9d6fb6597ee"
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/brokers/dbb38399-7be3-4d3d-a42c-635ecb0f1000/events.jsonl",
+      "sha256": "04a372a599e9e7d1e1651645250cf21186cdea76b32e227227ff3c6b7ebc45aa"
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/brokers/dce49f02-afdb-41f4-ae36-7cdc754ad006/events.jsonl",
+      "sha256": "2a9b9e9520393dd01c99fe0ece2d3bd4394aeb3bcfdb17f9afc9d589bd8d4392"
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/brokers/e46195da-6706-457f-b2c7-80b7100bdb28/events.jsonl",
+      "sha256": "e39339d5705d4507583302e3dc78ae7c7a214d03b18199670bfa5f512e3fbf12"
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/brokers/ed30c400-18bb-414c-a42d-dca6642f9e31/events.jsonl",
+      "sha256": "44de2f3a35ae6ca095b13049d7bd7d83ff0887db4d2132f0062d953385cd057f"
+    },
+    {
+      "path": "/nvme/development/bokkie-qualification-20260911-a/brokers/ef934c8b-68df-4298-b45d-5d00229469a8/events.jsonl",
+      "sha256": "77e184f25f0c9c6e781ee761eb69022c922aad552bcba7364613f28e00fc1588"
+    }
+  ],
+  "measurements": {
+    "report_schema_version": 2,
+    "observed_contexts": 12,
+    "context_inventory_complete": false,
+    "contexts_complete": false,
+    "observed_token_metrics_complete": {
+      "input": true,
+      "cached": true,
+      "output": true,
+      "uncached": true
+    },
+    "observed_telemetry_complete": true,
+    "telemetry_complete": false,
+    "input_tokens_complete": false,
+    "cached_input_tokens_complete": false,
+    "uncached_input_tokens_complete": false,
+    "output_tokens_complete": false,
+    "known_input_tokens": 4945794,
+    "known_cached_input_tokens": 4226560,
+    "known_uncached_tokens": 719234,
+    "known_output_tokens": 18346,
+    "known_model_responses": 81,
+    "fresh_contexts_per_accepted_qualification": null,
+    "uncached_tokens_per_accepted_qualification": null
+  },
+  "coverage_uncertainties": [
+    {
+      "enforcement": "observed_events",
+      "execution": "1fb647ae-0b8c-495a-baa0-ca65d757ca3a",
+      "reason": "context_coverage_unknown",
+      "unreported_children": "unknown"
+    },
+    {
+      "enforcement": "observed_events",
+      "execution": "89ea6163-9d79-4b5d-b733-804436d60a66",
+      "reason": "context_coverage_unknown",
+      "unreported_children": "unknown"
+    },
+    {
+      "enforcement": "observed_events",
+      "execution": "8a5b0a33-2d74-4b8e-bae0-b4f65ab9404c",
+      "reason": "context_coverage_unknown",
+      "unreported_children": "unknown"
+    },
+    {
+      "enforcement": "observed_events",
+      "execution": "9ff6d76b-83e4-4fee-b28d-aa974d50be4b",
+      "reason": "context_coverage_unknown",
+      "unreported_children": "unknown"
+    },
+    {
+      "enforcement": "observed_events",
+      "execution": "dbb38399-7be3-4d3d-a42c-635ecb0f1000",
+      "reason": "context_coverage_unknown",
+      "unreported_children": "unknown"
+    },
+    {
+      "enforcement": "observed_events",
+      "execution": "dce49f02-afdb-41f4-ae36-7cdc754ad006",
+      "reason": "context_coverage_unknown",
+      "unreported_children": "unknown"
+    },
+    {
+      "enforcement": "observed_events",
+      "execution": "e46195da-6706-457f-b2c7-80b7100bdb28",
+      "reason": "context_coverage_unknown",
+      "unreported_children": "unknown"
+    },
+    {
+      "enforcement": "observed_events",
+      "execution": "ed30c400-18bb-414c-a42d-dca6642f9e31",
+      "reason": "context_coverage_unknown",
+      "unreported_children": "unknown"
+    },
+    {
+      "enforcement": "observed_events",
+      "execution": "ef934c8b-68df-4298-b45d-5d00229469a8",
+      "reason": "context_coverage_unknown",
+      "unreported_children": "unknown"
+    }
+  ],
+  "admission_policy": {
+    "reserved_contexts": 240,
+    "charged_contexts": 240,
+    "measure": "reserved/charged admission-policy contexts; not observed model usage, tokens or quota",
+    "policy_changed": false
+  },
+  "limitations": [
+    "Available per-thread counters are observed subtotals, not complete campaign-wide usage.",
+    "The broker cannot establish that every child context was observed.",
+    "Response counts remain a lower bound; no billing, quota or savings claim."
+  ]
+}

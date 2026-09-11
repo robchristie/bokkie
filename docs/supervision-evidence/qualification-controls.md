@@ -109,6 +109,41 @@ Each observation is bound to an execution/thread. Usage is the latest cumulative
 per-thread counter, not the sum of replayed events; child totals are not added to
 a parent aggregate. Missing input/cache/output telemetry is unknown. Reports show
 known subtotals separately from complete per-accepted-qualification ratios.
+Report schema version 2 separates coverage from available counters:
+
+- `observed_contexts` counts distinct persisted thread identities.
+- `context_inventory_complete` asserts coverage of all execution contexts only
+  with explicit positive coverage evidence for every resolved model attempt and
+  a matching durable inventory. `contexts_complete` retains that same strong
+  meaning as a compatibility alias. False means completeness is unproved.
+- `observed_token_metrics_complete` reports availability of `input`, `cached`,
+  `uncached` and `output` counters across observed contexts only;
+  `observed_telemetry_complete` combines those flags. These do not certify final
+  runtime totals or coverage of unreported contexts. Empty observed sets have
+  vacuously available counters; coverage still needs separate evidence.
+- Existing `input_tokens_complete`, `cached_input_tokens_complete`,
+  `output_tokens_complete`, `telemetry_complete` and the new
+  `uncached_input_tokens_complete` require complete coverage as well as their
+  counters. Known subtotals remain available regardless of these flags.
+- Existing per-accepted-qualification ratios retain campaign-wide semantics and
+  are null when coverage is unknown; the token ratio also requires complete
+  input/cache/output telemetry, preserving its earlier gate.
+
+The current broker cannot certify the total inventory: `context_limit` describes
+`observed_events` enforcement with `unreported_children: unknown`. Collection
+retains that reason once per execution, regardless of event replay. Missing
+coverage metadata, including legacy observations with old completeness flags,
+also leaves coverage unproved. A recorded verified pre-model fault with no
+observed contexts retains known-zero usage. Reports regenerated from existing
+ledgers apply these conservative rules without a schema migration; immutable
+historical JSON reports retain their original values and require the linked
+correction below when interpreted. No absent field implies complete coverage.
+
+`reserved_contexts` and `charged_contexts` are admission-policy allowance units,
+not observed model usage, tokens, billing or quota. `context_allowance_measure`
+carries this distinction in machine-readable reports. The 240-context envelope
+and reservation/refund policy are unchanged.
+
 Response counts are observed agent messages or distinct cumulative usage updates,
 a labelled lower bound rather than an invented exact model call count.
 
@@ -180,7 +215,7 @@ qualification candidate `dc5c3a248f26ec7e8f3ddb7bec35f7d64b094129` after indepen
 review and canonical verification. All seven focused probes and installed Codex
 0.154.0 preflight passed on that exact candidate. The complete fixture used eight
 main-outcome executions and one authority execution, with three visible child
-contexts: 12 contexts in total, one complete attempt and no live focused probes.
+contexts: 12 observed contexts, one complete attempt and no live focused probes.
 
 The run took 746.76 seconds. Available per-thread cumulative observations report
 4,945,794 input tokens, 4,226,560 cached input, 719,234 uncached input and 18,346
@@ -207,3 +242,14 @@ Only then may `successor --next-campaign NEXT-ID --evidence next-change.json`
 explicitly archive the terminal campaign and start the next work package. Old IDs
 remain reportable and immutable. An exhausted or interrupted campaign cannot take
 this path. These commands retain decisions; they do not perform review or merge.
+
+## PR #28 telemetry correction
+
+The [corrected interpretation](qualification-telemetry-addendum.json) references
+original evidence hashes and recollected journal identities. It supersedes only
+the historical completeness and ratio interpretation: 12 contexts were observed,
+but the total context inventory is unknown. All observed contexts have the
+available input/cache/output counters quoted above. Those are known subtotals;
+they cannot establish complete campaign-wide totals or ratios. The original
+qualification JSON, retained reports, terminal ledger and acceptance remain
+unchanged. No new live qualification was run for this deterministic correction.

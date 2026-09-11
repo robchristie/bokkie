@@ -55,3 +55,11 @@ baseline and current all-response measurements are not directly comparable.
 The configured Astra/effort, engineering workflow, worker permissions and Store
 safety boundaries remain. No global configuration, private document ingestion,
 live Bokkie database, persistent service, deployment or publication was involved.
+
+## Subsequent telemetry interpretation
+
+The [PR #28 telemetry addendum](../../supervision-evidence/qualification-telemetry-addendum.json)
+corrects the original reporting interpretation without changing this historical
+acceptance. Twelve contexts and their token subtotals were observed; total child
+coverage remains unknown, so complete campaign-wide ratios are unproved. Field
+semantics and legacy compatibility are documented in the controls guide above.

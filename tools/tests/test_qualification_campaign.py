@@ -139,7 +139,7 @@ class CampaignTests(unittest.TestCase):
     def test_missing_and_cumulative_per_thread_telemetry(self):
         self.reserve()
         self.c.mark_launched('a')
-        self.c.complete('a', True, evidence={'observations': {'contexts': [{'thread_id': 'root'}, {'thread_id': 'child'}], 'uncertainties': []}})
+        self.c.complete('a', True, evidence={'observations': {'contexts': [{'thread_id': 'root'}, {'thread_id': 'child'}], 'uncertainties': [], 'context_inventory_complete': True}})
         self.assertIsNone(self.c.report()['uncached_tokens_per_accepted_qualification'])
         for _ in range(2):
             self.c.telemetry('a', 'root', 100, 40, 120, output_tokens=20)
@@ -180,7 +180,7 @@ class CampaignTests(unittest.TestCase):
         self.c.mark_launched('a')
         self.c.telemetry('a', 'root', 100, 40, 120)
         self.c.complete('a', True, evidence={'observations': {
-            'contexts': [{'thread_id': 'root'}], 'uncertainties': []}})
+            'contexts': [{'thread_id': 'root'}], 'uncertainties': [], 'context_inventory_complete': True}})
         report = self.c.report()
         self.assertTrue(report['input_tokens_complete'])
         self.assertTrue(report['cached_input_tokens_complete'])
@@ -197,6 +197,20 @@ class CampaignTests(unittest.TestCase):
         self.c.complete('a', True)
         self.assertFalse(self.c.report()['telemetry_complete'])
         self.assertIsNone(self.c.report()['fresh_contexts_per_accepted_qualification'])
+
+    def test_legacy_completeness_claim_is_not_coverage_evidence(self):
+        self.reserve()
+        self.c.mark_launched('a')
+        self.c.telemetry('a', 'root', 100, 40, output_tokens=20)
+        self.c.complete('a', True, evidence={'observations': {
+            'contexts': [{'thread_id': 'root'}], 'uncertainties': [],
+            'contexts_complete': True, 'telemetry_complete': True}})
+        report = self.c.report()
+        self.assertFalse(report['context_inventory_complete'])
+        self.assertTrue(report['observed_telemetry_complete'])
+        self.assertFalse(report['input_tokens_complete'])
+        self.assertIsNone(report['uncached_tokens_per_accepted_qualification'])
+        self.assertEqual(report['known_uncached_tokens'], 60)
 
     def test_pre_model_zero_usage_and_failed_checks_are_counted(self):
         self.c.record_check('bad-startup', 'preflight', self.fp, False,
