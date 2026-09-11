@@ -113,8 +113,9 @@ Response counts are observed agent messages or distinct cumulative usage updates
 a labelled lower bound rather than an invented exact model call count.
 
 Initial context composition is measured in UTF-8/JSON bytes: role instructions,
-guidance files, dynamic tool schemas, command schema, outcome/history snapshot and
-remaining envelope. These overlapping diagnostic fields must not be summed as
+dynamic tool schemas, command schema, outcome/history snapshot and
+remaining envelope. Guidance/skill file bytes are a discovered-file inventory,
+not proof that their full contents were injected into the prompt. These overlapping diagnostic fields must not be summed as
 independent buckets. Source contents and retained evidence retrieved later through
 tools are not part of the directly assembled initial prompt; initial references
 are in the snapshot. Runtime-injected tool/schema/prompt material and precise
@@ -174,8 +175,30 @@ and no new Pagefold acceptance claim is made.
 
 ## Current candidate evidence
 
-Pending final candidate verification and complete live fixture. The active plan
-owns progress until those observations are retained here.
+The [retained qualification](qualification-controls.json) passed on runtime and
+qualification candidate `dc5c3a248f26ec7e8f3ddb7bec35f7d64b094129` after independent
+review and canonical verification. All seven focused probes and installed Codex
+0.154.0 preflight passed on that exact candidate. The complete fixture used eight
+main-outcome executions and one authority execution, with three visible child
+contexts: 12 contexts in total, one complete attempt and no live focused probes.
+
+The run took 746.76 seconds. Available per-thread cumulative observations report
+4,945,794 input tokens, 4,226,560 cached input, 719,234 uncached input and 18,346
+output tokens. There were 81 observed response/usage-update observations under the
+report's lower-bound definition. No unplanned outer-agent or human intervention,
+preflight failure, suppressed retry or final-only infrastructure defect occurred.
+The three intentional fixture injections remain separate. All boundaries were
+reconciled and the accepted arithmetic checks passed. The campaign charged its
+240-context reservation conservatively, leaving 510 reserved-context allowance.
+
+The retained JSON includes byte composition, exact component/profile/environment
+identities, criteria/review/acceptance evidence and hashes of local receipts. Four
+outer implementation/review contexts supported this work package; their token
+telemetry is unavailable and separate from fixture usage. Four early independent
+review findings were repaired before model qualification began. Subsequent
+candidate changes contain evidence and documentation only; the live-qualified
+runtime and qualification component identities are unchanged. No comparable
+savings or weekly quota-charge claim follows from this single observation.
 
 Policy may be configured with `configure --limits policy.json --evidence decision.json`
 only before the first reservation. `finish --evidence landing.json` requires a
