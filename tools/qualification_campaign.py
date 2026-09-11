@@ -379,21 +379,63 @@ class Campaign:
         known = [r for r in tokens if r['input'] is not None and r['cached'] is not None]
         uncached = sum(r['input'] - r['cached'] for r in known)
         accepted = sum(r['stage'] == 'complete_fixture' and r['passed'] == 1 for r in rows)
-        missing = any(not any(t['attempt_id'] == r['id'] for t in tokens) for r in rows if r['launched']) or len(known) != len(tokens)
+        checks = [dict(r) for r in self.db.execute('SELECT * FROM checks WHERE scope=? ORDER BY created,id', (self.scope,))]
+        observation_unknowns = []
+        for row in rows:
+            observed = [t for t in tokens if t['attempt_id'] == row['id']]
+            # A verified fault before a model start has known zero model usage.
+            if row['state'] == 'completed' and row['pre_model_fault'] and not observed:
+                continue
+            evidence = json.loads(row['evidence'] or '{}')
+            observation = evidence.get('observations')
+            reasons = []
+            if row['state'] != 'completed':
+                reasons.append('attempt_unresolved')
+            if not isinstance(observation, dict):
+                reasons.append('observation_evidence_missing')
+            else:
+                reasons.extend(observation.get('uncertainties') or [])
+                recorded = observation.get('contexts')
+                if not isinstance(recorded, list) or not recorded:
+                    reasons.append('context_inventory_missing')
+                elif any(not isinstance(c, dict) or not c.get('thread_id') for c in recorded):
+                    reasons.append('context_identity_missing')
+                elif {c['thread_id'] for c in recorded} != {t['thread_id'] for t in observed}:
+                    reasons.append('context_inventory_telemetry_mismatch')
+                if observation.get('contexts_complete') is False or observation.get('telemetry_complete') is False:
+                    reasons.append('collector_incomplete')
+            if reasons:
+                observation_unknowns.append({'attempt_id': row['id'], 'reasons': reasons})
+        contexts_complete = not observation_unknowns
+        complete = {field: contexts_complete and all(r[field] is not None for r in tokens)
+                    for field in ('input', 'cached', 'output')}
+        telemetry_complete = all(complete.values())
+        intervention_fields = ('human_interventions', 'outer_agent_interventions')
+        intervention_evidence = [json.loads(r['evidence'] or '{}') for r in rows]
+        interventions = {field: sum(e.get(field, 0) for e in intervention_evidence) for field in intervention_fields}
         return {'scope': self.scope, 'campaign_id': self.campaign_id, 'limits': self.limits,
                 'attempts': rows, 'stages': {s: sum(r['stage'] == s for r in rows) for s in STAGES},
                 'terminal': json.loads(binding['terminal']) if binding['terminal'] else None,
                 'policy_events': [dict(r) for r in self.db.execute('SELECT * FROM policy_events WHERE scope=? ORDER BY created', (self.scope,))],
                 'charged_contexts': self._charged_contexts(rows),
                 'reserved_contexts': sum(r['envelope'] for r in rows), 'observed_contexts': len(tokens),
-                'telemetry_complete': not missing, 'known_uncached_tokens': uncached,
-                'uncached_tokens_per_accepted_qualification': uncached / accepted if accepted and not missing else None,
+                'telemetry_complete': telemetry_complete, 'contexts_complete': contexts_complete,
+                'observation_unknowns': observation_unknowns,
+                'input_tokens_complete': complete['input'], 'cached_input_tokens_complete': complete['cached'],
+                'output_tokens_complete': complete['output'],
+                'known_input_tokens': sum(r['input'] or 0 for r in tokens),
+                'known_cached_input_tokens': sum(r['cached'] or 0 for r in tokens),
+                'known_uncached_tokens': uncached,
+                'uncached_tokens_per_accepted_qualification': uncached / accepted if accepted and telemetry_complete else None,
+                'fresh_contexts_per_accepted_qualification': len(tokens) / accepted if accepted and contexts_complete else None,
                 'known_output_tokens': sum(r['output'] or 0 for r in tokens),
                 'known_model_responses': sum(r['responses'] or 0 for r in tokens),
-                'checks': [dict(r) for r in self.db.execute('SELECT * FROM checks WHERE scope=? ORDER BY created,id', (self.scope,))],
+                'checks': checks,
                 'accepted_qualifications': accepted, 'suppressions': [dict(r) for r in self.db.execute('SELECT * FROM suppressions WHERE scope=?', (self.scope,))],
-                'pre_model_faults': sum(r['pre_model_fault'] for r in rows),
+                'pre_model_faults': sum(r['pre_model_fault'] for r in rows) + sum(not r['passed'] for r in checks),
                 'final_only_defects': sum(r['final_only_defect'] for r in rows),
                 'elapsed_seconds': sum((r['completed'] or time.time()) - r['created'] for r in rows),
                 'interventions': sum(json.loads(r['evidence'] or '{}').get('interventions', 0) for r in rows),
+                **interventions,
+                'intervention_counts_complete': all(all(field in e for field in intervention_fields) for e in intervention_evidence),
                 'historical_baseline': {'contexts': 91, 'approx_first_response_uncached_tokens': 3340000, 'approx_fixture_input_tokens': 4150000, 'savings_claim': None}}

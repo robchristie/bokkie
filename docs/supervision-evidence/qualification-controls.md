@@ -18,7 +18,7 @@ reservation/accounting. Neither defines obligation transitions: Store remains
 authoritative for dispatch, cessation, repair and acceptance.
 
 The stages are preflight → focused probe → complete fixture → application dogfood.
-All complete attempts run all five deterministic probes and fresh local preflight.
+All complete attempts run all seven deterministic probes and fresh local preflight.
 After a failure, record the changed relevant inputs and diagnosis, then pass the
 relevant probe before a complete attempt. A failed probe never clears diagnosis.
 The driver exposes no arbitrary live command or switch that can disguise a complete
@@ -28,6 +28,8 @@ context envelope; it cannot reuse the complete fixture under a different label.
 
 | Probe | Historical failure property exercised without a model |
 |---|---|
+| `qualification_driver` | Actual worker-command marker, complete acceptance observations, bounded deadlines and controller cessation |
+| `campaign_admission` | Durable reservation, crash/restart, finite budgets and probe/repair admission |
 | `config_schema` | MCP table preservation, unquoted server keys, canonical concurrency field, effective configuration mismatch |
 | `child_review` | Root attribution, child final answer and exact successful child turn; wrong or missing provenance rejected |
 | `submission_binding` | Invented command observations and changed source cannot become valid submission evidence |
@@ -69,7 +71,10 @@ Changing a fixture directory, campaign ID or stage cannot replenish an active
 campaign. SQLite immediate transactions arbitrate concurrent reservation. A
 single-use launch claim is durable before the controller starts. Reservations
 are never refunded; crashes before or after launch remain unresolved until
-reconciliation proves not-started status or Store verifies cessation.
+reconciliation proves not-started status or verifies that the controller has ceased,
+all Store outcomes are terminal, and all execution boundaries have ceased. The
+driver holds a fixture lock and gives its controller a Linux parent-death signal;
+a crash between controller spawn and its identity receipt remains unresolved.
 
 Initial configurable defaults are three complete fixtures, two live probes, one
 application dogfood slot, 750 reserved contexts and 240 contexts protected for a

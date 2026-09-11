@@ -1,6 +1,7 @@
 """Compact observations from retained qualification journals; never prompt copies."""
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 
 
@@ -26,7 +27,15 @@ def collect(root):
         if role is not None and (value['role'] is None or role != 'child'):
             value['role'] = role
         return value
-    for path in sorted((Path(root) / 'brokers').glob('*/events.jsonl')):
+    paths = sorted((Path(root) / 'brokers').glob('*/events.jsonl'))
+    database = Path(root) / 'fixture.sqlite'
+    if database.exists():
+        with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as connection:
+            snapshots = connection.execute('SELECT v.snapshot_json FROM engineering_outcomes o JOIN engineering_versions v ON v.outcome_id=o.id AND v.revision=o.state_revision').fetchall()
+        expected = {e['id'] for (raw,) in snapshots for e in json.loads(raw)['executions']}
+        for missing in sorted(expected - {path.parent.name for path in paths}):
+            uncertain.append({'execution': missing, 'reason': 'missing_execution_journal'})
+    for path in paths:
         execution = path.parent.name
         root_thread = None
         role = None
@@ -37,12 +46,17 @@ def collect(root):
         if path.stat().st_size > 16 * 1024 * 1024:
             uncertain.append({'execution': execution, 'reason': 'journal_bound'})
             continue
+        expected_sequence = 1
         for line in path.read_bytes().splitlines():
             try:
                 event = json.loads(line)
             except ValueError:
                 uncertain.append({'execution': execution, 'reason': 'torn_journal'})
                 break
+            if event.get('sequence') is not None and event['sequence'] != expected_sequence:
+                uncertain.append({'execution': execution, 'reason': 'journal_sequence_gap'})
+                break
+            expected_sequence += 1
             kind, value = event.get('kind'), event.get('value', {})
             if kind == 'context_observed':
                 context(value['thread_id'], role if value.get('source') == 'root' else 'child')

@@ -139,11 +139,11 @@ class CampaignTests(unittest.TestCase):
     def test_missing_and_cumulative_per_thread_telemetry(self):
         self.reserve()
         self.c.mark_launched('a')
-        self.c.complete('a', True)
+        self.c.complete('a', True, evidence={'observations': {'contexts': [{'thread_id': 'root'}, {'thread_id': 'child'}], 'uncertainties': []}})
         self.assertIsNone(self.c.report()['uncached_tokens_per_accepted_qualification'])
         for _ in range(2):
-            self.c.telemetry('a', 'root', 100, 40, 120)
-            self.c.telemetry('a', 'child', 80, 20, 95, 'root')
+            self.c.telemetry('a', 'root', 100, 40, 120, output_tokens=20)
+            self.c.telemetry('a', 'child', 80, 20, 95, 'root', output_tokens=15)
         self.c.telemetry('a', 'root', 50, 45, 60)  # Old cache snapshot ignored.
         report = self.c.report()
         self.assertEqual(report['observed_contexts'], 2)
@@ -154,6 +154,72 @@ class CampaignTests(unittest.TestCase):
         self.assertIsNone(self.c.report()['uncached_tokens_per_accepted_qualification'])
         with self.assertRaises(ValueError):
             self.c.telemetry('a', 'child', 90, 20, 100)
+
+    def test_collector_uncertainties_keep_known_usage_but_suppress_ratios(self):
+        for reason in ('torn_journal', 'journal_bound', 'event_gap', 'missing_thread', 'source_provenance_missing'):
+            with self.subTest(reason=reason):
+                campaign = Campaign.open(self.path, reason, reason)
+                self.addCleanup(campaign.close)
+                campaign.reserve('a', 'complete_fixture', self.fp, 1, 0, 0, contexts_per_execution=None)
+                campaign.mark_launched('a')
+                campaign.telemetry('a', 'root', 100, 40, 120, output_tokens=20)
+                campaign.complete('a', True, evidence={'observations': {
+                    'contexts': [{'thread_id': 'root'}],
+                    'uncertainties': [{'reason': reason}]}})
+                report = campaign.report()
+                self.assertFalse(report['telemetry_complete'])
+                self.assertFalse(report['contexts_complete'])
+                self.assertEqual(report['known_input_tokens'], 100)
+                self.assertEqual(report['known_cached_input_tokens'], 40)
+                self.assertEqual(report['known_output_tokens'], 20)
+                self.assertIsNone(report['uncached_tokens_per_accepted_qualification'])
+                self.assertIsNone(report['fresh_contexts_per_accepted_qualification'])
+
+    def test_missing_output_is_unknown_while_context_count_can_be_complete(self):
+        self.reserve()
+        self.c.mark_launched('a')
+        self.c.telemetry('a', 'root', 100, 40, 120)
+        self.c.complete('a', True, evidence={'observations': {
+            'contexts': [{'thread_id': 'root'}], 'uncertainties': []}})
+        report = self.c.report()
+        self.assertTrue(report['input_tokens_complete'])
+        self.assertTrue(report['cached_input_tokens_complete'])
+        self.assertFalse(report['output_tokens_complete'])
+        self.assertFalse(report['telemetry_complete'])
+        self.assertIsNone(report['uncached_tokens_per_accepted_qualification'])
+        self.assertEqual(report['fresh_contexts_per_accepted_qualification'], 1)
+
+    def test_active_or_missing_inventory_never_claims_complete_telemetry(self):
+        self.reserve()
+        self.c.mark_launched('a')
+        self.c.telemetry('a', 'root', 100, 40, 120, output_tokens=20)
+        self.assertFalse(self.c.report()['telemetry_complete'])
+        self.c.complete('a', True)
+        self.assertFalse(self.c.report()['telemetry_complete'])
+        self.assertIsNone(self.c.report()['fresh_contexts_per_accepted_qualification'])
+
+    def test_pre_model_zero_usage_and_failed_checks_are_counted(self):
+        self.c.record_check('bad-startup', 'preflight', self.fp, False,
+                            {'error': 'configuration rejected'}, 'configuration')
+        self.c.record_check('negative-regression', 'focused_probe', self.fp, True,
+                            {'result': 'invalid configuration rejected as expected'})
+        self.reserve()
+        self.c.complete('a', False, 'configuration', pre_model_fault=True)
+        report = self.c.report()
+        self.assertTrue(report['telemetry_complete'])
+        self.assertEqual(report['known_input_tokens'], 0)
+        self.assertEqual(report['pre_model_faults'], 2)
+
+    def test_outer_and_human_interventions_are_separate(self):
+        self.reserve()
+        self.c.mark_launched('a')
+        self.c.complete('a', True, evidence={'human_interventions': 1,
+                                            'outer_agent_interventions': 2,
+                                            'planned_fixture_injections': 3})
+        report = self.c.report()
+        self.assertEqual(report['human_interventions'], 1)
+        self.assertEqual(report['outer_agent_interventions'], 2)
+        self.assertTrue(report['intervention_counts_complete'])
 
     def test_policy_can_change_only_before_reservation(self):
         self.c.configure({'contexts': 900}, {'decision': 'measured slack'})

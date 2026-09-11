@@ -5,6 +5,8 @@ Creates only synthetic task-scoped resources. It never supplies supervisor
 answers or worker instructions after the initial fixture/intent is saved.
 """
 import argparse
+import ctypes
+import fcntl
 import hashlib
 import json
 import os
@@ -19,7 +21,47 @@ import urllib.request
 
 
 def dump(path, value):
-    path.write_text(json.dumps(value, indent=2) + '\n')
+    temporary = path.with_name(path.name + '.tmp-' + str(os.getpid()))
+    with temporary.open('w') as stream:
+        json.dump(value, stream, indent=2)
+        stream.write('\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def process_identity(pid):
+    try:
+        stat = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+        if stat[0] == 'Z':
+            return None  # A zombie has ceased and cannot dispatch or retain a writer.
+        return {'pid': pid, 'start_ticks': stat[19],
+                'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
+    except FileNotFoundError:
+        return None
+
+
+def stop_with_parent(parent_pid):
+    # Linux task-scoped controller: a killed driver cannot leave a dispatcher.
+    # Detached worker brokers retain their existing independent safety boundary.
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0 or os.getppid() != parent_pid:
+        os._exit(125)
+
+
+def controller_stopped(root):
+    identity_path = root / 'controller-identity.json'
+    if not identity_path.exists():
+        # A crash between spawn and its receipt remains uncertain.
+        return not (root / 'controller-launch-intent.json').exists()
+    recorded = json.loads(identity_path.read_text())
+    return process_identity(recorded['pid']) != recorded
+
 
 
 def snapshot(database, outcome):
@@ -27,6 +69,20 @@ def snapshot(database, outcome):
         row = connection.execute('SELECT v.snapshot_json, b.state FROM engineering_outcomes o JOIN engineering_versions v ON v.outcome_id=o.id AND v.revision=o.state_revision JOIN obligations b ON b.id=o.root_obligation_id WHERE o.id=?', (outcome,)).fetchone()
         value = json.loads(row[0]); value['observed_root_state'] = row[1]
         return value
+
+
+def offline_command_seen(logs):
+    return any(execution['role'] == 'worker' and event['kind'] == 'item/started'
+        and event['value'].get('item', {}).get('type') == 'commandExecution'
+        and 'bokkie-offline-window' in event['value']['item'].get('command', '')
+        for execution, event in logs)
+
+
+def validate_acceptance_observations(state, restarted, offline):
+    if not restarted or not offline or not state['repairs'] or not state['acceptance']:
+        raise AssertionError('completion missing required restart/offline/repair evidence')
+    if not any(q.get('resolution') for q in state['questions']):
+        raise AssertionError('no retained autonomous question resolution')
 
 
 def prepare_fixture(source, root):
@@ -77,7 +133,13 @@ def run_fixture(source, root, timeout_seconds, monitor=None):
     def start():
         nonlocal process
         stream = (root / f'controller-{len(logs)}.log').open('w'); logs.append(stream)
-        process = subprocess.Popen([str(source / 'target/debug/bokkie'), '--database', str(database), 'serve', '--bind', f'127.0.0.1:{port}', '--poll-ms', '250', '--engineering-profile', str(profile_path)], stdout=stream, stderr=stream, start_new_session=True)
+        parent_pid = os.getpid()
+        dump(root / 'controller-launch-intent.json', {'runner': process_identity(parent_pid), 'parent_death_signal': 'SIGKILL'})
+        process = subprocess.Popen([str(source / 'target/debug/bokkie'), '--database', str(database), 'serve', '--bind', f'127.0.0.1:{port}', '--poll-ms', '250', '--engineering-profile', str(profile_path)], stdout=stream, stderr=stream, start_new_session=True, preexec_fn=lambda: stop_with_parent(parent_pid))
+        controller_identity = process_identity(process.pid)
+        if controller_identity is None:
+            raise RuntimeError('controller ceased before identity receipt')
+        dump(root / 'controller-identity.json', controller_identity)
         until = time.monotonic() + 20
         while time.monotonic() < until:
             if process.poll() is not None: raise RuntimeError('controller exited; inspect retained log')
@@ -122,7 +184,7 @@ def run_fixture(source, root, timeout_seconds, monitor=None):
                 replay = call('/engineering/outcomes', body)
                 if {k:v for k,v in replay.items() if k != 'service'} != {k:v for k,v in receipt.items() if k != 'service'}: raise AssertionError('intake replay changed saved receipt')
                 record('lost_ack_replay_passed'); restarted = True
-            if not offline and any(e['role'] == 'worker' and v['kind'] == 'item/started' and v['value'].get('item', {}).get('type') == 'commandExecution' and 'bokkie-offline-window' in v['value']['item'].get('command', '') for e, v in logs_now):
+            if not offline and offline_command_seen(logs_now):
                 stop(); record('controller_unavailable_during_worker')
                 offline_until = time.monotonic() + 120
                 while time.monotonic() < offline_until:
@@ -132,10 +194,7 @@ def run_fixture(source, root, timeout_seconds, monitor=None):
                 else: raise TimeoutError('worker did not complete/reap while controller unavailable')
                 record('worker_completed_offline'); start(); offline = True
             if state['observed_root_state'] == 'completed':
-                if not restarted or not offline or not state['repairs'] or not state['acceptance']:
-                    raise AssertionError('completion missing required restart/offline/repair evidence')
-                if not any(q.get('resolution') for q in state['questions']):
-                    raise AssertionError('no retained autonomous question resolution')
+                validate_acceptance_observations(state, restarted, offline)
                 dump(root / 'accepted-outcome.json', state)
                 result = subprocess.run(['python3', '-m', 'unittest', 'discover', '-s', 'tests'], cwd=workspace, capture_output=True, text=True)
                 (root / 'application-check.txt').write_text(result.stdout + result.stderr)
@@ -244,18 +303,23 @@ PROBE_FOR = {
     'configuration': 'config_schema', 'payload_size': 'encoded_paging',
     'source_binding': 'source_boundaries', 'submission': 'submission_binding',
     'child_review': 'child_review', 'journal_decoding': 'child_review',
+    'deadline': 'qualification_driver', 'admission': 'campaign_admission',
+    'qualification_acceptance': 'qualification_driver',
 }
 
 
 def reconciled(root):
     database = root / 'fixture.sqlite'
+    if not controller_stopped(root):
+        return False
     if not database.exists():
         # Absence of a DB alone does not prove a launch never occurred.
         return False
     with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as connection:
         ids = [r[0] for r in connection.execute('SELECT id FROM engineering_outcomes')]
-    return bool(ids) and all(e['cessation_verified'] for oid in ids
-                            for e in snapshot(database, oid)['executions'])
+    states = [snapshot(database, oid) for oid in ids]
+    return bool(states) and all(state['observed_root_state'] in ('completed', 'cancelled') and
+        all(e['cessation_verified'] for e in state['executions']) for state in states)
 
 
 def main():
@@ -318,6 +382,11 @@ def main():
     if binding['campaign'] != args.campaign or binding['registry'] != str(campaign.path.resolve()) or binding['root'] != str(root):
         parser.error('fixture campaign binding changed')
     attempt_id = binding['attempt_id']
+    runner_lock = (root / 'qualification-runner.lock').open('a+')
+    try:
+        fcntl.flock(runner_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise AdmissionDenied('fixture runner is still active; do not reconcile or replace it')
     preflight = load_preflight()
     def observe():
         observations = collect(root)
@@ -360,7 +429,9 @@ def main():
             parser.error('--repair-of requires a concrete --repair-note')
         failed = campaign._attempt(args.repair_of)
         required = PROBE_FOR.get(failed['failure'])
-        if required and required not in names:
+        if required is None:
+            parser.error('unclassified failure: add a concrete relevant regression probe before another live attempt')
+        if required not in names:
             parser.error('failure requires focused probe ' + required)
         campaign.record_repair(args.repair_of, fp, {**identity, 'diagnosis': args.repair_note})
     results = []
@@ -395,6 +466,7 @@ def main():
         subagents=profile['max_subagents'], contexts_per_execution=3 + profile['max_subagents'], final=args.final)
     dump(root / 'reservation.json', {**reservation, **identity})
     os.environ['BOKKIE_QUALIFICATION_CONTEXT_LIMIT'] = '3'
+    dump(root / 'runner-identity.json', process_identity(os.getpid()))
     campaign.mark_launched(attempt_id)
     def monitor():
         observed = observe()

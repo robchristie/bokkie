@@ -21,6 +21,13 @@ _spec.loader.exec_module(broker)
 # Each probe declares its question and smallest production-path regression set.
 # The acceptance condition is every named test actually running and passing.
 PROBES = {
+    'qualification_driver': {
+        'question': 'Do deadline and acceptance guards reject incomplete fixture observations and orphaned dispatch?',
+        'python_modules': ['test_qualification_runner'],
+        'rust': ['dispatch_limits_honour_package_deadline_and_original_claim']},
+    'campaign_admission': {
+        'question': 'Do reservation, crash/restart, changed-input and finite allowance gates hold?',
+        'python_modules': ['test_qualification_campaign']},
     'config_schema': {
         'question': 'Do installed-schema aliases and task overrides preserve bounded capabilities?',
         'python': ['test_installed_schema_projects_canonical_concurrency_field',
@@ -61,7 +68,11 @@ def file_identity(path):
 def runtime_identity():
     paths = ['tools/engineering-runtime/broker.py', 'tools/engineering-runtime/preflight.py',
              'src/engineering_runtime.rs', 'src/engineering.rs', 'src/store/engineering.rs',
-             'Cargo.lock', 'tools/tests/test_engineering_runtime.py']
+             'Cargo.lock', 'tools/tests/test_engineering_runtime.py',
+             'tools/qualify-engineering.py', 'tools/qualification_campaign.py',
+             'tools/qualification_observations.py', 'tools/tests/test_qualification_runner.py',
+             'tools/tests/test_qualification_campaign.py', 'tools/tests/test_engineering_preflight.py',
+             'tools/tests/test_qualification_observations.py']
     return broker.digest({name: file_identity(ROOT / name)['sha256'] for name in paths})
 
 
@@ -79,6 +90,12 @@ def run_probe(name, profile_path=None):
     """Exercise existing production validators through exact named regression tests."""
     definition = PROBES[name]
     checks = []
+    for module in definition.get('python_modules', []):
+        command = [sys.executable, '-m', 'unittest', module, '-v']
+        result, receipt = _run(command, ROOT / 'tools/tests')
+        if result.returncode or b'Ran 0 tests' in result.stdout or b'Ran ' not in result.stdout:
+            raise ValueError('probe failed: ' + name + '/' + module)
+        checks.append(receipt)
     for test in definition.get('python', []):
         command = [sys.executable, '-m', 'unittest', 'test_engineering_runtime.BrokerTests.' + test, '-v']
         result, receipt = _run(command, ROOT / 'tools/tests')
