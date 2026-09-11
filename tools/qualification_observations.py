@@ -46,6 +46,7 @@ def collect(root):
         if path.stat().st_size > 16 * 1024 * 1024:
             uncertain.append({'execution': execution, 'reason': 'journal_bound'})
             continue
+        coverage_reported = False
         expected_sequence = 1
         for line in path.read_bytes().splitlines():
             try:
@@ -58,6 +59,12 @@ def collect(root):
                 break
             expected_sequence += 1
             kind, value = event.get('kind'), event.get('value', {})
+            if kind == 'context_limit':
+                coverage_reported = True
+                uncertain.append({'execution': execution,
+                    'reason': 'context_coverage_unknown',
+                    'enforcement': value.get('enforcement', 'unknown'),
+                    'unreported_children': value.get('unreported_children', 'unknown')})
             if kind == 'context_observed':
                 context(value['thread_id'], role if value.get('source') == 'root' else 'child')
             if kind == 'thread_identity':
@@ -95,6 +102,12 @@ def collect(root):
                 output = usage.get('outputTokens')
                 if type(output) is int and output >= 0:
                     item['output_tokens'] = max(item['output_tokens'] or 0, output)
+        if not coverage_reported:
+            uncertain.append({'execution': execution, 'reason': 'context_coverage_evidence_missing'})
+    if not paths:
+        uncertain.append({'reason': 'context_coverage_evidence_missing'})
+    uncertain = [json.loads(value) for value in sorted({json.dumps(item, sort_keys=True)
+                                                      for item in uncertain})]
     for value in contexts.values():
         value['model_responses'] = max(len(value.pop('responses')), len(value.pop('usage_updates')))
         value['response_measure'] = 'distinct cumulative usage updates or observed agent messages; lower bound'
@@ -102,6 +115,8 @@ def collect(root):
             value['cached_input_tokens'] is None else
             max(0, value['input_tokens'] - value['cached_input_tokens']))
     return {'contexts': list(contexts.values()), 'context_input_bytes': inputs,
+            # The current broker observes events; it cannot certify all children.
+            'context_inventory_complete': False,
             'uncertainties': uncertain, 'measure': 'observed per-thread counters; absent is unknown'}
 
 

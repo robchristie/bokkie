@@ -395,6 +395,8 @@ class Campaign:
                 reasons.append('observation_evidence_missing')
             else:
                 reasons.extend(observation.get('uncertainties') or [])
+                if observation.get('context_inventory_complete') is not True:
+                    reasons.append('context_inventory_completeness_unproved')
                 recorded = observation.get('contexts')
                 if not isinstance(recorded, list) or not recorded:
                     reasons.append('context_inventory_missing')
@@ -402,27 +404,36 @@ class Campaign:
                     reasons.append('context_identity_missing')
                 elif {c['thread_id'] for c in recorded} != {t['thread_id'] for t in observed}:
                     reasons.append('context_inventory_telemetry_mismatch')
-                if observation.get('contexts_complete') is False or observation.get('telemetry_complete') is False:
+                if observation.get('contexts_complete') is False:
                     reasons.append('collector_incomplete')
             if reasons:
-                observation_unknowns.append({'attempt_id': row['id'], 'reasons': reasons})
+                observation_unknowns.append({'attempt_id': row['id'], 'reasons':
+                    [json.loads(value) for value in sorted({_json(reason) for reason in reasons})]})
         contexts_complete = not observation_unknowns
-        complete = {field: contexts_complete and all(r[field] is not None for r in tokens)
-                    for field in ('input', 'cached', 'output')}
+        observed_complete = {field: all(r[field] is not None for r in tokens)
+                             for field in ('input', 'cached', 'output')}
+        observed_complete['uncached'] = observed_complete['input'] and observed_complete['cached']
+        complete = {field: contexts_complete and available
+                    for field, available in observed_complete.items()}
         telemetry_complete = all(complete.values())
         intervention_fields = ('human_interventions', 'outer_agent_interventions')
         intervention_evidence = [json.loads(r['evidence'] or '{}') for r in rows]
         interventions = {field: sum(e.get(field, 0) for e in intervention_evidence) for field in intervention_fields}
-        return {'scope': self.scope, 'campaign_id': self.campaign_id, 'limits': self.limits,
+        return {'report_schema_version': 2, 'scope': self.scope, 'campaign_id': self.campaign_id, 'limits': self.limits,
                 'attempts': rows, 'stages': {s: sum(r['stage'] == s for r in rows) for s in STAGES},
                 'terminal': json.loads(binding['terminal']) if binding['terminal'] else None,
                 'policy_events': [dict(r) for r in self.db.execute('SELECT * FROM policy_events WHERE scope=? ORDER BY created', (self.scope,))],
+                'context_allowance_measure': 'reserved/charged admission-policy contexts; not observed model usage, tokens or quota',
                 'charged_contexts': self._charged_contexts(rows),
                 'reserved_contexts': sum(r['envelope'] for r in rows), 'observed_contexts': len(tokens),
                 'telemetry_complete': telemetry_complete, 'contexts_complete': contexts_complete,
+                'context_inventory_complete': contexts_complete,
+                'observed_token_metrics_complete': observed_complete,
+                'observed_telemetry_complete': all(observed_complete.values()),
                 'observation_unknowns': observation_unknowns,
                 'input_tokens_complete': complete['input'], 'cached_input_tokens_complete': complete['cached'],
                 'output_tokens_complete': complete['output'],
+                'uncached_input_tokens_complete': complete['uncached'],
                 'known_input_tokens': sum(r['input'] or 0 for r in tokens),
                 'known_cached_input_tokens': sum(r['cached'] or 0 for r in tokens),
                 'known_uncached_tokens': uncached,
