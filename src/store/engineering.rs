@@ -416,6 +416,7 @@ impl Store {
                 recoveries_used: 0,
                 cancellation_requested: false,
                 acceptance: None,
+                delivery_operations: vec![],
             }
         } else {
             let expected = envelope
@@ -491,7 +492,11 @@ impl Store {
                 || state.root.state.is_terminal()
                 || (role == EngineeringRole::Worker
                     && (state.root.state == ObligationState::Attention
-                        || missing_information_question(&state).is_some()))
+                        || missing_information_question(&state).is_some()
+                        || state
+                            .delivery_operations
+                            .iter()
+                            .any(|o| o.evidence_digest.is_none())))
             {
                 continue;
             }
@@ -1015,6 +1020,7 @@ fn apply_command(
         && !matches!(
             command,
             EngineeringCommand::RecordReconciliation(_)
+                | EngineeringCommand::RecordDeliveryResult { .. }
                 | EngineeringCommand::ReviseContract { .. }
                 | EngineeringCommand::RequestCancellation { .. }
                 | EngineeringCommand::FollowUp { .. }
@@ -1824,12 +1830,150 @@ fn apply_command(
                 }
             }
         }
+        EngineeringCommand::RecordDeliveryIntent(input) => {
+            let EngineeringActor::Reconciler { adapter_id } = actor else {
+                return Err(conflict("trusted delivery adapter required"));
+            };
+            let execution = state
+                .executions
+                .iter()
+                .find(|e| e.id == input.execution_id)
+                .ok_or(StoreError::Fenced)?;
+            if &execution.instructions.adapter_id != adapter_id
+                || execution.fenced
+                || execution.cessation_verified
+                || execution.contract_revision != state.contract_revision
+                || input.contract_revision != state.contract_revision
+                || input.evidence_digest.is_some()
+                || input.post_merge_verified
+                || !state
+                    .contract()
+                    .authority
+                    .iter()
+                    .any(|a| a.grant == "pagefold-github-delivery-v1")
+                || state.delivery_operations.len() >= 64
+                || state
+                    .delivery_operations
+                    .iter()
+                    .any(|o| o.evidence_digest.is_none() || o.id == input.id)
+            {
+                return Err(conflict(
+                    "delivery authority, ownership or pending intent conflict",
+                ));
+            }
+            if input.operation != "merge" && execution.role != EngineeringRole::Worker {
+                return Err(conflict(
+                    "only the workspace worker can prepare or publish delivery",
+                ));
+            }
+            if input.operation == "merge"
+                && (execution.role != EngineeringRole::Supervisor
+                    || state
+                        .executions
+                        .iter()
+                        .any(|e| e.role == EngineeringRole::Worker && !e.cessation_verified))
+            {
+                return Err(conflict("merge requires supervisor and ceased writers"));
+            }
+            if input.operation == "merge"
+                && state.packages.iter().any(|p| {
+                    p.contract_revision == state.contract_revision
+                        && p.superseded_by.is_none()
+                        && !p.cancellation_requested
+                        && !package_accepted(state, &p.id)
+                })
+            {
+                return Err(conflict("merge requires all current packages accepted"));
+            }
+            // Reuse normal lease fencing even though the trusted adapter supplies the record.
+            validate_actor(
+                tx,
+                state,
+                &match execution.role {
+                    EngineeringRole::Worker => EngineeringActor::Worker {
+                        execution_id: execution.id.clone(),
+                        claim: execution.claim.clone(),
+                    },
+                    EngineeringRole::Supervisor => EngineeringActor::Supervisor {
+                        execution_id: execution.id.clone(),
+                        claim: execution.claim.clone(),
+                    },
+                },
+                now,
+            )?;
+            state.delivery_operations.push(input.clone());
+            return Ok(Some(input.id.clone()));
+        }
+        EngineeringCommand::RecordDeliveryResult {
+            operation_id,
+            evidence_digest,
+            post_merge_verified,
+            failed,
+        } => {
+            let EngineeringActor::Reconciler { adapter_id } = actor else {
+                return Err(conflict("trusted delivery adapter required"));
+            };
+            let op = state
+                .delivery_operations
+                .iter()
+                .find(|o| o.id == *operation_id)
+                .ok_or_else(|| conflict("delivery intent missing"))?;
+            if !state
+                .executions
+                .iter()
+                .any(|e| e.id == op.execution_id && e.instructions.adapter_id == *adapter_id)
+                || op.evidence_digest.is_some()
+                || (*post_merge_verified && op.operation != "merge")
+                || (*failed && *post_merge_verified)
+                || (op.operation == "merge" && !post_merge_verified && !failed)
+            {
+                return Err(conflict(
+                    "delivery result requires matching intent and post-merge evidence",
+                ));
+            }
+            let op = state
+                .delivery_operations
+                .iter_mut()
+                .find(|o| o.id == *operation_id)
+                .unwrap();
+            op.evidence_digest = Some(evidence_digest.clone());
+            op.post_merge_verified = *post_merge_verified;
+            if state.cancellation_requested {
+                settle_cancellation(tx, state, now)?;
+            } else {
+                wake(tx, state, now)?;
+            }
+        }
         EngineeringCommand::FinishOutcome {
             assessment_ids,
             review,
             processed_message_count,
         } => {
             let assessor = supervisor(actor)?;
+            if state
+                .delivery_operations
+                .iter()
+                .any(|o| o.evidence_digest.is_none())
+            {
+                return Err(conflict(
+                    "unreconciled delivery operation blocks acceptance",
+                ));
+            }
+            if state
+                .contract()
+                .authority
+                .iter()
+                .any(|a| a.grant == "pagefold-github-delivery-v1")
+                && !state.delivery_operations.iter().any(|o| {
+                    o.operation == "merge"
+                        && o.post_merge_verified
+                        && o.contract_revision == state.contract_revision
+                })
+            {
+                return Err(conflict(
+                    "GitHub delivery requires verified merge and post-merge CI",
+                ));
+            }
             if state.contract().criteria.is_empty()
                 || *processed_message_count != state.messages.len()
             {
@@ -2003,7 +2147,11 @@ fn settle_cancellation(
         )?;
     }
     if state.cancellation_requested {
-        let unresolved = state.executions.iter().any(|e| !e.cessation_verified);
+        let unresolved = state.executions.iter().any(|e| !e.cessation_verified)
+            || state
+                .delivery_operations
+                .iter()
+                .any(|o| o.evidence_digest.is_none());
         apply_engineering_transition(
             tx,
             &state.root.id,
@@ -2264,6 +2412,24 @@ fn validate_envelope(
         identifier(&expected.outcome_id)?;
     }
     match &envelope.command {
+        EngineeringCommand::RecordDeliveryIntent(input) => {
+            identifier(&input.id)?;
+            identifier(&input.execution_id)?;
+            if !["prepare_branch", "commit", "push", "open_pr", "merge"]
+                .contains(&input.operation.as_str())
+            {
+                return Err(conflict("unsupported delivery operation"));
+            }
+            validate_bounded_text("delivery arguments", &input.arguments_json, 32768, false)?;
+        }
+        EngineeringCommand::RecordDeliveryResult {
+            operation_id,
+            evidence_digest,
+            ..
+        } => {
+            identifier(operation_id)?;
+            hash(evidence_digest)?;
+        }
         EngineeringCommand::RecordCheckpoint {
             runtime_identity,
             request_identity,
@@ -4547,6 +4713,422 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    fn github_delivery_create(store: &mut Store, granted: bool) -> String {
+        let mut input = contract();
+        if granted {
+            input.authority.push(EngineeringAuthority {
+                grant: "pagefold-github-delivery-v1".into(),
+                evidence_digest: sha("operator authorised Pagefold delivery"),
+            });
+        }
+        store
+            .engineering_command(
+                op(),
+                EngineeringCommandEnvelope {
+                    command_id: fresh_id(),
+                    expected: None,
+                    command: EngineeringCommand::CreateOutcome { contract: input },
+                },
+                100,
+            )
+            .unwrap()
+            .outcome_id
+    }
+
+    fn github_delivery_adapter() -> EngineeringActor {
+        EngineeringActor::Reconciler {
+            adapter_id: "test-adapter".into(),
+        }
+    }
+
+    fn github_delivery_intent(execution: &EngineeringClaim, operation: &str) -> EngineeringCommand {
+        EngineeringCommand::RecordDeliveryIntent(EngineeringDeliveryOperation {
+            id: fresh_id(),
+            execution_id: execution.execution_id.clone(),
+            contract_revision: 1,
+            operation: operation.into(),
+            arguments_json: "{\"head\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}".into(),
+            evidence_digest: None,
+            post_merge_verified: false,
+        })
+    }
+
+    fn github_delivery_result(id: &str, verified: bool, failed: bool) -> EngineeringCommand {
+        EngineeringCommand::RecordDeliveryResult {
+            operation_id: id.into(),
+            evidence_digest: sha("scoped GitHub read-back"),
+            post_merge_verified: verified,
+            failed,
+        }
+    }
+
+    #[test]
+    fn github_delivery_requires_trusted_adapter_grant_and_current_execution() {
+        for granted in [false, true] {
+            let mut store = Store::open_in_memory().unwrap();
+            let id = github_delivery_create(&mut store, granted);
+            let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+            new_package(&mut store, &root, 101);
+            let worker = claim(&mut store, EngineeringRole::Worker, 102);
+            let intent = github_delivery_intent(&worker, "push");
+            for untrusted in [
+                op(),
+                actor(&worker),
+                actor(&root),
+                EngineeringActor::Reconciler {
+                    adapter_id: "another-adapter".into(),
+                },
+            ] {
+                let env = envelope(&store, &id, intent.clone());
+                assert!(store.engineering_command(untrusted, env, 103).is_err());
+            }
+            if granted {
+                let mut stale_revision = intent.clone();
+                if let EngineeringCommand::RecordDeliveryIntent(ref mut operation) = stale_revision
+                {
+                    operation.contract_revision = 2;
+                }
+                let env = envelope(&store, &id, stale_revision);
+                assert!(
+                    store
+                        .engineering_command(github_delivery_adapter(), env, 103)
+                        .is_err()
+                );
+            }
+            let env = envelope(&store, &id, intent);
+            let result = store.engineering_command(github_delivery_adapter(), env, 103);
+            assert_eq!(result.is_ok(), granted);
+        }
+        for stale in ["revision", "expired", "ceased"] {
+            let mut store = Store::open_in_memory().unwrap();
+            let id = github_delivery_create(&mut store, true);
+            let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+            new_package(&mut store, &root, 101);
+            let worker = claim(&mut store, EngineeringRole::Worker, 102);
+            let mut now = 104;
+            if stale == "revision" {
+                let revised = store
+                    .engineering_outcome(&id)
+                    .unwrap()
+                    .unwrap()
+                    .contract()
+                    .clone();
+                command(
+                    &mut store,
+                    &id,
+                    op(),
+                    EngineeringCommand::ReviseContract { contract: revised },
+                    103,
+                );
+            } else if stale == "ceased" {
+                reconcile(&mut store, &worker, None, 103);
+            } else {
+                now = 703;
+            }
+            let env = envelope(&store, &id, github_delivery_intent(&worker, "push"));
+            assert!(
+                store
+                    .engineering_command(github_delivery_adapter(), env, now)
+                    .is_err(),
+                "{stale}"
+            );
+            assert!(
+                store
+                    .engineering_outcome(&id)
+                    .unwrap()
+                    .unwrap()
+                    .delivery_operations
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn github_delivery_replays_intent_and_result_after_reopen() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("delivery.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let id = github_delivery_create(&mut store, true);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        new_package(&mut store, &root, 101);
+        let worker = claim(&mut store, EngineeringRole::Worker, 102);
+        let intent = envelope(&store, &id, github_delivery_intent(&worker, "push"));
+        let first = store
+            .engineering_command(github_delivery_adapter(), intent.clone(), 103)
+            .unwrap();
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        let replay = store
+            .engineering_command(github_delivery_adapter(), intent, 104)
+            .unwrap();
+        assert_eq!(first.event_sequence, replay.event_sequence);
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert_eq!(state.delivery_operations.len(), 1);
+        assert!(state.delivery_operations[0].evidence_digest.is_none());
+        let result = envelope(
+            &store,
+            &id,
+            github_delivery_result(first.record_id.as_ref().unwrap(), false, false),
+        );
+        let recorded = store
+            .engineering_command(github_delivery_adapter(), result.clone(), 105)
+            .unwrap();
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        let replay = store
+            .engineering_command(github_delivery_adapter(), result, 106)
+            .unwrap();
+        assert_eq!(recorded.event_sequence, replay.event_sequence);
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert_eq!(state.delivery_operations.len(), 1);
+        assert_eq!(
+            state.delivery_operations[0].evidence_digest,
+            Some(sha("scoped GitHub read-back"))
+        );
+    }
+
+    #[test]
+    fn github_delivery_pending_intent_blocks_new_workers_and_acceptance() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = github_delivery_create(&mut store, true);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        new_package(&mut store, &root, 101);
+        let worker = claim(&mut store, EngineeringRole::Worker, 102);
+        let mut second = package();
+        second.workspace = "other-workspace".into();
+        command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::CreatePackage(second),
+            103,
+        );
+        let receipt = command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_intent(&worker, "push"),
+            104,
+        );
+        assert!(
+            store
+                .claim_due_engineering(EngineeringRole::Worker, 105, 600, 1)
+                .unwrap()
+                .is_empty()
+        );
+        let env = envelope(
+            &store,
+            &id,
+            EngineeringCommand::FinishOutcome {
+                assessment_ids: vec![],
+                review: review(),
+                processed_message_count: 1,
+            },
+        );
+        let error = store
+            .engineering_command(actor(&root), env, 105)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("unreconciled delivery"),
+            "{error}"
+        );
+        let env = envelope(&store, &id, github_delivery_intent(&worker, "open_pr"));
+        assert!(
+            store
+                .engineering_command(github_delivery_adapter(), env, 105)
+                .is_err()
+        );
+        command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_result(receipt.record_id.as_ref().unwrap(), false, false),
+            106,
+        );
+        assert_eq!(
+            store
+                .claim_due_engineering(EngineeringRole::Worker, 107, 600, 1)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn github_delivery_cancellation_retains_pending_intent_until_reconciled() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = github_delivery_create(&mut store, true);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        new_package(&mut store, &root, 101);
+        let worker = claim(&mut store, EngineeringRole::Worker, 102);
+        let receipt = command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_intent(&worker, "push"),
+            103,
+        );
+        command(
+            &mut store,
+            &id,
+            op(),
+            EngineeringCommand::RequestCancellation { package_id: None },
+            104,
+        );
+        reconcile(&mut store, &worker, None, 105);
+        reconcile(&mut store, &root, None, 106);
+        let state = store.engineering_outcome(&id).unwrap().unwrap();
+        assert!(state.executions.iter().all(|e| e.cessation_verified));
+        assert_eq!(state.root.state, ObligationState::Attention);
+        assert!(state.delivery_operations[0].evidence_digest.is_none());
+        command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_result(receipt.record_id.as_ref().unwrap(), false, false),
+            107,
+        );
+        assert_eq!(
+            store.engineering_outcome(&id).unwrap().unwrap().root.state,
+            ObligationState::Cancelled
+        );
+    }
+
+    #[test]
+    fn github_delivery_merge_needs_supervisor_ceased_workers_and_verified_post_merge() {
+        let mut store = Store::open_in_memory().unwrap();
+        let id = github_delivery_create(&mut store, true);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        new_package(&mut store, &root, 101);
+        let worker = claim(&mut store, EngineeringRole::Worker, 102);
+        for owner in [&root, &worker] {
+            let env = envelope(&store, &id, github_delivery_intent(owner, "merge"));
+            let error = store
+                .engineering_command(github_delivery_adapter(), env, 103)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("supervisor and ceased writers"),
+                "{error}"
+            );
+        }
+        command(
+            &mut store,
+            &id,
+            actor(&worker),
+            EngineeringCommand::SubmitResult(submission()),
+            104,
+        );
+        reconcile(&mut store, &worker, None, 105);
+        let accepted = assessment(&store, &id, EngineeringVerdict::Accept);
+        let assessed = command(
+            &mut store,
+            &id,
+            actor(&root),
+            EngineeringCommand::AssessResult(accepted),
+            106,
+        )
+        .record_id
+        .unwrap();
+        let finish = EngineeringCommand::FinishOutcome {
+            assessment_ids: vec![assessed],
+            review: review(),
+            processed_message_count: 1,
+        };
+        let env = envelope(&store, &id, finish.clone());
+        let error = store
+            .engineering_command(actor(&root), env, 107)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("verified merge and post-merge CI"),
+            "{error}"
+        );
+        let receipt = command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_intent(&root, "merge"),
+            108,
+        );
+        let operation = receipt.record_id.unwrap();
+        for (verified, failed) in [(false, false), (true, true)] {
+            let env = envelope(
+                &store,
+                &id,
+                github_delivery_result(&operation, verified, failed),
+            );
+            assert!(
+                store
+                    .engineering_command(github_delivery_adapter(), env, 109)
+                    .is_err()
+            );
+        }
+        assert!(
+            store
+                .engineering_outcome(&id)
+                .unwrap()
+                .unwrap()
+                .delivery_operations[0]
+                .evidence_digest
+                .is_none()
+        );
+        for untrusted in [
+            op(),
+            actor(&root),
+            EngineeringActor::Reconciler {
+                adapter_id: "other-adapter".into(),
+            },
+        ] {
+            let env = envelope(&store, &id, github_delivery_result(&operation, true, false));
+            assert!(store.engineering_command(untrusted, env, 110).is_err());
+        }
+        command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_result(&operation, false, true),
+            110,
+        );
+        let env = envelope(&store, &id, finish.clone());
+        let error = store
+            .engineering_command(actor(&root), env, 111)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("verified merge and post-merge CI"),
+            "{error}"
+        );
+        let env = envelope(&store, &id, github_delivery_result(&operation, true, false));
+        assert!(
+            store
+                .engineering_command(github_delivery_adapter(), env, 111)
+                .is_err()
+        );
+        let operation = command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_intent(&root, "merge"),
+            112,
+        )
+        .record_id
+        .unwrap();
+        command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_result(&operation, true, false),
+            113,
+        );
+        command(&mut store, &id, actor(&root), finish, 114);
+        assert_eq!(
+            store.engineering_outcome(&id).unwrap().unwrap().root.state,
+            ObligationState::Completed
         );
     }
 }

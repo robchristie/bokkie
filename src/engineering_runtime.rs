@@ -59,6 +59,48 @@ pub struct EngineeringRuntimeProfile {
     /// repository/UI integrations use ordinary gh/Lantern CLI tools.
     pub readonly_mcp_servers: Vec<String>,
     pub allow_single_pwd_approval: bool,
+    /// Explicit operator opt-in; absent profiles retain their original identity and authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_delivery: Option<PagefoldGithubProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PagefoldGithubProfile {
+    pub repo: String,
+    pub base: String,
+    pub branch: String,
+    /// Operator decision text; never a credential. Retained in the contract by digest.
+    pub authority: String,
+}
+impl PagefoldGithubProfile {
+    fn validate(&self) -> RuntimeResult<()> {
+        if self.repo != "robchristie/pagefold"
+            || self.base != "main"
+            || !self.branch.starts_with("codex/")
+            || self.branch.len() <= 6
+            || self.branch.len() > 120
+            || !self
+                .branch
+                .as_bytes()
+                .get(6)
+                .is_some_and(u8::is_ascii_alphanumeric)
+            || !self.branch[6..]
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            || self.authority.trim().is_empty()
+            || self.authority.len() > 4096
+        {
+            return Err(
+                "GitHub profile requires Pagefold/main, one codex/ branch and operator authority"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+    fn adapter_config(&self) -> Value {
+        json!({"repo":self.repo,"base":self.base,"branch":self.branch})
+    }
 }
 
 impl EngineeringRuntimeProfile {
@@ -79,6 +121,18 @@ impl EngineeringRuntimeProfile {
         ] {
             if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
                 return Err("profile paths must be absolute and normalised".into());
+            }
+        }
+        if let Some(github) = &self.github_delivery {
+            github.validate()?;
+            if !self.workspace.join(".git").is_dir()
+                || fs::symlink_metadata(self.workspace.join(".git"))?
+                    .file_type()
+                    .is_symlink()
+            {
+                return Err(
+                    "GitHub delivery requires an isolated full clone, not a linked worktree".into(),
+                );
             }
         }
         let workspace = fs::canonicalize(&self.workspace)?;
@@ -134,7 +188,8 @@ impl EngineeringRuntimeProfile {
             .filter_map(|t| t["name"].as_str().map(String::from))
             .collect::<Vec<_>>();
         for selected in [&self.supervisor_tools, &self.worker_tools] {
-            if selected.len() > known.len()
+            if (self.github_delivery.is_some() && !selected.iter().any(|s| s == "bokkie_github"))
+                || selected.len() > known.len()
                 || !selected.iter().any(|s| s == "bokkie_snapshot")
                 || !selected.iter().any(|s| s == "bokkie_command")
                 || selected.iter().any(|s| !known.contains(s))
@@ -183,10 +238,29 @@ impl EngineeringRuntimeProfile {
     /// intent; criteria remain empty until bounded supervisor formalisation.
     pub fn contract_template(&self, now: i64) -> RuntimeResult<EngineeringContract> {
         self.validate()?;
-        Ok(EngineeringContract { intent:String::new(),criteria:vec![],
-            permitted_scope:vec![self.workspace.to_string_lossy().into_owned()],
-            prohibited_effects:vec!["No deployment, release, remote publication, credentials, global configuration changes, destructive data operations or additional authority".into()],
-            authority:vec![],supervisor:self.instructions(false)?,worker:self.instructions(true)?,budget:self.budget(now,false) })
+        Ok(EngineeringContract {
+            intent: String::new(),
+            criteria: vec![],
+            permitted_scope: vec![self.workspace.to_string_lossy().into_owned()],
+            prohibited_effects: vec![if self.github_delivery.is_some() {
+                "Only typed Pagefold branch/commit/push/PR/status/squash-merge operations are authorised. No deployment, release, package/data publication, other repository writes, credential changes, global configuration changes or destructive data operations".into()
+            } else {
+                "No deployment, release, remote publication, credentials, global configuration changes, destructive data operations or additional authority".into()
+            }],
+            authority: self
+                .github_delivery
+                .as_ref()
+                .map(|g| {
+                    vec![EngineeringAuthority {
+                        grant: "pagefold-github-delivery-v1".into(),
+                        evidence_digest: sha(g.authority.as_bytes()),
+                    }]
+                })
+                .unwrap_or_default(),
+            supervisor: self.instructions(false)?,
+            worker: self.instructions(true)?,
+            budget: self.budget(now, false),
+        })
     }
     /// No-model qualification uses the exact production schemas and thread settings.
     pub fn preflight_parameters(&self) -> RuntimeResult<Value> {
@@ -231,11 +305,29 @@ impl EngineeringRuntimeProfile {
             &self.supervisor_instructions
         };
         let bytes = bounded_read(path, MAX_FILE)?;
-        let text = String::from_utf8(bytes.clone())?;
+        let mut text = String::from_utf8(bytes.clone())?;
+        if let Some(github) = &self.github_delivery {
+            let role = if worker { "worker" } else { "supervisor" };
+            let supplement = bounded_read(
+                &self
+                    .broker
+                    .parent()
+                    .ok_or("broker parent missing")?
+                    .join(format!("../../instructions/engineering-github-{role}.md")),
+                MAX_FILE,
+            )?;
+            text.push_str("\n\n");
+            text.push_str(&String::from_utf8(supplement)?);
+            text.push_str(&format!(
+                "\nRegistered GitHub scope: {} base {} branch {}.\nOperator authority: {}\n",
+                github.repo, github.base, github.branch, github.authority
+            ));
+        }
+        let digest = sha(text.as_bytes());
         Ok(EngineeringInstructions {
             text,
-            digest: sha(&bytes),
-            context_digests: vec![sha(&bytes)],
+            digest: digest.clone(),
+            context_digests: vec![digest],
             profile_digest: sha(&serde_json::to_vec(self)?),
             adapter_id: "codex-broker-v1".into(),
         })
@@ -500,6 +592,12 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 }
 fn dynamic_tools() -> Vec<Value> {
     vec![
+        tool(
+            "bokkie_github",
+            "Pagefold-scoped delivery. Worker: prepare_branch, commit(paths,message), push(head), open_pr(head,title,body). Supervisor: merge(pr,head,review evidence). Both: status(pr), reconcile. All mutations require expected from bokkie_snapshot; status/reconcile observe saved operations. No arbitrary commands, repositories or URLs.",
+            json!({"operation":{"type":"string","enum":["prepare_branch","commit","push","open_pr","status","merge","reconcile"]},"arguments":{"type":"object"},"expected":{"type":"object"},"review":{"type":"object"}}),
+            &["operation", "arguments"],
+        ),
         tool(
             "bokkie_snapshot",
             "Read durable intent, contract, messages, packages, questions, submissions and precondition. Read again after every mutation or conflict; reconsider your decision.",
@@ -861,6 +959,228 @@ impl EngineeringRuntime {
         }
         Ok(())
     }
+    fn github_adapter(
+        &self,
+        operation: &str,
+        arguments: &Value,
+        reconcile: bool,
+    ) -> RuntimeResult<Value> {
+        let scope = self
+            .profile
+            .github_delivery
+            .as_ref()
+            .ok_or("GitHub delivery is not enabled")?;
+        let mut child = Command::new("python3")
+            .arg(self.profile.broker.with_file_name("github_delivery.py"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let request = json!({"config":scope.adapter_config(),"workspace":self.profile.workspace,
+            "operation":operation,"arguments":arguments,"reconcile":reconcile});
+        child
+            .stdin
+            .take()
+            .ok_or("missing adapter stdin")?
+            .write_all(&serde_json::to_vec(&request)?)?;
+        let output = child.wait_with_output()?;
+        if output.stdout.len() as u64 > MAX_FILE {
+            return Err("delivery reply exceeded bound; reconcile".into());
+        }
+        let result: Value = serde_json::from_slice(&output.stdout)?;
+        if !output.status.success() && result.get("error").is_none() {
+            return Err("delivery adapter stopped; reconcile".into());
+        }
+        Ok(result)
+    }
+    fn complete_delivery(
+        &self,
+        store: &mut Store,
+        state: &EngineeringOutcomeSnapshot,
+        op: &EngineeringDeliveryOperation,
+        result: Value,
+        now: i64,
+    ) -> RuntimeResult<Value> {
+        let digest = self.blob(&serde_json::to_vec(&result)?)?;
+        let failed = result.get("error").is_some();
+        let verified = result["post_merge_verified"] == true;
+        let settled = !result.is_null()
+            && (!failed || result["uncertain"] == false)
+            && (op.operation != "merge" || verified || failed);
+        if settled {
+            let execution = state
+                .executions
+                .iter()
+                .find(|e| e.id == op.execution_id)
+                .ok_or("missing delivery owner")?;
+            let directory = self.profile.broker_root.join(&execution.id);
+            self.activity(
+                store,
+                &directory,
+                execution,
+                &format!("delivery-result-{}", op.id),
+                EngineeringCommand::RecordDeliveryResult {
+                    operation_id: op.id.clone(),
+                    evidence_digest: digest.clone(),
+                    post_merge_verified: verified,
+                    failed,
+                },
+                true,
+                now,
+            )?;
+        }
+        Ok(
+            json!({"operation_id":op.id,"pending":!settled,"evidence_digest":digest,"result":result}),
+        )
+    }
+    fn reconcile_delivery(
+        &self,
+        store: &mut Store,
+        state: &EngineeringOutcomeSnapshot,
+        op: &EngineeringDeliveryOperation,
+        now: i64,
+    ) -> RuntimeResult<Value> {
+        if let Some(digest) = &op.evidence_digest {
+            return Ok(
+                json!({"operation_id":op.id,"pending":false,"evidence_digest":digest,"result":serde_json::from_slice::<Value>(&self.evidence(digest)?)?}),
+            );
+        }
+        let receipt = self
+            .profile
+            .broker_root
+            .join(&op.execution_id)
+            .join("receipts")
+            .join(format!("delivery-result-{}-0.json", op.id));
+        if receipt.exists() {
+            let saved: EngineeringCommandEnvelope = read_json(&receipt)?;
+            if let EngineeringCommand::RecordDeliveryResult {
+                operation_id,
+                evidence_digest,
+                ..
+            } = saved.command
+            {
+                if operation_id != op.id {
+                    return Err("delivery receipt identity mismatch".into());
+                }
+                let result = serde_json::from_slice(&self.evidence(&evidence_digest)?)?;
+                return self.complete_delivery(store, state, op, result, now);
+            }
+            return Err("invalid retained delivery result command".into());
+        }
+        let saved: Value = serde_json::from_str(&op.arguments_json)?;
+        let result = self.github_adapter(&op.operation, &saved["arguments"], true)?;
+        // Read-back errors never prove a previously uncertain mutation did not occur.
+        if result.get("error").is_some() {
+            return Ok(json!({"operation_id":op.id,"pending":true,"result":result}));
+        }
+        self.complete_delivery(store, state, op, result, now)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn github_tool(
+        &self,
+        store: &mut Store,
+        directory: &Path,
+        execution: &EngineeringExecution,
+        key: &str,
+        args: &Value,
+        now: i64,
+    ) -> RuntimeResult<Value> {
+        self.profile
+            .github_delivery
+            .as_ref()
+            .ok_or("GitHub delivery is not enabled")?;
+        let operation = args["operation"].as_str().ok_or("missing operation")?;
+        let state = snapshot(store, &execution_outcome(directory)?)?;
+        if operation == "status" {
+            let result = self.github_adapter(operation, &args["arguments"], false)?;
+            return Ok(
+                json!({"evidence_digest":self.blob(&serde_json::to_vec(&result)?)?,"result":result}),
+            );
+        }
+        if operation == "reconcile" {
+            let id = args["arguments"]["operation_id"]
+                .as_str()
+                .ok_or("missing operation_id")?;
+            let op = state
+                .delivery_operations
+                .iter()
+                .find(|o| o.id == id)
+                .ok_or("unknown delivery operation")?;
+            return self.reconcile_delivery(store, &state, op, now);
+        }
+        if !["prepare_branch", "commit", "push", "open_pr", "merge"].contains(&operation) {
+            return Err("unsupported delivery operation".into());
+        }
+        let id = sha(format!("{}:{key}", execution.id).as_bytes());
+        let arguments_json = serde_json::to_string(args)?;
+        if let Some(op) = state.delivery_operations.iter().find(|o| o.id == id) {
+            if op.arguments_json != arguments_json || op.operation != operation {
+                return Err("delivery request replay conflict".into());
+            }
+            return self.reconcile_delivery(store, &state, op, now);
+        }
+        let expected: EngineeringPrecondition = serde_json::from_value(args["expected"].clone())?;
+        let observed: EngineeringPrecondition = read_json(&directory.join("observed.json"))?;
+        if expected != observed || expected != state.precondition() {
+            return Err("delivery requires the current observed snapshot".into());
+        }
+        if operation == "merge" {
+            let review: EngineeringReviewEvidence = serde_json::from_value(args["review"].clone())?;
+            self.verify_review(&review, execution)?;
+            let report: Value = serde_json::from_slice(&self.evidence(&review.evidence_digest)?)?;
+            let head = args["arguments"]["head"]
+                .as_str()
+                .ok_or("missing merge head")?;
+            let exact = |artefact: &EngineeringArtefact| matches!(artefact, EngineeringArtefact::Git {repository,commit,..} if Path::new(repository) == self.profile.workspace && commit == head);
+            if report["verdict"] != "pass"
+                || !review.artefacts.iter().any(exact)
+                || state.contract().criteria.is_empty()
+                || !state.contract().criteria.iter().all(|criterion| {
+                    state.assessments.iter().any(|assessment| {
+                        assessment.contract_revision == state.contract_revision
+                            && assessment.input.verdict == EngineeringVerdict::Accept
+                            && state.submissions.iter().any(|s| {
+                                s.id == assessment.input.submission_id
+                                    && s.input.artefacts.iter().any(exact)
+                                    && s.input.evidence.iter().any(|e| {
+                                        e.criterion_id == criterion.id
+                                            && e.exit_code == 0
+                                            && exact(&e.artefact)
+                                    })
+                            })
+                    })
+                })
+            {
+                return Err(
+                    "merge requires registered passing exact-head review and accepted submission"
+                        .into(),
+                );
+            }
+        }
+        let op = EngineeringDeliveryOperation {
+            id: id.clone(),
+            execution_id: execution.id.clone(),
+            contract_revision: state.contract_revision,
+            operation: operation.into(),
+            arguments_json,
+            evidence_digest: None,
+            post_merge_verified: false,
+        };
+        // No Git or network mutation occurs before this durable, fenced command commits.
+        store.engineering_command(
+            EngineeringActor::Reconciler {
+                adapter_id: execution.instructions.adapter_id.clone(),
+            },
+            EngineeringCommandEnvelope {
+                command_id: format!("delivery:{id}"),
+                expected: Some(expected),
+                command: EngineeringCommand::RecordDeliveryIntent(op.clone()),
+            },
+            now,
+        )?;
+        let result = self.github_adapter(operation, &args["arguments"], false)?;
+        self.complete_delivery(store, &state, &op, result, now)
+    }
     fn execution_limits(
         &self,
         state: &EngineeringOutcomeSnapshot,
@@ -935,7 +1255,7 @@ impl EngineeringRuntime {
                 "subagent_effort":self.profile.subagent_effort,"max_subagents":self.profile.max_subagents,
                 "turn_seconds":seconds,"deadline":deadline,"codex":self.profile.codex,"bwrap":self.profile.bwrap,
                 "worker_network_access":self.profile.worker_network_access,"worker_scratch":self.profile.worker_scratch,
-                "readonly_mcp_servers":self.profile.readonly_mcp_servers,"allow_single_pwd_approval":self.profile.allow_single_pwd_approval,
+                "readonly_mcp_servers":self.profile.readonly_mcp_servers,"allow_single_pwd_approval":self.profile.allow_single_pwd_approval,"github_delivery":self.profile.github_delivery,
                 "thread_params":params,"prompt":prompt,"instructions":execution.instructions,
                 "codex_digest":sha(&bounded_read(&self.profile.codex,512*1024*1024)?),
                 "broker_digest":sha(&bounded_read(&self.profile.broker,MAX_FILE)?)});
@@ -981,6 +1301,32 @@ impl EngineeringRuntime {
             for execution in &state.executions {
                 if let Err(error) = self.reconcile(store, &state, execution, now) {
                     errors.push(json!({"execution_id":execution.id,"error":error.to_string()}));
+                }
+            }
+        }
+        // One controller owns bounded read-back; never repeat an uncertain mutation.
+        if self.profile.github_delivery.is_some() {
+            let poll_path = self.profile.broker_root.join("delivery-poll.json");
+            let last: i64 = if poll_path.exists() {
+                read_json(&poll_path)?
+            } else {
+                0
+            };
+            if now.saturating_sub(last) >= 30 {
+                atomic(&poll_path, &now)?;
+                for id in &ids {
+                    let state = snapshot(store, id)?;
+                    for op in state
+                        .delivery_operations
+                        .iter()
+                        .filter(|o| o.evidence_digest.is_none())
+                    {
+                        if let Err(error) = self.reconcile_delivery(store, &state, op, now) {
+                            errors.push(
+                                json!({"delivery_operation":op.id,"error":error.to_string()}),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -1174,6 +1520,31 @@ impl EngineeringRuntime {
                 if execution.role == EngineeringRole::Supervisor =>
             {
                 self.verify_review(review, execution)?;
+                if self.profile.github_delivery.is_some() {
+                    let merged = state
+                        .delivery_operations
+                        .iter()
+                        .rev()
+                        .find(|o| {
+                            o.operation == "merge"
+                                && o.post_merge_verified
+                                && o.contract_revision == state.contract_revision
+                        })
+                        .ok_or("delivery requires post-merge verification")?;
+                    let saved: Value = serde_json::from_str(&merged.arguments_json)?;
+                    let merge_review: EngineeringReviewEvidence =
+                        serde_json::from_value(saved["review"].clone())?;
+                    let final_report: Value =
+                        serde_json::from_slice(&self.evidence(&review.evidence_digest)?)?;
+                    if final_report["verdict"] != "pass"
+                        || review.artefacts != merge_review.artefacts
+                    {
+                        return Err(
+                            "final acceptance must cover exactly the reviewed merged artefacts"
+                                .into(),
+                        );
+                    }
+                }
             }
             _ => return Err("command is outside this model role's adapter authority".into()),
         }
@@ -1237,6 +1608,7 @@ impl EngineeringRuntime {
                     json!({"snapshot":state,"expected":state.precondition(),"registered_reviews":reviews,"reviewer_candidates":observed_reviews(log)}),
                 )
             }
+            "bokkie_github" => self.github_tool(store, directory, execution, key, args, now),
             "bokkie_command" => self.command(store, directory, execution, key, args.clone(), now),
             "bokkie_file" => {
                 let (artefact, bytes) = self.file(args["path"].as_str().ok_or("missing path")?)?;
@@ -1872,6 +2244,9 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
+            Self::with_github(false)
+        }
+        fn with_github(github: bool) -> Self {
             let temp = tempfile::tempdir().unwrap();
             let workspace = temp.path().join("workspace");
             let root = temp.path().join("broker");
@@ -1879,6 +2254,37 @@ mod tests {
             fs::create_dir(&root).unwrap();
             let instruction = temp.path().join("instructions.md");
             fs::write(&instruction, "Preserve the original intent.").unwrap();
+            if github {
+                for args in [
+                    vec!["init", "-b", "main"],
+                    vec!["config", "user.name", "Fixture"],
+                    vec!["config", "user.email", "fixture@example.invalid"],
+                    vec![
+                        "remote",
+                        "add",
+                        "origin",
+                        "https://github.com/robchristie/pagefold.git",
+                    ],
+                    vec![
+                        "-c",
+                        "commit.gpgsign=false",
+                        "commit",
+                        "--allow-empty",
+                        "-m",
+                        "Initial fixture",
+                    ],
+                ] {
+                    assert!(
+                        Command::new("git")
+                            .args(args)
+                            .current_dir(&workspace)
+                            .output()
+                            .unwrap()
+                            .status
+                            .success()
+                    );
+                }
+            }
             let profile = EngineeringRuntimeProfile {
                 workspace,
                 broker_root: root,
@@ -1916,6 +2322,12 @@ mod tests {
                     .collect(),
                 readonly_mcp_servers: vec![],
                 allow_single_pwd_approval: false,
+                github_delivery: github.then(|| PagefoldGithubProfile {
+                    repo: "robchristie/pagefold".into(),
+                    base: "main".into(),
+                    branch: "codex/fixture".into(),
+                    authority: "Explicit fixture delivery".into(),
+                }),
             };
             let runtime = EngineeringRuntime::new(profile).unwrap();
             let mut store = Store::open_in_memory().unwrap();
@@ -2737,6 +3149,236 @@ mod tests {
                     105
                 )
                 .is_ok()
+        );
+    }
+    #[test]
+    fn github_host_branch_commit_and_receipt_replay_use_real_local_git_only() {
+        let mut f = Fixture::with_github(true);
+        let directory = f.directory(&f.worker);
+        let expected = snapshot(&f.store, &f.id).unwrap().precondition();
+        let request = json!({"operation":"prepare_branch","arguments":{},"expected":expected});
+        let first = f
+            .runtime
+            .github_tool(
+                &mut f.store,
+                &directory,
+                &f.worker,
+                "prepare",
+                &request,
+                105,
+            )
+            .unwrap();
+        assert_eq!(first["pending"], false);
+        assert_eq!(first["result"]["branch"], "codex/fixture");
+        let again = f
+            .runtime
+            .github_tool(
+                &mut f.store,
+                &directory,
+                &f.worker,
+                "prepare",
+                &request,
+                106,
+            )
+            .unwrap();
+        assert_eq!(first, again);
+        assert_eq!(
+            snapshot(&f.store, &f.id).unwrap().delivery_operations.len(),
+            1
+        );
+        fs::write(
+            f.runtime.profile.workspace.join("reader.txt"),
+            "synthetic reader",
+        )
+        .unwrap();
+        let expected = snapshot(&f.store, &f.id).unwrap().precondition();
+        atomic(&directory.join("observed.json"), &expected).unwrap();
+        let request = json!({"operation":"commit","arguments":{"paths":["reader.txt"],"message":"Add synthetic reader"},"expected":expected});
+        let first = f
+            .runtime
+            .github_tool(&mut f.store, &directory, &f.worker, "commit", &request, 107)
+            .unwrap();
+        assert_eq!(first["pending"], false);
+        assert!(
+            first["result"]["head"]
+                .as_str()
+                .is_some_and(|h| h.len() == 40)
+        );
+        let again = f
+            .runtime
+            .github_tool(&mut f.store, &directory, &f.worker, "commit", &request, 108)
+            .unwrap();
+        assert_eq!(first, again);
+        assert_eq!(
+            snapshot(&f.store, &f.id).unwrap().delivery_operations.len(),
+            2
+        );
+        // A rejected pre-mutation request is retained without trapping future work.
+        let expected = snapshot(&f.store, &f.id).unwrap().precondition();
+        atomic(&directory.join("observed.json"), &expected).unwrap();
+        let request = json!({"operation":"commit","arguments":{"paths":["../escape"],"message":"Rejected"},"expected":expected});
+        let failed = f
+            .runtime
+            .github_tool(
+                &mut f.store,
+                &directory,
+                &f.worker,
+                "rejected",
+                &request,
+                109,
+            )
+            .unwrap();
+        assert_eq!(failed["pending"], false);
+        assert!(failed["result"]["error"].is_string());
+        assert!(
+            snapshot(&f.store, &f.id)
+                .unwrap()
+                .delivery_operations
+                .iter()
+                .all(|o| o.evidence_digest.is_some())
+        );
+    }
+    #[test]
+    fn github_delivery_replays_persisted_result_before_uncertain_commit_readback() {
+        let mut f = Fixture::with_github(true);
+        let directory = f.directory(&f.worker);
+        let before = snapshot(&f.store, &f.id).unwrap();
+        let op = EngineeringDeliveryOperation {
+            id: sha(b"lost-result"),
+            execution_id: f.worker.id.clone(),
+            contract_revision: before.contract_revision,
+            operation: "commit".into(),
+            arguments_json: json!({"arguments":{"paths":["reader.txt"],"message":"Example"}})
+                .to_string(),
+            evidence_digest: None,
+            post_merge_verified: false,
+        };
+        f.store
+            .engineering_command(
+                EngineeringActor::Reconciler {
+                    adapter_id: f.worker.instructions.adapter_id.clone(),
+                },
+                EngineeringCommandEnvelope {
+                    command_id: "intent-before-crash".into(),
+                    expected: Some(before.precondition()),
+                    command: EngineeringCommand::RecordDeliveryIntent(op.clone()),
+                },
+                105,
+            )
+            .unwrap();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        let result = json!({"head":"a".repeat(40),"parent":"b".repeat(40)});
+        let digest = f
+            .runtime
+            .blob(&serde_json::to_vec(&result).unwrap())
+            .unwrap();
+        let key = format!("delivery-result-{}", op.id);
+        atomic(
+            &directory.join("receipts").join(format!("{key}-0.json")),
+            &EngineeringCommandEnvelope {
+                command_id: format!("{}:{key}:0", f.worker.id),
+                expected: Some(state.precondition()),
+                command: EngineeringCommand::RecordDeliveryResult {
+                    operation_id: op.id.clone(),
+                    evidence_digest: digest,
+                    post_merge_verified: false,
+                    failed: false,
+                },
+            },
+        )
+        .unwrap();
+        let result = f
+            .runtime
+            .reconcile_delivery(&mut f.store, &state, &op, 106)
+            .unwrap();
+        assert_eq!(result["pending"], false);
+        assert!(
+            snapshot(&f.store, &f.id).unwrap().delivery_operations[0]
+                .evidence_digest
+                .is_some()
+        );
+    }
+    #[test]
+    fn github_profile_is_explicit_and_local_identity_is_unchanged() {
+        let fixture = Fixture::new();
+        let mut profile = fixture.runtime.profile.clone();
+        let local = serde_json::to_value(&profile).unwrap();
+        assert!(local.get("github_delivery").is_none());
+        let round_trip: EngineeringRuntimeProfile = serde_json::from_value(local.clone()).unwrap();
+        assert_eq!(serde_json::to_value(round_trip).unwrap(), local);
+        assert!(profile.contract_template(100).unwrap().authority.is_empty());
+        let original = profile.instructions(true).unwrap();
+        profile.github_delivery = Some(PagefoldGithubProfile {
+            repo: "robchristie/pagefold".into(),
+            base: "main".into(),
+            branch: "codex/fixture".into(),
+            authority: "Explicit ordinary Pagefold delivery".into(),
+        });
+        assert!(profile.validate().is_err()); // An ordinary directory is not a safe Git workspace.
+        fs::create_dir(profile.workspace.join(".git")).unwrap();
+        profile.validate().unwrap();
+        let opted = profile.instructions(true).unwrap();
+        assert!(opted.text.starts_with(&original.text));
+        assert_ne!(opted.digest, original.digest);
+        assert_eq!(
+            profile.contract_template(100).unwrap().authority[0].grant,
+            "pagefold-github-delivery-v1"
+        );
+        profile.github_delivery.as_mut().unwrap().repo = "robchristie/bokkie".into();
+        assert!(profile.validate().is_err());
+        profile.github_delivery.as_mut().unwrap().repo = "robchristie/pagefold".into();
+        profile.github_delivery.as_mut().unwrap().branch = "main".into();
+        assert!(profile.validate().is_err());
+    }
+    #[test]
+    fn github_tool_refuses_stale_and_unattributed_merge_before_host_call() {
+        let mut f = Fixture::new();
+        let directory = f.runtime.profile.broker_root.join(&f.worker.id);
+        let args = json!({"operation":"prepare_branch","arguments":{}});
+        assert!(
+            f.runtime
+                .github_tool(&mut f.store, &directory, &f.worker, "disabled", &args, 105)
+                .unwrap_err()
+                .to_string()
+                .contains("not enabled")
+        );
+        f.runtime.profile.github_delivery = Some(PagefoldGithubProfile {
+            repo: "robchristie/pagefold".into(),
+            base: "main".into(),
+            branch: "codex/fixture".into(),
+            authority: "authorised".into(),
+        });
+        let state = snapshot(&f.store, &f.id).unwrap();
+        atomic(&directory.join("observed.json"), &state.precondition()).unwrap();
+        let mut stale = state.precondition();
+        stale.contract_revision += 1;
+        let args = json!({"operation":"prepare_branch","arguments":{},"expected":stale});
+        assert!(
+            f.runtime
+                .github_tool(&mut f.store, &directory, &f.worker, "stale", &args, 105)
+                .unwrap_err()
+                .to_string()
+                .contains("current observed")
+        );
+        assert!(
+            snapshot(&f.store, &f.id)
+                .unwrap()
+                .delivery_operations
+                .is_empty()
+        );
+        // Even a current request has no authority to introduce a caller-invented review.
+        let args = json!({"operation":"merge","arguments":{"pr":1,"head":"a".repeat(40)},"expected":state.precondition(),
+            "review":{"reviewer_identity":"invented","artefacts":[],"evidence_digest":"b".repeat(64)}});
+        assert!(
+            f.runtime
+                .github_tool(&mut f.store, &directory, &f.worker, "review", &args, 105)
+                .is_err()
+        );
+        assert!(
+            snapshot(&f.store, &f.id)
+                .unwrap()
+                .delivery_operations
+                .is_empty()
         );
     }
     #[test]

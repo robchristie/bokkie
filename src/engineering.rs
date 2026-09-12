@@ -133,6 +133,13 @@ pub enum EngineeringCommand {
         package_id: Option<String>,
     },
     RecordReconciliation(EngineeringReconciliationInput),
+    RecordDeliveryIntent(EngineeringDeliveryOperation),
+    RecordDeliveryResult {
+        operation_id: String,
+        evidence_digest: String,
+        post_merge_verified: bool,
+        failed: bool,
+    },
     FinishOutcome {
         assessment_ids: Vec<String>,
         review: EngineeringReviewEvidence,
@@ -366,6 +373,18 @@ pub struct EngineeringAcceptance {
     pub review: EngineeringReviewEvidence,
     pub at: i64,
 }
+/// Adapter-owned external intent. SQLite commits it before any Git/GitHub effect.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineeringDeliveryOperation {
+    pub id: String,
+    pub execution_id: String,
+    pub contract_revision: u64,
+    pub operation: String,
+    pub arguments_json: String,
+    pub evidence_digest: Option<String>,
+    pub post_merge_verified: bool,
+}
 /// Materialised projection. Immutable commands, dispatches and audit events retain history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineeringOutcomeSnapshot {
@@ -390,6 +409,8 @@ pub struct EngineeringOutcomeSnapshot {
     pub recoveries_used: u32,
     pub cancellation_requested: bool,
     pub acceptance: Option<EngineeringAcceptance>,
+    #[serde(default)]
+    pub delivery_operations: Vec<EngineeringDeliveryOperation>,
 }
 impl EngineeringOutcomeSnapshot {
     pub fn contract(&self) -> &EngineeringContract {

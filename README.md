@@ -16,8 +16,9 @@ The initial implementation is intentionally narrow:
   and
 - a loopback HTTP API with a delivered local Polyorama attention interface.
 
-General infrastructure actions, automatic merge or deployment, notifications,
-and memory remain outside the delivered capability. The graphical interface was
+General infrastructure actions, deployment, notifications and memory remain
+outside the delivered capability. Automatic merge is available only through the
+explicit [bounded Pagefold profile](docs/pagefold-github-delivery.md). The graphical interface was
 outside the original obligation-kernel slice and subsequently landed as the
 local attention UI in [pull request #4](https://github.com/robchristie/bokkie/pull/4).
 The narrow gardener uses Codex only through isolated, network-off worktrees,
@@ -145,8 +146,10 @@ database and profile to ingest retained events and results. Use outcome
 cancellation to request termination; responsibility remains visible until the
 broker proves cessation. Budget exhaustion and uncertain ownership remain
 recoverable attention conditions. Do not delete broker spools or workspace
-ownership records to force replacement. No persistent service, deployment or
-publication is enabled by these commands.
+ownership records to force replacement. No persistent service or deployment is enabled by these commands. The
+local-only profile excludes publication; the optional [Pagefold GitHub
+profile](docs/pagefold-github-delivery.md) authorises only its bounded reviewed
+branch/PR/CI/squash-merge delivery flow.
 
 The [supervision contract](docs/engineering-supervision-contract.md) defines
 backend constraints. The [completed delivery plan](docs/plans/completed/engineering-supervision.md)

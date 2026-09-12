@@ -11,6 +11,16 @@ through this runtime after recorded infrastructure repairs and repeated
 qualification; the [completed plan](../../docs/plans/completed/engineering-supervision.md)
 links the final evidence.
 
+## Pagefold GitHub profile
+
+The optional [bounded Pagefold profile](../../docs/pagefold-github-delivery.md)
+adds typed branch, commit, push, PR, status and supervisor-only squash merge
+operations through a host adapter. Its review, CI and post-merge acceptance gates
+are separate from worker completion. It preserves the local-only template and
+existing engineering guidance; it does not grant authenticated worker shell
+access or change the gardener's permissions. Qualify it with no-model preflight
+before submitting a live outcome.
+
 ## Start an isolated instance
 
 Prepare an isolated workspace and a separate private broker directory. Copy
@@ -28,8 +38,10 @@ and network-off. The original personal/repository guidance and installed skills
 remain loaded, and enabled guidance/skill file digests are retained per execution.
 
 `supervisor_tools` and `worker_tools` select from the bounded Bokkie capabilities
-listed in the template. Snapshot and command are required. Repository and UI
-operations use normal Git/gh and Lantern CLI tools under the task sandbox;
+listed in the template. Snapshot and command are required. Local repository and UI
+operations use normal Git and Lantern CLI tools under the task sandbox; the
+opt-in Pagefold profile routes Git mutations and authenticated GitHub work
+through bokkie_github;
 `readonly_mcp_servers` may explicitly retain `openaiDeveloperDocs`. External app
 mutation tools are disabled. An unsupported integration is a profile decision,
 not permission to inherit every connected application.

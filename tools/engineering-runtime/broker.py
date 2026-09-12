@@ -587,6 +587,80 @@ class Broker:
         if Path(started.get('cwd', '')).resolve() != Path(m['workspace']).resolve():
             raise ValueError('effective cwd differs from registered workspace')
 
+    def environment(self):
+        """One launch environment for the broker and no-model preflight."""
+        environment = dict(os.environ)
+        if self.manifest.get('github_delivery') is not None:
+            # Host-side typed delivery owns GitHub and Git authentication. Do not
+            # let app-server or its shell descendants inherit alternate helpers.
+            for name in list(environment):
+                if name.startswith(('GH_', 'GITHUB_', 'GIT_', 'SSH_')) or name in {
+                    'DBUS_SESSION_BUS_ADDRESS', 'BASH_ENV', 'ENV', 'ZDOTDIR',
+                    'LD_PRELOAD', 'LD_LIBRARY_PATH', 'PYTHONPATH', 'PYTHONSTARTUP',
+                }:
+                    environment.pop(name)
+            environment.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
+                               GIT_TERMINAL_PROMPT='0')
+        if self.manifest.get('worker_scratch') and self.manifest['role'] == 'worker':
+            environment['TMPDIR'] = self.manifest['worker_scratch']
+        return environment
+
+    def github_boundary(self):
+        """Hide supported credential stores and protect host delivery records.
+
+        This opt-in profile supports a standalone checkout, standard credential
+        stores and the explicit gh/XDG overrides. Arbitrary credential copies
+        or credentials embedded in repository files are outside that profile.
+        """
+        workspace = Path(self.manifest['workspace']).resolve(strict=True)
+        git = workspace / '.git'
+        if git.is_symlink() or not git.is_dir():
+            raise ValueError('GitHub delivery requires a standalone .git directory')
+        broker_roots = {self.root.parent.resolve(strict=True),
+                        Path(self.manifest.get('broker_root', self.root.parent)).resolve(strict=True)}
+        if any(root.is_relative_to(workspace) or workspace.is_relative_to(root)
+               for root in broker_roots):
+            raise ValueError('GitHub delivery broker root must be disjoint from workspace')
+        homes = {Path.home(), Path(pwd.getpwuid(os.getuid()).pw_dir)}
+        paths = {Path('/etc/gitconfig'), Path('/run/user') / str(os.getuid()) / 'bus'}
+        for home in homes:
+            paths.update(home / name for name in (
+                '.config/gh', '.ssh', '.netrc', '.git-credentials', '.gitconfig',
+                '.config/git/config', '.config/git/credentials'))
+        for name, suffix in [('GH_CONFIG_DIR', ''), ('XDG_CONFIG_HOME', 'gh'),
+                             ('SSH_AUTH_SOCK', '')]:
+            if os.environ.get(name):
+                path = Path(os.environ[name])
+                if not path.is_absolute():
+                    raise ValueError('GitHub delivery credential paths must be absolute')
+                paths.add(path / suffix if suffix else path)
+        if os.environ.get('XDG_CONFIG_HOME'):
+            paths.update(Path(os.environ['XDG_CONFIG_HOME']) / 'git' / name
+                         for name in ('config', 'credentials'))
+        # Cover symlink targets too: hiding only an alias leaves the same host
+        # credential readable by its canonical path under the inherited root.
+        paths.update(path.resolve() for path in list(paths))
+        args = []
+        masked_directories = []
+        codex_home = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))).resolve()
+        for path in sorted(paths, key=lambda value: (len(value.parts), str(value))):
+            if not path.exists() or path.is_symlink():
+                continue
+            if (workspace.is_relative_to(path) or path.is_relative_to(workspace) or
+                    codex_home.is_relative_to(path) or path.is_relative_to(codex_home) or
+                    any(root.is_relative_to(path) or path.is_relative_to(root) for root in broker_roots)):
+                raise ValueError('GitHub delivery credential store overlaps protected runtime paths')
+            if any(path.is_relative_to(parent) for parent in masked_directories):
+                continue
+            if path.is_dir():
+                masked_directories.append(path)
+                args += ['--tmpfs', str(path), '--remount-ro', str(path)]
+            else:
+                args += ['--ro-bind', '/dev/null', str(path)]
+        for path in [git, *sorted(broker_roots)]:
+            args += ['--ro-bind', str(path), str(path)]
+        return args
+
     def command(self):
         m = self.manifest
         config = self.configuration()
@@ -600,6 +674,8 @@ class Broker:
             # even if a narrowly approved command escapes the inner Codex sandbox.
             lock_root = str(workspace_lock_root())
             args += ['--ro-bind', lock_root, lock_root]
+        if m.get('github_delivery') is not None:
+            args += self.github_boundary()
         args += ['--', m['codex'], 'app-server', '--listen', 'stdio://']
         for key, value in config.items():
             if isinstance(value, dict):
@@ -628,9 +704,7 @@ class Broker:
                     'spool': str(self.root.resolve())})
                 self.event('workspace_reserved', {'workspace': str(Path(m['workspace']).resolve()),
                            'generation': self.generation})
-            environment = dict(os.environ)
-            if m.get('worker_scratch') and m['role'] == 'worker':
-                environment['TMPDIR'] = m['worker_scratch']
+            environment = self.environment()
             self.child = self.spawn(self.command(), cwd=m['workspace'], env=environment, stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     start_new_session=True)

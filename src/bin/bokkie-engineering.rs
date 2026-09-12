@@ -1,4 +1,4 @@
-//! Explicit local-only engineering runtime entrypoint; no daemon installation.
+//! Explicit task-profile engineering runtime entrypoint; no daemon installation.
 use bokkie::{Store, engineering_runtime};
 use clap::{Parser, Subcommand};
 use engineering_runtime::{EngineeringRuntime, EngineeringRuntimeProfile, RuntimeResult};
