@@ -1,0 +1,340 @@
+{
+  "schema_version": 1,
+  "result": "accepted",
+  "runtime_revision": "c21a9d2280c2ccd7c5a92b96ae88cfec68625d66",
+  "outcome_id": "9637199b-a6c4-4d6c-886e-235731aae71e",
+  "contract_revision": 2,
+  "state_revision": 84,
+  "acceptance": {
+    "assessor_execution_id": "fc589907-8b92-4184-98c4-290ef2325844",
+    "contract_revision": 2,
+    "assessment_ids": [
+      "1b6d7891-819b-4335-ad52-dfe88226bd2b",
+      "db43171f-4c5b-4411-8a27-41d07c7508dc"
+    ],
+    "review": {
+      "reviewer_identity": "codex-thread:01a094c5-a1c3-7af2-8c64-1b4e7ee821bc:turn:01a094c5-a1fa-7d03-836c-d4bc816e0e46",
+      "artefacts": [
+        {
+          "kind": "git",
+          "repository": "/nvme/development/pagefold-github-delivery/workspace",
+          "commit": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+          "tree": "0d4618485758defe335aca48651f164b741fe7e7"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "src/lib.rs",
+          "bytes": 35240,
+          "sha256": "64897ca9ae8c6ce1c84fb25662e656f3956a2259c883e14f075185496a9fb90e"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "README.md",
+          "bytes": 5844,
+          "sha256": "bc42a961886d0837b9cf4ad63894f948703b1d8d89d1374d36e0156a5dddd966"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/qualification.md",
+          "bytes": 7132,
+          "sha256": "1bba651b303e05e4913121ba23bd160b6b420829e67c5d1c2079669c44268852"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/manifest.json",
+          "bytes": 8391,
+          "sha256": "ef168236053ef684054f776fb97a4d5caf970d8e97e30dff9b02be7ea520b30b"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/registered-review.json",
+          "bytes": 979,
+          "sha256": "b26f5b285dea6ae738f22d6ea42b71ecd2031a3795f38a47ebe9465b02993ee7"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/delivery.md",
+          "bytes": 3303,
+          "sha256": "9caccddf7f4623f78a6621c83d9274ef2e36ccbabd2b0a691d85594ccb58ca90"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/verify-continuation.log",
+          "bytes": 2351,
+          "sha256": "53c1a53cef2021556d215af33e6a9b6af3ca8f50fb0788a4df932019cfb1bade"
+        }
+      ],
+      "evidence_digest": "64fbb1e46a3291cbfb598b06d8719a61997d9239f302b145cb4b647e93c792d2"
+    },
+    "at": 1789203263
+  },
+  "submission_ids": [
+    "541eba5b-91c7-47c2-a306-1b2da159983a",
+    "c1ef794e-8de5-4776-a86f-5177a4e9f11b"
+  ],
+  "executions": [
+    {
+      "id": "07c0c718-40dc-46b9-9098-fa2e3d165c2c",
+      "role": "supervisor",
+      "cessation_verified": true
+    },
+    {
+      "id": "dd3765db-b9a1-4204-9013-1cdb830fa75e",
+      "role": "supervisor",
+      "cessation_verified": true
+    },
+    {
+      "id": "6c912886-0e40-4158-9fa1-1ced04965ea5",
+      "role": "worker",
+      "cessation_verified": true
+    },
+    {
+      "id": "cc273e76-5d35-4bf6-9ad4-2c0e313fb9fb",
+      "role": "supervisor",
+      "cessation_verified": true
+    },
+    {
+      "id": "6dc6746c-5762-415e-9580-1bec80d0dbc2",
+      "role": "supervisor",
+      "cessation_verified": true
+    },
+    {
+      "id": "dc2d54f4-c085-48b5-8723-a678e115724f",
+      "role": "supervisor",
+      "cessation_verified": true
+    },
+    {
+      "id": "fcf7c210-2dfb-48a0-afb3-f45f09b74e4b",
+      "role": "worker",
+      "cessation_verified": true
+    },
+    {
+      "id": "1c415581-421a-49aa-b45b-11a8cd8b5cdf",
+      "role": "supervisor",
+      "cessation_verified": true
+    },
+    {
+      "id": "6e3bf2f3-84a1-49aa-88c1-282e7f4adaa5",
+      "role": "supervisor",
+      "cessation_verified": true
+    },
+    {
+      "id": "2e36ca65-2bfc-4425-8f23-c5928739d8cc",
+      "role": "supervisor",
+      "cessation_verified": true
+    },
+    {
+      "id": "29874193-d8f0-4a0a-9b58-97360f21ab12",
+      "role": "worker",
+      "cessation_verified": true
+    },
+    {
+      "id": "c734657e-8f18-47b0-a3e2-383301472789",
+      "role": "supervisor",
+      "cessation_verified": true
+    },
+    {
+      "id": "509ef89a-493e-4672-9ddb-f9909c8bcf98",
+      "role": "supervisor",
+      "cessation_verified": true
+    },
+    {
+      "id": "610fb260-92cf-446a-a314-e5e417c75c36",
+      "role": "supervisor",
+      "cessation_verified": true
+    },
+    {
+      "id": "fc589907-8b92-4184-98c4-290ef2325844",
+      "role": "supervisor",
+      "cessation_verified": true
+    }
+  ],
+  "reviews": [
+    {
+      "reviewer_identity": "codex-thread:01a094c5-a1c3-7af2-8c64-1b4e7ee821bc:turn:01a094c5-a1fa-7d03-836c-d4bc816e0e46",
+      "artefacts": [
+        {
+          "kind": "git",
+          "repository": "/nvme/development/pagefold-github-delivery/workspace",
+          "commit": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+          "tree": "0d4618485758defe335aca48651f164b741fe7e7"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "src/lib.rs",
+          "bytes": 35240,
+          "sha256": "64897ca9ae8c6ce1c84fb25662e656f3956a2259c883e14f075185496a9fb90e"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "README.md",
+          "bytes": 5844,
+          "sha256": "bc42a961886d0837b9cf4ad63894f948703b1d8d89d1374d36e0156a5dddd966"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/qualification.md",
+          "bytes": 7132,
+          "sha256": "1bba651b303e05e4913121ba23bd160b6b420829e67c5d1c2079669c44268852"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/manifest.json",
+          "bytes": 8391,
+          "sha256": "ef168236053ef684054f776fb97a4d5caf970d8e97e30dff9b02be7ea520b30b"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/registered-review.json",
+          "bytes": 979,
+          "sha256": "b26f5b285dea6ae738f22d6ea42b71ecd2031a3795f38a47ebe9465b02993ee7"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/delivery.md",
+          "bytes": 3303,
+          "sha256": "9caccddf7f4623f78a6621c83d9274ef2e36ccbabd2b0a691d85594ccb58ca90"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/verify-continuation.log",
+          "bytes": 2351,
+          "sha256": "53c1a53cef2021556d215af33e6a9b6af3ca8f50fb0788a4df932019cfb1bade"
+        }
+      ],
+      "evidence_digest": "64fbb1e46a3291cbfb598b06d8719a61997d9239f302b145cb4b647e93c792d2"
+    },
+    {
+      "reviewer_identity": "codex-thread:01a094bb-9c0b-7201-9e47-48098bfb4691:turn:01a094bb-9c44-7f40-ab0c-91e344952cfc",
+      "artefacts": [
+        {
+          "kind": "git",
+          "repository": "/nvme/development/pagefold-github-delivery/workspace",
+          "commit": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+          "tree": "0d4618485758defe335aca48651f164b741fe7e7"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/qualification.md",
+          "bytes": 7132,
+          "sha256": "1bba651b303e05e4913121ba23bd160b6b420829e67c5d1c2079669c44268852"
+        },
+        {
+          "kind": "file",
+          "store": "/nvme/development/pagefold-github-delivery/workspace",
+          "path": "target/bokkie-tmp/manifest.json",
+          "bytes": 8391,
+          "sha256": "ef168236053ef684054f776fb97a4d5caf970d8e97e30dff9b02be7ea520b30b"
+        }
+      ],
+      "evidence_digest": "7282363f94664a800520a9d42b794bfc7060695e71447fceb297372043d8c7ce"
+    }
+  ],
+  "delivery": {
+    "base": "main",
+    "branch": "codex/pagefold-bokkie-delivery",
+    "changes_requested": false,
+    "checks": [
+      {
+        "app_id": 15368,
+        "conclusion": "success",
+        "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+        "name": "Fresh-checkout verification",
+        "status": "completed"
+      }
+    ],
+    "draft": false,
+    "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+    "human_review_required": false,
+    "merge_commit": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+    "mergeable": null,
+    "mergeable_state": "unknown",
+    "merged": true,
+    "post_merge_verified": true,
+    "pr": 2,
+    "repo": "robchristie/pagefold",
+    "state": "closed",
+    "unresolved_threads": false
+  },
+  "pr": "https://github.com/robchristie/pagefold/pull/2",
+  "pre_merge_ci": [
+    {
+      "conclusion": "success",
+      "databaseId": 34683633527,
+      "event": "pull_request",
+      "headSha": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+      "name": "CI",
+      "status": "completed",
+      "url": "https://github.com/robchristie/pagefold/actions/runs/34683633527"
+    }
+  ],
+  "post_merge_ci": [
+    {
+      "conclusion": "success",
+      "databaseId": 34684023723,
+      "event": "push",
+      "headSha": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+      "name": "CI",
+      "status": "completed",
+      "url": "https://github.com/robchristie/pagefold/actions/runs/34684023723"
+    }
+  ],
+  "usage": {
+    "observed_contexts": 17,
+    "known_input_tokens": 21824641,
+    "known_cached_input_tokens": 19964672,
+    "known_uncached_tokens": 1859969,
+    "known_output_tokens": 51257,
+    "known_model_responses": 212,
+    "charged_contexts": 120,
+    "reserved_contexts": 120,
+    "context_inventory_complete": false,
+    "observed_telemetry_complete": true,
+    "stages": {
+      "complete_fixture": 0,
+      "live_probe": 0,
+      "application_dogfood": 1
+    },
+    "elapsed_seconds": 2989.610648393631,
+    "outer_agent_interventions": 3,
+    "human_interventions": 0
+  },
+  "campaign": "pagefold-navigation-20260912",
+  "attempt": "pagefold-navigation-live-1",
+  "campaign_terminal": false,
+  "campaign_terminal_limitation": "Campaign.finish requires final complete_fixture; application attempt completed without unrelated arithmetic run",
+  "evidence_root": "/nvme/development/pagefold-github-delivery",
+  "retained_files": {
+    "/nvme/development/pagefold-github-delivery/navigation-intake.json": "e597177823cc0f4559b580ea10d62ada519ffa0f2efcdfc4e0c324ecddfdfd65",
+    "/nvme/development/pagefold-github-delivery/navigation-preflight-result.json": "551a21d251cf52adb2eaa2b51d6f2448a94201a2938c0f2c17ed392d50e04f08",
+    "/nvme/development/pagefold-github-delivery/navigation-snapshot.json": "810d5fed085acc2080f38fea5eabf0e9c6f13684bd5f353001fd8cbd63e192af",
+    "/nvme/development/pagefold-github-delivery/navigation-campaign-report.json": "35922b47412bb15a8c900b6fa991f25f657aed182c48fa5f3caf17e94b284ac4",
+    "/nvme/development/pagefold-github-delivery/navigation-observations.json": "11ce6c990c28bb0aff754246a0deb6bd2731445603d55d72204644b5758b1f51",
+    "/nvme/development/pagefold-github-delivery/navigation-trusted-cargo-answer.json": "deda062144ddb8ac903fe1be1799cb88a095f53e487c8072883b580a17114176",
+    "/nvme/development/pagefold-github-delivery/navigation-host-closeout-answer.json": "51a25a9b9c1c656410f6fc330f49070e6eeb39ac5ac1e4d8b79893ba9fa93af8"
+  },
+  "cleanup": {
+    "live_remote_task_head": "absent",
+    "local_task_branch": "absent",
+    "remote_tracking_task_ref": "pruned",
+    "linked_task_worktrees": "none",
+    "workspace": "retained clean on main at merge commit",
+    "scratch": "retained exact acceptance evidence",
+    "controller": "stopped"
+  }
+}
