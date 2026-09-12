@@ -261,7 +261,7 @@ def execute(config, workspace, operation, arguments, *, run=subprocess.run):
     if operation == 'commit':
         paths = a['paths']
         if (not isinstance(paths, list) or not 0 < len(paths) <= 200 or len(set(map(str, paths))) != len(paths)
-                or any(not isinstance(p, str) or len(p) > 1024 or not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_./ -]*', p)
+                or any(not isinstance(p, str) or len(p) > 1024 or not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_./ -]*', p)
                        or any(part in ('', '.', '..', '.git') for part in p.split('/')) for p in paths)):
             raise DeliveryError('unsafe commit paths')
         for path in paths:

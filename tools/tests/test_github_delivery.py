@@ -104,9 +104,26 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse((self.root / 'NEVER').exists())
         self.assertIsNone(delivery.reconcile(CONFIG, self.root, 'commit', args, run=self.runner))
 
+    def test_commit_dotfiles_and_ci_workflow_preserves_unrelated_files(self):
+        self.prepare()
+        files = {'.gitignore': '/build/\n', '.gitattributes': '*.md text\n',
+                 '.github/workflows/ci.yml': 'name: Synthetic CI\n'}
+        for name, content in files.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        (self.root / 'unrelated.txt').write_text('preserve this work')
+        result = delivery.execute(CONFIG, self.root, 'commit',
+                                  {'paths': list(files), 'message': 'Prepare synthetic CI'}, run=self.runner)
+        self.assertEqual(result['head'], self.git('rev-parse', 'HEAD'))
+        for name, content in files.items():
+            self.assertEqual(self.git('show', 'HEAD:' + name), content.strip())
+        self.assertEqual(self.git('status', '--porcelain'), '?? unrelated.txt')
+        self.assertEqual(set(self.git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').splitlines()), set(files))
+
     def test_reject_paths_and_preexisting_index(self):
         self.prepare()
-        for path in ('../oops', '/tmp/oops', ':!file.txt', '.git/config', 'x/../../y', '$(touch nope)'):
+        for path in ('.', '..', './file.txt', '.git', '../oops', '/tmp/oops', ':!file.txt', '.git/config', 'x/../../y', '$(touch nope)'):
             with self.subTest(path=path), self.assertRaises(delivery.DeliveryError):
                 delivery.execute(CONFIG, self.root, 'commit', {'paths': [path], 'message': 'Test'}, run=self.runner)
         (self.root / 'file.txt').write_text('changed')

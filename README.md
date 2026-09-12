@@ -16,8 +16,9 @@ The initial implementation is intentionally narrow:
   and
 - a loopback HTTP API with a delivered local Polyorama attention interface.
 
-General infrastructure actions, automatic merge or deployment, notifications,
-and memory remain outside the delivered capability. The graphical interface was
+General infrastructure actions, deployment, notifications and memory remain
+outside the delivered capability. Automatic merge is available only through the
+explicit [bounded Pagefold profile](docs/pagefold-github-delivery.md). The graphical interface was
 outside the original obligation-kernel slice and subsequently landed as the
 local attention UI in [pull request #4](https://github.com/robchristie/bokkie/pull/4).
 The narrow gardener uses Codex only through isolated, network-off worktrees,
