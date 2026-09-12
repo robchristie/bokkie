@@ -360,6 +360,108 @@ for line in sys.stdin:
         self.assertNotEqual(retained[0], retained[1])
         self.assertTrue(broker.spool.has('item/started'))
 
+    def delivery_broker(self):
+        broker = self.broker()
+        workspace = self.root / 'workspace'
+        (workspace / '.git').mkdir(parents=True)
+        broker.root = self.root / 'brokers' / 'execution'
+        broker.root.mkdir(parents=True)
+        broker.manifest.update(workspace=str(workspace), github_delivery={})
+        return broker
+
+    def test_delivery_environment_strips_host_credentials_and_preserves_codex(self):
+        broker = self.delivery_broker()
+        broker.manifest['worker_scratch'] = '/workspace/scratch'
+        inherited = {'HOME': '/home/example', 'CODEX_HOME': '/home/example/.codex',
+                     'PATH': '/usr/bin', 'GH_TOKEN': 'secret', 'GITHUB_TOKEN': 'secret',
+                     'GH_CONFIG_DIR': '/private/gh', 'GIT_CONFIG_COUNT': '1',
+                     'GIT_ASKPASS': '/helper', 'SSH_AUTH_SOCK': '/private/agent',
+                     'SSH_ASKPASS': '/helper', 'DBUS_SESSION_BUS_ADDRESS': 'private',
+                     'BASH_ENV': '/credential-script', 'LD_PRELOAD': '/interceptor'}
+        with patch.dict(os.environ, inherited, clear=True):
+            actual = broker.environment()
+            self.assertEqual(actual, {'HOME': '/home/example', 'CODEX_HOME': '/home/example/.codex',
+                                     'PATH': '/usr/bin', 'GIT_CONFIG_NOSYSTEM': '1',
+                                     'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0',
+                                     'TMPDIR': '/workspace/scratch'})
+            broker.manifest.pop('github_delivery')
+            self.assertEqual(broker.environment(), {**inherited, 'TMPDIR': '/workspace/scratch'})
+
+    def test_delivery_command_masks_credentials_and_protects_receipts_and_git(self):
+        broker = self.delivery_broker()
+        home = self.root / 'home'
+        for name in ('.config/gh', '.ssh', '.codex/skills', 'custom-gh', 'xdg/gh'):
+            (home / name).mkdir(parents=True)
+        for name in ('.netrc', '.git-credentials', '.gitconfig', 'agent', '.codex/auth.json'):
+            (home / name).write_text('private')
+        inherited = {'HOME': str(home), 'CODEX_HOME': str(home / '.codex'),
+                     'GH_CONFIG_DIR': str(home / 'custom-gh'),
+                     'XDG_CONFIG_HOME': str(home / 'xdg'), 'SSH_AUTH_SOCK': str(home / 'agent')}
+        account = type('Account', (), {'pw_dir': str(home)})()
+        with patch.dict(os.environ, inherited, clear=True), patch.object(b.pwd, 'getpwuid', return_value=account):
+            command = broker.command()
+        for name in ('.config/gh', '.ssh', 'custom-gh', 'xdg/gh'):
+            start = command.index(str(home / name))
+            self.assertEqual(command[start - 1:start + 3],
+                             ['--tmpfs', str(home / name), '--remount-ro', str(home / name)])
+        for name in ('.netrc', '.git-credentials', '.gitconfig', 'agent'):
+            start = command.index(str(home / name))
+            self.assertEqual(command[start - 2:start + 1], ['--ro-bind', '/dev/null', str(home / name)])
+        for path in (Path(broker.manifest['workspace']) / '.git', broker.root.parent):
+            start = command.index(str(path))
+            self.assertEqual(command[start - 1:start + 2], ['--ro-bind', str(path), str(path)])
+        self.assertNotIn(str(home / '.codex'), command)
+        self.assertEqual((home / '.codex/auth.json').read_text(), 'private')
+
+    def test_delivery_boundary_protects_profile_root_and_preflight_receipts(self):
+        broker = self.delivery_broker()
+        authoritative = self.root / 'authoritative-brokers'
+        authoritative.mkdir()
+        broker.manifest['broker_root'] = str(authoritative)
+        command = broker.github_boundary()
+        for root in (authoritative, broker.root.parent):
+            start = command.index(str(root))
+            self.assertEqual(command[start - 1:start + 2], ['--ro-bind', str(root), str(root)])
+        authoritative.rmdir()
+        with self.assertRaises(FileNotFoundError):
+            broker.github_boundary()
+
+    def test_delivery_boundary_hides_credential_symlink_target(self):
+        broker = self.delivery_broker()
+        target = self.root / 'private-gh'
+        target.mkdir()
+        alias = self.root / 'gh-alias'
+        alias.symlink_to(target, target_is_directory=True)
+        with patch.dict(os.environ, {'GH_CONFIG_DIR': str(alias)}):
+            command = broker.github_boundary()
+        start = command.index(str(target))
+        self.assertEqual(command[start - 1:start + 3],
+                         ['--tmpfs', str(target), '--remount-ro', str(target)])
+
+    def test_delivery_run_uses_filtered_environment(self):
+        broker = self.delivery_broker()
+        with patch.dict(os.environ, {'GH_TOKEN': 'never-pass-to-worker'}), \
+                patch.object(broker, 'spawn', side_effect=OSError('fake spawn failure')) as spawn:
+            broker.run()
+        self.assertNotIn('GH_TOKEN', spawn.call_args.kwargs['env'])
+        self.assertTrue(broker.spool.has('not_started'))
+
+    def test_delivery_boundary_rejects_worktree_and_credential_overlap(self):
+        broker = self.delivery_broker()
+        git = Path(broker.manifest['workspace']) / '.git'
+        git.rmdir()
+        git.write_text('gitdir: /other/repository')
+        with self.assertRaisesRegex(ValueError, 'standalone'):
+            broker.github_boundary()
+        git.unlink()
+        git.mkdir()
+        with patch.dict(os.environ, {'GH_CONFIG_DIR': broker.manifest['workspace']}):
+            with self.assertRaisesRegex(ValueError, 'overlaps'):
+                broker.github_boundary()
+        with patch.dict(os.environ, {'GH_CONFIG_DIR': 'relative'}):
+            with self.assertRaisesRegex(ValueError, 'absolute'):
+                broker.github_boundary()
+
     def test_profile_contains_required_pid_namespace_and_client_reviewer(self):
         command = self.broker().command()
         for arg in ['--die-with-parent', '--unshare-pid', '--new-session', '--proc', 'approvals_reviewer="user"']:

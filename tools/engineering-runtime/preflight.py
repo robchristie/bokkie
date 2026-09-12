@@ -21,6 +21,18 @@ _spec.loader.exec_module(broker)
 # Each probe declares its question and smallest production-path regression set.
 # The acceptance condition is every named test actually running and passing.
 PROBES = {
+    'github_delivery': {
+        'question': 'Do fixed delivery scope, CI gates, replay and credential isolation hold without model turns?',
+        'python_modules': ['test_github_delivery', 'test_engineering_runtime'],
+        'rust': ['github_profile_is_explicit_and_local_identity_is_unchanged',
+                 'github_host_branch_commit_and_receipt_replay_use_real_local_git_only',
+                 'github_delivery_replays_persisted_result_before_uncertain_commit_readback',
+                 'github_tool_refuses_stale_and_unattributed_merge_before_host_call',
+                 'store::engineering::tests::github_delivery_requires_trusted_adapter_grant_and_current_execution',
+                 'store::engineering::tests::github_delivery_replays_intent_and_result_after_reopen',
+                 'store::engineering::tests::github_delivery_pending_intent_blocks_new_workers_and_acceptance',
+                 'store::engineering::tests::github_delivery_cancellation_retains_pending_intent_until_reconciled',
+                 'store::engineering::tests::github_delivery_merge_needs_supervisor_ceased_workers_and_verified_post_merge']},
     'qualification_driver': {
         'question': 'Do deadline and acceptance guards reject incomplete fixture observations and orphaned dispatch?',
         'python_modules': ['test_qualification_runner'],
@@ -66,7 +78,9 @@ def file_identity(path):
 
 
 def runtime_identity():
-    paths = ['tools/engineering-runtime/broker.py', 'tools/engineering-runtime/preflight.py',
+    paths = ['tools/engineering-runtime/github_delivery.py', 'tools/tests/test_github_delivery.py',
+             'instructions/engineering-github-worker.md', 'instructions/engineering-github-supervisor.md',
+             'tools/engineering-runtime/broker.py', 'tools/engineering-runtime/preflight.py',
              'src/engineering_runtime.rs', 'src/engineering.rs', 'src/store/engineering.rs',
              'Cargo.lock', 'tools/tests/test_engineering_runtime.py',
              'tools/qualify-engineering.py', 'tools/qualification_campaign.py',
@@ -173,9 +187,7 @@ def _session(profile, role, root):
         # Match the production namespace and worker lock-registry read-only mount;
         # no writer reservation is acquired because no turn can execute.
         broker.workspace_lock_root().mkdir(mode=0o700, parents=True, exist_ok=True)
-        environment = dict(os.environ)
-        if role == 'worker' and profile.get('worker_scratch'):
-            environment['TMPDIR'] = profile['worker_scratch']
+        environment = peer.environment()
         peer.child = subprocess.Popen(peer.command(), cwd=profile['workspace'], env=environment,
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE, start_new_session=True)
@@ -192,11 +204,17 @@ def _session(profile, role, root):
         peer.verify_thread_settings(started)
         identities = [file_identity(path) for path in started.get('instructionSources', [])]
         skills = peer.rpc('skills/list', {'cwds': [profile['workspace']], 'forceReload': True})
+        skill_names = []
         for entry in skills.get('data', []):
             if entry.get('errors'):
                 raise ValueError('installed skill discovery reported errors')
+            skill_names += [skill['name'] for skill in entry.get('skills', []) if skill.get('enabled', True)]
             identities += [file_identity(skill['path']) for skill in entry.get('skills', [])
                            if skill.get('enabled', True)]
+        if profile.get('github_delivery') is not None:
+            if not any(name.split(':')[-1] == 'land-reviewed-pr' for name in skill_names):
+                raise ValueError('Pagefold delivery requires the installed land-reviewed-pr skill')
+            peer.facts['enabled_skill_names'] = sorted(skill_names)
         # Relocating an identical fixture must not disguise an unchanged failure.
         for item in identities:
             guidance_path = Path(item['path'])
@@ -231,6 +249,14 @@ def run_preflight(profile_path, receipt_dir):
     before = file_identity(profile_path)
     parameters = _profile(profile_path, receipt_dir)
     profile = parameters['profile']
+    github_result = None
+    if profile.get('github_delivery') is not None:
+        Path(profile['broker_root']).mkdir(mode=0o700, parents=True, exist_ok=True)
+        spec = importlib.util.spec_from_file_location('github_delivery', Path(__file__).with_name('github_delivery.py'))
+        github = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(github)
+        scope = {k: profile['github_delivery'][k] for k in ('repo', 'base', 'branch')}
+        github_result = github.preflight(scope, profile['workspace'])
     profile['_thread_parameters'] = {role: parameters[role] for role in ('supervisor', 'worker')}
     with tempfile.TemporaryDirectory(prefix='preflight-', dir=receipt_dir) as temporary:
         root = Path(temporary)
@@ -260,6 +286,8 @@ def run_preflight(profile_path, receipt_dir):
                    'codex_version': version.decode('utf-8').strip(),
                    'executables': {key: file_identity(profile[key]) for key in ('codex', 'bwrap', 'broker')},
                    'sessions': environment_sessions}
+    if github_result is not None:
+        environment['github_delivery'] = github_result
     selection = {'workspace': profile['workspace'], 'worker_scratch': profile.get('worker_scratch'),
                  'source_identity': broker.digest(source), 'capture': source['capture'],
                  'commit': source.get('commit'), 'tree': source.get('tree'), 'clean': source.get('clean')}

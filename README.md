@@ -145,8 +145,10 @@ database and profile to ingest retained events and results. Use outcome
 cancellation to request termination; responsibility remains visible until the
 broker proves cessation. Budget exhaustion and uncertain ownership remain
 recoverable attention conditions. Do not delete broker spools or workspace
-ownership records to force replacement. No persistent service, deployment or
-publication is enabled by these commands.
+ownership records to force replacement. No persistent service or deployment is enabled by these commands. The
+local-only profile excludes publication; the optional [Pagefold GitHub
+profile](docs/pagefold-github-delivery.md) authorises only its bounded reviewed
+branch/PR/CI/squash-merge delivery flow.
 
 The [supervision contract](docs/engineering-supervision-contract.md) defines
 backend constraints. The [completed delivery plan](docs/plans/completed/engineering-supervision.md)
