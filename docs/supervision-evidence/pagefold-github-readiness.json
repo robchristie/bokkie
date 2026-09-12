@@ -1,0 +1,387 @@
+{
+  "candidate": "927f1d84b7399c7caf4e1f249a03252093af3705",
+  "preflight": {
+    "environment": {
+      "codex_version": "codex-cli 0.154.0",
+      "executables": {
+        "broker": {
+          "byte_length": 43668,
+          "path": "/nvme/development/bokkie/tools/engineering-runtime/broker.py",
+          "sha256": "b46270fc3d3efdfb21417201a15c8a908451bdaeb58c9be9e54915c3e3c15b94"
+        },
+        "bwrap": {
+          "byte_length": 84464,
+          "path": "/usr/bin/bwrap",
+          "sha256": "6ad2138a73d592acb43525432965e3c66f6fad8a2f3d610c6ca0b6855e993cbe"
+        },
+        "codex": {
+          "byte_length": 8790,
+          "path": "/home/rob/pixi/.pixi/envs/default/lib/node_modules/@openai/codex/bin/codex.js",
+          "sha256": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70"
+        }
+      },
+      "github_delivery": {
+        "authenticated": true,
+        "base": "main",
+        "base_ci_verified": true,
+        "base_head": "f0c75dd4bc26ca0ebb07758cbd93fe41eb2d5611",
+        "branch": "codex/pagefold-bokkie-delivery",
+        "policy_sha256": "de3e2222009689a8a535d15388d0dcd6f46bc30f2884f35978b9d6032c8086e2",
+        "protected": false,
+        "push_authorised": true,
+        "repo": "robchristie/pagefold",
+        "squash_merge": true
+      },
+      "implementation_identity": "997fcc09f87e8775ca5c6549fd4711443ee2bc18497b996a5a74a9641cfd2cd9",
+      "sessions": {
+        "supervisor": {
+          "developer_instructions_sha256": "68b6f5dd6b19b03ca8e1ed2aea0fe6f7709e2e7cdd1c8495a758047033bf4f56",
+          "dynamic_tools_schema_sha256": "1d2c2cc56fa69cc9370c87bf3c2367282ee73d5b153d88826ffbb2d240fe9104",
+          "effective_capabilities": {
+            "agents": {
+              "default_subagent_model": "gpt-6-astra",
+              "default_subagent_reasoning_effort": "high",
+              "max_depth": 1,
+              "max_threads": 2
+            },
+            "apps": false,
+            "dynamic_tools": [
+              "bokkie_github",
+              "bokkie_snapshot",
+              "bokkie_command",
+              "bokkie_question",
+              "bokkie_file",
+              "bokkie_inspect",
+              "bokkie_evidence",
+              "bokkie_review",
+              "bokkie_commands",
+              "bokkie_validation"
+            ],
+            "mcp_servers": {
+              "openaiDeveloperDocs": {
+                "enabled": false
+              }
+            },
+            "source_capture_limits": {
+              "max_file_bytes": 2097152,
+              "max_files": 2048,
+              "max_total_bytes": 33554432
+            },
+            "web_search": "disabled"
+          },
+          "effective_settings": {
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "model": "gpt-6-astra",
+            "reasoningEffort": "medium",
+            "sandbox": {
+              "networkAccess": false,
+              "type": "readOnly"
+            }
+          },
+          "enabled_skill_names": [
+            "bootstrap-codex-workspace",
+            "coordinate-cross-repo-change",
+            "deliver-engineering-objective",
+            "deliver-engineering-programme",
+            "imagegen",
+            "land-reviewed-pr",
+            "lantern-ui-inspection",
+            "openai-docs",
+            "plugin-creator",
+            "review-agent",
+            "review-workflow-friction",
+            "skill-creator",
+            "skill-installer",
+            "visualize:visualize"
+          ],
+          "guidance_count": 16,
+          "guidance_identity": "87ef3882c05af6f944451d0811e8723956943a559ac7e0ef42472edb9b6baee2",
+          "rpc_methods": [
+            "initialize",
+            "config/read",
+            "thread/start",
+            "skills/list"
+          ]
+        },
+        "worker": {
+          "developer_instructions_sha256": "ced7ff83fc94ca623fa85d8ca01b6e6b79a8b76c0c2ede2f4bb731886bbc1dac",
+          "dynamic_tools_schema_sha256": "1d2c2cc56fa69cc9370c87bf3c2367282ee73d5b153d88826ffbb2d240fe9104",
+          "effective_capabilities": {
+            "agents": {
+              "default_subagent_model": "gpt-6-astra",
+              "default_subagent_reasoning_effort": "high",
+              "max_depth": 1,
+              "max_threads": 2
+            },
+            "apps": false,
+            "dynamic_tools": [
+              "bokkie_github",
+              "bokkie_snapshot",
+              "bokkie_command",
+              "bokkie_question",
+              "bokkie_file",
+              "bokkie_inspect",
+              "bokkie_evidence",
+              "bokkie_review",
+              "bokkie_commands",
+              "bokkie_validation"
+            ],
+            "mcp_servers": {
+              "openaiDeveloperDocs": {
+                "enabled": false
+              }
+            },
+            "source_capture_limits": {
+              "max_file_bytes": 2097152,
+              "max_files": 2048,
+              "max_total_bytes": 33554432
+            },
+            "web_search": "disabled"
+          },
+          "effective_settings": {
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "model": "gpt-6-astra",
+            "reasoningEffort": "medium",
+            "sandbox": {
+              "excludeSlashTmp": true,
+              "excludeTmpdirEnvVar": true,
+              "networkAccess": true,
+              "type": "workspaceWrite"
+            }
+          },
+          "enabled_skill_names": [
+            "bootstrap-codex-workspace",
+            "coordinate-cross-repo-change",
+            "deliver-engineering-objective",
+            "deliver-engineering-programme",
+            "imagegen",
+            "land-reviewed-pr",
+            "lantern-ui-inspection",
+            "openai-docs",
+            "plugin-creator",
+            "review-agent",
+            "review-workflow-friction",
+            "skill-creator",
+            "skill-installer",
+            "visualize:visualize"
+          ],
+          "guidance_count": 16,
+          "guidance_identity": "87ef3882c05af6f944451d0811e8723956943a559ac7e0ef42472edb9b6baee2",
+          "rpc_methods": [
+            "initialize",
+            "config/read",
+            "thread/start",
+            "skills/list"
+          ]
+        }
+      }
+    },
+    "environment_identity": "c54ed718f83c2dc280b957e4a72161b08a38d668d5816a53048a1d438c327a59",
+    "model_turns": 0,
+    "passed": true,
+    "profile_sha256": "1d9e6a911f7a2cadd8398f7b41456180618cf7262976bea5879fb8c27c233a81",
+    "runtime_identity": "10853727795ca72acd59618c0f5473b165135214c21c454d29e752ba2e3bde60",
+    "schema_version": 1,
+    "workspace": {
+      "capture": {
+        "file_count": 573,
+        "limits": {
+          "max_file_bytes": 2097152,
+          "max_files": 2048,
+          "max_total_bytes": 33554432
+        },
+        "total_bytes": 23587773
+      },
+      "clean": true,
+      "commit": "f0c75dd4bc26ca0ebb07758cbd93fe41eb2d5611",
+      "source_identity": "ace4b194a13640a589a64dfce3060656354dae963302a230516d9d389fe8bb98",
+      "tree": "93ab4ed867644c4a0d1931856031fc079a381c46",
+      "worker_scratch": "/nvme/development/pagefold-github-delivery/workspace/target/bokkie-tmp",
+      "workspace": "/nvme/development/pagefold-github-delivery/workspace"
+    },
+    "workspace_identity": "908c9f7b46de57c722d729bcf4c8229467026234ce3c6ca794d5b5615275f756"
+  },
+  "focused_probe": {
+    "evidence_owner": "tools/engineering-runtime/preflight.py",
+    "exit_condition": "Every exact named production-path regression ran and passed",
+    "model_turns": 0,
+    "name": "github_delivery",
+    "passed": true,
+    "question": "Do fixed delivery scope, CI gates, replay and credential isolation hold without model turns?",
+    "runtime_identity": "10853727795ca72acd59618c0f5473b165135214c21c454d29e752ba2e3bde60",
+    "schema_version": 1
+  },
+  "checks": [
+    {
+      "command": [
+        "/home/rob/pixi/.pixi/envs/default/bin/python3",
+        "-m",
+        "unittest",
+        "test_github_delivery",
+        "-v"
+      ],
+      "exit_code": 0,
+      "output_bytes": 2747,
+      "output_sha256": "d6d196fcc09db49446db9498db486711e155d6850d41949119c4e4ab7acabaae"
+    },
+    {
+      "command": [
+        "/home/rob/pixi/.pixi/envs/default/bin/python3",
+        "-m",
+        "unittest",
+        "test_engineering_runtime",
+        "-v"
+      ],
+      "exit_code": 0,
+      "output_bytes": 4645,
+      "output_sha256": "749a9078909c30d851d9fe5e7e189a340610263ab07824fec02d8e860f8f3222"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "engineering_runtime::tests::github_profile_is_explicit_and_local_identity_is_unchanged",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "output_bytes": 364,
+      "output_sha256": "69cf806f51e78a18d4e20455e8c99d665a2c9f76edb85372719819d9abcdf589"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "engineering_runtime::tests::github_host_branch_commit_and_receipt_replay_use_real_local_git_only",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "output_bytes": 374,
+      "output_sha256": "48feaa82c1e2443a85387f400a2972950f4040f6f84268108acde75dc32a0f0b"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "engineering_runtime::tests::github_delivery_replays_persisted_result_before_uncertain_commit_readback",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "output_bytes": 379,
+      "output_sha256": "bb6f2b6e455e3a8041c24b1bbd7193541721abe295e3a09725026a7de8c7df58"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "engineering_runtime::tests::github_tool_refuses_stale_and_unattributed_merge_before_host_call",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "output_bytes": 371,
+      "output_sha256": "ebcb6e0c2df529382ce93b4ad576f7be2220322acb749a6d90f9152f1c26012a"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "store::engineering::tests::github_delivery_requires_trusted_adapter_grant_and_current_execution",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "output_bytes": 373,
+      "output_sha256": "78e73ae957d23552e4edf94c17f6dccc6b99a93843b7f7d306c4e1c225d77dc9"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "store::engineering::tests::github_delivery_replays_intent_and_result_after_reopen",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "output_bytes": 359,
+      "output_sha256": "63520e428e19c23fe754f81e7ebdeae66b930d58ae4257e7959c750711a10b20"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "store::engineering::tests::github_delivery_pending_intent_blocks_new_workers_and_acceptance",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "output_bytes": 369,
+      "output_sha256": "74cbb873b5a7b7e32a096805e948d2d7cc0545e7445d22f8c83198564692909a"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "store::engineering::tests::github_delivery_cancellation_retains_pending_intent_until_reconciled",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "output_bytes": 373,
+      "output_sha256": "70604fb21125ebddd5b3011d356eedcfc991b8afe38fd165425b708d2a76c2cd"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "store::engineering::tests::github_delivery_merge_needs_supervisor_ceased_workers_and_verified_post_merge",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "output_bytes": 382,
+      "output_sha256": "b5ccdc0ae90c4e858ed85d46dd2046d77a92db14f99ef16be7de2bcfbf2206ac"
+    }
+  ],
+  "canonical_logs": {
+    "check.log": {
+      "sha256": "034753fdc94a019121d6f6b9bad72d873c3b1b50752b33c217d9c781ca90e6c4",
+      "exit_code": 0
+    },
+    "check-ui.log": {
+      "sha256": "e7b1a9c9044852859694c4d7c776f4733bb6759d65895a484be20998eac81f3a",
+      "exit_code": 0
+    }
+  }
+}
