@@ -1,5 +1,5 @@
 {
-  "candidate": "927f1d84b7399c7caf4e1f249a03252093af3705",
+  "candidate": "7836e39b47c7cc273d09169d83e557682965133b",
   "preflight": {
     "environment": {
       "codex_version": "codex-cli 0.154.0",
@@ -182,7 +182,7 @@
     "model_turns": 0,
     "passed": true,
     "profile_sha256": "1d9e6a911f7a2cadd8398f7b41456180618cf7262976bea5879fb8c27c233a81",
-    "runtime_identity": "10853727795ca72acd59618c0f5473b165135214c21c454d29e752ba2e3bde60",
+    "runtime_identity": "c68dd71fb21e4540fe2376cac6d7dcde6e05db61ce0d535d3d78fbc0f88cfd06",
     "schema_version": 1,
     "workspace": {
       "capture": {
@@ -210,7 +210,7 @@
     "name": "github_delivery",
     "passed": true,
     "question": "Do fixed delivery scope, CI gates, replay and credential isolation hold without model turns?",
-    "runtime_identity": "10853727795ca72acd59618c0f5473b165135214c21c454d29e752ba2e3bde60",
+    "runtime_identity": "c68dd71fb21e4540fe2376cac6d7dcde6e05db61ce0d535d3d78fbc0f88cfd06",
     "schema_version": 1
   },
   "checks": [
@@ -223,8 +223,8 @@
         "-v"
       ],
       "exit_code": 0,
-      "output_bytes": 2747,
-      "output_sha256": "d6d196fcc09db49446db9498db486711e155d6850d41949119c4e4ab7acabaae"
+      "output_bytes": 2916,
+      "output_sha256": "f2daf4fdce6ecd5014810b72fec7a1766ebf15b30e57a67be9d4f8bb19ffba8e"
     },
     {
       "command": [
@@ -236,7 +236,7 @@
       ],
       "exit_code": 0,
       "output_bytes": 4645,
-      "output_sha256": "749a9078909c30d851d9fe5e7e189a340610263ab07824fec02d8e860f8f3222"
+      "output_sha256": "3b40bc1674d49c2d113afad2678aab083e7b5b82eef0fbfd90ff8a2b2416de69"
     },
     {
       "command": [
@@ -251,7 +251,7 @@
       ],
       "exit_code": 0,
       "output_bytes": 364,
-      "output_sha256": "69cf806f51e78a18d4e20455e8c99d665a2c9f76edb85372719819d9abcdf589"
+      "output_sha256": "94d5254fc037d88ce4db5727eedab8e23cbd9301b030f9ee121986a11a8daadd"
     },
     {
       "command": [
@@ -266,7 +266,7 @@
       ],
       "exit_code": 0,
       "output_bytes": 374,
-      "output_sha256": "48feaa82c1e2443a85387f400a2972950f4040f6f84268108acde75dc32a0f0b"
+      "output_sha256": "8bcf8399d1a206279da790ddd95850a521e61b1ad77ce5d9c60eec8171f01344"
     },
     {
       "command": [
@@ -281,7 +281,7 @@
       ],
       "exit_code": 0,
       "output_bytes": 379,
-      "output_sha256": "bb6f2b6e455e3a8041c24b1bbd7193541721abe295e3a09725026a7de8c7df58"
+      "output_sha256": "1b60df28f9668b1153e3999d3fe243352446a5d79a268dd938fac79d43e8f225"
     },
     {
       "command": [
@@ -296,7 +296,7 @@
       ],
       "exit_code": 0,
       "output_bytes": 371,
-      "output_sha256": "ebcb6e0c2df529382ce93b4ad576f7be2220322acb749a6d90f9152f1c26012a"
+      "output_sha256": "8bfabda62a5821140902c8f8e14329801b0466865f2d7bbd01f2038433b87b6f"
     },
     {
       "command": [
@@ -311,7 +311,7 @@
       ],
       "exit_code": 0,
       "output_bytes": 373,
-      "output_sha256": "78e73ae957d23552e4edf94c17f6dccc6b99a93843b7f7d306c4e1c225d77dc9"
+      "output_sha256": "44a1c12b26ba8cce0c97a25d042269578d1c64f7232470531c0adbc1b48bca61"
     },
     {
       "command": [
@@ -326,7 +326,7 @@
       ],
       "exit_code": 0,
       "output_bytes": 359,
-      "output_sha256": "63520e428e19c23fe754f81e7ebdeae66b930d58ae4257e7959c750711a10b20"
+      "output_sha256": "226cc6fc741e958a37c6f356be89e4c3b580e642cc110c366294fdfaac22c446"
     },
     {
       "command": [
@@ -341,7 +341,7 @@
       ],
       "exit_code": 0,
       "output_bytes": 369,
-      "output_sha256": "74cbb873b5a7b7e32a096805e948d2d7cc0545e7445d22f8c83198564692909a"
+      "output_sha256": "b8cdc0b12f0b0c56d2b137bef82fe2ffde15e0abbe91af4019461eaacefabca1"
     },
     {
       "command": [
@@ -356,7 +356,7 @@
       ],
       "exit_code": 0,
       "output_bytes": 373,
-      "output_sha256": "70604fb21125ebddd5b3011d356eedcfc991b8afe38fd165425b708d2a76c2cd"
+      "output_sha256": "332b2e65ca6106f6b427f8325bdb6032d5530af418ea73dd2155a581cbab3075"
     },
     {
       "command": [
@@ -371,12 +371,12 @@
       ],
       "exit_code": 0,
       "output_bytes": 382,
-      "output_sha256": "b5ccdc0ae90c4e858ed85d46dd2046d77a92db14f99ef16be7de2bcfbf2206ac"
+      "output_sha256": "c1edac6eae2a4569abc09d3736849f800abee0c66c7b86597a9ec5ffb5f25fd3"
     }
   ],
   "canonical_logs": {
-    "check.log": {
-      "sha256": "034753fdc94a019121d6f6b9bad72d873c3b1b50752b33c217d9c781ca90e6c4",
+    "check-repair.log": {
+      "sha256": "21474e33c38a5ff9c581231a639061ca80334f9c49b850c03dbf6f507471b188",
       "exit_code": 0
     },
     "check-ui.log": {
