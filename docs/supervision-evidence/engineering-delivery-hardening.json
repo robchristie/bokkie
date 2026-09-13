@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "implementation_revision": "ddca380cecf19b001c846ff685d7bb06b4a0c477",
-  "runtime_identity": "a006780cea13b2a13004a81d5f57bd19259ba04928f1c3239bb85ebf38073a71",
+  "runtime_identity": "4dfda3424b1a765b5c93a1d258214d9b92b53ee3d9e19f216e738c1d4082db2d",
   "model_turns": 0,
   "canonical": {
     "command": "RUST_TEST_THREADS=2 tools/check.sh",
