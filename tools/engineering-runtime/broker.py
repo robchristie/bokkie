@@ -83,41 +83,264 @@ def read(path):
     return json.loads(data)
 
 
+MAX_JOURNAL = 128 * 1024 * 1024
+MAX_JOURNAL_EVENTS = 32768
+MAX_BLOBS = 128 * 1024 * 1024
+MAX_BLOB_COUNT = 4096
+MAX_SEGMENTS = 64
+OUTPUT_BLOB_THRESHOLD = 32 * 1024
+
+
+def regular_bytes(path, limit):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, 'rb') as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size > limit:
+            raise ValueError('invalid or oversized journal file')
+        # Capture a bounded prefix: concurrent appends belong to the next read.
+        data = stream.read(metadata.st_size)
+    if len(data) != metadata.st_size or len(data) > limit:
+        raise ValueError('journal file changed or exceeded bound')
+    return data
+
+
+def valid_hash(value):
+    return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+
+
 class Spool:
-    def __init__(self, root):
-        self.root = root
-        self.path = root / 'events.jsonl'
+    """Single-owner journal; immutable sealed segments and content-addressed payloads."""
+    def __init__(self, root, *, segment_limit=MAX_SPOOL, journal_limit=MAX_JOURNAL,
+                 event_limit=MAX_JOURNAL_EVENTS, blob_limit=MAX_BLOBS,
+                 blob_count_limit=MAX_BLOB_COUNT, create=True, tolerate_partial=False):
+        self.root = Path(root)
+        self.read_only = not create or tolerate_partial
+        self.segment_limit, self.journal_limit = segment_limit, journal_limit
+        self.event_limit, self.blob_limit = event_limit, blob_limit
+        self.blob_count_limit = blob_count_limit
         self.events = []
-        if self.path.exists():
-            if self.path.stat().st_size > MAX_SPOOL:
-                raise ValueError('spool bound exceeded')
-            with self.path.open('rb') as stream:
-                for line in stream:
-                    # Torn tails remain uncertain. Never truncate and replay a start.
-                    event = json.loads(line)
-                    if event['sequence'] != len(self.events) + 1:
-                        raise ValueError('spool sequence gap')
-                    self.events.append(event)
-        self.size = self.path.stat().st_size if self.path.exists() else 0
+        self.size = 0
+        self.segment_size = 0
+        self.blobs = {}
+        self.manifest_path = self.root / 'journal.json'
+        legacy = self.root / 'events.jsonl'
+        self.legacy = os.path.lexists(legacy)
+        if self.legacy and os.path.lexists(self.manifest_path):
+            raise ValueError('mixed legacy and segmented journals')
+        self.manifest = None
+        if self.legacy:
+            self.path = legacy
+            self.journal_limit, self.event_limit = MAX_SPOOL, MAX_EVENTS
+            data = regular_bytes(legacy, MAX_SPOOL)
+            if tolerate_partial and data and not data.endswith(b'\n'):
+                data = data[:data.rfind(b'\n') + 1]
+            self._load_events(data)
+            self.segment_size = self.size
+            return
+        if os.path.lexists(self.manifest_path):
+            self.manifest = json.loads(regular_bytes(self.manifest_path, MAX_MESSAGE))
+            manifest = self.manifest
+            if (not isinstance(manifest, dict) or set(manifest) != {'version', 'segments'} or
+                    type(manifest['version']) is not int or manifest['version'] != 2 or
+                    not isinstance(manifest['segments'], list) or not 1 <= len(manifest['segments']) <= MAX_SEGMENTS):
+                raise ValueError('invalid journal manifest')
+            for index, segment in enumerate(manifest['segments']):
+                sealed = index < len(manifest['segments']) - 1
+                keys = {'path', 'first_sequence'} | ({'bytes', 'sha256', 'last_sequence'} if sealed else set())
+                if (not isinstance(segment, dict) or set(segment) != keys or
+                        segment['path'] != f'events-{index:06d}.jsonl' or
+                        type(segment['first_sequence']) is not int or segment['first_sequence'] != len(self.events) + 1):
+                    raise ValueError('invalid journal segment metadata')
+                self.path = self.root / segment['path']
+                data = regular_bytes(self.path, self.segment_limit)
+                if sealed and (type(segment['bytes']) is not int or segment['bytes'] != len(data) or
+                               not valid_hash(segment['sha256']) or hashlib.sha256(data).hexdigest() != segment['sha256']):
+                    raise ValueError('sealed journal segment integrity mismatch')
+                if not sealed and tolerate_partial and data and not data.endswith(b'\n'):
+                    data = data[:data.rfind(b'\n') + 1]
+                self._load_events(data)
+                if sealed and (not data or type(segment['last_sequence']) is not int or segment['last_sequence'] != len(self.events)):
+                    raise ValueError('sealed journal sequence mismatch')
+                self.segment_size = len(data)
+        elif create:
+            self.path = self.root / 'events-000000.jsonl'
+            self._create_segment(self.path)
+            self.manifest = {'version': 2, 'segments': [{'path': self.path.name, 'first_sequence': 1}]}
+            atomic(self.manifest_path, self.manifest)
+        elif segments := list(self.root.glob('events-*.jsonl')):
+            if tolerate_partial and len(segments) == 1 and segments[0].name == 'events-000000.jsonl':
+                # Publication may complete and append after our manifest lookup.
+                # This snapshot has no published events; retry on the next poll.
+                # Strict inspection/reopen still rejects an orphan initial file.
+                regular_bytes(segments[0], self.segment_limit)
+                return
+            raise ValueError('journal segments without manifest')
+        self._scan_blobs()
+        # Validate even unconsumed references before permitting another append.
+        for event in self.events:
+            self._resolve(event)
+
+    def _load_events(self, data):
+        if data and not data.endswith(b'\n'):
+            raise ValueError('torn journal tail; stop and reconcile')
+        for line in data.splitlines():
+            if len(line) + 1 > MAX_MESSAGE:
+                raise ValueError('journal event exceeded bound')
+            event = json.loads(line)
+            if (not isinstance(event, dict) or set(event) != {'sequence', 'kind', 'value'} or
+                    not isinstance(event['kind'], str) or type(event.get('sequence')) is not int or
+                    event['sequence'] != len(self.events) + 1):
+                raise ValueError('spool sequence gap')
+            self.events.append(event)
+        self.size += len(data)
+        if self.size > self.journal_limit or len(self.events) > self.event_limit:
+            raise ValueError('journal exhausted')
+
+    def _scan_blobs(self):
+        directory = self.root / 'journal-blobs'
+        if not os.path.lexists(directory):
+            return
+        if directory.is_symlink() or not directory.is_dir():
+            raise ValueError('invalid journal blob directory')
+        total = 0
+        for path in directory.iterdir():
+            if not valid_hash(path.name):
+                raise ValueError('invalid journal blob name')
+            raw = regular_bytes(path, min(MAX_MESSAGE, self.blob_limit))
+            if not self.read_only and hashlib.sha256(raw).hexdigest() != path.name:
+                raise ValueError('journal blob digest mismatch')
+            total += len(raw)
+            self.blobs[path.name] = len(raw)
+            if total > self.blob_limit or len(self.blobs) > self.blob_count_limit:
+                raise ValueError('journal blob budget exhausted')
+
+    def _blob(self, raw, encoding):
+        if len(raw) > min(MAX_MESSAGE, self.blob_limit):
+            raise ValueError('journal blob exceeded bound')
+        sha = hashlib.sha256(raw).hexdigest()
+        directory = self.root / 'journal-blobs'
+        if sha in self.blobs:
+            if regular_bytes(directory / sha, self.blob_limit) != raw:
+                raise ValueError('existing journal blob changed')
+        else:
+            if sum(self.blobs.values()) + len(raw) > self.blob_limit or len(self.blobs) >= self.blob_count_limit:
+                raise ValueError('journal blob budget exhausted')
+            directory.mkdir(mode=0o700, exist_ok=True)
+            if directory.is_symlink():
+                raise ValueError('invalid journal blob directory')
+            # Exclusive creation preserves crash debris as bounded, visible uncertainty.
+            fd = os.open(directory / sha, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            sync_dir(directory)
+            sync_dir(self.root)
+            self.blobs[sha] = len(raw)
+        return {'sha256': sha, 'bytes': len(raw), 'encoding': encoding}
+
+    def _reference(self, descriptor, encoding):
+        if (not isinstance(descriptor, dict) or set(descriptor) != {'sha256', 'bytes', 'encoding'} or
+                not valid_hash(descriptor['sha256']) or type(descriptor['bytes']) is not int or
+                descriptor['bytes'] < 0 or descriptor['encoding'] != encoding or
+                self.blobs.get(descriptor['sha256']) != descriptor['bytes']):
+            raise ValueError('invalid journal blob reference')
+        raw = regular_bytes(self.root / 'journal-blobs' / descriptor['sha256'], self.blob_limit)
+        if len(raw) != descriptor['bytes'] or hashlib.sha256(raw).hexdigest() != descriptor['sha256']:
+            raise ValueError('journal blob reference integrity mismatch')
+        value = json.loads(raw) if encoding == 'json' else raw.decode('utf-8')
+        if encoding == 'json' and encoded(value) != raw:
+            raise ValueError('noncanonical source blob')
+        return value
+
+    def _resolve(self, event):
+        event = json.loads(encoded(event))
+        value = event.get('value')
+        if event.get('kind') == 'command_source' and isinstance(value, dict) and 'source_ref' in value:
+            if 'source' in value:
+                raise ValueError('ambiguous source payload')
+            value['source'] = self._reference(value.pop('source_ref'), 'json')
+        item = value.get('item') if isinstance(value, dict) else None
+        if isinstance(item, dict) and 'aggregatedOutput_ref' in item:
+            if item.get('type') != 'commandExecution' or 'aggregatedOutput' in item:
+                raise ValueError('ambiguous command output payload')
+            item['aggregatedOutput'] = self._reference(item.pop('aggregatedOutput_ref'), 'utf8')
+        return event
+
+    def resolved_events(self):
+        return [self._resolve(event) for event in self.events]
+
+    @staticmethod
+    def _create_segment(path):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        sync_dir(path.parent)
+
+    def _rollover(self):
+        if len(self.manifest['segments']) >= MAX_SEGMENTS:
+            raise ValueError('journal segment budget exhausted')
+        old = regular_bytes(self.path, self.segment_limit)
+        if len(old) != self.segment_size:
+            raise ValueError('active journal segment changed')
+        manifest = json.loads(encoded(self.manifest))
+        manifest['segments'][-1].update(bytes=len(old), sha256=hashlib.sha256(old).hexdigest(), last_sequence=len(self.events))
+        path = self.root / f"events-{len(manifest['segments']):06d}.jsonl"
+        self._create_segment(path)
+        manifest['segments'].append({'path': path.name, 'first_sequence': len(self.events) + 1})
+        atomic(self.manifest_path, manifest)
+        self.manifest, self.path, self.segment_size = manifest, path, 0
 
     def append(self, kind, value, terminal=False):
+        if self.read_only:
+            raise ValueError('read-only journal cannot append')
+        value = json.loads(encoded(value))
+        if not self.legacy:
+            if kind == 'command_source' and 'source' in value:
+                if 'source_ref' in value:
+                    raise ValueError('ambiguous source payload')
+                value['source_ref'] = self._blob(encoded(value.pop('source')), 'json')
+            item = value.get('item') if isinstance(value, dict) else None
+            if isinstance(item, dict) and item.get('type') == 'commandExecution' and isinstance(item.get('aggregatedOutput'), str):
+                if 'aggregatedOutput_ref' in item:
+                    raise ValueError('ambiguous output payload')
+                raw = item['aggregatedOutput'].encode('utf-8')
+                if len(raw) >= OUTPUT_BLOB_THRESHOLD:
+                    item['aggregatedOutput_ref'] = self._blob(raw, 'utf8')
+                    del item['aggregatedOutput']
         event = {'sequence': len(self.events) + 1, 'kind': kind, 'value': value}
+        self._resolve(event)
         data = encoded(event) + b'\n'
-        cap = MAX_SPOOL if terminal else MAX_SPOOL - RESERVE
-        if len(data) > MAX_MESSAGE or self.size + len(data) > cap or (not terminal and len(self.events) >= MAX_EVENTS - 4):
+        cap = self.journal_limit if terminal else self.journal_limit - RESERVE
+        count_cap = self.event_limit if terminal else self.event_limit - 4
+        if len(data) > min(MAX_MESSAGE, self.segment_limit) or self.size + len(data) > cap or len(self.events) >= count_cap:
             raise ValueError('event spool exhausted; stop and reconcile')
-        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        if not self.legacy and self.segment_size + len(data) > self.segment_limit:
+            self._rollover()
+        fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
         with os.fdopen(fd, 'ab') as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size != self.segment_size:
+                raise ValueError('active journal segment changed')
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
         sync_dir(self.root)
         self.events.append(event)
         self.size += len(data)
+        self.segment_size += len(data)
         return event
 
     def has(self, kind):
         return any(e['kind'] == kind for e in self.events)
+
+
+def iter_events(root, *, tolerate_partial=False):
+    """Read both journal generations without creating files during inspection."""
+    spool = Spool(root, create=False, tolerate_partial=tolerate_partial)
+    return (spool._resolve(event) for event in spool.events)
 
 
 def workspace_lock_root():

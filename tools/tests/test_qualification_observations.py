@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from qualification_observations import collect, failure_category
+from qualification_observations import collect, failure_category, _journal
 from qualification_campaign import Campaign
 
 
@@ -26,7 +26,8 @@ class ObservationTests(unittest.TestCase):
             response = {'kind': 'item/completed', 'value': {'threadId': 'child',
                 'turnId': 'c', 'item': {'id': 'answer', 'type': 'agentMessage'}}}
             events += [response, response]
-            (spool / 'events.jsonl').write_text('\n'.join(map(json.dumps, events)))
+            (spool / 'events.jsonl').write_text('\n'.join(json.dumps(dict(event, sequence=i))
+                for i, event in enumerate(events, 1)) + '\n')
             result = collect(root)
             self.assertEqual(result, collect(root))
             self.assertEqual(len(result['contexts']), 2)
@@ -55,7 +56,7 @@ class ObservationTests(unittest.TestCase):
                     events *= 2
                     for sequence, event in enumerate(events, 1):
                         events[sequence - 1] = dict(event, sequence=sequence)
-                    (spool / 'events.jsonl').write_text('\n'.join(map(json.dumps, events)))
+                    (spool / 'events.jsonl').write_text('\n'.join(map(json.dumps, events)) + '\n')
                     observation = collect(root)
                     self.assertEqual(observation, collect(root))
                     self.assertFalse(observation['context_inventory_complete'])
@@ -111,6 +112,48 @@ class ObservationTests(unittest.TestCase):
             for metric in ('input_tokens', 'cached_input_tokens', 'uncached_tokens', 'output_tokens'):
                 self.assertEqual(report['known_' + metric], 0)
             self.assertEqual(report['reserved_contexts'], 240)
+
+    def test_mixed_journals_rollover_replay_and_failures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy = root / 'brokers/legacy'
+            modern = root / 'brokers/modern'
+            legacy.mkdir(parents=True)
+            modern.mkdir()
+            usage = lambda count: {'threadId': 'shared', 'tokenUsage': {'total': {
+                'inputTokens': count, 'cachedInputTokens': 40, 'outputTokens': 20}}}
+            events = [
+                {'kind': 'thread_identity', 'value': {'thread_id': 'shared'}},
+                {'kind': 'token_usage', 'value': usage(100)},
+                {'kind': 'token_usage', 'value': usage(200)},
+                {'kind': 'item/completed', 'value': {'threadId': 'shared', 'turnId': 't',
+                    'item': {'id': 'answer', 'type': 'agentMessage'}}},
+                {'kind': 'context_limit', 'value': {'enforcement': 'observed_events',
+                    'unreported_children': 'unknown'}},
+                {'kind': 'failure', 'value': {'message': 'deadline expired'}}]
+            (legacy / 'events.jsonl').write_text(''.join(json.dumps(dict(event, sequence=i)) + '\n'
+                for i, event in enumerate(events, 1)))
+            spool = _journal.Spool(modern, segment_limit=300)
+            for event in events * 2:
+                spool.append(event['kind'], event['value'])
+            self.assertGreater(len(list(modern.glob('events-*.jsonl'))), 2)
+            before = {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            observed = collect(root)
+            self.assertEqual(observed, collect(root))
+            self.assertEqual(failure_category(root, RuntimeError('opaque')), 'deadline')
+            self.assertEqual(len(observed['contexts']), 1)
+            self.assertEqual(observed['contexts'][0]['input_tokens'], 200)
+            self.assertEqual(observed['contexts'][0]['uncached_input_tokens'], 160)
+            self.assertEqual(observed['contexts'][0]['output_tokens'], 20)
+            self.assertEqual(observed['contexts'][0]['model_responses'], 2)
+            self.assertFalse(observed['context_inventory_complete'])
+            self.assertEqual(len(observed['uncertainties']), 2)
+            self.assertEqual(before, {p.relative_to(root): p.read_bytes()
+                for p in root.rglob('*') if p.is_file()})
+            sealed = modern / 'events-000000.jsonl'
+            sealed.write_bytes(sealed.read_bytes().replace(b'shared', b'broken'))
+            self.assertIn('torn_journal', {v['reason'] for v in collect(root)['uncertainties']})
+            self.assertEqual(failure_category(root, RuntimeError('opaque')), 'journal_decoding')
 
     def test_torn_tail_is_unknown_and_dynamic_error_ids_not_fingerprint(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -26,6 +26,37 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(r.offline_command_seen([(worker, fake)]))
         self.assertFalse(r.offline_command_seen([({'role': 'supervisor'}, fake)]))
 
+    def test_event_logs_read_both_formats_and_reject_corruption(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            brokers = Path(temporary)
+            legacy = brokers / 'legacy'
+            modern = brokers / 'modern'
+            legacy.mkdir()
+            modern.mkdir()
+            identity = {'sequence': 1, 'kind': 'thread_identity', 'value': {'thread_id': 'root'}}
+            (legacy / 'events.jsonl').write_text(json.dumps(identity) + '\n')
+            spool = r._journal.Spool(modern, segment_limit=200)
+            spool.append('thread_identity', {'thread_id': 'worker'})
+            spool.append('item/started', {'item': {'type': 'commandExecution',
+                'command': 'bokkie-offline-window'}})
+            spool.append('boundary_reaped', {'verified': True})
+            self.assertGreater(len(list(modern.glob('events-*.jsonl'))), 1)
+            state = {'executions': [{'id': 'legacy', 'role': 'supervisor'},
+                                    {'id': 'modern', 'role': 'worker'}]}
+            logs = list(r.event_logs(brokers, state))
+            self.assertEqual(len(logs), 4)
+            self.assertTrue(r.offline_command_seen(logs))
+            active = spool.path
+            with active.open('ab') as stream:
+                stream.write(b'{')
+            self.assertEqual(list(r.event_logs(brokers, state, tolerate_partial=True)), logs)
+            with self.assertRaises(ValueError):
+                list(r.event_logs(brokers, state))
+            sealed = modern / 'events-000000.jsonl'
+            sealed.write_bytes(sealed.read_bytes().replace(b'worker', b'broken'))
+            with self.assertRaises(ValueError):
+                list(r.event_logs(brokers, state, tolerate_partial=True))
+
     def test_acceptance_requires_every_fixture_observation(self):
         state = {'repairs': ['repair'], 'acceptance': {'id': 'accept'}, 'questions': [{'resolution': 'answer'}]}
         r.validate_acceptance_observations(state, True, True)

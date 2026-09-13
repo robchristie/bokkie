@@ -11,6 +11,8 @@ use std::os::unix::io::AsRawFd;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
+mod journal;
+
 pub type RuntimeResult<T> = Result<T, Box<dyn std::error::Error>>;
 const MAX_FILE: u64 = 2 * 1024 * 1024;
 const MAX_SPOOL: u64 = 16 * 1024 * 1024;
@@ -521,26 +523,9 @@ fn events(directory: &Path) -> RuntimeResult<Vec<Event>> {
     Ok(read_events(directory)?.0)
 }
 fn read_events(directory: &Path) -> RuntimeResult<(Vec<Event>, Vec<u8>)> {
-    let path = directory.join("events.jsonl");
-    if !path.exists() {
-        return Ok((vec![], vec![]));
-    }
-    let bytes = bounded_read(&path, MAX_SPOOL)?;
-    let mut result = vec![];
-    // Ignore only an in-progress final append. A stopped broker with a torn tail
-    // has no cessation event and therefore retains ownership.
-    for line in bytes.split_inclusive(|b| *b == b'\n') {
-        if !line.ends_with(b"\n") {
-            break;
-        }
-        let event: Event = serde_json::from_slice(line)?;
-        if event.sequence != result.len() as u64 + 1 {
-            return Err("broker event sequence gap".into());
-        }
-        result.push(event);
-    }
-    Ok((result, bytes))
+    journal::read(directory)
 }
+
 fn file_inspection(artefact: EngineeringArtefact, bytes: &[u8]) -> Value {
     match std::str::from_utf8(bytes) {
         Ok(text) if !bytes.contains(&0) => {
@@ -558,7 +543,12 @@ fn file_inspection(artefact: EngineeringArtefact, bytes: &[u8]) -> Value {
         }
     }
 }
-fn captured_command_source<'a>(log: &'a [Event], item: &Event, phase: &str) -> Option<&'a Value> {
+fn captured_command_source(
+    directory: &Path,
+    log: &[Event],
+    item: &Event,
+    phase: &str,
+) -> RuntimeResult<Option<Value>> {
     log.iter()
         .find(|event| {
             event.kind == "command_source"
@@ -567,7 +557,8 @@ fn captured_command_source<'a>(log: &'a [Event], item: &Event, phase: &str) -> O
                 && event.value["thread_id"] == item.value["threadId"]
                 && event.value["turn_id"] == item.value["turnId"]
         })
-        .map(|event| &event.value["source"])
+        .map(|event| journal::source(directory, &event.value))
+        .transpose()
 }
 fn source_capture_summary(source: Option<&Value>) -> Value {
     match source {
@@ -580,12 +571,20 @@ fn source_capture_summary(source: Option<&Value>) -> Value {
             "commit":source["commit"],"tree":source["tree"],"clean":source["clean"]}),
     }
 }
-fn command_capture_summary(log: &[Event], item: &Event) -> Value {
-    let before = captured_command_source(log, item, "item/started");
-    let after = captured_command_source(log, item, "item/completed");
-    json!({"start":source_capture_summary(before),"completion":source_capture_summary(after),
-        "unchanged":before.is_some_and(|source|source.get("unavailable").is_none()) && before == after})
+fn command_capture_summary(directory: &Path, log: &[Event], item: &Event) -> Value {
+    let sources = ["item/started", "item/completed"]
+        .map(|phase| captured_command_source(directory, log, item, phase));
+    match sources {
+        [Ok(before), Ok(after)] => {
+            json!({"start":source_capture_summary(before.as_ref()),"completion":source_capture_summary(after.as_ref()),
+            "unchanged":before.as_ref().is_some_and(|source|source.get("unavailable").is_none()) && before == after})
+        }
+        _ => {
+            json!({"start":{"status":"unavailable"},"completion":{"status":"unavailable"},"unchanged":false,"error":"Source evidence missing or corrupt"})
+        }
+    }
 }
+
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({"type":"function", "name":name, "description":description,
         "inputSchema":{"type":"object", "properties":properties, "required":required,"additionalProperties":false}})
@@ -1671,7 +1670,7 @@ impl EngineeringRuntime {
                 Ok(json!(review))
             }
             "bokkie_commands" => Ok(
-                json!({"commands":log.iter().filter(|e|e.kind=="item/completed" && e.value["item"]["type"]=="commandExecution").map(|e|json!({"item_id":e.value["item"]["id"],"command":e.value["item"]["command"],"exit_code":e.value["item"]["exitCode"],"source_capture":command_capture_summary(log,e)})).collect::<Vec<_>>(),"reviewer_candidates":observed_reviews(log)}),
+                json!({"commands":log.iter().filter(|e|e.kind=="item/completed" && e.value["item"]["type"]=="commandExecution").map(|e|json!({"item_id":e.value["item"]["id"],"command":e.value["item"]["command"],"exit_code":e.value["item"]["exitCode"],"source_capture":command_capture_summary(directory,log,e)})).collect::<Vec<_>>(),"reviewer_candidates":observed_reviews(log)}),
             ),
             "bokkie_validation" => {
                 let item_id = args["item_id"].as_str().ok_or("missing command item ID")?;
@@ -1686,22 +1685,24 @@ impl EngineeringRuntime {
                 let artefact: EngineeringArtefact =
                     serde_json::from_value(args["artefact"].clone())?;
                 self.inspect(&artefact)?;
-                let sources = ["item/started", "item/completed"]
-                    .map(|phase| captured_command_source(log, item, phase));
+                let sources = [
+                    captured_command_source(directory, log, item, "item/started")?,
+                    captured_command_source(directory, log, item, "item/completed")?,
+                ];
                 let [Some(before), Some(after)] = sources else {
                     return Err("validation requires broker source identities at command start and completion; rerun the check".into());
                 };
                 if before.get("unavailable").is_some() || after.get("unavailable").is_some() {
                     return Err(format!(
                         "validation source capture unavailable: {}",
-                        command_capture_summary(log, item)
+                        command_capture_summary(directory, log, item)
                     )
                     .into());
                 }
                 if before != after {
                     return Err(format!(
                         "source changed during validation: {}",
-                        command_capture_summary(log, item)
+                        command_capture_summary(directory, log, item)
                     )
                     .into());
                 }
@@ -1729,9 +1730,7 @@ impl EngineeringRuntime {
                 let command = item.value["item"]["command"]
                     .as_str()
                     .ok_or("missing actual command")?;
-                let output = item.value["item"]["aggregatedOutput"]
-                    .as_str()
-                    .ok_or("missing actual output")?;
+                let output = journal::output(directory, &item.value["item"])?;
                 let exit_code = i32::try_from(
                     item.value["item"]["exitCode"]
                         .as_i64()
@@ -1744,7 +1743,7 @@ impl EngineeringRuntime {
                         .into(),
                     artefact,
                     command_digest: self.blob(command.as_bytes())?,
-                    output_digest: self.blob(output.as_bytes())?,
+                    output_digest: self.blob(&output)?,
                     exit_code,
                 };
                 // Retain provenance separately from model-supplied hashes.
@@ -2186,7 +2185,7 @@ impl EngineeringRuntime {
             };
             // Retain exactly the bounded journal we parsed. Re-encoding a full
             // journal can exceed its byte bound and obscure the retained proof.
-            let hash = self.blob(&journal_bytes)?;
+            let hash = journal::retain(self, &directory, &journal_bytes)?;
             let journal_exhausted = log.iter().any(|event| {
                 event.kind == "failure"
                     && event.value["message"] == "event spool exhausted; stop and reconcile"
@@ -2206,8 +2205,10 @@ impl EngineeringRuntime {
             }
             let status: Value = serde_json::from_slice(&output.stdout)?;
             if status["active"] == false && status["launched"] == true {
-                let hash =
-                    self.blob(&serde_json::to_vec(&json!({"status":status,"events":log}))?)?;
+                let journal_digest = journal::retain(self, &directory, &journal_bytes)?;
+                let hash = self.blob(&serde_json::to_vec(
+                    &json!({"status":status,"journal_digest":journal_digest}),
+                )?)?;
                 self.activity(store,&directory,execution,"uncertain",EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
                     execution_id:execution.id.clone(),runtime_identity:execution.id.clone(),
                     observation:if log.iter().any(|e| e.kind == "not_started") {
@@ -2731,6 +2732,74 @@ mod tests {
     }
 
     #[test]
+    fn segmented_journal_retains_paged_evidence_and_reconciles_once() {
+        let mut f = Fixture::new();
+        let directory = f.directory(&f.supervisor);
+        let script = r#"import importlib.util, pathlib, sys
+spec=importlib.util.spec_from_file_location('broker',sys.argv[1]); b=importlib.util.module_from_spec(spec); spec.loader.exec_module(b)
+s=b.Spool(pathlib.Path(sys.argv[2]),segment_limit=1024)
+s.append('thread_identity',{'thread_id':'root-thread'})
+s.append('turn_identity',{'thread_id':'root-thread','turn_id':'root-turn'})
+for i in range(20):
+ s.append('command_source',{'source':{'files':{'page.md':{'sha256':'a'*64}}}})
+ s.append('item/completed',{'item':{'type':'commandExecution','id':str(i),'aggregatedOutput':'é\r\n'*12000}})
+s.append('boundary_reaped',{'boundary':'fixture:segmented','exit_code':0},terminal=True)
+"#;
+        let result = Command::new("python3")
+            .args(["-c", script])
+            .arg(&f.runtime.profile.broker)
+            .arg(&directory)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let before = snapshot(&f.store, &f.id).unwrap();
+        f.runtime
+            .reconcile(&mut f.store, &before, &f.supervisor, 105)
+            .unwrap();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        assert!(
+            state
+                .executions
+                .iter()
+                .find(|e| e.id == f.supervisor.id)
+                .unwrap()
+                .cessation_verified
+        );
+        assert!(state.acceptance.is_none());
+        let input = &state.reconciliations.last().unwrap().input;
+        let page = f
+            .runtime
+            .evidence_page(&json!({"digest":input.evidence_digest}))
+            .unwrap();
+        let receipt: Value = serde_json::from_str(page["content"].as_str().unwrap()).unwrap();
+        assert_eq!(receipt["format"], "bokkie-journal-v2");
+        for descriptor in receipt["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(receipt["blobs"].as_array().unwrap())
+        {
+            let digest = descriptor["sha256"].as_str().unwrap();
+            let bytes = fs::read(f.runtime.profile.broker_root.join("blobs").join(digest)).unwrap();
+            assert_eq!(sha(&bytes), digest);
+            assert_eq!(bytes.len() as u64, descriptor["bytes"].as_u64().unwrap());
+            let page = f
+                .runtime
+                .evidence_page(&json!({"digest":digest,"max_bytes":128}))
+                .unwrap();
+            assert_eq!(page["total_bytes"], bytes.len());
+        }
+        f.runtime
+            .reconcile(&mut f.store, &state, &f.supervisor, 106)
+            .unwrap();
+        assert_eq!(snapshot(&f.store, &f.id).unwrap().reconciliations.len(), 1);
+    }
+
+    #[test]
     fn exhausted_large_journal_retains_exact_cessation_and_bounded_continuation() {
         let mut f = Fixture::new();
         let directory = f.directory(&f.supervisor);
@@ -3105,51 +3174,71 @@ mod tests {
     }
     #[test]
     fn validation_rejects_checks_run_against_an_older_source() {
-        let mut f = Fixture::new();
-        fs::write(f.runtime.profile.workspace.join("reader.txt"), "new").unwrap();
-        let (artefact, _) = f.runtime.file("reader.txt").unwrap();
-        let mut log = vec![Event {
-            sequence: 1,
-            kind: "item/completed".into(),
-            value: json!({"threadId":"thread","turnId":"turn","item":{"id":"check","type":"commandExecution","command":"test reader","aggregatedOutput":"PASS","exitCode":0}}),
-        }];
-        for phase in ["item/started", "item/completed"] {
-            log.push(Event { sequence:log.len() as u64 + 1,kind:"command_source".into(),
+        for referenced in [false, true] {
+            let mut f = Fixture::new();
+            fs::write(f.runtime.profile.workspace.join("reader.txt"), "new").unwrap();
+            let (artefact, _) = f.runtime.file("reader.txt").unwrap();
+            let mut log = vec![Event {
+                sequence: 1,
+                kind: "item/completed".into(),
+                value: json!({"threadId":"thread","turnId":"turn","item":{"id":"check","type":"commandExecution","command":"test reader","aggregatedOutput":"PASS","exitCode":0}}),
+            }];
+            for phase in ["item/started", "item/completed"] {
+                log.push(Event { sequence:log.len() as u64 + 1,kind:"command_source".into(),
                 value:json!({"phase":phase,"item_id":"check","thread_id":"thread","turn_id":"turn","source":{"files":{"reader.txt":{"sha256":sha(b"old"),"byte_length":3}}}})});
+            }
+            let directory = f.directory(&f.worker);
+            let stored_log = |events: &[Event]| {
+                let mut stored = events.to_vec();
+                if referenced {
+                    fs::create_dir_all(directory.join("journal-blobs")).unwrap();
+                    for event in &mut stored {
+                        if let Some(source) = event.value.as_object_mut().unwrap().remove("source")
+                        {
+                            let bytes = serde_json::to_vec(&source).unwrap();
+                            let digest = sha(&bytes);
+                            fs::write(directory.join("journal-blobs").join(&digest), &bytes)
+                                .unwrap();
+                            event.value["source_ref"] =
+                                json!({"sha256":digest,"bytes":bytes.len(),"encoding":"json"});
+                        }
+                    }
+                }
+                stored
+            };
+            let params = json!({"tool":"bokkie_validation","arguments":{"item_id":"check","artefact":artefact,"criterion_id":"reader"}});
+            assert!(
+                f.runtime
+                    .dynamic(
+                        &mut f.store,
+                        &directory,
+                        &f.worker,
+                        "old-check",
+                        &params,
+                        &stored_log(&log),
+                        105
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("submitted source revision")
+            );
+            for event in log.iter_mut().skip(1) {
+                event.value["source"]["files"]["reader.txt"]["sha256"] = json!(sha(b"new"));
+            }
+            assert!(
+                f.runtime
+                    .dynamic(
+                        &mut f.store,
+                        &directory,
+                        &f.worker,
+                        "current-check",
+                        &params,
+                        &stored_log(&log),
+                        105
+                    )
+                    .is_ok()
+            );
         }
-        let directory = f.directory(&f.worker);
-        let params = json!({"tool":"bokkie_validation","arguments":{"item_id":"check","artefact":artefact,"criterion_id":"reader"}});
-        assert!(
-            f.runtime
-                .dynamic(
-                    &mut f.store,
-                    &directory,
-                    &f.worker,
-                    "old-check",
-                    &params,
-                    &log,
-                    105
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("submitted source revision")
-        );
-        for event in log.iter_mut().skip(1) {
-            event.value["source"]["files"]["reader.txt"]["sha256"] = json!(sha(b"new"));
-        }
-        assert!(
-            f.runtime
-                .dynamic(
-                    &mut f.store,
-                    &directory,
-                    &f.worker,
-                    "current-check",
-                    &params,
-                    &log,
-                    105
-                )
-                .is_ok()
-        );
     }
     #[test]
     fn github_host_branch_commit_and_receipt_replay_use_real_local_git_only() {

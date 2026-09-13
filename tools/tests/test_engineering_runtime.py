@@ -190,14 +190,14 @@ class BrokerTests(unittest.TestCase):
         broker.deadline = 0
         with self.assertRaises(TimeoutError):
             broker.pump()
-        broker.spool.size = b.MAX_SPOOL - b.RESERVE
+        broker.spool.size = b.MAX_JOURNAL - b.RESERVE
         with self.assertRaises(ValueError):
             broker.event('progress', {'value': 'x'})
         broker.event('failure', {'message': 'budget exhausted'}, terminal=True)
 
     def test_torn_spool_never_restarts(self):
         (self.root / 'events.jsonl').write_bytes(b'{"sequence":1')
-        with self.assertRaises(json.JSONDecodeError):
+        with self.assertRaises(ValueError):
             self.broker()
 
     def test_real_fake_peer_completion_then_reconnect_read(self):
@@ -215,12 +215,16 @@ for line in sys.stdin:
  elif m=='turn/start': r={'turn':{'id':'turn'}}
  print(json.dumps({'id':rid,'result':r}),flush=True)
  if m=='turn/start':
+  for index in range(20):
+   print(json.dumps({'method':'item/completed','params':{'threadId':'thread','turnId':'turn','item':{'type':'agentMessage','text':'x'*256,'id':str(index)}}}),flush=True)
   print(json.dumps({'method':'item/completed','params':{'threadId':'thread','turnId':'turn','item':{'type':'agentMessage','text':'submission only','id':'final'}}}),flush=True)
   print(json.dumps({'method':'turn/completed','params':{'threadId':'thread','turn':{'id':'turn','status':'completed'}}}),flush=True)
 ''')
         broker = self.broker()
+        broker.spool = b.Spool(self.root, segment_limit=4096)
         broker.spawn = lambda *args, **kwargs: subprocess.Popen([sys.executable, str(peer)], **kwargs)
         self.assertEqual(broker.run(), 'finished')
+        self.assertGreater(len(broker.spool.manifest['segments']), 1)
         reconnected = b.Spool(self.root)
         self.assertTrue(reconnected.has('turn/completed'))
         self.assertTrue(reconnected.has('boundary_reaped'))
@@ -355,7 +359,7 @@ for line in sys.stdin:
             broker.observe({'method': method, 'params': {'threadId': 't', 'turnId': 'turn',
                             'item': {'id': 'check', 'type': 'commandExecution', 'command': 'check'}}})
             path.write_text('after')
-        retained = [event['value']['source'] for event in broker.spool.events if event['kind'] == 'command_source']
+        retained = [event['value']['source'] for event in broker.spool.resolved_events() if event['kind'] == 'command_source']
         self.assertEqual(len(retained), 2)
         self.assertNotEqual(retained[0], retained[1])
         self.assertTrue(broker.spool.has('item/started'))
