@@ -6,6 +6,11 @@ import json
 import os
 from pathlib import Path
 import sys
+import signal
+import resource
+
+signal.alarm(60)
+resource.setrlimit(resource.RLIMIT_AS, (512 * 1024**2, 512 * 1024**2))
 
 spec = importlib.util.spec_from_file_location('evidence_broker', Path(__file__).with_name('broker.py'))
 broker = importlib.util.module_from_spec(spec)

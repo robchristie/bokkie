@@ -128,7 +128,11 @@ def storage_entries(root, maximum):
         raise ValueError('dependency storage root must be a real directory: ' + str(root))
     entries = []
     total = 0
+    visited = 0
     for path in root.rglob('*'):
+        visited += 1
+        if visited > 100000:
+            raise ValueError('dependency storage entry bound exceeded')
         mode = path.lstat().st_mode
         if stat.S_ISDIR(mode):
             continue

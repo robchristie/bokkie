@@ -107,6 +107,13 @@ class DependencyTests(unittest.TestCase):
                 d.execute(self.peer, 'metadata')
         spawn.assert_not_called()
 
+    def test_empty_directories_count_towards_storage_bound(self):
+        storage = Path(self.peer.manifest['dependency_preparation']['storage'])
+        storage.mkdir(parents=True)
+        with patch.object(Path, 'rglob', return_value=iter([storage] * 100001)):
+            with self.assertRaisesRegex(ValueError, 'entry bound'):
+                d.storage_entries(storage, 1024**2)
+
     def test_command_failure_has_bounded_sanitised_cause(self):
         d.ready(self.peer, prepare=True)
         cause = d.diagnostic_tail(b'error: missing dependency; token=private https://user:password@example.com/file?secret=value')

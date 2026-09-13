@@ -1,0 +1,224 @@
+{
+  "campaign": "pagefold-navigation-20260912",
+  "purpose": "application_delivery",
+  "terminal_policy": "store_application_acceptance_v1",
+  "terminal": true,
+  "registry": "/nvme/development/bokkie/.git/qualification/campaign.sqlite",
+  "scope": "engineering-qualification",
+  "terminal_receipt_sha256": "4d59c09ea8a2abc69705348bac0e991c4572ca5086c3f38c0329a2055dbad489",
+  "outcome_id": "9637199b-a6c4-4d6c-886e-235731aae71e",
+  "contract_revision": 2,
+  "state_revision": 84,
+  "attempt_id": "pagefold-navigation-live-1",
+  "snapshots_sha256": "712d3721eca5081f57691553d8cc5f3d588f81da0e2ca0c34c1bdf1e1faba6ef",
+  "controller_and_broker_locks_verified": true,
+  "deliveries": [
+    {
+      "evidence_digest": "202fe08f41fe3c1ffc95b0b68038788c459b2c505d84bcf3058bb1e9e2189ebc",
+      "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+      "head_tree": "0d4618485758defe335aca48651f164b741fe7e7",
+      "merge_commit": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+      "merge_tree": "0d4618485758defe335aca48651f164b741fe7e7",
+      "operation_id": "4abb1b8e9cfead70c27d94cc7e9cf126189afc2187f918b567f28c006d794398",
+      "post_merge_ci": {
+        "head": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+        "jobs": [
+          {
+            "attempt": 1,
+            "conclusion": "success",
+            "head": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+            "id": 103527724445,
+            "name": "Fresh-checkout verification",
+            "run_id": 34684023723,
+            "status": "completed",
+            "url": "https://github.com/robchristie/pagefold/actions/runs/34684023723/job/103527724445"
+          }
+        ],
+        "run": {
+          "attempt": 1,
+          "conclusion": "success",
+          "head": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+          "id": 34684023723,
+          "status": "completed",
+          "url": "https://github.com/robchristie/pagefold/actions/runs/34684023723"
+        },
+        "runs": [
+          {
+            "attempt": 1,
+            "conclusion": "success",
+            "head": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+            "id": 34684023723,
+            "status": "completed",
+            "url": "https://github.com/robchristie/pagefold/actions/runs/34684023723"
+          }
+        ],
+        "state": "success"
+      },
+      "pr": 2,
+      "pre_merge_ci": {
+        "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+        "jobs": [
+          {
+            "attempt": 1,
+            "conclusion": "success",
+            "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+            "id": 103526651481,
+            "name": "Fresh-checkout verification",
+            "run_id": 34683633527,
+            "status": "completed",
+            "url": "https://github.com/robchristie/pagefold/actions/runs/34683633527/job/103526651481"
+          }
+        ],
+        "run": {
+          "attempt": 1,
+          "conclusion": "success",
+          "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+          "id": 34683633527,
+          "status": "completed",
+          "url": "https://github.com/robchristie/pagefold/actions/runs/34683633527"
+        },
+        "runs": [
+          {
+            "attempt": 1,
+            "conclusion": "success",
+            "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+            "id": 34683633527,
+            "status": "completed",
+            "url": "https://github.com/robchristie/pagefold/actions/runs/34683633527"
+          }
+        ],
+        "state": "success"
+      },
+      "repository": "robchristie/pagefold",
+      "supplemental_observation": {
+        "adapter_sha256": "21b4b0c6cc094a73bfa81bdeb0d146b7c1190fd582c1a1893ce62f2a5ba50f53",
+        "operation": "status",
+        "result": {
+          "base": "main",
+          "branch": "codex/pagefold-bokkie-delivery",
+          "changes_requested": false,
+          "checks": [
+            {
+              "app_id": 15368,
+              "conclusion": "success",
+              "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+              "name": "Fresh-checkout verification",
+              "status": "completed"
+            }
+          ],
+          "draft": false,
+          "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+          "head_tree": "0d4618485758defe335aca48651f164b741fe7e7",
+          "human_review_required": false,
+          "merge_commit": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+          "merge_tree": "0d4618485758defe335aca48651f164b741fe7e7",
+          "mergeable": null,
+          "mergeable_state": "unknown",
+          "merged": true,
+          "post_merge_ci": {
+            "head": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+            "jobs": [
+              {
+                "attempt": 1,
+                "conclusion": "success",
+                "head": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+                "id": 103527724445,
+                "name": "Fresh-checkout verification",
+                "run_id": 34684023723,
+                "status": "completed",
+                "url": "https://github.com/robchristie/pagefold/actions/runs/34684023723/job/103527724445"
+              }
+            ],
+            "run": {
+              "attempt": 1,
+              "conclusion": "success",
+              "head": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+              "id": 34684023723,
+              "status": "completed",
+              "url": "https://github.com/robchristie/pagefold/actions/runs/34684023723"
+            },
+            "runs": [
+              {
+                "attempt": 1,
+                "conclusion": "success",
+                "head": "fe4d076c7dc4d522419381c8fec4427ecf935dba",
+                "id": 34684023723,
+                "status": "completed",
+                "url": "https://github.com/robchristie/pagefold/actions/runs/34684023723"
+              }
+            ],
+            "state": "success"
+          },
+          "post_merge_verified": true,
+          "pr": 2,
+          "pre_merge_ci": {
+            "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+            "jobs": [
+              {
+                "attempt": 1,
+                "conclusion": "success",
+                "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+                "id": 103526651481,
+                "name": "Fresh-checkout verification",
+                "run_id": 34683633527,
+                "status": "completed",
+                "url": "https://github.com/robchristie/pagefold/actions/runs/34683633527/job/103526651481"
+              }
+            ],
+            "run": {
+              "attempt": 1,
+              "conclusion": "success",
+              "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+              "id": 34683633527,
+              "status": "completed",
+              "url": "https://github.com/robchristie/pagefold/actions/runs/34683633527"
+            },
+            "runs": [
+              {
+                "attempt": 1,
+                "conclusion": "success",
+                "head": "5ff5465ea6b5b9b82bbff7ddb46494541c767589",
+                "id": 34683633527,
+                "status": "completed",
+                "url": "https://github.com/robchristie/pagefold/actions/runs/34683633527"
+              }
+            ],
+            "state": "success"
+          },
+          "repo": "robchristie/pagefold",
+          "state": "closed",
+          "tree_equal": true,
+          "unresolved_threads": false
+        }
+      }
+    }
+  ],
+  "unchanged_ledger_rows": {
+    "attempts": {
+      "rows": 1,
+      "sha256": "40876f82cff3e410438518e48bacda0af09348da70dacefa20cdb12d85a4d198"
+    },
+    "telemetry": {
+      "rows": 17,
+      "sha256": "48ba767abb4e05ed6e71650d63ff394d68839e5aa2b1784d561ee25b4c9db1d0"
+    },
+    "repairs": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "probes": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "checks": {
+      "rows": 1,
+      "sha256": "31f9a1f5ac672f475fd621826d96f45beddca52a1820ed59eaac4071f334a52e"
+    },
+    "suppressions": {
+      "rows": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "registry": "/nvme/development/bokkie/.git/qualification/campaign.sqlite",
+    "scope": "engineering-qualification"
+  }
+}
