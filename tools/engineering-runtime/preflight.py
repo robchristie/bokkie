@@ -278,7 +278,12 @@ def run_preflight(profile_path, receipt_dir, prepare_dependencies=False):
         peer.manifest = {**profile, 'role': 'worker'}
         peer.root = Path(profile['broker_root']) / 'dependency-preflight'
         Path(profile['broker_root']).mkdir(parents=True, exist_ok=True)
-        dependency_result = broker.dependencies.ready(peer, prepare=prepare_dependencies)
+        writer = broker.WorkspaceWriter(profile['workspace'], {'operation': 'dependency-preflight', 'pid': os.getpid()})
+        try:
+            dependency_result = broker.dependencies.ready(peer, prepare=prepare_dependencies)
+        finally:
+            # ready() waits for its contained subprocess on every normal/error exit.
+            writer.release_after_cessation()
     profile['_thread_parameters'] = {role: parameters[role] for role in ('supervisor', 'worker')}
     with tempfile.TemporaryDirectory(prefix='preflight-', dir=receipt_dir) as temporary:
         root = Path(temporary)

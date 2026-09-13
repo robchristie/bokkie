@@ -72,6 +72,20 @@ class PreflightTests(unittest.TestCase):
         session.assert_not_called()
         self.assertFalse((self.root / 'receipts/preflight.json').exists())
 
+    def test_dependency_preflight_preserves_active_workspace_ownership(self):
+        self.profile['dependency_preparation'] = {'storage': str(self.workspace / 'target/dependencies')}
+        self.profile['broker_root'] = str(self.root / 'broker-root')
+        self.path.write_text(json.dumps(self.profile))
+        parameters = {'profile': copy.deepcopy(self.profile), 'worker': {}, 'supervisor': {}}
+        writer = p.broker.WorkspaceWriter(self.workspace, {'execution_id': 'active-worker'})
+        try:
+            with patch.object(p, '_profile', return_value=parameters), patch.object(p.broker.dependencies, 'ready') as ready:
+                with self.assertRaises(BlockingIOError):
+                    p.run_preflight(self.path, self.root / 'receipts', prepare_dependencies=True)
+            ready.assert_not_called()
+        finally:
+            writer.release_after_cessation()
+
     def test_environment_observation_changes_without_retaining_values(self):
         value = object.__new__(p.broker.Broker)
         value.manifest = {'workspace': str(self.workspace), 'role': 'worker'}
