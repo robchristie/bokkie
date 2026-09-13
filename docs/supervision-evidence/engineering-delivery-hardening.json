@@ -1,25 +1,28 @@
 {
   "schema_version": 1,
-  "implementation_revision": "5869db43441664bdc15a21d26301f37b1888c600",
-  "runtime_identity": "169d29fdb876393c077dd711be0d32c259b1aae1c35208dc3c7269a118028161",
+  "implementation_revision": "fbdfa00c4cbc4ad25bad663e48f03202127bc9c1",
+  "runtime_identity": "5084d91e649f74390faff8a60ed2bdcc2ff9122352442670983511b3d3ade33b",
   "model_turns": 0,
   "canonical": {
     "command": "RUST_TEST_THREADS=2 tools/check.sh",
     "result": "passed",
-    "subsequent_changes": "Bound storage entries and context helper duration; fence dependency preflight. Focused dependency, preflight and continuation checks passed; other canonical evidence reused."
+    "subsequent_changes": "Python-only review repairs reject parsed Cargo patch/replace tables and preserve settled failed-delivery history. All 164 Python tests and plan lint passed on fbdfa00; unchanged Rust canonical results reused.",
+    "source_revision": "0d1b9d64c3e49b96555d2103a2a19cc7a93374ba",
+    "source_tree": "79820bffff2adf75bab33217b84298b79c460d9e"
   },
   "focused": {
-    "dependency_tests": 8,
+    "dependency_tests": 9,
     "preflight_tests": 15,
     "github_adapter_tests": 28,
-    "campaign_tests": 32,
+    "campaign_tests": 34,
     "replacement_and_coverage": "passed inline and source-ref variants",
-    "typed_delivery_and_store_cleanup": "passed"
+    "typed_delivery_and_store_cleanup": "passed",
+    "python_suite": 164
   },
   "production_preflight": {
     "passed": true,
     "codex_version": "codex-cli 0.154.0",
-    "environment_identity": "83c4215fffb71ebdc444b2482e51a47981d05d2971b1dbd172599d81cf0346ea",
+    "environment_identity": "5d1c87f3f4223d41d7c21a4e1751b7f61c7c3e8a226a9b1bea58bb5ab8606b2b",
     "workspace_identity": "0252bc5caf5ae5f48751b5b3e47710e967f6359ff79aa16f3526aaa2031474d2",
     "material": {
       "bytes": 884272375,
@@ -40,7 +43,9 @@
         "thread/start",
         "skills/list"
       ]
-    }
+    },
+    "receipt_path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/preflight-fbdfa00.json",
+    "prepared_material_reused": true
   },
   "application_campaign": {
     "id": "pagefold-navigation-20260912",
@@ -124,6 +129,26 @@
       "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/guidance.json",
       "sha256": "523d819fff84bd2b7848af30c6004709441943b11c30901e8130bd520b5f705e",
       "bytes": 3960
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/python-fbdfa00.log",
+      "sha256": "ba6289ae749a54792fb85c799b624dc822c2b1b4f7de78ffc46544cbe0f70320",
+      "bytes": 378
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/preflight-fbdfa00.json",
+      "sha256": "7b65a980f0bce12ed135655fa7dd18e3ed68723d6ffb329757e85c1c2a50548f",
+      "bytes": 6621
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/dependency-ready-fbdfa00.json",
+      "sha256": "22eb645b54a8c17a740fb57f7e3e7aeffc63cb1f180794f61bb69d205f289b37",
+      "bytes": 3270
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/canonical-0d1b9d6.log",
+      "sha256": "1f966934dc81c4d61ba528a6471755c12a21ff106851ce3ba087f961e7944259",
+      "bytes": 29370
     }
   ],
   "limits": [
@@ -132,5 +157,15 @@
     "Legacy validations without captured environment bindings cannot be transplanted to replacement executions.",
     "Aggregate dependency storage can briefly overshoot the polling limit."
   ],
-  "retained_fixture": "/tmp/bokkie-dependency-qualification-j9mlyn06"
+  "retained_fixture": "/tmp/bokkie-dependency-qualification-j9mlyn06",
+  "review_repairs": {
+    "rejected_head": "0d1b9d64c3e49b96555d2103a2a19cc7a93374ba",
+    "record": "https://github.com/robchristie/bokkie/pull/33#issuecomment-5652548797",
+    "fixed_in": "fbdfa00c4cbc4ad25bad663e48f03202127bc9c1",
+    "regressions": [
+      "parsed override tables rejected before fetch",
+      "settled failed merge followed by verified success closes with preserved history",
+      "unresolved or uncertain operations still block closure"
+    ]
+  }
 }
