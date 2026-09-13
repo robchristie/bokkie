@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "implementation_revision": "5869db43441664bdc15a21d26301f37b1888c600",
+  "runtime_identity": "169d29fdb876393c077dd711be0d32c259b1aae1c35208dc3c7269a118028161",
+  "model_turns": 0,
+  "canonical": {
+    "command": "RUST_TEST_THREADS=2 tools/check.sh",
+    "result": "passed",
+    "subsequent_changes": "Bound storage entries and context helper duration; fence dependency preflight. Focused dependency, preflight and continuation checks passed; other canonical evidence reused."
+  },
+  "focused": {
+    "dependency_tests": 8,
+    "preflight_tests": 15,
+    "github_adapter_tests": 28,
+    "campaign_tests": 32,
+    "replacement_and_coverage": "passed inline and source-ref variants",
+    "typed_delivery_and_store_cleanup": "passed"
+  },
+  "production_preflight": {
+    "passed": true,
+    "codex_version": "codex-cli 0.154.0",
+    "environment_identity": "83c4215fffb71ebdc444b2482e51a47981d05d2971b1dbd172599d81cf0346ea",
+    "workspace_identity": "0252bc5caf5ae5f48751b5b3e47710e967f6359ff79aa16f3526aaa2031474d2",
+    "material": {
+      "bytes": 884272375,
+      "files": 21606,
+      "sha256": "e1ab5e27daa99fa70458f24c839c29c5cbe0dfc563de2062156f31388a3325b3"
+    },
+    "profile_sha256": "e1026bb405c53cf60ca26d0d87e15f6109fa8867f420a0f74cc3d3bf841c7f28",
+    "role_methods": {
+      "supervisor": [
+        "initialize",
+        "config/read",
+        "thread/start",
+        "skills/list"
+      ],
+      "worker": [
+        "initialize",
+        "config/read",
+        "thread/start",
+        "skills/list"
+      ]
+    }
+  },
+  "application_campaign": {
+    "id": "pagefold-navigation-20260912",
+    "terminal": true,
+    "closure_receipt": "pagefold-navigation-closure.json",
+    "allowance_contexts": 120,
+    "historical_delivery_only": true
+  },
+  "files": [
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-check.log",
+      "sha256": "0bad94a4c54ac7da0952d99588d9a4fc432afafcd58f11eae2044b907dd54f8e",
+      "bytes": 29394
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-shutdown.log",
+      "sha256": "b5f6cdfd653a69fa50c2eaee51078e148abc9b10b79703c523f3bc4f1b5f7b9a",
+      "bytes": 399
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-final-preflight-tests.log",
+      "sha256": "4b1cca74b37c64eabb2e5ae19093b50e9d3dae99aa62f33f72b3a636290ed6d5",
+      "bytes": 98
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-final-dependency-tests.log",
+      "sha256": "861af9bf2100ac7fc6647dc388e95858d54f8378374810bc1c71b55f8dcda2ec",
+      "bytes": 1348
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-final-submission-probe.json",
+      "sha256": "7d44c6028f9181f38e5aa58f45722a82cf108bbcceb4fb67008a9e52511cd963",
+      "bytes": 3323
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-github-probe.json",
+      "sha256": "dbd59d95dd29aad338bc39c43e017d1025198d60c0873e49cf79764ff21bc012",
+      "bytes": 17064
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-campaign-probe.json",
+      "sha256": "07b79a0443f0a27219f6e251b5af761c70995366bda3432a8ca55bd3531bec40",
+      "bytes": 6058
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-store-cleanup.log",
+      "sha256": "b13c215cb246ac488ef718c53b98fce61e410a102322316914ad2558d6413a1f",
+      "bytes": 436
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-delivery-receipt.log",
+      "sha256": "de5b0605eb4b221f2812dd68d0fef9a216727c6e3541081e2ea1b305528a647f",
+      "bytes": 373
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-reuse.log",
+      "sha256": "2c2e9875504fdadaf5b47b3122a8112e49a2bc26693b9461f5d2f2ca3c1b817e",
+      "bytes": 377
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-closure-dry-run.json",
+      "sha256": "e37fd887b3df792ef2681361c139c1fcb6df65b38b0b4cfe579ddab73a74817d",
+      "bytes": 35169
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-closure.json",
+      "sha256": "5c04a3ad0e705cf89c0df8b86806f1aef0db6f7edc5f8d092d1e0bdb8bb0f906",
+      "bytes": 54847
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/bokkie-hardening-ledger-before.json",
+      "sha256": "b8a763c7b5ddc607bb41c38de0c769d24f1687891fabd9a204da7c4c332e5c97",
+      "bytes": 823
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/preflight.json",
+      "sha256": "db53f158002e7ffe4dbc6fa56533511dbfec8224b9a107028f8845649e86926e",
+      "bytes": 6621
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/guidance.json",
+      "sha256": "523d819fff84bd2b7848af30c6004709441943b11c30901e8130bd520b5f705e",
+      "bytes": 3960
+    }
+  ],
+  "limits": [
+    "Offline resolution is not compilation.",
+    "No live model or new Pagefold product delivery.",
+    "Legacy validations without captured environment bindings cannot be transplanted to replacement executions.",
+    "Aggregate dependency storage can briefly overshoot the polling limit."
+  ],
+  "retained_fixture": "/tmp/bokkie-dependency-qualification-j9mlyn06"
+}
