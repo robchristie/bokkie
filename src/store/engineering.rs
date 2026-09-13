@@ -266,6 +266,30 @@ impl Store {
         )?;
         validate_submission_for_execution(&state, execution_id, input).map(|_| ())
     }
+    /// Advisory coverage uses the final assessment validator; it mutates no state.
+    pub fn engineering_review_coverage_preflight(
+        &self,
+        outcome_id: &str,
+        execution_id: &str,
+        input: &EngineeringSubmissionInput,
+        review: &EngineeringReviewEvidence,
+    ) -> Result<(), StoreError> {
+        self.engineering_submission_preflight(outcome_id, execution_id, input)?;
+        let state = load(&self.connection, outcome_id)?;
+        if !state
+            .executions
+            .iter()
+            .any(|e| e.id == execution_id && !e.fenced && !e.cessation_verified)
+        {
+            return Err(StoreError::Fenced);
+        }
+        let excluded = state
+            .executions
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect::<Vec<_>>();
+        validate_review(review, &input.artefacts, &excluded)
+    }
     pub fn engineering_outcome(
         &self,
         id: &str,
@@ -1861,19 +1885,23 @@ fn apply_command(
                     "delivery authority, ownership or pending intent conflict",
                 ));
             }
-            if input.operation != "merge" && execution.role != EngineeringRole::Worker {
+            if !["merge", "cleanup"].contains(&input.operation.as_str())
+                && execution.role != EngineeringRole::Worker
+            {
                 return Err(conflict(
                     "only the workspace worker can prepare or publish delivery",
                 ));
             }
-            if input.operation == "merge"
+            if ["merge", "cleanup"].contains(&input.operation.as_str())
                 && (execution.role != EngineeringRole::Supervisor
                     || state
                         .executions
                         .iter()
                         .any(|e| e.role == EngineeringRole::Worker && !e.cessation_verified))
             {
-                return Err(conflict("merge requires supervisor and ceased writers"));
+                return Err(conflict(
+                    "merge/cleanup requires supervisor and ceased writers",
+                ));
             }
             if input.operation == "merge"
                 && state.packages.iter().any(|p| {
@@ -1884,6 +1912,16 @@ fn apply_command(
                 })
             {
                 return Err(conflict("merge requires all current packages accepted"));
+            }
+            if input.operation == "cleanup"
+                && !state.delivery_operations.iter().any(|op| {
+                    op.operation == "merge"
+                        && op.contract_revision == state.contract_revision
+                        && op.post_merge_verified
+                        && op.evidence_digest.is_some()
+                })
+            {
+                return Err(conflict("cleanup requires a verified completed merge"));
             }
             // Reuse normal lease fencing even though the trusted adapter supplies the record.
             validate_actor(
@@ -2415,8 +2453,15 @@ fn validate_envelope(
         EngineeringCommand::RecordDeliveryIntent(input) => {
             identifier(&input.id)?;
             identifier(&input.execution_id)?;
-            if !["prepare_branch", "commit", "push", "open_pr", "merge"]
-                .contains(&input.operation.as_str())
+            if ![
+                "prepare_branch",
+                "commit",
+                "push",
+                "open_pr",
+                "merge",
+                "cleanup",
+            ]
+            .contains(&input.operation.as_str())
             {
                 return Err(conflict("unsupported delivery operation"));
             }
@@ -5125,7 +5170,25 @@ mod tests {
             github_delivery_result(&operation, true, false),
             113,
         );
-        command(&mut store, &id, actor(&root), finish, 114);
+        let cleanup = command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_intent(&root, "cleanup"),
+            114,
+        )
+        .record_id
+        .unwrap();
+        let env = envelope(&store, &id, finish.clone());
+        assert!(store.engineering_command(actor(&root), env, 115).is_err());
+        command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_result(&cleanup, false, false),
+            116,
+        );
+        command(&mut store, &id, actor(&root), finish, 117);
         assert_eq!(
             store.engineering_outcome(&id).unwrap().unwrap().root.state,
             ObligationState::Completed

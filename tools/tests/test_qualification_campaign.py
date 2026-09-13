@@ -329,5 +329,269 @@ class CampaignTests(unittest.TestCase):
             self.c.complete('a', True)
 
 
+
+
+class ApplicationClosureTests(unittest.TestCase):
+    def setUp(self):
+        import hashlib
+        import json
+        import sqlite3
+        import sys
+        sys.path.insert(0, str(Path(__file__).parents[1]))
+        self.addCleanup(lambda: sys.path.remove(str(Path(__file__).parents[1])))
+        self.json = json
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.c = Campaign.open(self.root / 'registry.sqlite', 'application', 'app', purpose='application_delivery')
+        self.addCleanup(self.c.close)
+        self.brokers = self.root / 'brokers'
+        (self.brokers / 'blobs').mkdir(parents=True)
+        (self.brokers / 'reviews').mkdir()
+        (self.brokers / 'controller.lock').touch()
+        for identity in ('worker', 'supervisor'):
+            (self.brokers / identity).mkdir()
+            (self.brokers / identity / 'owner.lock').touch()
+        def save(path, value):
+            path.write_text(json.dumps(value))
+        self.save = save
+        def blob(value):
+            data = json.dumps(value).encode()
+            digest = hashlib.sha256(data).hexdigest()
+            (self.brokers / 'blobs' / digest).write_bytes(data)
+            return digest
+        self.blob = blob
+        def ci(head):
+            run = {'id': 1, 'url': 'https://example.test/run/1', 'attempt': 1, 'head': head,
+                   'status': 'completed', 'conclusion': 'success'}
+            return {'state': 'success', 'head': head, 'run': run, 'runs': [run], 'jobs': [
+                {'id': 2, 'url': 'https://example.test/job/2', 'run_id': 1, 'attempt': 1, 'head': head,
+                 'name': 'Fresh-checkout verification', 'status': 'completed', 'conclusion': 'success'}]}
+        self.delivery = {'merged': True, 'post_merge_verified': True, 'head': 'head',
+                         'merge_commit': 'merge-head', 'pr': 1, 'repo': 'test/repository',
+                         'base': 'main', 'branch': 'codex/task', 'head_tree': 'tree', 'merge_tree': 'tree',
+                         'tree_equal': True, 'pre_merge_ci': ci('head'), 'post_merge_ci': ci('merge-head')}
+        artefact = {'kind': 'git', 'repository': '/synthetic', 'commit': 'head', 'tree': 'tree'}
+        self.review = {'reviewer_identity': 'codex-thread:child:turn:review', 'artefacts': [artefact],
+                       'evidence_digest': blob({'verdict': 'pass', 'artefacts': [artefact], 'findings': []})}
+        save(self.brokers / 'reviews' / (self.review['evidence_digest'] + '.json'), self.review)
+        acceptance = {'contract_revision': 2, 'assessor_execution_id': 'supervisor',
+                      'assessment_ids': ['assessment'], 'review': self.review}
+        self.state = {'id': 'outcome', 'state_revision': 8, 'contract_revision': 2,
+            'contracts': [{'revision': 2, 'contract': {'criteria': [{'id': 'works'}]}}],
+            'executions': [{'id': i, 'role': i, 'cessation_verified': True} for i in ('worker', 'supervisor')],
+            'acceptance': acceptance,
+            'submissions': [{'id': 'submission', 'execution_id': 'worker', 'contract_revision': 2,
+                'digest': 'result-digest', 'input': {'artefacts': [artefact], 'evidence': [
+                    {'criterion_id': 'works', 'artefact': artefact, 'exit_code': 0,
+                     'command_digest': blob('command'), 'output_digest': blob('output')} ]}}],
+            'assessments': [{'id': 'assessment', 'contract_revision': 2, 'input': {
+                'submission_id': 'submission', 'submission_digest': 'result-digest',
+                'verdict': 'accept', 'unmet_criteria': [], 'review': self.review}}],
+            'delivery_operations': [{'id': 'merge', 'operation': 'merge', 'contract_revision': 2,
+                'post_merge_verified': True, 'arguments_json': json.dumps({'arguments': {'head': 'head', 'pr': 1}, 'review': self.review}),
+                'evidence_digest': blob(self.delivery)}]}
+        self.db = sqlite3.connect(self.root / 'engineering.sqlite')
+        self.addCleanup(self.db.close)
+        self.db.executescript('''CREATE TABLE engineering_writers(workspace TEXT);
+            CREATE TABLE obligations(id TEXT, state TEXT, lease_token TEXT);
+            CREATE TABLE engineering_outcomes(id TEXT, state_revision INT, root_obligation_id TEXT);
+            CREATE TABLE engineering_versions(outcome_id TEXT, revision INT, snapshot_json TEXT);
+            INSERT INTO obligations VALUES('root', 'completed', NULL);
+            INSERT INTO engineering_outcomes VALUES('outcome', 8, 'root');''')
+        self.persist()
+        save(self.root / 'profile.json', {'broker_root': str(self.brokers), 'workspace': '/synthetic',
+            'github_delivery': {'repo': 'test/repository', 'base': 'main', 'branch': 'codex/task', 'authority': 'synthetic authority'}})
+        save(self.root / 'campaign-binding.json', {'campaign': 'app', 'registry': str(self.c.path),
+                                                   'root': str(self.root), 'attempt_id': 'a'})
+        self.c.reserve('a', 'application_dogfood', {'source': 'one'}, root_turns=1, authority_turns=0)
+        self.c.mark_launched('a')
+        self.c.complete('a', True, evidence={'root': str(self.root), 'outcome_id': 'outcome', 'acceptance': acceptance})
+        self.selectors = {'attempts': [{'attempt_id': 'a', 'outcome_id': 'outcome',
+                                       'contract_revision': 2, 'state_revision': 8}]}
+
+    def persist(self):
+        self.db.execute('DELETE FROM engineering_versions')
+        self.db.execute('INSERT INTO engineering_versions VALUES(?,?,?)', ('outcome', 8, self.json.dumps(self.state)))
+        self.db.commit()
+
+    def test_supported_cli_verifies_and_closes_application(self):
+        import contextlib
+        import io
+        from unittest.mock import patch
+        import sys
+        spec = importlib.util.spec_from_file_location('application_cli', Path(__file__).parents[1] / 'qualify-engineering.py')
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        selectors = self.root / 'closure.json'
+        self.save(selectors, self.selectors)
+        argv = ['qualify-engineering.py', 'finish-application', '--campaign', 'app', '--evidence', str(selectors)]
+        with patch('qualification_campaign.Campaign.open', return_value=self.c), contextlib.redirect_stdout(io.StringIO()):
+            with patch.object(sys, 'argv', argv + ['--dry-run']):
+                cli.main()
+            self.assertIsNone(self.c.report()['terminal'])
+            with patch.object(sys, 'argv', argv):
+                cli.main()
+        self.assertEqual(self.c.report()['terminal']['policy'], 'store_application_acceptance_v1')
+
+    def test_application_closure_preserves_allowance_and_successor_history(self):
+        before = self.c.report()
+        receipt = self.c.finish_application(self.selectors, dry_run=True)
+        self.assertEqual(receipt['qualification_claim'], 'application_delivery_only')
+        self.assertIsNone(self.c.report()['terminal'])
+        self.c.finish_application(self.selectors)
+        after = self.c.report()
+        for key in ('attempts', 'limits', 'reserved_contexts', 'charged_contexts', 'stages', 'suppressions'):
+            self.assertEqual(before[key], after[key])
+        successor = self.c.begin_successor('next', {'package': 'new runtime change'})
+        self.addCleanup(successor.close)
+        self.assertEqual(successor.report()['purpose'], 'runtime_qualification')
+        self.assertEqual(self.c.report()['attempts'][0]['scope'], 'application::app')
+        with self.assertRaises(AdmissionDenied):
+            self.c.finish_application(self.selectors)
+
+    def test_purpose_cannot_change_and_fixture_finish_cannot_close_application(self):
+        with self.assertRaises(AdmissionDenied):
+            Campaign.open(self.c.path, 'application', 'app', purpose='runtime_qualification')
+        with self.assertRaises(AdmissionDenied):
+            self.c.finish({'reviewed_revision': 'claimed', 'landed_reference': 'claimed'})
+        with self.assertRaises(AdmissionDenied):
+            self.c.reserve('fixture', 'complete_fixture', {'source': 'two'}, final=True)
+        runtime = Campaign.open(self.root / 'runtime.sqlite', 'runtime', 'runtime')
+        self.addCleanup(runtime.close)
+        with self.assertRaises(AdmissionDenied):
+            runtime.finish_application(self.selectors, classify_legacy=True)
+
+    def test_legacy_classification_is_atomic_and_cannot_follow_failure(self):
+        self.c.db.execute('UPDATE campaigns SET purpose=NULL,terminal_policy=NULL')
+        with self.assertRaises(AdmissionDenied):
+            self.c.finish_application(self.selectors)
+        self.selectors['attempts'][0]['contract_revision'] = 1
+        with self.assertRaises(ValueError):
+            self.c.finish_application(self.selectors, classify_legacy=True)
+        self.assertEqual(self.c.report()['purpose'], 'legacy_unclassified')
+        self.selectors['attempts'][0]['contract_revision'] = 2
+        self.c.db.execute('UPDATE attempts SET passed=0')
+        with self.assertRaises(AdmissionDenied):
+            self.c.finish_application(self.selectors, classify_legacy=True)
+        self.c.db.execute('UPDATE attempts SET passed=1')
+        self.c.finish_application(self.selectors, classify_legacy=True)
+        self.assertEqual(self.c.report()['purpose'], 'application_delivery')
+        self.assertEqual(self.c.report()['policy_events'][-1]['kind'], 'legacy_application_classification')
+
+    def test_forged_selectors_cannot_replace_store_or_registered_evidence(self):
+        for mutate in (
+            lambda: self.state.update(acceptance=None),
+            lambda: self.state['acceptance'].update(contract_revision=1),
+            lambda: self.state['acceptance']['review'].update(reviewer_identity='invented'),
+            lambda: self.state['contracts'][0]['contract']['criteria'].append({'id': 'unproved'}),
+            lambda: self.state['submissions'][0].update(digest='changed'),
+            lambda: self.state['delivery_operations'][0].update(evidence_digest=None),
+            lambda: self.state['delivery_operations'][0].update(post_merge_verified=False),
+            lambda: self.state['executions'][0].update(cessation_verified=False),
+        ):
+            original = self.json.loads(self.json.dumps(self.state))
+            with self.subTest(mutation=mutate):
+                mutate()
+                self.persist()
+                with self.assertRaises((ValueError, TypeError)):
+                    self.c.finish_application(self.selectors)
+                self.assertIsNone(self.c.report()['terminal'])
+            self.state = original
+        self.persist()
+        (self.brokers / 'reviews' / (self.review['evidence_digest'] + '.json')).unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.c.finish_application(self.selectors)
+
+    def test_settled_failed_merge_then_successful_merge_closes_with_full_history(self):
+        failed_result = {'error': 'exact-head CI was not ready', 'uncertain': False}
+        failed = dict(self.state['delivery_operations'][0], id='failed-merge',
+                      post_merge_verified=False, evidence_digest=self.blob(failed_result))
+        self.state['delivery_operations'].insert(0, failed)
+        self.persist()
+        attempts = self.c.report()['attempts']
+        receipt = self.c.finish_application(self.selectors)
+        history = receipt['attempts'][0]['delivery_history']
+        self.assertEqual([item['operation_id'] for item in history], ['failed-merge', 'merge'])
+        self.assertEqual(history[0]['disposition'], 'settled_failure')
+        self.assertEqual(history[0]['result'], failed_result)
+        self.assertEqual(history[0]['evidence_digest'], failed['evidence_digest'])
+        self.assertEqual([item['operation_id'] for item in receipt['attempts'][0]['deliveries']], ['merge'])
+        self.assertEqual(self.c.report()['attempts'], attempts)
+
+    def test_successful_merge_cannot_hide_unresolved_or_uncertain_delivery(self):
+        for result in (None, {'error': 'uncertain launch', 'uncertain': True},
+                       {'error': 'missing cessation evidence'},
+                       {'uncertain': True, 'post_merge_verified': True},
+                       {'merged': True, 'post_merge_verified': False}):
+            with self.subTest(result=result):
+                earlier = dict(self.state['delivery_operations'][-1], id='earlier-merge',
+                    post_merge_verified=False, evidence_digest=self.blob(result) if result is not None else None)
+                self.state['delivery_operations'] = [earlier, self.state['delivery_operations'][-1]]
+                self.persist()
+                with self.assertRaises(ValueError):
+                    self.c.finish_application(self.selectors)
+                self.assertIsNone(self.c.report()['terminal'])
+        # A settled failure alone cannot supply final delivery acceptance.
+        self.state['delivery_operations'] = [dict(earlier, evidence_digest=self.blob(
+            {'error': 'merge refused', 'uncertain': False}))]
+        self.persist()
+        with self.assertRaisesRegex(ValueError, 'no verified merge'):
+            self.c.finish_application(self.selectors)
+
+    def test_delivery_requires_exact_trees_and_ci_not_boolean_claims(self):
+        import copy
+        from unittest.mock import patch
+        for mutate in (
+            lambda d: d.update(merge_tree='other-tree'),
+            lambda d: d.update(head_tree='other-tree', merge_tree='other-tree'),
+            lambda d: d.update(base='other-base'),
+            lambda d: d['post_merge_ci']['run'].update(attempt=2),
+            lambda d: d['post_merge_ci'].update(head='other-head'),
+            lambda d: d['pre_merge_ci'].update(jobs=[]),
+        ):
+            altered = copy.deepcopy(self.delivery)
+            mutate(altered)
+            self.state['delivery_operations'][0]['evidence_digest'] = self.blob(altered)
+            self.persist()
+            with self.assertRaises(ValueError):
+                self.c.finish_application(self.selectors)
+        legacy = {k: v for k, v in self.delivery.items() if k not in
+                  ('head_tree', 'merge_tree', 'tree_equal', 'pre_merge_ci', 'post_merge_ci')}
+        self.state['delivery_operations'][0]['evidence_digest'] = self.blob(legacy)
+        self.persist()
+        with patch('qualification_application.observe_delivery', return_value={
+                'adapter_sha256': 'synthetic', 'result': self.delivery}) as observe:
+            receipt = self.c.finish_application(self.selectors, dry_run=True)
+        observe.assert_called_once()
+        self.assertEqual(receipt['attempts'][0]['deliveries'][0]['supplemental_observation']['result'], self.delivery)
+        mismatched = dict(self.delivery, head='unrelated')
+        with patch('qualification_application.observe_delivery', return_value={'result': mismatched}):
+            with self.assertRaises(ValueError):
+                self.c.finish_application(self.selectors)
+        self.assertIsNone(self.c.report()['terminal'])
+
+    def test_controller_broker_writer_and_unaccounted_attempt_block_closure(self):
+        import fcntl
+        for path in (self.brokers / 'controller.lock', self.brokers / 'worker/owner.lock'):
+            with path.open('rb') as held:
+                fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaises(ValueError):
+                    self.c.finish_application(self.selectors)
+        self.db.execute("INSERT INTO engineering_writers VALUES('workspace')")
+        self.db.commit()
+        with self.assertRaises(ValueError):
+            self.c.finish_application(self.selectors)
+        self.db.execute('DELETE FROM engineering_writers')
+        self.db.execute("UPDATE obligations SET state='running'")
+        self.db.commit()
+        with self.assertRaises(ValueError):
+            self.c.finish_application(self.selectors)
+        self.db.execute("UPDATE obligations SET state='completed'")
+        self.db.commit()
+        with self.assertRaises(ValueError):
+            self.c.finish_application({'attempts': self.selectors['attempts'] * 2})
+
+
 if __name__ == '__main__':
     unittest.main()

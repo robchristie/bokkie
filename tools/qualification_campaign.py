@@ -16,6 +16,7 @@ parent totals that already include children. Missing telemetry remains unknown.
 from __future__ import annotations
 
 from functools import wraps
+from contextlib import ExitStack
 import json
 import re
 import sqlite3
@@ -24,6 +25,8 @@ from pathlib import Path
 
 DEFAULT_LIMITS = {"complete_fixture": 3, "live_probe": 2,
                   "application_dogfood": 1, "contexts": 750, "final_headroom": 240, "diagnosis_threshold": 2}
+PURPOSES = {"runtime_qualification": "final_complete_fixture_v1",
+            "application_delivery": "store_application_acceptance_v1"}
 STAGES = ("complete_fixture", "live_probe", "application_dogfood")
 
 
@@ -62,6 +65,7 @@ def _mutation(method):
     def wrapped(self, *args, **kwargs):
         owner = not self.db.in_transaction
         if owner:
+            self._mutation_resources = ExitStack()
             self.db.execute('BEGIN IMMEDIATE')
         try:
             self._assert_active()
@@ -73,15 +77,18 @@ def _mutation(method):
             if owner:
                 self.db.rollback()
             raise
+        finally:
+            if owner:
+                self._mutation_resources.close()
     return wrapped
 
 
 class Campaign:
     @classmethod
-    def open(cls, registry_path, scope, campaign_id, limits=None):
-        return cls(registry_path, scope, campaign_id, limits)
+    def open(cls, registry_path, scope, campaign_id, limits=None, purpose=None):
+        return cls(registry_path, scope, campaign_id, limits, purpose)
 
-    def __init__(self, registry_path, scope, campaign_id, limits=None):
+    def __init__(self, registry_path, scope, campaign_id, limits=None, purpose=None):
         if not scope or not campaign_id:
             raise ValueError("stable scope and campaign identifier required")
         self.scope, self.campaign_id = scope, campaign_id
@@ -107,6 +114,15 @@ class Campaign:
                 if 'terminal' not in {row[1] for row in self.db.execute('PRAGMA table_info(campaigns)')}:
                     raise
         self.db.execute('CREATE TABLE IF NOT EXISTS policy_events(scope TEXT NOT NULL, kind TEXT NOT NULL, evidence TEXT NOT NULL, created REAL NOT NULL)')
+        for column in ('purpose', 'terminal_policy'):
+            if column not in {row[1] for row in self.db.execute('PRAGMA table_info(campaigns)')}:
+                try:
+                    self.db.execute(f'ALTER TABLE campaigns ADD COLUMN {column} TEXT')
+                except sqlite3.OperationalError:
+                    if column not in {row[1] for row in self.db.execute('PRAGMA table_info(campaigns)')}:
+                        raise
+        if purpose is not None and purpose not in PURPOSES:
+            raise ValueError('unknown campaign purpose')
         requested = self._limits(limits)
         self.db.execute('BEGIN IMMEDIATE')
         try:
@@ -118,13 +134,16 @@ class Campaign:
             if row:
                 if row['campaign_id'] != campaign_id or (limits is not None and row['limits'] != _json(requested)):
                     raise AdmissionDenied('scope already bound to an immutable campaign and allowance')
+                if purpose is not None and row['purpose'] != purpose:
+                    raise AdmissionDenied('campaign purpose is immutable; legacy classification requires validated closure')
                 self.limits = json.loads(row['limits'])
             else:
-                self.db.execute('INSERT INTO campaigns(scope,campaign_id,limits,created) VALUES(?,?,?,?)', (scope, campaign_id, _json(requested), time.time()))
+                self.db.execute('INSERT INTO campaigns(scope,campaign_id,limits,created,purpose,terminal_policy) VALUES(?,?,?,?,?,?)', (scope, campaign_id, _json(requested), time.time(), purpose or 'runtime_qualification', PURPOSES[purpose or 'runtime_qualification']))
                 self.limits = requested
             self.db.commit()
         except BaseException:
             self.db.rollback()
+            self.db.close()
             raise
 
     @staticmethod
@@ -158,15 +177,48 @@ class Campaign:
         """Close after final acceptance and recorded review/landing identities."""
         if not isinstance(evidence, dict) or not all(isinstance(evidence.get(k), str) and evidence[k].strip() for k in ('reviewed_revision', 'landed_reference')):
             raise ValueError('terminal evidence requires reviewed_revision and landed_reference')
+        binding = self.db.execute('SELECT * FROM campaigns WHERE scope=?', (self.scope,)).fetchone()
+        if binding['purpose'] == 'application_delivery':
+            raise AdmissionDenied('application closure requires verified Store evidence')
         rows = self.db.execute('SELECT * FROM attempts WHERE scope=? ORDER BY created,id', (self.scope,)).fetchall()
         if not rows or any(r['state'] != 'completed' for r in rows) or not (rows[-1]['stage'] == 'complete_fixture' and rows[-1]['final'] and rows[-1]['passed']):
             raise AdmissionDenied('terminal campaign requires all attempts reconciled and latest final qualification passed')
         self.db.execute('UPDATE campaigns SET terminal=? WHERE scope=?', (_json(evidence), self.scope))
 
-    def begin_successor(self, new_campaign_id, evidence, limits=None):
+    @_mutation
+    def finish_application(self, evidence, classify_legacy=False, dry_run=False):
+        """Verify retained Store/runtime evidence; never replace attempt accounting."""
+        from qualification_application import verify_application
+        binding = self.db.execute('SELECT * FROM campaigns WHERE scope=?', (self.scope,)).fetchone()
+        rows = [dict(r) for r in self.db.execute(
+            'SELECT * FROM attempts WHERE scope=? ORDER BY created,id', (self.scope,))]
+        legacy = binding['purpose'] is None
+        if binding['purpose'] not in (None, 'application_delivery'):
+            raise AdmissionDenied('runtime campaign cannot switch to application closure')
+        if legacy and (not classify_legacy or any(r['stage'] != 'application_dogfood' or
+                r['passed'] != 1 for r in rows)):
+            raise AdmissionDenied('legacy classification requires exclusively successful application attempts')
+        if not rows or any(r['state'] != 'completed' for r in rows) or not (
+                rows[-1]['stage'] == 'application_dogfood' and rows[-1]['passed'] == 1):
+            raise AdmissionDenied('all attempts must reconcile and latest application must pass')
+        # Keep controller/broker exclusion through the ledger commit. The outer
+        # mutation commits after this method; SQLite records are already terminal.
+        receipt = self._mutation_resources.enter_context(verify_application(self, rows, evidence))
+        if not dry_run:
+            if legacy:
+                self.db.execute('UPDATE campaigns SET purpose=?,terminal_policy=? WHERE scope=?',
+                    ('application_delivery', PURPOSES['application_delivery'], self.scope))
+                self.db.execute('INSERT INTO policy_events VALUES(?,?,?,?)',
+                    (self.scope, 'legacy_application_classification', _json(receipt), time.time()))
+            self.db.execute('UPDATE campaigns SET terminal=? WHERE scope=?', (_json(receipt), self.scope))
+        return receipt
+
+    def begin_successor(self, new_campaign_id, evidence, limits=None, purpose="runtime_qualification"):
         """Explicitly archive a terminal campaign and start its next work package."""
         if not new_campaign_id or new_campaign_id == self.campaign_id or not evidence:
             raise ValueError('distinct successor identity and work-package evidence required')
+        if purpose not in PURPOSES:
+            raise ValueError('unknown campaign purpose')
         requested = self._limits(limits)
         scope = self.scope
         archive = scope + '::' + self.campaign_id
@@ -179,7 +231,7 @@ class Campaign:
                 raise AdmissionDenied('successor or archive identity already exists')
             for table in ('campaigns', 'attempts', 'repairs', 'probes', 'telemetry', 'checks', 'suppressions', 'policy_events'):
                 self.db.execute(f'UPDATE {table} SET scope=? WHERE scope=?', (archive, scope))
-            self.db.execute('INSERT INTO campaigns(scope,campaign_id,limits,created) VALUES(?,?,?,?)', (scope, new_campaign_id, _json(requested), time.time()))
+            self.db.execute('INSERT INTO campaigns(scope,campaign_id,limits,created,purpose,terminal_policy) VALUES(?,?,?,?,?,?)', (scope, new_campaign_id, _json(requested), time.time(), purpose, PURPOSES[purpose]))
             self.db.execute('INSERT INTO policy_events VALUES(?,?,?,?)', (scope, 'successor', _json({'previous_campaign': self.campaign_id, 'evidence': evidence}), time.time()))
             self.db.commit()
         except BaseException:
@@ -210,6 +262,9 @@ class Campaign:
         self.db.execute('BEGIN IMMEDIATE')
         try:
             self._assert_active()
+            purpose = self.db.execute('SELECT purpose FROM campaigns WHERE scope=?', (self.scope,)).fetchone()[0]
+            if purpose == 'application_delivery' and stage != 'application_dogfood':
+                raise AdmissionDenied('application campaign admits only its application stage')
             rows = [dict(r) for r in self.db.execute('SELECT * FROM attempts WHERE scope=? ORDER BY created,id', (self.scope,))]
             reason = None
             prior = next((r for r in rows if r['id'] == attempt_id), None)
@@ -420,6 +475,8 @@ class Campaign:
         intervention_evidence = [json.loads(r['evidence'] or '{}') for r in rows]
         interventions = {field: sum(e.get(field, 0) for e in intervention_evidence) for field in intervention_fields}
         return {'report_schema_version': 2, 'scope': self.scope, 'campaign_id': self.campaign_id, 'limits': self.limits,
+                'purpose': binding['purpose'] or 'legacy_unclassified',
+                'terminal_policy': binding['terminal_policy'] or 'legacy_final_complete_fixture_v1',
                 'attempts': rows, 'stages': {s: sum(r['stage'] == s for r in rows) for s in STAGES},
                 'terminal': json.loads(binding['terminal']) if binding['terminal'] else None,
                 'policy_events': [dict(r) for r in self.db.execute('SELECT * FROM policy_events WHERE scope=? ORDER BY created', (self.scope,))],

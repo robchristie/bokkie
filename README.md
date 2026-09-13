@@ -158,6 +158,9 @@ repeated qualification.
 
 ## Attention UI
 
+For engineering workspace preparation, reusable validation references and
+application campaign closure, see the [delivery hardening guide](docs/engineering-delivery-hardening.md).
+
 The first operator workspace is a separate Rust application that reads Bokkie's
 HTTP projections; it never opens SQLite directly and cannot create a second
 state path. Its default attention desk pairs one collection list with one detail

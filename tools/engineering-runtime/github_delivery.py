@@ -4,6 +4,10 @@ The subprocess seam is for deterministic tests. Errors deliberately omit command
 Git and GitHub diagnostics can contain credentials or private account details.
 """
 from contextvars import ContextVar
+from contextlib import contextmanager
+import fcntl
+import pwd
+import stat
 import json
 import hashlib
 import os
@@ -57,6 +61,7 @@ class Host:
         if (self.root / '.git' / 'commondir').exists() or any(p.is_symlink() for p in (self.root / '.git').rglob('*')):
             raise DeliveryError('indirect Git metadata is unsupported')
         self.run = run
+        self.lock_fd = None
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_', 'GH_', 'GITHUB_'))}
         self.env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0', GH_PROMPT_DISABLED='1', GH_HOST='github.com', GIT_PAGER='cat')
         # Host authentication comes from the existing gh configuration, never the candidate.
@@ -88,7 +93,8 @@ class Host:
     def command(self, argv, *, host=False):
         try:
             result = self.run(argv, cwd='/' if host else str(self.root), env=self.env,
-                              capture_output=True, text=True, timeout=90, check=False)
+                              capture_output=True, text=True, timeout=90, check=False,
+                              **({'pass_fds': (self.lock_fd,)} if self.lock_fd is not None else {}))
         except (OSError, subprocess.SubprocessError):
             raise DeliveryError('host command failed or timed out; reconcile before retry') from None
         if result.returncode or len(result.stdout) > 2_000_000:
@@ -96,7 +102,7 @@ class Host:
         return result.stdout
 
     def git(self, *args):
-        if any(arg in ('switch', 'add', 'commit', 'push') for arg in args):
+        if any(arg in ('switch', 'add', 'commit', 'push', 'fetch', 'merge', 'update-ref') for arg in args):
             _UNCERTAIN.set(True)
         return self.command(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
                              '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', *args])
@@ -140,8 +146,14 @@ class Host:
         for review in reviews:
             if review['state'] in ('APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'):
                 latest[review['user']['login']] = review['state']
-        post_merge = bool(p['merged'] and p.get('merge_commit_sha') and self.successful_ci(_head(p['merge_commit_sha'])))
-        return {'post_merge_verified': post_merge, 'repo': REPO, 'base': 'main', 'branch': self.branch, 'pr': number, 'head': head,
+        head_tree = self.commit_tree(head)
+        merge_tree = self.commit_tree(_head(p['merge_commit_sha'])) if p['merged'] and p.get('merge_commit_sha') else None
+        pre_ci = self.ci_receipt(head)
+        post_ci = self.ci_receipt(_head(p['merge_commit_sha'])) if merge_tree else {'state': 'unavailable', 'head': None, 'run': None, 'runs': [], 'jobs': []}
+        tree_equal = merge_tree is not None and head_tree == merge_tree
+        post_merge = bool(tree_equal and post_ci['state'] == 'success')
+        return {'head_tree': head_tree, 'merge_tree': merge_tree, 'tree_equal': tree_equal,
+                'pre_merge_ci': pre_ci, 'post_merge_ci': post_ci, 'post_merge_verified': post_merge, 'repo': REPO, 'base': 'main', 'branch': self.branch, 'pr': number, 'head': head,
                 'state': p['state'], 'merged': p['merged'], 'merge_commit': p.get('merge_commit_sha'),
                 'draft': p['draft'], 'mergeable': p.get('mergeable'), 'mergeable_state': p.get('mergeable_state'),
                 'changes_requested': 'CHANGES_REQUESTED' in latest.values(),
@@ -159,27 +171,162 @@ class Host:
             raise DeliveryError('ambiguous duplicate pull requests')
         return self.pull(matching[0]['number']) if matching else None
 
+    def commit_tree(self, head):
+        commit = self.api(f'repos/{REPO}/git/commits/{_head(head)}')
+        if commit.get('sha') != head:
+            raise DeliveryError('commit evidence identity mismatch')
+        return _head(commit.get('tree', {}).get('sha'))
+
     def successful_ci(self, head):
-        runs = self.api(f'repos/{REPO}/actions/runs?head_sha={head}&per_page=100')
+        return self.ci_receipt(head)['state'] == 'success'
+
+    def ci_receipt(self, head):
+        receipt = {'state': 'unavailable', 'head': _head(head), 'run': None, 'runs': [], 'jobs': []}
+        try:
+            runs = self.api(f'repos/{REPO}/actions/runs?head_sha={head}&per_page=100')
+        except DeliveryError:
+            return receipt
         if runs.get('total_count', 101) != len(runs.get('workflow_runs', [])):
             raise DeliveryError('workflow evidence exceeds supported bound')
         matching = [r for r in runs['workflow_runs'] if r.get('name') == 'CI'
                     and r.get('head_sha') == head and r.get('repository', {}).get('full_name') == REPO]
         if not matching:
-            return False
-        latest = max(matching, key=lambda r: r['id'])
-        if latest.get('status') != 'completed' or latest.get('conclusion') != 'success':
-            return False
-        run_id = latest['id']
-        if type(run_id) is not int or run_id <= 0:
+            receipt['state'] = 'pending'
+            return receipt
+        if any(type(r.get('id')) is not int or r['id'] <= 0 for r in matching):
             raise DeliveryError('invalid workflow identity')
-        jobs = self.api(f'repos/{REPO}/actions/runs/{run_id}/jobs?filter=latest&per_page=100')
+        for candidate in matching:
+            candidate_id = candidate['id']
+            if (type(candidate.get('run_attempt')) is not int or candidate['run_attempt'] <= 0
+                    or candidate.get('html_url') != f'https://github.com/{REPO}/actions/runs/{candidate_id}'):
+                raise DeliveryError('invalid workflow attempt or URL')
+            receipt['runs'].append({'id': candidate_id, 'url': candidate['html_url'],
+                                    'attempt': candidate['run_attempt'], 'head': head,
+                                    'status': candidate.get('status'), 'conclusion': candidate.get('conclusion')})
+        latest = max(matching, key=lambda r: r['id'])
+        run_id, attempt = latest['id'], latest.get('run_attempt')
+        url = f'https://github.com/{REPO}/actions/runs/{run_id}'
+        if type(attempt) is not int or attempt <= 0 or latest.get('html_url') != url:
+            raise DeliveryError('invalid workflow attempt or URL')
+        receipt['run'] = {'id': run_id, 'url': url, 'attempt': attempt, 'head': head,
+                          'status': latest.get('status'), 'conclusion': latest.get('conclusion')}
+        # Attempt-specific jobs cannot accidentally mix a restarted run with old jobs.
+        try:
+            jobs = self.api(f'repos/{REPO}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100')
+        except DeliveryError:
+            return receipt
         if jobs.get('total_count', 101) != len(jobs.get('jobs', [])):
             raise DeliveryError('workflow job evidence exceeds supported bound')
-        return any(j.get('name') == 'Fresh-checkout verification' and j.get('status') == 'completed'
-                   and j.get('conclusion') == 'success' and j.get('head_sha') == head
-                   and any(step.get('status') == 'completed' and step.get('conclusion') == 'success'
-                           for step in j.get('steps', [])) for j in jobs['jobs'])
+        for job in jobs['jobs']:
+            job_id = job.get('id')
+            if (type(job_id) is not int or job_id <= 0 or job.get('run_id') != run_id
+                    or job.get('run_attempt', attempt) != attempt or job.get('head_sha') != head
+                    or job.get('html_url') not in (url + '/job/' + str(job_id),
+                        f'https://github.com/{REPO}/runs/{run_id}/jobs/{job_id}')):
+                raise DeliveryError('workflow job identity mismatch')
+            receipt['jobs'].append({'id': job_id, 'url': job['html_url'], 'run_id': run_id,
+                                    'attempt': attempt, 'head': head, 'name': job.get('name'),
+                                    'status': job.get('status'), 'conclusion': job.get('conclusion')})
+        required = [j for j in jobs['jobs'] if j.get('name') == 'Fresh-checkout verification']
+        if latest.get('status') != 'completed':
+            receipt['state'] = 'pending'
+        elif latest.get('conclusion') != 'success':
+            receipt['state'] = 'failed'
+        elif any(j.get('status') != 'completed' for j in required):
+            receipt['state'] = 'pending'
+        elif len(required) != 1 or required[0].get('conclusion') != 'success' or not any(
+                step.get('status') == 'completed' and step.get('conclusion') == 'success'
+                for step in required[0].get('steps', [])):
+            receipt['state'] = 'failed'
+        else:
+            receipt['state'] = 'success'
+        return receipt
+
+    def cleanup(self, arguments, *, mutate):
+        """Only task-owned refs; retain all objects, ignored files and broker evidence."""
+        a = arguments
+        status = self.status(a['pr'])
+        if (not status['merged'] or status['head'] != a['head']
+                or status['head_tree'] != a['tree'] or status['merge_commit'] != a['merge_commit']
+                or not status['post_merge_verified'] or status['human_review_required']):
+            raise DeliveryError('cleanup requires exact merged tree and successful merge CI')
+        if self.git('status', '--porcelain', '--untracked-files=all').strip():
+            raise DeliveryError('cleanup requires clean workspace')
+        worktrees = self.git('worktree', 'list', '--porcelain').splitlines()
+        if [line for line in worktrees if line.startswith('worktree ')] != ['worktree ' + str(self.root)]:
+            raise DeliveryError('cleanup refuses additional worktrees')
+        current = self.git('symbolic-ref', '--short', 'HEAD').strip()
+        if current not in ('main', self.branch):
+            raise DeliveryError('cleanup checkout ownership mismatch')
+        refs = dict(line.split(' ', 1) for line in self.git('for-each-ref', '--format=%(refname) %(objectname)',
+                                                          'refs/heads/').splitlines())
+        tracking_ref = 'refs/remotes/origin/' + self.branch
+        tracking = self.git('for-each-ref', '--format=%(objectname)', tracking_ref).strip()
+        if tracking and tracking != a['head']:
+            raise DeliveryError('cleanup tracking branch identity mismatch')
+        local = refs.get('refs/heads/' + self.branch)
+        if local is not None and local != a['head']:
+            raise DeliveryError('cleanup local branch identity mismatch')
+        # Successful ls-remote with no exact ref establishes absence, unlike a 404.
+        remote_raw = self.git('ls-remote', '--heads', URL, 'refs/heads/' + self.branch).strip()
+        remote = remote_raw.split('\t') if remote_raw else None
+        if remote and remote != [a['head'], 'refs/heads/' + self.branch]:
+            raise DeliveryError('cleanup remote branch identity mismatch')
+        base = self.api(f'repos/{REPO}/branches/main')
+        if base.get('name') != 'main':
+            raise DeliveryError('cleanup base identity mismatch')
+        base_head = _head(base.get('commit', {}).get('sha'))
+        retained = {}
+        for label, commit in (('reviewed', a['head']), ('merged', a['merge_commit'])):
+            ref = f'refs/bokkie/delivery/pr-{a["pr"]}/{label}'
+            existing = self.git('for-each-ref', '--format=%(objectname)', ref).strip()
+            if existing and existing != commit:
+                raise DeliveryError('cleanup retained evidence identity mismatch')
+            retained[ref] = (commit, bool(existing))
+        done = all(exists for _, exists in retained.values()) and current == 'main' and refs.get('refs/heads/main') == base_head and local is None and remote is None and not tracking
+        if done:
+            self.git('merge-base', '--is-ancestor', a['merge_commit'], base_head)
+        if mutate and not done:
+            self.git('-c', 'remote.origin.fetch=', 'fetch', '--no-tags', '--prune', 'origin',
+                     '+refs/heads/main:refs/remotes/origin/main')
+            if self.git('rev-parse', 'refs/remotes/origin/main').strip() != base_head:
+                raise DeliveryError('cleanup base moved; reconcile fresh evidence')
+            self.git('merge-base', '--is-ancestor', a['merge_commit'], base_head)
+            self.git('merge-base', '--is-ancestor', 'refs/heads/main', base_head)
+            if _head(self.git('rev-parse', a['head'] + '^{tree}').strip()) != a['tree']:
+                raise DeliveryError('cleanup local reviewed tree mismatch')
+            if _head(self.git('rev-parse', a['merge_commit'] + '^{tree}').strip()) != a['tree']:
+                raise DeliveryError('cleanup local merge tree mismatch')
+            for ref, (commit, exists) in retained.items():
+                if not exists:
+                    self.git('update-ref', ref, commit, '0' * 40)
+            self.git('switch', '--no-overwrite-ignore', 'main')
+            self.git('merge', '--no-overwrite-ignore', '--ff-only', base_head)
+            if remote:
+                self.git('-c', 'credential.helper=', '-c', 'credential.helper=!/usr/bin/gh auth git-credential',
+                         'push', '--porcelain', '--force-with-lease=refs/heads/' + self.branch + ':' + a['head'],
+                         URL, ':refs/heads/' + self.branch)
+            if local:
+                self.git('update-ref', '-d', 'refs/heads/' + self.branch, a['head'])
+            self.git('-c', 'remote.origin.fetch=', 'fetch', '--no-tags', '--prune', 'origin',
+                     '+refs/heads/main:refs/remotes/origin/main')
+            if self.git('ls-remote', '--heads', URL, 'refs/heads/' + self.branch).strip():
+                raise DeliveryError('cleanup remote task branch reappeared')
+            if tracking:
+                self.git('update-ref', '-d', tracking_ref, a['head'])
+            return self.cleanup(a, mutate=False)
+        status['cleanup'] = {'state': 'success' if done else 'pending', 'base_head': base_head,
+                             'local_branch_deleted': local is None, 'remote_branch_deleted': remote is None, 'remote_tracking_deleted': not tracking,
+                             'evidence_retained': all(exists for _, exists in retained.values()),
+                             'actions': {
+                                 'base': {'state': 'completed' if current == 'main' and refs.get('refs/heads/main') == base_head else 'blocked', 'reason': 'exact base checked out' if current == 'main' and refs.get('refs/heads/main') == base_head else 'fast-forward pending'},
+                                 'local_branch': {'state': 'completed' if local is None else 'blocked', 'reason': 'absent' if local is None else 'exact task branch deletion pending'},
+                                 'remote_branch': {'state': 'completed' if remote is None else 'blocked', 'reason': 'absent' if remote is None else 'lease-protected task branch deletion pending'},
+                                 'remote_tracking': {'state': 'completed' if not tracking else 'blocked', 'reason': 'absent' if not tracking else 'exact task tracking ref prune pending'},
+                                 'workspace_and_evidence': {'state': 'intentionally_retained', 'reason': 'checkout, ignored files and external broker receipts retained'},
+                                 'git_evidence': {'state': 'intentionally_retained' if all(exists for _, exists in retained.values()) else 'blocked', 'reason': 'exact reviewed and merged objects retained' if all(exists for _, exists in retained.values()) else 'immutable evidence refs pending'}}}
+
+        return status
 
     def policy(self):
         repo = self.api(f'repos/{REPO}')
@@ -218,6 +365,45 @@ class Host:
                 raise DeliveryError('required check application mismatch')
 
 
+def workspace_lock_root():
+    # Same stable registry as broker.WorkspaceWriter, independent of caller HOME.
+    return Path(pwd.getpwuid(os.getuid()).pw_dir) / '.local/state/bokkie/workspace-locks'
+
+
+@contextmanager
+def cleanup_ownership(host):
+    root = workspace_lock_root()
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if root.resolve() != root or root.is_relative_to(host.root):
+        raise DeliveryError('cleanup lock storage must be canonical and outside workspace')
+    metadata = root.stat()
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise DeliveryError('cleanup lock storage must be private')
+    path = root / (hashlib.sha256(os.fsencode(host.root)).hexdigest() + '.lock')
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_nlink != 1:
+            raise DeliveryError('invalid cleanup lock inode')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise DeliveryError('cleanup workspace has an active owner') from None
+        previous = os.read(fd, 4097)
+        try:
+            if previous and json.loads(previous) != {}:
+                raise DeliveryError('cleanup prior workspace owner lacks verified cessation')
+        except (ValueError, UnicodeError):
+            raise DeliveryError('cleanup prior workspace ownership is uncertain') from None
+        # Do not overwrite the worker's durable marker. Child commands inherit
+        # this lock so an adapter death cannot release it while Git is active.
+        host.lock_fd = fd
+        yield
+    finally:
+        host.lock_fd = None
+        os.close(fd)
+
+
 def preflight(config, workspace, *, run=subprocess.run):
     _UNCERTAIN.set(False)
     host = Host(config, workspace, run)
@@ -235,13 +421,17 @@ def preflight(config, workspace, *, run=subprocess.run):
 
 def _arguments(operation, args):
     schema = {'prepare_branch': set(), 'commit': {'paths', 'message'}, 'push': {'head'},
-              'open_pr': {'head', 'title', 'body'}, 'status': {'pr'}, 'merge': {'pr', 'head'}}
+              'open_pr': {'head', 'title', 'body'}, 'status': {'pr'}, 'merge': {'pr', 'head'},
+              'cleanup': {'pr', 'head', 'tree', 'merge_commit'}}
     if operation not in schema or not isinstance(args, dict) or set(args) != schema[operation]:
         raise DeliveryError('invalid delivery operation arguments')
     if 'head' in args:
         _head(args['head'])
     if 'pr' in args:
         _pr(args['pr'])
+    if operation == 'cleanup':
+        _head(args['tree'])
+        _head(args['merge_commit'])
 
 
 def execute(config, workspace, operation, arguments, *, run=subprocess.run):
@@ -251,6 +441,9 @@ def execute(config, workspace, operation, arguments, *, run=subprocess.run):
     a = arguments
     if operation == 'status':
         return h.status(a['pr'])
+    if operation == 'cleanup':
+        with cleanup_ownership(h):
+            return h.cleanup(a, mutate=True)
     if operation == 'prepare_branch':
         branch = h.git('symbolic-ref', '--short', 'HEAD').strip()
         if branch != 'main' or h.git('status', '--porcelain').strip():
@@ -324,6 +517,9 @@ def reconcile(config, workspace, operation, arguments, *, run=subprocess.run):
     _UNCERTAIN.set(False)
     _arguments(operation, arguments)
     h = Host(config, workspace, run)
+    if operation == 'cleanup':
+        with cleanup_ownership(h):
+            return h.cleanup(arguments, mutate=False)
     if operation == 'prepare_branch':
         return {'branch': h.branch, 'head': h.current()}
     if operation == 'commit':

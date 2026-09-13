@@ -1,10 +1,15 @@
 """No network or remote mutations: disposable Git and scripted GitHub evidence."""
 import importlib.util
+import fcntl
+import hashlib
+import os
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location('github_delivery', Path(__file__).resolve().parents[1] / 'engineering-runtime/github_delivery.py')
 delivery = importlib.util.module_from_spec(SPEC)
@@ -18,6 +23,12 @@ class AdapterTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        lock_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(lock_tmp.cleanup)
+        self.lock_root = Path(lock_tmp.name)
+        self.lock_patch = patch.object(delivery, 'workspace_lock_root', return_value=self.lock_root)
+        self.lock_patch.start()
+        self.addCleanup(self.lock_patch.stop)
         self.git('init', '-b', 'main')
         self.git('remote', 'add', 'origin', delivery.URL)
         self.git('config', 'user.name', 'Test')
@@ -66,11 +77,12 @@ class AdapterTests(unittest.TestCase):
         self.responses[base + 'branches/main/protection'] = {'required_status_checks': {'contexts': ['Fresh-checkout verification']}}
         self.responses[base + 'rulesets?includes_parents=true&per_page=100'] = []
         for sha in (head, 'b' * 40):
+            self.responses[base + f'git/commits/{sha}'] = {'sha': sha, 'tree': {'sha': 'd' * 40}}
             self.responses[base + f'actions/runs?head_sha={sha}&per_page=100'] = {'total_count': 1, 'workflow_runs': [
-                {'id': 10 if sha == head else 11, 'name': 'CI', 'head_sha': sha, 'repository': {'full_name': delivery.REPO}, 'status': 'completed', 'conclusion': 'success'}]}
+                {'id': 10 if sha == head else 11, 'run_attempt': 1, 'html_url': f'https://github.com/{delivery.REPO}/actions/runs/{10 if sha == head else 11}', 'name': 'CI', 'head_sha': sha, 'repository': {'full_name': delivery.REPO}, 'status': 'completed', 'conclusion': 'success'}]}
             run_id = 10 if sha == head else 11
-            self.responses[base + f'actions/runs/{run_id}/jobs?filter=latest&per_page=100'] = {'total_count': 1, 'jobs': [
-                {'name': 'Fresh-checkout verification', 'head_sha': sha, 'status': 'completed', 'conclusion': 'success',
+            self.responses[base + f'actions/runs/{run_id}/attempts/1/jobs?per_page=100'] = {'total_count': 1, 'jobs': [
+                {'id': run_id + 100, 'run_id': run_id, 'run_attempt': 1, 'html_url': f'https://github.com/{delivery.REPO}/actions/runs/{run_id}/job/{run_id + 100}', 'name': 'Fresh-checkout verification', 'head_sha': sha, 'status': 'completed', 'conclusion': 'success',
                  'steps': [{'status': 'completed', 'conclusion': 'success'}]}]}
         return self.responses[base + 'pulls/1']
 
@@ -80,8 +92,8 @@ class AdapterTests(unittest.TestCase):
         result = delivery.preflight(CONFIG, self.root, run=self.runner)
         self.assertTrue(result['base_ci_verified'])
         self.assertEqual(result['base_head'], HEAD)
-        self.responses[f'repos/{delivery.REPO}/actions/runs/10/jobs?filter=latest&per_page=100']['jobs'] = []
-        self.responses[f'repos/{delivery.REPO}/actions/runs/10/jobs?filter=latest&per_page=100']['total_count'] = 0
+        self.responses[f'repos/{delivery.REPO}/actions/runs/10/attempts/1/jobs?per_page=100']['jobs'] = []
+        self.responses[f'repos/{delivery.REPO}/actions/runs/10/attempts/1/jobs?per_page=100']['total_count'] = 0
         with self.assertRaisesRegex(delivery.DeliveryError, 'representative run'):
             delivery.preflight(CONFIG, self.root, run=self.runner)
 
@@ -254,7 +266,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_zero_jobs_or_steps_do_not_qualify_ci(self):
         self.evidence()
-        jobs_key = f'repos/{delivery.REPO}/actions/runs/10/jobs?filter=latest&per_page=100'
+        jobs_key = f'repos/{delivery.REPO}/actions/runs/10/attempts/1/jobs?per_page=100'
         self.responses[jobs_key]['jobs'][0]['steps'] = []
         self.assertFalse(self.host().successful_ci(HEAD))
         self.responses[jobs_key] = {'total_count': 0, 'jobs': []}
@@ -289,6 +301,171 @@ class AdapterTests(unittest.TestCase):
             delivery.execute(CONFIG, self.root, 'commit', {'paths': ['file.txt'], 'message': 'Change'}, run=failed_commit)
         self.assertTrue(failed.exception.uncertain)
         self.assertEqual(self.git('diff', '--cached', '--name-only'), 'file.txt')
+
+    def test_ci_receipts_bind_attempts_urls_and_distinct_observations(self):
+        self.evidence(merged=True)
+        status = self.host().status(1)
+        self.assertEqual(status['head_tree'], 'd' * 40)
+        self.assertTrue(status['tree_equal'])
+        self.assertEqual(status['pre_merge_ci']['run']['id'], 10)
+        self.assertEqual(status['post_merge_ci']['jobs'][0]['run_id'], 11)
+        self.assertEqual(status['post_merge_ci']['jobs'][0]['attempt'], 1)
+        job = self.responses[f'repos/{delivery.REPO}/actions/runs/10/attempts/1/jobs?per_page=100']['jobs'][0]
+        del job['run_attempt']  # Attempt is authoritative in the requested endpoint.
+        job['html_url'] = f'https://github.com/{delivery.REPO}/runs/10/jobs/110'
+        self.assertEqual(self.host().ci_receipt(HEAD)['state'], 'success')
+        key = f'repos/{delivery.REPO}/actions/runs?head_sha={HEAD}&per_page=100'
+        self.responses[key]['workflow_runs'][0]['status'] = 'queued'
+        self.assertEqual(self.host().ci_receipt(HEAD)['state'], 'pending')
+        self.responses[key]['workflow_runs'][0].update(status='completed', conclusion='failure')
+        self.assertEqual(self.host().ci_receipt(HEAD)['state'], 'failed')
+        self.responses[key] = {'total_count': 0, 'workflow_runs': []}
+        self.assertEqual(self.host().ci_receipt(HEAD)['state'], 'pending')
+        def unavailable(argv, **kwargs):
+            if argv[0] == '/usr/bin/gh':
+                return subprocess.CompletedProcess(argv, 1, '', 'private')
+            return self.runner(argv, **kwargs)
+        self.assertEqual(delivery.Host(CONFIG, self.root, unavailable).ci_receipt(HEAD)['state'], 'unavailable')
+
+    def test_tree_mismatch_attempt_spoofing_and_pagination_cannot_qualify(self):
+        self.evidence(merged=True)
+        self.responses[f'repos/{delivery.REPO}/git/commits/{"b" * 40}']['tree']['sha'] = 'e' * 40
+        self.assertFalse(self.host().status(1)['post_merge_verified'])
+        for field, value in [('run_id', 99), ('run_attempt', 2), ('head_sha', 'f' * 40), ('html_url', 'https://evil.invalid/')]:
+            self.evidence()
+            self.responses[f'repos/{delivery.REPO}/actions/runs/10/attempts/1/jobs?per_page=100']['jobs'][0][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(delivery.DeliveryError, 'identity'):
+                self.host().ci_receipt(HEAD)
+        self.evidence()
+        self.responses[f'repos/{delivery.REPO}/actions/runs/10/attempts/1/jobs?per_page=100']['total_count'] = 101
+        with self.assertRaisesRegex(delivery.DeliveryError, 'bound'):
+            self.host().ci_receipt(HEAD)
+
+    def cleanup_fixture(self):
+        base = self.git('rev-parse', 'main')
+        self.prepare()
+        (self.root / 'file.txt').write_text('reviewed change')
+        self.git('add', 'file.txt')
+        self.git('commit', '-m', 'Change')
+        head = self.git('rev-parse', 'HEAD')
+        tree = self.git('rev-parse', 'HEAD^{tree}')
+        merged = self.git('commit-tree', tree, '-p', base, '-m', 'Squash')
+        self.evidence(head=head, merged=True)
+        prefix = f'repos/{delivery.REPO}/'
+        self.responses[prefix + 'pulls/1']['merge_commit_sha'] = merged
+        self.responses[prefix + 'branches/main']['commit']['sha'] = merged
+        self.responses[prefix + f'git/commits/{head}']['tree']['sha'] = tree
+        self.responses[prefix + f'git/commits/{merged}'] = {'sha': merged, 'tree': {'sha': tree}}
+        runs = self.responses[prefix + f'actions/runs?head_sha={"b" * 40}&per_page=100']
+        runs['workflow_runs'][0]['head_sha'] = merged
+        self.responses[prefix + f'actions/runs?head_sha={merged}&per_page=100'] = runs
+        self.responses[prefix + 'actions/runs/11/attempts/1/jobs?per_page=100']['jobs'][0]['head_sha'] = merged
+        self.git('update-ref', 'refs/remotes/origin/codex/test', head)
+        remote = {'head': head, 'lose_ack': False}
+        def runner(argv, **kwargs):
+            if argv[0] == '/usr/bin/git' and 'ls-remote' in argv:
+                output = remote['head'] + '\trefs/heads/codex/test\n' if remote['head'] else ''
+                return subprocess.CompletedProcess(argv, 0, output, '')
+            if argv[0] == '/usr/bin/git' and 'fetch' in argv:
+                self.assertEqual(argv[-1], '+refs/heads/main:refs/remotes/origin/main')
+                self.assertIn('remote.origin.fetch=', argv)
+                self.git('update-ref', 'refs/remotes/origin/main', merged)
+                return subprocess.CompletedProcess(argv, 0, '', '')
+            if argv[0] == '/usr/bin/git' and 'push' in argv:
+                self.assertIn('--force-with-lease=refs/heads/codex/test:' + head, argv)
+                self.assertIn(':refs/heads/codex/test', argv)
+                remote['head'] = None
+                return subprocess.CompletedProcess(argv, 1 if remote['lose_ack'] else 0, '', '')
+            return self.runner(argv, **kwargs)
+        return {'pr': 1, 'head': head, 'tree': tree, 'merge_commit': merged}, remote, runner
+
+    def test_cleanup_exact_refs_retains_evidence_and_is_idempotent(self):
+        args, remote, runner = self.cleanup_fixture()
+        (self.root / '.git/info/exclude').write_text('scratch/\n')
+        (self.root / 'scratch').mkdir()
+        (self.root / 'scratch/receipt').write_text('retained')
+        result = delivery.execute(CONFIG, self.root, 'cleanup', args, run=runner)
+        self.assertEqual(result['cleanup']['state'], 'success')
+        self.assertIsNone(remote['head'])
+        self.assertTrue(result['cleanup']['remote_tracking_deleted'])
+        self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
+        self.assertEqual(self.git('rev-parse', 'main'), args['merge_commit'])
+        self.assertEqual(self.git('rev-parse', 'refs/bokkie/delivery/pr-1/reviewed'), args['head'])
+        self.assertEqual((self.root / 'scratch/receipt').read_text(), 'retained')
+        self.assertEqual(delivery.execute(CONFIG, self.root, 'cleanup', args, run=runner), result)
+        self.assertEqual(delivery.reconcile(CONFIG, self.root, 'cleanup', args, run=runner), result)
+
+    def test_cleanup_lost_ack_reads_partial_then_resumes_safely(self):
+        args, remote, runner = self.cleanup_fixture()
+        remote['lose_ack'] = True
+        with self.assertRaises(delivery.DeliveryError) as caught:
+            delivery.execute(CONFIG, self.root, 'cleanup', args, run=runner)
+        self.assertTrue(caught.exception.uncertain)
+        observed = delivery.reconcile(CONFIG, self.root, 'cleanup', args, run=runner)
+        self.assertEqual(observed['cleanup']['state'], 'pending')
+        self.assertTrue(observed['cleanup']['remote_branch_deleted'])
+        self.assertFalse(observed['cleanup']['local_branch_deleted'])
+        self.assertEqual(delivery.execute(CONFIG, self.root, 'cleanup', args, run=runner)['cleanup']['state'], 'success')
+
+    def test_cleanup_rejects_dirty_changed_refs_and_foreign_worktrees(self):
+        args, remote, runner = self.cleanup_fixture()
+        (self.root / 'unrelated').write_text('preserve')
+        with self.assertRaisesRegex(delivery.DeliveryError, 'clean'):
+            delivery.execute(CONFIG, self.root, 'cleanup', args, run=runner)
+        (self.root / 'unrelated').unlink()
+        remote['head'] = 'e' * 40
+        with self.assertRaisesRegex(delivery.DeliveryError, 'remote branch'):
+            delivery.execute(CONFIG, self.root, 'cleanup', args, run=runner)
+        remote['head'] = args['head']
+        with tempfile.TemporaryDirectory() as other:
+            self.git('worktree', 'add', '--detach', other)
+            with self.assertRaisesRegex(delivery.DeliveryError, 'worktrees'):
+                delivery.execute(CONFIG, self.root, 'cleanup', args, run=runner)
+            self.git('worktree', 'remove', other)
+        self.git('commit', '--allow-empty', '-m', 'Unrelated new work')
+        with self.assertRaisesRegex(delivery.DeliveryError, 'local branch'):
+            delivery.execute(CONFIG, self.root, 'cleanup', args, run=runner)
+        self.assertEqual(remote['head'], args['head'])
+
+    def test_cleanup_respects_shared_lock_and_uncertain_worker_marker(self):
+        args, _, runner = self.cleanup_fixture()
+        path = self.lock_root / (hashlib.sha256(os.fsencode(self.root)).hexdigest() + '.lock')
+        with path.open('w+') as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(delivery.DeliveryError, 'active owner'):
+                delivery.execute(CONFIG, self.root, 'cleanup', args, run=runner)
+        path.write_text('{"workspace": "prior", "owner": "uncertain"}')
+        with self.assertRaisesRegex(delivery.DeliveryError, 'ownership|cessation'):
+            delivery.execute(CONFIG, self.root, 'cleanup', args, run=runner)
+        self.assertIn('uncertain', path.read_text())
+        path.write_text('{}')
+        observed = []
+        def inherited(argv, **kwargs):
+            if 'pass_fds' in kwargs:
+                with path.open() as handle:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                observed.append(kwargs['pass_fds'])
+            return runner(argv, **kwargs)
+        self.assertEqual(delivery.execute(CONFIG, self.root, 'cleanup', args, run=inherited)['cleanup']['state'], 'success')
+        self.assertTrue(observed)
+        self.assertEqual(path.read_text(), '{}')
+
+    def test_cleanup_lock_survives_adapter_fd_close_until_child_exits(self):
+        host = self.host()
+        path = self.lock_root / (hashlib.sha256(os.fsencode(self.root)).hexdigest() + '.lock')
+        with delivery.cleanup_ownership(host):
+            child = subprocess.Popen([sys.executable, '-c', 'import sys; print("ready", flush=True); sys.stdin.read(1)'],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, pass_fds=(host.lock_fd,))
+            self.assertEqual(child.stdout.readline().strip(), 'ready')
+        try:
+            with path.open() as handle:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            child.communicate('x', timeout=5)
+        with path.open() as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def test_errors_do_not_expose_diagnostics(self):
         def fail(argv, **kwargs):
