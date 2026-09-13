@@ -87,3 +87,9 @@ review's commissioning execution. That tool reads a real completed subagent
 report; it does not trust caller-supplied reviewer text. Commission a worker to
 perform this bounded independent review if no registered report covers the exact
 submitted artefacts. Read its retained JSON verdict and findings before deciding.
+
+A journal evidence digest may identify a `bokkie-journal-v2` receipt rather than
+raw JSONL. Its ordered `segments` and unique `blobs` name exact bytes by `sha256`;
+use `bokkie_evidence` with those digests to inspect the relevant segment or payload.
+Source/output references preserve complete evidence. Inspect what the decision
+requires without reconstructing the entire journal in the model context.

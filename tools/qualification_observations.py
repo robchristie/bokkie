@@ -1,8 +1,21 @@
 """Compact observations from retained qualification journals; never prompt copies."""
 import hashlib
+import importlib.util
 import json
 import sqlite3
 from pathlib import Path
+
+
+_spec = importlib.util.spec_from_file_location(
+    'qualification_journal', Path(__file__).parent / 'engineering-runtime/broker.py')
+_journal = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_journal)
+
+
+def journal_roots(root):
+    """Discover both formats once, without opening a mutable broker spool."""
+    return sorted({path.parent for name in ('events.jsonl', 'journal.json', 'events-*.jsonl')
+                   for path in (Path(root) / 'brokers').glob('*/' + name)})
 
 
 def file_identity(path):
@@ -27,37 +40,32 @@ def collect(root):
         if role is not None and (value['role'] is None or role != 'child'):
             value['role'] = role
         return value
-    paths = sorted((Path(root) / 'brokers').glob('*/events.jsonl'))
+    paths = journal_roots(root)
     database = Path(root) / 'fixture.sqlite'
     if database.exists():
         with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as connection:
             snapshots = connection.execute('SELECT v.snapshot_json FROM engineering_outcomes o JOIN engineering_versions v ON v.outcome_id=o.id AND v.revision=o.state_revision').fetchall()
         expected = {e['id'] for (raw,) in snapshots for e in json.loads(raw)['executions']}
-        for missing in sorted(expected - {path.parent.name for path in paths}):
+        for missing in sorted(expected - {path.name for path in paths}):
             uncertain.append({'execution': missing, 'reason': 'missing_execution_journal'})
     for path in paths:
-        execution = path.parent.name
+        execution = path.name
         root_thread = None
         role = None
-        manifest = path.parent / 'dispatch.json'
+        manifest = path / 'dispatch.json'
         if manifest.exists():
             role = json.loads(manifest.read_text()).get('role')
-        # Runtime limits this file to 16 MiB; refuse unexpected growth.
-        if path.stat().st_size > 16 * 1024 * 1024:
-            uncertain.append({'execution': execution, 'reason': 'journal_bound'})
-            continue
         coverage_reported = False
-        expected_sequence = 1
-        for line in path.read_bytes().splitlines():
+        def observed_events():
             try:
-                event = json.loads(line)
-            except ValueError:
-                uncertain.append({'execution': execution, 'reason': 'torn_journal'})
-                break
-            if event.get('sequence') is not None and event['sequence'] != expected_sequence:
-                uncertain.append({'execution': execution, 'reason': 'journal_sequence_gap'})
-                break
-            expected_sequence += 1
+                yield from _journal.iter_events(path)
+            except (OSError, ValueError) as error:
+                diagnostic = str(error).lower()
+                reason = ('journal_sequence_gap' if 'sequence' in diagnostic else
+                          'journal_bound' if 'bound' in diagnostic or 'oversized' in diagnostic else
+                          'torn_journal')
+                uncertain.append({'execution': execution, 'reason': reason})
+        for event in observed_events():
             kind, value = event.get('kind'), event.get('value', {})
             if kind == 'context_limit':
                 coverage_reported = True
@@ -123,15 +131,13 @@ def collect(root):
 def failure_category(root, error):
     """Stable categories; changing IDs and raw diagnostic strings are not keys."""
     text = type(error).__name__.lower() + ' ' + str(error).lower()
-    for path in (Path(root) / 'brokers').glob('*/events.jsonl'):
-        if path.stat().st_size <= 16 * 1024 * 1024:
-            for line in path.read_bytes().splitlines():
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    return 'journal_decoding'
+    for path in journal_roots(root):
+        try:
+            for event in _journal.iter_events(path):
                 if event.get('kind') == 'failure':
                     text += ' ' + json.dumps(event.get('value', {})).lower()
+        except (OSError, ValueError):
+            return 'journal_decoding'
     for category, words in [
         ('configuration', ('config', 'capabilit', 'mcp', 'sandbox')),
         ('payload_size', ('exceeds bound', 'spool exhausted', 'reply limit', 'journal exhaust')),

@@ -21,6 +21,12 @@ _spec.loader.exec_module(broker)
 # Each probe declares its question and smallest production-path regression set.
 # The acceptance condition is every named test actually running and passing.
 PROBES = {
+    'journal_storage': {
+        'question': 'Do segmented Python journals replay exactly in Rust with bounded storage and corruption rejection?',
+        'python_modules': ['test_engineering_journal'],
+        'rust': ['segmented_journal_retains_paged_evidence_and_reconciles_once',
+                 'engineering_runtime::journal::tests::python_segments_preserve_exact_sources_outputs_and_retained_evidence',
+                 'engineering_runtime::journal::tests::empty_legacy_torn_and_corrupt_segment_boundaries']},
     'github_delivery': {
         'question': 'Do fixed delivery scope, CI gates, replay and credential isolation hold without model turns?',
         'python_modules': ['test_github_delivery', 'test_engineering_runtime'],
@@ -81,7 +87,8 @@ def runtime_identity():
     paths = ['tools/engineering-runtime/github_delivery.py', 'tools/tests/test_github_delivery.py',
              'instructions/engineering-github-worker.md', 'instructions/engineering-github-supervisor.md',
              'tools/engineering-runtime/broker.py', 'tools/engineering-runtime/preflight.py',
-             'src/engineering_runtime.rs', 'src/engineering.rs', 'src/store/engineering.rs',
+             'src/engineering_runtime.rs', 'src/engineering_runtime/journal.rs',
+             'tools/tests/test_engineering_journal.py', 'src/engineering.rs', 'src/store/engineering.rs',
              'Cargo.lock', 'tools/tests/test_engineering_runtime.py',
              'tools/qualify-engineering.py', 'tools/qualification_campaign.py',
              'tools/qualification_observations.py', 'tools/tests/test_qualification_runner.py',

@@ -69,3 +69,9 @@ in ordinary documentation/evidence. A complete submission needs successful
 recorded evidence for every assigned criterion, including any fixture-history
 criteria; the supervisor additionally checks that history against durable state.
 Multiple distinct evidence records may support the same criterion.
+
+A journal evidence digest may identify a `bokkie-journal-v2` receipt rather than
+raw JSONL. Its ordered `segments` and unique `blobs` name exact bytes by `sha256`;
+use `bokkie_evidence` with those digests to inspect the relevant segment or payload.
+Source/output references preserve complete evidence. Inspect what the decision
+requires without reconstructing the entire journal in the model context.

@@ -8,6 +8,7 @@ import argparse
 import ctypes
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,20 @@ import sqlite3
 import subprocess
 import time
 import urllib.request
+
+
+_spec = importlib.util.spec_from_file_location(
+    'fixture_journal', Path(__file__).parent / 'engineering-runtime/broker.py')
+_journal = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_journal)
+
+
+def event_logs(brokers, state, *, tolerate_partial=False):
+    """Read durable observations; malformed evidence cannot qualify a fixture."""
+    for execution in state['executions']:
+        path = Path(brokers) / execution['id']
+        for event in _journal.iter_events(path, tolerate_partial=tolerate_partial):
+            yield execution, event
 
 
 def dump(path, value):
@@ -153,13 +168,6 @@ def run_fixture(source, root, timeout_seconds, monitor=None):
             try: process.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 process.kill(); process.wait(); record('controller_forced_stop')
-    def event_logs(state):
-        for execution in state['executions']:
-            path = brokers / execution['id'] / 'events.jsonl'
-            if path.exists():
-                for line in path.read_text().splitlines():
-                    try: yield execution, json.loads(line)
-                    except ValueError: pass
     source_revision = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
     fixture_revision = subprocess.check_output(['git', '-C', str(workspace), 'rev-parse', 'HEAD'], text=True).strip()
     record('fixture_created', source_revision=source_revision, fixture_revision=fixture_revision, profile_sha256=hashlib.sha256(profile_path.read_bytes()).hexdigest())
@@ -178,7 +186,7 @@ def run_fixture(source, root, timeout_seconds, monitor=None):
             state = snapshot(database, outcome)
             if monitor:
                 monitor()
-            logs_now = list(event_logs(state))
+            logs_now = list(event_logs(brokers, state, tolerate_partial=True))
             if not restarted and any(e['role'] == 'worker' and v['kind'] == 'thread_identity' for e, v in logs_now):
                 stop(); record('restart_after_dispatch', executions=[e['id'] for e in state['executions']]); start()
                 replay = call('/engineering/outcomes', body)
@@ -188,12 +196,14 @@ def run_fixture(source, root, timeout_seconds, monitor=None):
                 stop(); record('controller_unavailable_during_worker')
                 offline_until = time.monotonic() + 120
                 while time.monotonic() < offline_until:
-                    new = list(event_logs(state))
+                    new = list(event_logs(brokers, state, tolerate_partial=True))
                     if any(e['role'] == 'worker' and v['kind'] == 'boundary_reaped' for e, v in new): break
                     time.sleep(1)
                 else: raise TimeoutError('worker did not complete/reap while controller unavailable')
                 record('worker_completed_offline'); start(); offline = True
             if state['observed_root_state'] == 'completed':
+                # Acceptance requires complete journal evidence, including the active tail.
+                list(event_logs(brokers, state))
                 validate_acceptance_observations(state, restarted, offline)
                 dump(root / 'accepted-outcome.json', state)
                 result = subprocess.run(['python3', '-m', 'unittest', 'discover', '-s', 'tests'], cwd=workspace, capture_output=True, text=True)
@@ -225,7 +235,10 @@ def run_fixture(source, root, timeout_seconds, monitor=None):
                     raise TimeoutError('authority escalation did not become actionable')
                 drain = time.monotonic() + 30
                 while time.monotonic() < drain:
-                    if all(e['cessation_verified'] for oid in [outcome, authority_id] for e in snapshot(database, oid)['executions']):
+                    final_states = [snapshot(database, oid) for oid in [outcome, authority_id]]
+                    if all(e['cessation_verified'] for final_state in final_states for e in final_state['executions']):
+                        for final_state in final_states:
+                            list(event_logs(brokers, final_state))
                         record('all_fixture_boundaries_reconciled')
                         passed = True
                         return

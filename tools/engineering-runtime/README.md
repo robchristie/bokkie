@@ -99,7 +99,25 @@ A lost stdio start acknowledgement ends in bounded namespace cleanup; it is neve
 replayed as another `turn/start`. App-server history resume is not used as proof
 of in-flight recovery.
 
-The event journal is at most 16 MiB / 2,048 events, with terminal-event reserve.
+New executions use a version 2 `journal.json` manifest and globally sequenced
+`events-NNNNNN.jsonl` segments. Each segment is at most 16 MiB; rollover seals its
+length, digest and sequence range before publishing the next active segment.
+Rollover does not interrupt the app-server process. Per-execution aggregate
+limits remain finite: 128 MiB of event data, 32,768 events and 64 segments, plus
+128 MiB / 4,096 payload blobs (at most 2 MiB each). The journal reserves 8 KiB and
+four events for failure/cessation receipts. Aggregate exhaustion still stops and
+reconciles the execution. Existing `events.jsonl` journals remain readable and
+append using their original 16 MiB / 2,048-event limits; no in-flight migration
+or historical rewrite occurs.
+
+Every command still records its own start/completion source observation. Identical
+source payloads share immutable SHA-256-addressed JSON blobs. Command output of
+at least 32 KiB is retained as exact UTF-8 bytes in a blob; small output stays
+inline. References retain length, digest and encoding. Readers validate bounded
+storage and hashes and resolve source/output bytes when needed for validation.
+Orphan blobs count towards disk limits. Sealed corruption, missing payloads and
+ambiguous formats fail closed; only active polling tolerates an incomplete final
+line. Restart never appends over a torn tail or overwrites an orphan segment.
 Protocol messages and normal adapter artefacts are at most 2 MiB. Events have
 increasing sequence numbers; request keys include execution, broker generation,
 thread, turn, item and protocol request ID. Store command envelopes are retained
@@ -115,11 +133,10 @@ limit and affected path instead of a partial file map. Effective capability
 evidence records these limits. `bokkie_commands` exposes start/completion capture
 status, measured totals, available binding metadata and precise errors;
 `bokkie_validation` reports capture failures separately from changed source.
-The event-journal budget and exact before/after source-binding checks remain
-unchanged.
+Exact before/after source-binding checks remain unchanged.
 
 `bokkie_evidence` returns digest-verified pages of up to 32 KiB from retained
-blobs, including journals within the existing 16 MiB bound. Its optional
+blobs, including individual journal segments within the 16 MiB bound. Its optional
 `byte_offset` and `max_bytes` arguments select a range; replies include exact
 offset/length, total size, `partial`, encoding (`utf8` or lossless `base64`) and
 `next_byte_offset`. Use continuation offsets for sequential reading or seek a
@@ -131,8 +148,13 @@ explicit digest-based paging descriptor; larger responses and request errors
 receive durable bounded errors. Once reaping
 is proved, unfinished tool requests cannot delay cessation reconciliation or
 acquire authority to mutate the outcome after execution has stopped.
-Reconciliation retains the exact journal bytes it parsed, including terminal
-failure and reaping records. Journal exhaustion records the interruption and
+Reconciliation retains the exact journal segments it parsed, including terminal
+failure and reaping records, plus each referenced payload. For version 2 journals,
+the evidence digest identifies a compact `bokkie-journal-v2` receipt: `segments`
+contains ordered paths, first sequences, byte lengths and digests; `blobs` contains
+unique payload descriptors. Pass an individual `sha256` to `bokkie_evidence` to
+page that segment or payload. Legacy journal evidence remains raw JSONL. The
+receipt avoids flattening a whole execution into one oversized evidence blob. Journal exhaustion records the interruption and
 verified cessation; continuation remains subject to the existing finite budget,
 without treating diagnostic failure as acceptance or new human authority.
 
@@ -235,3 +257,9 @@ for mandatory no-model preflight, focused repair probes, durable campaign budget
 and comparison reports. The qualification runner prepares isolated fixture roots
 and binds successive databases to one campaign registry in the Git common
 directory. It preserves this guide's production safety and acceptance boundaries.
+
+The deterministic `journal_storage` preflight probe covers Python/Rust replay,
+source/output fidelity, segmented cessation and evidence paging. Ordinary checks
+use self-contained fixtures and a fake app-server peer; the optional ignored
+historical replay test requires an explicitly selected local journal and never
+changes it. See [storage qualification](../../docs/supervision-evidence/segmented-engineering-journals.md).
