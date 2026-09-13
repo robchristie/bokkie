@@ -29,11 +29,26 @@ def sha(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def read_input(path):
+    """Read only bounded, regular root inputs without following aliases."""
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise ValueError('dependency input must be a regular non-symlink file: ' + str(path))
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError('dependency input must be a regular file: ' + str(path))
+        raw = stream.read(2 * 1024**2 + 1)
+    if len(raw) > 2 * 1024**2:
+        raise ValueError('dependency input exceeds bound: ' + str(path))
+    return raw.decode('utf-8')
+
+
 def configuration(manifest):
     config = manifest.get('dependency_preparation')
     if config is None:
         return None
     workspace = Path(manifest['workspace']).resolve(strict=True)
+    inputs = {name: read_input(workspace / name) for name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml')}
     storage = Path(config['storage'])
     if storage.is_symlink() or storage.resolve() != storage or not storage.is_relative_to(workspace) or storage == workspace:
         raise ValueError('dependency storage must be canonical and strictly inside workspace')
@@ -57,14 +72,14 @@ def configuration(manifest):
     cargo = Path(config['cargo'])
     if not cargo.is_absolute() or cargo.resolve(strict=True) != cargo:
         raise ValueError('dependency cargo must be the canonical installed toolchain executable')
-    toolchain = tomllib.loads((workspace / 'rust-toolchain.toml').read_text())['toolchain']['channel']
+    toolchain = tomllib.loads(inputs['rust-toolchain.toml'])['toolchain']['channel']
     if not all(part.isdigit() for part in toolchain.split('.')) or len(toolchain.split('.')) != 3:
         raise ValueError('dependency toolchain must be an exact installed version')
     result = subprocess.run([str(cargo), '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     if result.returncode or not result.stdout.startswith(('cargo ' + toolchain + ' ').encode()):
         raise ValueError('dependency executable differs from pinned toolchain')
-    package = tomllib.loads((workspace / 'Cargo.toml').read_text())
-    if any(key in package for key in ('workspace', 'patch', 'replace')):
+    package = tomllib.loads(inputs['Cargo.toml'])
+    if any(key in package for key in ('workspace', 'patch', 'replace')) or 'workspace' in package.get('package', {}):
         raise ValueError('dependency preparation supports one unpatched root package')
     def inspect(value):
         if isinstance(value, dict):
@@ -80,7 +95,7 @@ def configuration(manifest):
     for key, value in package.items():
         if 'dependencies' in key or key == 'target':
             inspect(value)
-    for package in tomllib.loads((workspace / 'Cargo.lock').read_text()).get('package', []):
+    for package in tomllib.loads(inputs['Cargo.lock']).get('package', []):
         source = package.get('source')
         if source is None:
             continue
@@ -102,7 +117,7 @@ def environment(manifest):
     cargo = Path(config['cargo'])
     return {'CARGO_HOME': str(storage / 'cargo'), 'CARGO_TARGET_DIR': str(storage / 'target'),
             'RUSTC': str(cargo.with_name('rustc')), 'RUSTDOC': str(cargo.with_name('rustdoc')),
-            'RUSTUP_TOOLCHAIN': tomllib.loads((Path(manifest['workspace']) / 'rust-toolchain.toml').read_text())['toolchain']['channel'],
+            'RUSTUP_TOOLCHAIN': tomllib.loads(read_input(Path(manifest['workspace']) / 'rust-toolchain.toml'))['toolchain']['channel'],
             'CARGO_NET_OFFLINE': 'true'}
 
 
@@ -178,11 +193,14 @@ def command(peer, operation, online=False):
     # workspace write boundary, still preserving source manifests and Git state.
     if operation == 'metadata':
         args += ['--bind', m['workspace'], m['workspace']]
-    if not online and not m.get('worker_network_access', False):
+    if operation == 'locate-project' or (not online and not m.get('worker_network_access', False)):
         args += ['--unshare-net']
     if m.get('github_delivery') is not None:
         args += peer.github_boundary()
-    args += ['--', m['dependency_preparation']['cargo'], operation, '--locked']
+    args += ['--', m['dependency_preparation']['cargo'], operation, '--locked',
+             '--manifest-path', str(Path(m['workspace']) / 'Cargo.toml')]
+    if operation == 'locate-project':
+        args += ['--workspace', '--offline', '--message-format', 'plain']
     if operation == 'metadata':
         args += ['--offline', '--format-version', '1']
     return args
@@ -196,7 +214,7 @@ def execute(peer, operation, online=False):
            'HOME': str(storage / 'home'), 'TMPDIR': str(storage / 'tmp'),
            'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0',
            **environment(m)}
-    if not online:
+    if not online and operation != 'locate-project':
         env = peer.environment()
     if online:
         env['CARGO_NET_OFFLINE'] = 'false'
@@ -229,6 +247,9 @@ def execute(peer, operation, online=False):
         code = process.wait(timeout=max(0.1, deadline - time.monotonic()))
         if code:
             raise ValueError('dependency ' + operation + ' failed; output sha256=' + output.hexdigest() + '; cause: ' + diagnostic_tail(tail))
+        if operation == 'locate-project':
+            if count > 8192 or tail.decode('utf-8').strip() != str(Path(m['workspace']) / 'Cargo.toml'):
+                raise ValueError('dependency Cargo workspace resolves outside the registered root manifest')
         return {'command': args, 'exit_code': code, 'output_sha256': output.hexdigest(), 'output_bytes': count}
     finally:
         if process.poll() is None:
@@ -262,10 +283,10 @@ def ready(peer, prepare=False):
         if not valid and not prepare:
             raise ValueError('dependency preparation stale or incomplete; run prepare-dependencies')
         receipt.unlink(missing_ok=True)
-        checks = []
+        for name in ('cargo', 'home', 'tmp'):
+            (storage / name).mkdir(exist_ok=True, mode=0o700)
+        checks = [execute(peer, 'locate-project')]
         if not valid:
-            for name in ('cargo', 'home', 'tmp'):
-                (storage / name).mkdir(exist_ok=True, mode=0o700)
             checks.append(execute(peer, 'fetch', online=True))
         checks.append(execute(peer, 'metadata'))
         if binding(peer) != expected:

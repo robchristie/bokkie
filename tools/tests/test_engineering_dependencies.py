@@ -91,6 +91,56 @@ class DependencyTests(unittest.TestCase):
                 execute.assert_not_called()
                 self.assertFalse((Path(self.peer.manifest['dependency_preparation']['storage']) / 'ready.json').exists())
 
+    def test_explicit_package_workspace_is_rejected_before_fetch(self):
+        with (self.workspace / 'Cargo.toml').open('a') as stream:
+            stream.write('workspace = ".."\n')
+        with patch.object(d, 'execute') as execute:
+            with self.assertRaisesRegex(ValueError, 'unpatched root package'):
+                d.ready(self.peer, prepare=True)
+        execute.assert_not_called()
+
+    def test_implicit_ancestor_workspace_is_rejected_offline_before_fetch(self):
+        (self.root / 'Cargo.toml').write_text('[workspace]\nmembers = ["workspace"]\n[patch.crates-io]\nunsupported = { git = "https://unsupported.invalid/dependency" }\n')
+        execute = d.execute
+        operations = []
+        def observed(peer, operation, online=False):
+            operations.append((operation, online))
+            self.assertFalse(online, 'ancestor resolution must fail before online fetching')
+            return execute(peer, operation, online)
+        # Even profiles allowing worker networking must locate the workspace
+        # with OS-enforced network isolation and the installed Cargo executable.
+        self.peer.manifest['worker_network_access'] = True
+        with patch.object(d, 'execute', side_effect=observed):
+            with self.assertRaisesRegex(ValueError, 'outside the registered root manifest'):
+                d.ready(self.peer, prepare=True)
+        self.assertEqual(operations, [('locate-project', False)])
+        args = d.command(self.peer, 'locate-project')
+        self.assertIn('--unshare-net', args)
+        self.assertIn('--manifest-path', args)
+        self.assertIn(self.peer.manifest['dependency_preparation']['cargo'], args)
+        self.assertFalse((Path(self.peer.manifest['dependency_preparation']['storage']) / 'ready.json').exists())
+
+    def test_root_input_symlinks_and_special_files_rejected_before_parse(self):
+        for name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'):
+            path = self.workspace / name
+            original = path.read_bytes()
+            outside = self.root / ('outside-' + name)
+            outside.write_bytes(original)
+            for kind in ('symlink', 'fifo'):
+                with self.subTest(name=name, kind=kind):
+                    path.unlink()
+                    if kind == 'symlink':
+                        path.symlink_to(outside)
+                    else:
+                        os.mkfifo(path)
+                    with patch.object(d.tomllib, 'loads') as parse, patch.object(d, 'execute') as execute:
+                        with self.assertRaisesRegex(ValueError, 'regular non-symlink file'):
+                            d.ready(self.peer, prepare=True)
+                    parse.assert_not_called()
+                    execute.assert_not_called()
+                    path.unlink()
+                    path.write_bytes(original)
+
     def test_rejects_ancestor_configuration_and_sanitises_environment(self):
         (self.workspace / '.cargo').mkdir()
         (self.workspace / '.cargo/config.toml').write_text('[net]\noffline=true\n')
