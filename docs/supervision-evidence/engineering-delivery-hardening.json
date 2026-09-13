@@ -1,28 +1,28 @@
 {
   "schema_version": 1,
-  "implementation_revision": "fbdfa00c4cbc4ad25bad663e48f03202127bc9c1",
-  "runtime_identity": "5084d91e649f74390faff8a60ed2bdcc2ff9122352442670983511b3d3ade33b",
+  "implementation_revision": "ddca380cecf19b001c846ff685d7bb06b4a0c477",
+  "runtime_identity": "a006780cea13b2a13004a81d5f57bd19259ba04928f1c3239bb85ebf38073a71",
   "model_turns": 0,
   "canonical": {
     "command": "RUST_TEST_THREADS=2 tools/check.sh",
     "result": "passed",
-    "subsequent_changes": "Python-only review repairs reject parsed Cargo patch/replace tables and preserve settled failed-delivery history. All 164 Python tests and plan lint passed on fbdfa00; unchanged Rust canonical results reused.",
+    "subsequent_changes": "Python-only review repairs reject Cargo overrides and ancestor workspace selection and preserve settled failed-delivery history. All 167 Python tests and plan lint passed on ddca380; unchanged Rust canonical results reused.",
     "source_revision": "0d1b9d64c3e49b96555d2103a2a19cc7a93374ba",
     "source_tree": "79820bffff2adf75bab33217b84298b79c460d9e"
   },
   "focused": {
-    "dependency_tests": 9,
+    "dependency_tests": 12,
     "preflight_tests": 15,
     "github_adapter_tests": 28,
     "campaign_tests": 34,
     "replacement_and_coverage": "passed inline and source-ref variants",
     "typed_delivery_and_store_cleanup": "passed",
-    "python_suite": 164
+    "python_suite": 167
   },
   "production_preflight": {
     "passed": true,
     "codex_version": "codex-cli 0.154.0",
-    "environment_identity": "5d1c87f3f4223d41d7c21a4e1751b7f61c7c3e8a226a9b1bea58bb5ab8606b2b",
+    "environment_identity": "4a45af750fef8d378a3cbf826bdebed56a3f76df74da1ee19e5d5a4ce8738ac7",
     "workspace_identity": "0252bc5caf5ae5f48751b5b3e47710e967f6359ff79aa16f3526aaa2031474d2",
     "material": {
       "bytes": 884272375,
@@ -44,7 +44,7 @@
         "skills/list"
       ]
     },
-    "receipt_path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/preflight-fbdfa00.json",
+    "receipt_path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/preflight-ddca380.json",
     "prepared_material_reused": true
   },
   "application_campaign": {
@@ -149,6 +149,21 @@
       "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/canonical-0d1b9d6.log",
       "sha256": "1f966934dc81c4d61ba528a6471755c12a21ff106851ce3ba087f961e7944259",
       "bytes": 29370
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/preflight-ddca380.json",
+      "sha256": "035b6776c4aa7c15c9c751562253fdc1c0fb830e27c7f6df60d5ca432e7de3a5",
+      "bytes": 6621
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/dependency-ready-ddca380.json",
+      "sha256": "bbc1cf10c28456e4855b19d344705cd55fff6d0ee9f88d99daa7166ca1177c6f",
+      "bytes": 4640
+    },
+    {
+      "path": "/nvme/development/bokkie/.git/qualification/engineering-delivery-hardening/python-ddca380.log",
+      "sha256": "89f90072da02f00927be5c5882ca15d2393343c23d36c7510b23436c9fe22d9b",
+      "bytes": 381
     }
   ],
   "limits": [
@@ -166,6 +181,16 @@
       "parsed override tables rejected before fetch",
       "settled failed merge followed by verified success closes with preserved history",
       "unresolved or uncertain operations still block closure"
+    ]
+  },
+  "workspace_review_repair": {
+    "rejected_head": "97ee1e4052a7abdf2cf9936cdcb341efc9dd6190",
+    "record": "https://github.com/robchristie/bokkie/pull/33#issuecomment-5652573531",
+    "fixed_in": "ddca380cecf19b001c846ff685d7bb06b4a0c477",
+    "regressions": [
+      "explicit package.workspace rejected",
+      "implicit ancestor workspace rejected offline before fetch",
+      "root input symlinks and FIFOs rejected before parsing"
     ]
   }
 }

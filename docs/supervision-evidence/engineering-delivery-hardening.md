@@ -99,3 +99,8 @@ objects, source, ignored files and private evidence; it refuses shared or dirty
 workspaces and ambiguous ownership. New evidence bindings require captured worker
 environment identity; legacy unbound validations remain with their original
 submission and are not relabelled as replacement commands.
+
+The subsequent Cargo workspace repair rejects explicit workspace redirection and
+checks Cargo’s resolved workspace root offline under Bubblewrap before acquisition
+or reuse. All 167 Python tests and the installed no-model preparation/reuse probe
+passed on `ddca380cecf19b001c846ff685d7bb06b4a0c477`.
