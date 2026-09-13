@@ -8,6 +8,7 @@ original parent can attest wait/reaping of the Bubblewrap boundary.
 import argparse
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import pwd
@@ -16,11 +17,16 @@ from pathlib import Path
 import selectors
 import select
 import signal
+import shutil
 import subprocess
 import sys
 import time
 import tomllib
 import uuid
+
+_dependency_spec = importlib.util.spec_from_file_location('engineering_dependencies', Path(__file__).with_name('dependencies.py'))
+dependencies = importlib.util.module_from_spec(_dependency_spec)
+_dependency_spec.loader.exec_module(dependencies)
 
 MAX_MESSAGE = 2 * 1024 * 1024
 MAX_SPOOL = 16 * 1024 * 1024
@@ -476,6 +482,40 @@ class Broker:
                        p.get('threadId', self.thread), p.get('turnId', self.turn),
                        p.get('itemId'), message['id']])
 
+    def command_environment_identity(self, include_material=True):
+        """Opaque applicability identity; never retain environment/config values."""
+        environment = self.environment()
+        selected = {name: value for name, value in environment.items()
+                    if name in ('PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'CC', 'CXX',
+                                'CODEX_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM')
+                    or name.startswith(('CARGO_', 'RUST', 'RUSTUP_'))}
+        executables = {}
+        for name in ('cargo', 'rustc', 'python3', 'git'):
+            path = shutil.which(name, path=environment.get('PATH'))
+            if path:
+                executables[name] = dependencies.sha(Path(path).resolve())
+        config = {}
+        workspace = Path(self.manifest['workspace'])
+        for parent in [workspace, *workspace.parents]:
+            for name in ('.cargo/config', '.cargo/config.toml'):
+                path = parent / name
+                if path.is_file():
+                    config[str(path)] = dependencies.sha(path)
+        for name in ('CARGO_HOME', 'RUSTUP_HOME'):
+            if environment.get(name):
+                for filename in ('config', 'config.toml', 'settings.toml'):
+                    path = Path(environment[name]) / filename
+                    if path.is_file():
+                        config[str(path)] = dependencies.sha(path)
+        prepared = self.manifest.get('dependency_preparation')
+        material = None
+        if include_material and prepared and (Path(prepared['storage']) / 'cargo').is_dir():
+            material = dependencies.inventory(Path(prepared['storage']) / 'cargo', prepared['max_bytes'])
+        return digest({'environment': selected, 'executables': executables,
+                       'configuration': config, 'dependency_material': material,
+                       'network_access': self.manifest.get('worker_network_access', False),
+                       'dependency_preparation': self.manifest.get('dependency_preparation')})
+
     def source_snapshot(self):
         workspace = Path(self.manifest['workspace'])
         try:
@@ -533,7 +573,7 @@ class Broker:
                         raise SourceCaptureError('changed_during_capture', 'source changed while being observed',
                                                  path=relative, expected_bytes=size, observed_bytes=len(raw))
                 files[relative] = {'sha256': hashlib.sha256(raw).hexdigest(), 'byte_length': size}
-            return {'files': files, 'commit': commit, 'tree': tree, 'clean': clean,
+            return {'environment_identity': self.command_environment_identity(), 'files': files, 'commit': commit, 'tree': tree, 'clean': clean,
                     'capture': {'total_bytes': total, 'file_count': len(files), 'limits': source_capture_limits()}}
         except SourceCaptureError as error:
             return {'unavailable': error.details, 'capture': {'limits': source_capture_limits()}}
@@ -826,6 +866,14 @@ class Broker:
                                GIT_TERMINAL_PROMPT='0')
         if self.manifest.get('worker_scratch') and self.manifest['role'] == 'worker':
             environment['TMPDIR'] = self.manifest['worker_scratch']
+        if self.manifest.get('dependency_preparation') and self.manifest['role'] == 'worker':
+            for name in list(environment):
+                if name.startswith(('CARGO_', 'RUST', 'RUSTUP_')):
+                    environment.pop(name)
+            environment.setdefault('CODEX_HOME', str(Path.home() / '.codex'))
+            environment['HOME'] = str(Path(self.manifest['dependency_preparation']['storage']) / 'home')
+            environment.update(dependencies.environment(self.manifest))
+            environment['PATH'] = str(Path(self.manifest['dependency_preparation']['cargo']).parent) + ':' + environment.get('PATH', '/usr/bin:/bin')
         return environment
 
     def github_boundary(self):
@@ -927,6 +975,8 @@ class Broker:
                     'spool': str(self.root.resolve())})
                 self.event('workspace_reserved', {'workspace': str(Path(m['workspace']).resolve()),
                            'generation': self.generation})
+            if m['role'] == 'worker' and m.get('dependency_preparation'):
+                self.event('dependency_readiness', dependencies.ready(self))
             environment = self.environment()
             self.child = self.spawn(self.command(), cwd=m['workspace'], env=environment, stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,

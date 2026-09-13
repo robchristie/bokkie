@@ -340,7 +340,7 @@ def main():
     from qualification_campaign import Campaign, AdmissionDenied
     from qualification_observations import collect, failure_category
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('stage', choices=['prepare', 'preflight', 'probe', 'complete', 'report', 'reconcile', 'configure', 'finish', 'successor'])
+    parser.add_argument('stage', choices=['prepare', 'preflight', 'probe', 'complete', 'report', 'reconcile', 'configure', 'finish', 'finish-application', 'successor'])
     parser.add_argument('--campaign', required=True, help='Stable work-package identity; cannot replace an active campaign')
     parser.add_argument('--runtime-root', type=Path)
     parser.add_argument('--run-live', action='store_true')
@@ -351,16 +351,22 @@ def main():
     parser.add_argument('--limits', type=Path, help='Finite JSON policy, accepted only when creating the campaign')
     parser.add_argument('--evidence', type=Path, help='Compact policy or terminal evidence JSON')
     parser.add_argument('--next-campaign', help='Explicit successor, only after verified terminal closeout')
+    parser.add_argument('--purpose', choices=['runtime_qualification', 'application_delivery'], help='Immutable purpose for a new campaign or successor')
+    parser.add_argument('--classify-legacy', action='store_true', help='Classify an exclusively successful legacy application at validated closure')
+    parser.add_argument('--dry-run', action='store_true', help='Verify application closure without changing the campaign')
     parser.add_argument('--final', action='store_true', help='Use reserved final-fixture headroom')
     args = parser.parse_args()
+    if (args.dry_run or args.classify_legacy) and args.stage != 'finish-application':
+        parser.error('--dry-run and --classify-legacy apply only to finish-application')
     if not 60 <= args.timeout_seconds <= 3600:
         parser.error('timeout must be 60–3600 seconds')
     source = Path(__file__).resolve().parents[1]
     common = Path(subprocess.check_output(['git', '-C', str(source), 'rev-parse', '--path-format=absolute', '--git-common-dir'], text=True).strip())
     # A caller cannot redirect the ledger by changing fixture directory or ID.
     campaign = Campaign.open(common / 'qualification/campaign.sqlite', 'engineering-qualification',
-                             args.campaign, json.loads(args.limits.read_text()) if args.limits and args.stage not in ('configure', 'successor') else None)
-    if args.stage in ('configure', 'finish', 'successor'):
+                             args.campaign, json.loads(args.limits.read_text()) if args.limits and args.stage not in ('configure', 'successor') else None,
+                             purpose=args.purpose if args.stage != 'successor' else None)
+    if args.stage in ('configure', 'finish', 'finish-application', 'successor'):
         if not args.evidence:
             parser.error('policy and terminal changes require retained --evidence JSON')
         evidence = json.loads(args.evidence.read_text())
@@ -368,13 +374,17 @@ def main():
             if not args.limits:
                 parser.error('configure requires --limits')
             campaign.configure(json.loads(args.limits.read_text()), evidence)
+        elif args.stage == 'finish-application':
+            receipt = campaign.finish_application(evidence, args.classify_legacy, args.dry_run)
+            print(json.dumps({'verified_application_closure': receipt, 'dry_run': args.dry_run}, indent=2))
         elif args.stage == 'finish':
             campaign.finish(evidence)
         else:
             if not args.next_campaign:
                 parser.error('successor requires --next-campaign')
             campaign = campaign.begin_successor(args.next_campaign, evidence,
-                json.loads(args.limits.read_text()) if args.limits else None)
+                json.loads(args.limits.read_text()) if args.limits else None,
+                purpose=args.purpose or 'runtime_qualification')
         print(json.dumps(campaign.report(), indent=2)); return
     if args.stage == 'report':
         print(json.dumps(campaign.report(), indent=2)); return

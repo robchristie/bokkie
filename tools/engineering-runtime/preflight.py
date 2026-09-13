@@ -21,6 +21,9 @@ _spec.loader.exec_module(broker)
 # Each probe declares its question and smallest production-path regression set.
 # The acceptance condition is every named test actually running and passing.
 PROBES = {
+    'dependency_preparation': {
+        'question': 'Do isolated public locked preparation, restricted readiness and stale/incomplete admission hold?',
+        'python_modules': ['test_engineering_dependencies', 'test_engineering_preflight']},
     'journal_storage': {
         'question': 'Do segmented Python journals replay exactly in Rust with bounded storage and corruption rejection?',
         'python_modules': ['test_engineering_journal'],
@@ -34,6 +37,7 @@ PROBES = {
                  'github_host_branch_commit_and_receipt_replay_use_real_local_git_only',
                  'github_delivery_replays_persisted_result_before_uncertain_commit_readback',
                  'github_tool_refuses_stale_and_unattributed_merge_before_host_call',
+                 'delivery_receipt_rejects_boolean_only_and_mismatched_ci_and_cleanup',
                  'store::engineering::tests::github_delivery_requires_trusted_adapter_grant_and_current_execution',
                  'store::engineering::tests::github_delivery_replays_intent_and_result_after_reopen',
                  'store::engineering::tests::github_delivery_pending_intent_blocks_new_workers_and_acceptance',
@@ -61,6 +65,7 @@ PROBES = {
         'question': 'Are invented validations and submissions against changed sources rejected?',
         'rust': ['validation_rejects_checks_run_against_an_older_source',
                  'invented_validation_and_changed_artefacts_are_rejected',
+                 'replacement_reuses_bound_evidence_and_checks_coverage_before_submission',
                  'store::engineering::tests::submission_preflight_allows_distinct_evidence_per_criterion_and_rejects_duplicates']},
     'encoded_paging': {
         'question': 'Do encoded and binary pages retain exact bytes without blocking cessation?',
@@ -93,7 +98,10 @@ def runtime_identity():
              'tools/qualify-engineering.py', 'tools/qualification_campaign.py',
              'tools/qualification_observations.py', 'tools/tests/test_qualification_runner.py',
              'tools/tests/test_qualification_campaign.py', 'tools/tests/test_engineering_preflight.py',
-             'tools/tests/test_qualification_observations.py']
+             'tools/tests/test_qualification_observations.py', 'tools/engineering-runtime/dependencies.py',
+             'tools/tests/test_engineering_dependencies.py', 'tools/qualification_application.py',
+             'tools/engineering-runtime/evidence_context.py', 'src/engineering_runtime/reusable_evidence.rs', 'src/engineering_runtime/reuse_tests.rs',
+             'src/engineering_runtime/delivery_receipt.rs']
     return broker.digest({name: file_identity(ROOT / name)['sha256'] for name in paths})
 
 
@@ -243,7 +251,7 @@ def _session(profile, role, root):
         peer.selector.close()
 
 
-def run_preflight(profile_path, receipt_dir):
+def run_preflight(profile_path, receipt_dir, prepare_dependencies=False):
     """Validate a local installed runtime and source selection without model turns."""
     profile_path = Path(profile_path).resolve(strict=True)
     receipt_dir = Path(receipt_dir).resolve()
@@ -264,6 +272,13 @@ def run_preflight(profile_path, receipt_dir):
         spec.loader.exec_module(github)
         scope = {k: profile['github_delivery'][k] for k in ('repo', 'base', 'branch')}
         github_result = github.preflight(scope, profile['workspace'])
+    dependency_result = None
+    if profile.get('dependency_preparation'):
+        peer = object.__new__(broker.Broker)
+        peer.manifest = {**profile, 'role': 'worker'}
+        peer.root = Path(profile['broker_root']) / 'dependency-preflight'
+        Path(profile['broker_root']).mkdir(parents=True, exist_ok=True)
+        dependency_result = broker.dependencies.ready(peer, prepare=prepare_dependencies)
     profile['_thread_parameters'] = {role: parameters[role] for role in ('supervisor', 'worker')}
     with tempfile.TemporaryDirectory(prefix='preflight-', dir=receipt_dir) as temporary:
         root = Path(temporary)
@@ -293,6 +308,8 @@ def run_preflight(profile_path, receipt_dir):
                    'codex_version': version.decode('utf-8').strip(),
                    'executables': {key: file_identity(profile[key]) for key in ('codex', 'bwrap', 'broker')},
                    'sessions': environment_sessions}
+    if dependency_result is not None:
+        environment['dependencies'] = {key: dependency_result[key] for key in ('binding', 'material')}
     if github_result is not None:
         environment['github_delivery'] = github_result
     selection = {'workspace': profile['workspace'], 'worker_scratch': profile.get('worker_scratch'),
@@ -312,8 +329,11 @@ if __name__ == '__main__':
     preflight = subparsers.add_parser('preflight')
     preflight.add_argument('--profile', type=Path, required=True)
     preflight.add_argument('--receipt-dir', type=Path, required=True)
+    preparation = subparsers.add_parser('prepare-dependencies')
+    preparation.add_argument('--profile', type=Path, required=True)
+    preparation.add_argument('--receipt-dir', type=Path, required=True)
     probe = subparsers.add_parser('probe')
     probe.add_argument('name', choices=PROBES)
     args = parser.parse_args()
-    result = run_preflight(args.profile, args.receipt_dir) if args.operation == 'preflight' else run_probe(args.name)
+    result = run_probe(args.name) if args.operation == 'probe' else run_preflight(args.profile, args.receipt_dir, args.operation == 'prepare-dependencies')
     print(json.dumps(result, sort_keys=True))

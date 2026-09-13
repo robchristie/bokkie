@@ -11,7 +11,9 @@ use std::os::unix::io::AsRawFd;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
+mod delivery_receipt;
 mod journal;
+mod reusable_evidence;
 
 pub type RuntimeResult<T> = Result<T, Box<dyn std::error::Error>>;
 const MAX_FILE: u64 = 2 * 1024 * 1024;
@@ -64,6 +66,17 @@ pub struct EngineeringRuntimeProfile {
     /// Explicit operator opt-in; absent profiles retain their original identity and authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github_delivery: Option<PagefoldGithubProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependency_preparation: Option<DependencyPreparationProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DependencyPreparationProfile {
+    pub cargo: PathBuf,
+    pub storage: PathBuf,
+    pub timeout_seconds: u64,
+    pub max_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +136,20 @@ impl EngineeringRuntimeProfile {
         ] {
             if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
                 return Err("profile paths must be absolute and normalised".into());
+            }
+        }
+        if let Some(preparation) = &self.dependency_preparation {
+            let workspace = fs::canonicalize(&self.workspace)?;
+            if !preparation.cargo.is_absolute()
+                || !preparation.cargo.is_file()
+                || !preparation.storage.is_absolute()
+                || fs::canonicalize(&preparation.storage)? != preparation.storage
+                || preparation.storage == workspace
+                || !preparation.storage.starts_with(&workspace)
+                || !(1..=1800).contains(&preparation.timeout_seconds)
+                || !(1..=10_737_418_240).contains(&preparation.max_bytes)
+            {
+                return Err("dependency preparation requires installed Cargo, isolated canonical workspace storage and finite bounds".into());
             }
         }
         if let Some(github) = &self.github_delivery {
@@ -593,8 +620,8 @@ fn dynamic_tools() -> Vec<Value> {
     vec![
         tool(
             "bokkie_github",
-            "Pagefold-scoped delivery. Worker: prepare_branch, commit(paths,message), push(head), open_pr(head,title,body). Supervisor: merge(pr,head,review evidence). Both: status(pr), reconcile. All mutations require expected from bokkie_snapshot; status/reconcile observe saved operations. No arbitrary commands, repositories or URLs.",
-            json!({"operation":{"type":"string","enum":["prepare_branch","commit","push","open_pr","status","merge","reconcile"]},"arguments":{"type":"object"},"expected":{"type":"object"},"review":{"type":"object"}}),
+            "Pagefold-scoped delivery. Worker: prepare_branch, commit(paths,message), push(head), open_pr(head,title,body). Supervisor: merge(pr,head,review evidence), cleanup(pr,head,tree,merge_commit) after verified merge and ceased workers. Both: status(pr), reconcile. All mutations require expected from bokkie_snapshot; status/reconcile observe saved operations. No arbitrary commands, repositories or URLs.",
+            json!({"operation":{"type":"string","enum":["prepare_branch","commit","push","open_pr","status","merge","cleanup","reconcile"]},"arguments":{"type":"object"},"expected":{"type":"object"},"review":{"type":"object"}}),
             &["operation", "arguments"],
         ),
         tool(
@@ -605,8 +632,8 @@ fn dynamic_tools() -> Vec<Value> {
         ),
         tool(
             "bokkie_command",
-            "Issue a typed engineering command with the exact precondition you read. No actor field. Worker submit_result queues a submission and stops this execution; completion is never acceptance. Supervisor may formalise_contract, create_package, resolve_question, assess_result, create_repair, request_cancellation for a current-contract package_id, yield_supervisor, finish_outcome or ask_question. Whole-outcome cancellation requires the operator.",
-            json!({"expected":{"type":"object"},"command":{"type":"object"}}),
+            "Issue a typed engineering command with the exact precondition you read. No actor field. Worker submit_result queues a submission and stops this execution; completion is never acceptance. Supervisor may formalise_contract, create_package, resolve_question, assess_result, create_repair, request_cancellation for a current-contract package_id, yield_supervisor, finish_outcome or ask_question. Whole-outcome cancellation requires the operator. For advisory submission validation without stopping, set preflight_only=true and supply review; uses the same backend coverage rules.",
+            json!({"expected":{"type":"object"},"command":{"type":"object"},"preflight_only":{"type":"boolean"},"review":{"type":"object"}}),
             &["expected", "command"],
         ),
         tool(
@@ -641,8 +668,8 @@ fn dynamic_tools() -> Vec<Value> {
         ),
         tool(
             "bokkie_commands",
-            "Return completed commands, exit codes and source_capture status for start/completion (actual resource failures, limits and available binding metadata), plus observed reviewer_candidates. Use these actual protocol identities for validation and review registration; inspect source_capture before retrying unavailable evidence.",
-            json!({}),
+            "Use include_prior=true for compact eligible prior validation/review references with original provenance and rejection reasons. Return completed commands, exit codes and source_capture status for start/completion (actual resource failures, limits and available binding metadata), plus observed reviewer_candidates. Use these actual protocol identities for validation and review registration; inspect source_capture before retrying unavailable evidence.",
+            json!({"include_prior":{"type":"boolean"}}),
             &[],
         ),
         tool(
@@ -891,47 +918,6 @@ impl EngineeringRuntime {
             }
         }
     }
-    fn verify_submission(&self, input: &EngineeringSubmissionInput) -> RuntimeResult<()> {
-        for artefact in &input.artefacts {
-            self.inspect(artefact)?;
-        }
-        for evidence in &input.evidence {
-            if !input.artefacts.contains(&evidence.artefact) {
-                return Err("validation source not in submission".into());
-            }
-            self.inspect(&evidence.artefact)?;
-            self.evidence(&evidence.command_digest)?;
-            self.evidence(&evidence.output_digest)?;
-            let mut observed = false;
-            for directory in fs::read_dir(&self.profile.broker_root)? {
-                let receipts = directory?.path().join("receipts");
-                if !receipts.is_dir() {
-                    continue;
-                }
-                for entry in fs::read_dir(receipts)? {
-                    let path = entry?.path();
-                    if path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with("validation-"))
-                    {
-                        let actual: EngineeringCriterionEvidence = read_json(&path)?;
-                        if &actual == evidence {
-                            observed = true;
-                            break;
-                        }
-                    }
-                }
-                if observed {
-                    break;
-                }
-            }
-            if !observed {
-                return Err("validation is not an actual recorded command observation".into());
-            }
-        }
-        Ok(())
-    }
     fn verify_review(
         &self,
         review: &EngineeringReviewEvidence,
@@ -1002,10 +988,14 @@ impl EngineeringRuntime {
     ) -> RuntimeResult<Value> {
         let digest = self.blob(&serde_json::to_vec(&result)?)?;
         let failed = result.get("error").is_some();
-        let verified = result["post_merge_verified"] == true;
+        let verified = op.operation == "merge" && result["post_merge_verified"] == true;
+        if verified {
+            self.validate_delivery_receipt(&result)?;
+        }
         let settled = !result.is_null()
             && (!failed || result["uncertain"] == false)
-            && (op.operation != "merge" || verified || failed);
+            && (op.operation != "merge" || verified || failed)
+            && (op.operation != "cleanup" || result["cleanup"]["state"] == "success" || failed);
         if settled {
             let execution = state
                 .executions
@@ -1072,6 +1062,14 @@ impl EngineeringRuntime {
         if result.get("error").is_some() {
             return Ok(json!({"operation_id":op.id,"pending":true,"result":result}));
         }
+        let result = if op.operation == "cleanup" && result["cleanup"]["state"] == "pending" {
+            // The durable intent retains authority across controller loss. Read
+            // back first, then resume only this monotonic fixed-scope cleanup.
+            self.validate_cleanup_scope(state, &saved["arguments"])?;
+            self.github_adapter("cleanup", &saved["arguments"], false)?
+        } else {
+            result
+        };
         self.complete_delivery(store, state, op, result, now)
     }
     #[allow(clippy::too_many_arguments)]
@@ -1107,7 +1105,16 @@ impl EngineeringRuntime {
                 .ok_or("unknown delivery operation")?;
             return self.reconcile_delivery(store, &state, op, now);
         }
-        if !["prepare_branch", "commit", "push", "open_pr", "merge"].contains(&operation) {
+        if ![
+            "prepare_branch",
+            "commit",
+            "push",
+            "open_pr",
+            "merge",
+            "cleanup",
+        ]
+        .contains(&operation)
+        {
             return Err("unsupported delivery operation".into());
         }
         let id = sha(format!("{}:{key}", execution.id).as_bytes());
@@ -1155,6 +1162,9 @@ impl EngineeringRuntime {
                         .into(),
                 );
             }
+        }
+        if operation == "cleanup" {
+            self.validate_cleanup_scope(&state, &args["arguments"])?;
         }
         let op = EngineeringDeliveryOperation {
             id: id.clone(),
@@ -1254,7 +1264,7 @@ impl EngineeringRuntime {
                 "subagent_effort":self.profile.subagent_effort,"max_subagents":self.profile.max_subagents,
                 "turn_seconds":seconds,"deadline":deadline,"codex":self.profile.codex,"bwrap":self.profile.bwrap,
                 "worker_network_access":self.profile.worker_network_access,"worker_scratch":self.profile.worker_scratch,
-                "readonly_mcp_servers":self.profile.readonly_mcp_servers,"allow_single_pwd_approval":self.profile.allow_single_pwd_approval,"github_delivery":self.profile.github_delivery,
+                "readonly_mcp_servers":self.profile.readonly_mcp_servers,"allow_single_pwd_approval":self.profile.allow_single_pwd_approval,"github_delivery":self.profile.github_delivery,"dependency_preparation":self.profile.dependency_preparation,
                 "thread_params":params,"prompt":prompt,"instructions":execution.instructions,
                 "codex_digest":sha(&bounded_read(&self.profile.codex,512*1024*1024)?),
                 "broker_digest":sha(&bounded_read(&self.profile.broker,MAX_FILE)?)});
@@ -1426,6 +1436,9 @@ impl EngineeringRuntime {
         struct Decision {
             expected: EngineeringPrecondition,
             command: EngineeringCommand,
+            #[serde(default)]
+            preflight_only: bool,
+            review: Option<EngineeringReviewEvidence>,
         }
         let mut decision: Decision = serde_json::from_value(args)?;
         if let EngineeringCommand::AskQuestion { request_key, .. } = &mut decision.command {
@@ -1440,6 +1453,24 @@ impl EngineeringRuntime {
             expected: Some(decision.expected.clone()),
             command: decision.command.clone(),
         };
+        if decision.preflight_only {
+            let EngineeringCommand::SubmitResult(input) = &decision.command else {
+                return Err("preflight_only requires submit_result".into());
+            };
+            let state = snapshot(store, &execution_outcome(directory)?)?;
+            if decision.expected != state.precondition() || execution.fenced {
+                return Err("submission preflight requires current execution and snapshot".into());
+            }
+            store.engineering_submission_preflight(&state.id, &execution.id, input)?;
+            self.verify_submission_scoped(input, &state, execution)?;
+            let review = decision
+                .review
+                .as_ref()
+                .ok_or("submission preflight requires independent review")?;
+            self.verify_review(review, execution)?;
+            store.engineering_review_coverage_preflight(&state.id, &execution.id, input, review)?;
+            return Ok(json!({"ready":true,"submitted":false,"coverage":"exact"}));
+        }
         if path.exists() {
             let saved: EngineeringCommandEnvelope = read_json(&path)?;
             if serde_json::to_vec(&saved)? != serde_json::to_vec(&envelope)? {
@@ -1469,7 +1500,7 @@ impl EngineeringRuntime {
                 if execution.role == EngineeringRole::Worker =>
             {
                 store.engineering_submission_preflight(&state.id, &execution.id, input)?;
-                self.verify_submission(input)?;
+                self.verify_submission_scoped(input, &state, execution)?;
                 // Durable result intent is separate from a successful Store result.
                 atomic(&directory.join("submission.json"), input)?;
                 atomic(
@@ -1512,7 +1543,15 @@ impl EngineeringRuntime {
                     .iter()
                     .find(|s| s.id == input.submission_id)
                     .ok_or("unknown submission")?;
-                self.verify_submission(&submission.input)?;
+                self.verify_submission_scoped(
+                    &submission.input,
+                    &state,
+                    state
+                        .executions
+                        .iter()
+                        .find(|e| e.id == submission.execution_id)
+                        .ok_or("submission execution missing")?,
+                )?;
                 self.verify_review(&input.review, execution)?;
             }
             EngineeringCommand::FinishOutcome { review, .. }
@@ -1669,6 +1708,10 @@ impl EngineeringRuntime {
                 )?;
                 Ok(json!(review))
             }
+            "bokkie_commands" if args["include_prior"] == true => {
+                let state = snapshot(store, &execution_outcome(directory)?)?;
+                self.discover_evidence(&state, execution)
+            }
             "bokkie_commands" => Ok(
                 json!({"commands":log.iter().filter(|e|e.kind=="item/completed" && e.value["item"]["type"]=="commandExecution").map(|e|json!({"item_id":e.value["item"]["id"],"command":e.value["item"]["command"],"exit_code":e.value["item"]["exitCode"],"source_capture":command_capture_summary(directory,log,e)})).collect::<Vec<_>>(),"reviewer_candidates":observed_reviews(log)}),
             ),
@@ -1746,6 +1789,8 @@ impl EngineeringRuntime {
                     output_digest: self.blob(&output)?,
                     exit_code,
                 };
+                let state = snapshot(store, &execution_outcome(directory)?)?;
+                self.bind_validation(&state, execution, key, item_id, &evidence, &before)?;
                 // Retain provenance separately from model-supplied hashes.
                 atomic(
                     &directory
@@ -2147,7 +2192,7 @@ impl EngineeringRuntime {
             if let Some(input) = &submission {
                 let validation: RuntimeResult<()> = (|| {
                     store.engineering_submission_preflight(&current.id, &execution.id, input)?;
-                    self.verify_submission(input)
+                    self.verify_submission_scoped(input, &current, execution)
                 })();
                 if let Err(error) = validation {
                     validation_error = Some(error.to_string());
@@ -2323,6 +2368,7 @@ mod tests {
                     .collect(),
                 readonly_mcp_servers: vec![],
                 allow_single_pwd_approval: false,
+                dependency_preparation: None,
                 github_delivery: github.then(|| PagefoldGithubProfile {
                     repo: "robchristie/pagefold".into(),
                     base: "main".into(),
@@ -2443,6 +2489,7 @@ mod tests {
             file.sync_all().unwrap();
         }
     }
+    include!("engineering_runtime/reuse_tests.rs");
     #[test]
     fn large_evidence_pages_preserve_exact_bytes_and_bound_encoded_replies() {
         let f = Fixture::new();
@@ -3749,14 +3796,18 @@ s.append('boundary_reaped',{'boundary':'fixture:segmented','exit_code':0},termin
         };
         assert!(
             f.runtime
-                .verify_submission(&EngineeringSubmissionInput {
-                    artefacts: vec![artefact.clone()],
-                    evidence: vec![evidence],
-                    limitations: String::new()
-                })
+                .verify_submission_scoped(
+                    &EngineeringSubmissionInput {
+                        artefacts: vec![artefact.clone()],
+                        evidence: vec![evidence],
+                        limitations: String::new()
+                    },
+                    &snapshot(&f.store, &f.id).unwrap(),
+                    &f.worker
+                )
                 .unwrap_err()
                 .to_string()
-                .contains("actual recorded")
+                .contains("validation is inapplicable")
         );
         fs::write(f.runtime.profile.workspace.join("reader.txt"), "after").unwrap();
         assert!(f.runtime.inspect(&artefact).is_err());

@@ -236,8 +236,14 @@ runtime and qualification component identities are unchanged. No comparable
 savings or weekly quota-charge claim follows from this single observation.
 
 Policy may be configured with `configure --limits policy.json --evidence decision.json`
-only before the first reservation. `finish --evidence landing.json` requires a
-passing final fixture and retained `reviewed_revision`/`landed_reference` fields.
+only before the first reservation. New campaigns persist an immutable `purpose`
+and terminal policy. The default `runtime_qualification` keeps its passing final
+complete-fixture gate; `finish --evidence landing.json` also retains
+`reviewed_revision`/`landed_reference` fields. An `application_delivery` campaign
+admits only application attempts and closes through the verified operation below.
+Select its purpose when creating a campaign or its explicit successor with
+`--purpose application_delivery`. Purpose and terminal policy cannot be changed
+through configuration, reopening, a failed run or a different stage.
 Only then may `successor --next-campaign NEXT-ID --evidence next-change.json`
 explicitly archive the terminal campaign and start the next work package. Old IDs
 remain reportable and immutable. An exhausted or interrupted campaign cannot take
@@ -253,3 +259,65 @@ available input/cache/output counters quoted above. Those are known subtotals;
 they cannot establish complete campaign-wide totals or ratios. The original
 qualification JSON, retained reports, terminal ledger and acceptance remain
 unchanged. No new live qualification was run for this deterministic correction.
+
+
+## Verified application campaign closure
+
+Application delivery uses `store_application_acceptance_v1`. The supported
+`finish-application` operation reads the private Store database and retained runtime
+blobs itself. Caller JSON supplies only exact selectors, for example:
+
+```json
+{"attempts": [{"attempt_id": "application-attempt", "outcome_id": "saved-outcome-id", "contract_revision": 2, "state_revision": 84}]}
+```
+
+```sh
+python3 tools/qualify-engineering.py finish-application --campaign CHANGE-ID --evidence closure.json --dry-run
+python3 tools/qualify-engineering.py finish-application --campaign CHANGE-ID --evidence closure.json
+```
+
+The operation derives each runtime root from its immutable attempt evidence and
+checks its original campaign binding. The supported application layout retains
+`engineering.sqlite`, `profile.json` and `brokers/` in that root. Every attempt must
+be reconciled, the latest application must pass, every Store obligation must be
+terminal without a lease, and no writer reservation may remain. The verifier holds
+the existing production controller and broker locks through the campaign commit;
+missing locks or uncertain execution cessation refuse closure.
+
+For a passing application it requires the exact saved contract and state revisions,
+Store acceptance and its accepted submission digests, criterion coverage,
+successful validation blobs, registered independent passing reviews covering the
+accepted artefacts, and the same accepted/reviewed head in a settled delivery with
+retained successful post-merge verification. Reviewed and merged trees must match
+the accepted Git tree and authorised repository/base/branch. Both CI receipts must
+identify the successful exact-head run, attempt and required job. It verifies retained blob hashes;
+caller-supplied reviewer names, acceptance booleans or PR identities are insufficient.
+Store remains the acceptance owner. This is verification of its retained decision,
+not another assessment or a claim that current workspace bytes still match
+historical source. A legacy delivery blob lacking the new tree and CI fields is
+supplemented only by the existing host adapter's read-only `status` operation,
+bound to the original PR/head/merge and profile scope. Closure retains that full
+observation and adapter digest alongside the original immutable delivery digest;
+caller JSON cannot supply it. Missing or differing host evidence refuses closure.
+No model or external mutation is launched.
+
+Pre-policy campaigns retain a visible `legacy_unclassified` purpose and the old
+final-fixture rule. `--classify-legacy` is a narrow, atomic option on the validated
+application closure operation: every reserved attempt must already be a successful
+application attempt. Failed, mixed, unresolved and explicitly runtime campaigns
+cannot use it. A failed verification leaves classification and terminal state
+unchanged. `--dry-run` verifies without classifying or closing; opening an older
+registry can still add the nullable schema columns. Existing terminal campaign
+records and reports are preserved. Closure changes neither attempt records nor
+allowances, telemetry, failure/probe history or suppression counters. It cannot
+replenish an allowance; the existing terminal-only explicit successor remains the
+sole next-package operation. An application closure makes no runtime fixture claim.
+
+The deterministic application tests exercise exact revision/result/criterion
+bindings, missing registered review, pending delivery, forged tree/CI booleans and identities, uncertain broker/controller
+responsibility, writer/lease responsibility, failed legacy classification, dry-run
+rollback, immutable purpose and unchanged allowance/history through successor.
+They use disposable Store-shaped databases and hashed synthetic runtime evidence.
+The `campaign_admission` probe and canonical checks execute these tests without
+model turns. The Pagefold boundary's existing focused qualification policy applies;
+this accounting change does not require an unrelated arithmetic or product run.

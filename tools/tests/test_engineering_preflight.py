@@ -61,6 +61,27 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(environment_changed['model_turns'], 0)
         self.assertEqual(environment_changed, json.loads((self.root / 'receipts/preflight.json').read_text()))
 
+    def test_dependency_admission_precedes_any_session(self):
+        self.profile['dependency_preparation'] = {'storage': str(self.workspace / 'target/dependencies')}
+        self.profile['broker_root'] = str(self.root / 'broker-root')
+        self.path.write_text(json.dumps(self.profile))
+        parameters = {'profile': copy.deepcopy(self.profile), 'worker': {}, 'supervisor': {}}
+        with patch.object(p, '_profile', return_value=parameters), patch.object(p, '_session') as session, patch.object(p.broker.dependencies, 'ready', side_effect=ValueError('dependencies missing')):
+            with self.assertRaisesRegex(ValueError, 'dependencies missing'):
+                p.run_preflight(self.path, self.root / 'receipts')
+        session.assert_not_called()
+        self.assertFalse((self.root / 'receipts/preflight.json').exists())
+
+    def test_environment_observation_changes_without_retaining_values(self):
+        value = object.__new__(p.broker.Broker)
+        value.manifest = {'workspace': str(self.workspace), 'role': 'worker'}
+        with patch.dict(os.environ, {'RUSTFLAGS': 'first private value'}):
+            first = value.source_snapshot()['environment_identity']
+        with patch.dict(os.environ, {'RUSTFLAGS': 'changed private value'}):
+            second = value.source_snapshot()['environment_identity']
+        self.assertNotEqual(first, second)
+        self.assertNotIn('private', first + second)
+
     def test_rejects_receipts_inside_source_before_writing(self):
         with self.assertRaisesRegex(ValueError, 'outside'):
             p.run_preflight(self.path, self.workspace / 'receipts')
@@ -134,6 +155,15 @@ class PreflightTests(unittest.TestCase):
             value = p.broker.Broker(self.root)
         self.addCleanup(value.selector.close)
         return value
+
+    def test_worker_dependency_failure_prevents_app_server_launch(self):
+        value = self.limited_broker(None)
+        value.manifest.update(role='worker', dependency_preparation={'cargo': '/installed/cargo', 'storage': str(self.workspace / 'target/dependencies')})
+        with patch.object(p.broker.dependencies, 'ready', side_effect=ValueError('dependency preparation missing')), patch.object(value, 'spawn') as spawn:
+            self.assertEqual(value.run(), 'finished')
+        spawn.assert_not_called()
+        self.assertTrue(value.spool.has('failure'))
+        self.assertTrue(value.spool.has('not_started'))
 
     def test_context_limit_counts_unique_root_children_and_replayed_links(self):
         value = self.limited_broker('3')

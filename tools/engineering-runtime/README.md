@@ -23,6 +23,10 @@ before submitting a live outcome.
 
 ## Start an isolated instance
 
+The [delivery hardening guide](../../docs/engineering-delivery-hardening.md)
+documents optional locked dependency preparation, cross-execution evidence
+discovery, advisory submission coverage, delivery cleanup and campaign closure.
+
 Prepare an isolated workspace and a separate private broker directory. Copy
 `instructions/profiles/engineering-local.json` to a task-owned profile file and
 replace its absolute path placeholders. This is an operator/runtime profile;
