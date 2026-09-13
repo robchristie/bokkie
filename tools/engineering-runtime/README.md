@@ -117,7 +117,10 @@ inline. References retain length, digest and encoding. Readers validate bounded
 storage and hashes and resolve source/output bytes when needed for validation.
 Orphan blobs count towards disk limits. Sealed corruption, missing payloads and
 ambiguous formats fail closed; only active polling tolerates an incomplete final
-line. Restart never appends over a torn tail or overwrites an orphan segment.
+line. During initial manifest publication, active qualification polling reports
+no published events and retries; strict final inspection still rejects an
+unpublished initial segment. Rust reconciliation already retries read errors
+without cancelling the broker. Restart never appends over a torn tail or overwrites an orphan segment.
 Protocol messages and normal adapter artefacts are at most 2 MiB. Events have
 increasing sequence numbers; request keys include execution, broker generation,
 thread, turn, item and protocol request ID. Store command envelopes are retained

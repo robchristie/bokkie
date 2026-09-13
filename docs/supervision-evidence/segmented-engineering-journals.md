@@ -28,6 +28,10 @@ The self-contained cases establish:
   torn tails, byte/event/blob limits and rollover crash points fail conservatively.
   Read-only polling ignores only an incomplete active tail and snapshots file
   length before reading, so concurrent appends belong to a later observation.
+- A paused initial manifest publication cannot cancel a healthy fixture: active
+  polling returns no published events and retries, including a stale manifest
+  lookup followed by the first append. Strict inspection/reopen still rejects
+  the unpublished segment. Rust tick already retains read errors for retry.
 - Partially written unreferenced blobs count towards storage bounds but do not
   invalidate active polling. A broker reopening for append validates their
   hashes; referenced blobs always require exact hashes and lengths.

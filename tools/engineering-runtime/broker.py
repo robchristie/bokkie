@@ -167,7 +167,13 @@ class Spool:
             self._create_segment(self.path)
             self.manifest = {'version': 2, 'segments': [{'path': self.path.name, 'first_sequence': 1}]}
             atomic(self.manifest_path, self.manifest)
-        elif any(self.root.glob('events-*.jsonl')):
+        elif segments := list(self.root.glob('events-*.jsonl')):
+            if tolerate_partial and len(segments) == 1 and segments[0].name == 'events-000000.jsonl':
+                # Publication may complete and append after our manifest lookup.
+                # This snapshot has no published events; retry on the next poll.
+                # Strict inspection/reopen still rejects an orphan initial file.
+                regular_bytes(segments[0], self.segment_limit)
+                return
             raise ValueError('journal segments without manifest')
         self._scan_blobs()
         # Validate even unconsumed references before permitting another append.

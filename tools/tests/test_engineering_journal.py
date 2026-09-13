@@ -19,6 +19,28 @@ class JournalTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
 
+    def test_poll_during_initial_publication_remains_uncertain_until_manifest(self):
+        publish = b.atomic
+        def paused_publish(path, value):
+            if path.name == 'journal.json':
+                self.assertEqual((self.root / 'events-000000.jsonl').read_bytes(), b'')
+                self.assertEqual(list(b.iter_events(self.root, tolerate_partial=True)), [])
+                with self.assertRaises(ValueError):
+                    list(b.iter_events(self.root))
+                with self.assertRaises(FileExistsError):
+                    b.Spool(self.root)
+            publish(path, value)
+        with patch.object(b, 'atomic', paused_publish):
+            spool = b.Spool(self.root)
+        spool.append('progress', {'published': True})
+        self.assertEqual(list(b.iter_events(self.root)), spool.events)
+        # A manifest lookup can precede publication while the segment read follows
+        # the first append. The stale lookup must still yield an uncertain poll.
+        actual = b.os.path.lexists
+        with patch.object(b.os.path, 'lexists', lambda path: False if Path(path).name == 'journal.json' else actual(path)):
+            self.assertEqual(list(b.iter_events(self.root, tolerate_partial=True)), [])
+        self.assertEqual(list(b.iter_events(self.root)), spool.events)
+
     def test_active_read_uses_snapshot_length_during_append(self):
         path = self.root / 'active'
         path.write_bytes(b'first')
