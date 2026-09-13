@@ -503,6 +503,42 @@ class ApplicationClosureTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             self.c.finish_application(self.selectors)
 
+    def test_settled_failed_merge_then_successful_merge_closes_with_full_history(self):
+        failed_result = {'error': 'exact-head CI was not ready', 'uncertain': False}
+        failed = dict(self.state['delivery_operations'][0], id='failed-merge',
+                      post_merge_verified=False, evidence_digest=self.blob(failed_result))
+        self.state['delivery_operations'].insert(0, failed)
+        self.persist()
+        attempts = self.c.report()['attempts']
+        receipt = self.c.finish_application(self.selectors)
+        history = receipt['attempts'][0]['delivery_history']
+        self.assertEqual([item['operation_id'] for item in history], ['failed-merge', 'merge'])
+        self.assertEqual(history[0]['disposition'], 'settled_failure')
+        self.assertEqual(history[0]['result'], failed_result)
+        self.assertEqual(history[0]['evidence_digest'], failed['evidence_digest'])
+        self.assertEqual([item['operation_id'] for item in receipt['attempts'][0]['deliveries']], ['merge'])
+        self.assertEqual(self.c.report()['attempts'], attempts)
+
+    def test_successful_merge_cannot_hide_unresolved_or_uncertain_delivery(self):
+        for result in (None, {'error': 'uncertain launch', 'uncertain': True},
+                       {'error': 'missing cessation evidence'},
+                       {'uncertain': True, 'post_merge_verified': True},
+                       {'merged': True, 'post_merge_verified': False}):
+            with self.subTest(result=result):
+                earlier = dict(self.state['delivery_operations'][-1], id='earlier-merge',
+                    post_merge_verified=False, evidence_digest=self.blob(result) if result is not None else None)
+                self.state['delivery_operations'] = [earlier, self.state['delivery_operations'][-1]]
+                self.persist()
+                with self.assertRaises(ValueError):
+                    self.c.finish_application(self.selectors)
+                self.assertIsNone(self.c.report()['terminal'])
+        # A settled failure alone cannot supply final delivery acceptance.
+        self.state['delivery_operations'] = [dict(earlier, evidence_digest=self.blob(
+            {'error': 'merge refused', 'uncertain': False}))]
+        self.persist()
+        with self.assertRaisesRegex(ValueError, 'no verified merge'):
+            self.c.finish_application(self.selectors)
+
     def test_delivery_requires_exact_trees_and_ci_not_boolean_claims(self):
         import copy
         from unittest.mock import patch

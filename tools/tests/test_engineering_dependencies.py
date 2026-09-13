@@ -70,6 +70,27 @@ class DependencyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Git ignored'):
             d.configuration(self.peer.manifest)
 
+    def test_parsed_patch_and_replace_forms_are_rejected_before_fetch(self):
+        manifest = self.workspace / 'Cargo.toml'
+        original = manifest.read_text()
+        declarations = (
+            '[ patch.crates-io ]\nunsupported = { git = "https://unsupported.invalid/dependency" }\n',
+            '["patch"."crates-io"]\nunsupported = { git = "https://unsupported.invalid/dependency" }\n',
+            'patch.crates-io.unsupported = { git = "https://unsupported.invalid/dependency" }\n',
+            '[ replace ]\n"unsupported:1.0.0" = { git = "https://unsupported.invalid/dependency" }\n',
+            '["replace"]\n"unsupported:1.0.0" = { git = "https://unsupported.invalid/dependency" }\n',
+            '"replace"."unsupported:1.0.0" = { git = "https://unsupported.invalid/dependency" }\n',
+        )
+        for declaration in declarations:
+            with self.subTest(declaration=declaration):
+                # Dotted assignments must precede [package] to remain top-level.
+                manifest.write_text(declaration + original)
+                with patch.object(d, 'execute') as execute:
+                    with self.assertRaisesRegex(ValueError, 'unpatched root package'):
+                        d.ready(self.peer, prepare=True)
+                execute.assert_not_called()
+                self.assertFalse((Path(self.peer.manifest['dependency_preparation']['storage']) / 'ready.json').exists())
+
     def test_rejects_ancestor_configuration_and_sanitises_environment(self):
         (self.workspace / '.cargo').mkdir()
         (self.workspace / '.cargo/config.toml').write_text('[net]\noffline=true\n')

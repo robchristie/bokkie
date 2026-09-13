@@ -64,7 +64,7 @@ def configuration(manifest):
     if result.returncode or not result.stdout.startswith(('cargo ' + toolchain + ' ').encode()):
         raise ValueError('dependency executable differs from pinned toolchain')
     package = tomllib.loads((workspace / 'Cargo.toml').read_text())
-    if 'workspace' in package or '[patch' in (workspace / 'Cargo.toml').read_text() or '[replace' in (workspace / 'Cargo.toml').read_text():
+    if any(key in package for key in ('workspace', 'patch', 'replace')):
         raise ValueError('dependency preparation supports one unpatched root package')
     def inspect(value):
         if isinstance(value, dict):

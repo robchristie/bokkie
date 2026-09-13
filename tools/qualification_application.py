@@ -38,6 +38,25 @@ def lock(stack, path):
         raise ValueError('controller or broker still owns execution responsibility') from error
 
 
+def settled_delivery(operation, brokers):
+    """Account for a retained result without treating a failed operation as success."""
+    require(operation.get('evidence_digest'), 'delivery operation remains unresolved')
+    result = json.loads(blob(brokers, operation['evidence_digest']))
+    require(isinstance(result, dict) and ('uncertain' not in result or result['uncertain'] is False),
+            'delivery operation retains uncertain responsibility')
+    if 'error' in result:
+        require(result.get('uncertain') is False and operation.get('post_merge_verified') is not True,
+                'failed delivery operation is not explicitly settled')
+        return result, 'settled_failure'
+    if operation['operation'] == 'merge':
+        require(operation.get('post_merge_verified') is True and result.get('post_merge_verified') is True,
+                'merge operation retains unverified responsibility')
+    if operation['operation'] == 'cleanup':
+        require((result.get('cleanup') or {}).get('state') == 'success',
+                'cleanup operation retains unresolved responsibility')
+    return result, 'settled_result'
+
+
 def observe_delivery(profile, number):
     """Only the existing host adapter may supply missing legacy delivery facts."""
     path = Path(__file__).parent / 'engineering-runtime/github_delivery.py'
@@ -118,9 +137,8 @@ def verify_acceptance(state, expected, brokers, profile):
                 'independent review does not pass for every accepted artefact')
     deliveries = []
     for operation in state['delivery_operations']:
-        require(operation.get('evidence_digest'), 'delivery operation remains unresolved')
-        result = json.loads(blob(brokers, operation['evidence_digest']))
-        if operation['operation'] != 'merge' or operation['contract_revision'] != revision:
+        result, disposition = settled_delivery(operation, brokers)
+        if disposition == 'settled_failure' or operation['operation'] != 'merge' or operation['contract_revision'] != revision:
             continue
         request = json.loads(operation['arguments_json'])
         require(operation['post_merge_verified'] is True and result.get('merged') is True and
@@ -202,7 +220,7 @@ def verify_application(campaign, attempts, evidence):
                 'JOIN obligations b ON b.id=o.root_obligation_id').fetchall()
             require(bool(rows) and len(rows) == connection.execute('SELECT COUNT(*) FROM engineering_outcomes').fetchone()[0],
                     'retained Store has missing outcome snapshots')
-            states = []
+            states, delivery_history = [], []
             for identity, revision, raw, root_state in rows:
                 state = json.loads(raw)
                 require(state['id'] == identity and state['state_revision'] == revision,
@@ -212,8 +230,10 @@ def verify_application(campaign, attempts, evidence):
                 for execution in state['executions']:
                     lock(stack, brokers / execution['id'] / 'owner.lock')
                 for operation in state['delivery_operations']:
-                    require(operation.get('evidence_digest'), 'Store retains unresolved delivery responsibility')
-                    blob(brokers, operation['evidence_digest'])
+                    result, disposition = settled_delivery(operation, brokers)
+                    delivery_history.append({'outcome_id': identity, 'operation_id': operation['id'],
+                        'operation': operation['operation'], 'contract_revision': operation['contract_revision'],
+                        'evidence_digest': operation['evidence_digest'], 'disposition': disposition, 'result': result})
                 state['observed_root_state'] = root_state
                 states.append(state)
             if attempt['passed']:
@@ -230,6 +250,6 @@ def verify_application(campaign, attempts, evidence):
             receipts.append({'attempt_id': attempt['id'], 'root': str(root),
                 'database': str(database), 'snapshots_sha256': hashlib.sha256(
                     json.dumps(states, sort_keys=True).encode()).hexdigest(),
-                'controller_and_broker_locks_verified': True, **receipt})
+                'controller_and_broker_locks_verified': True, 'delivery_history': delivery_history, **receipt})
         yield {'policy': 'store_application_acceptance_v1', 'attempts': receipts,
                'qualification_claim': 'application_delivery_only'}

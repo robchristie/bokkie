@@ -24,13 +24,21 @@ Canonical `tools/check.sh` passed with `RUST_TEST_THREADS=2`: Python tests, gove
 toolchain contract, all backend targets, Clippy and formatting. An earlier
 unrestricted run encountered the existing 20 ms app-server cancellation test;
 that test passed in isolation before the canonical rerun. No app-server behaviour
-was changed for that scheduling failure. Later bounded resource/probe additions
-received focused affected tests; unaffected canonical evidence remains applicable.
+was changed for that scheduling failure. An additional canonical run on exact head
+`0d1b9d64c3e49b96555d2103a2a19cc7a93374ba` passed with its commit/tree
+stamped in the retained log. Later Python review repairs received focused checks;
+unaffected canonical evidence remains applicable.
 
 The operator API, UI, shared API/toolchain boundaries and CI configuration are
 unchanged. No local UI inspection is required. The normal repository CI includes
 its locked attention UI job. Independent exact-head review and actual merge CI
 are retained in [PR #33](https://github.com/robchristie/bokkie/pull/33).
+
+Independent review identified two repaired defects: parsed Cargo override tables
+now fail before fetching even with alternate TOML formatting, and campaign closure
+retains settled failed-merge receipts while selecting subsequent verified delivery.
+Unresolved or uncertain delivery still prevents closure. The rejected exact head
+and repairs are recorded separately on the same PR.
 
 No model turns were used. Current Pagefold delivery guidance permits focused
 no-model qualification for this boundary; the complete-fixture requirement applies
