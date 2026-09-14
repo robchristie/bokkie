@@ -116,6 +116,48 @@ impl EngineeringRuntime {
         }
         Ok(())
     }
+    pub(super) fn closeout_arguments(
+        &self,
+        state: &EngineeringOutcomeSnapshot,
+        args: &Value,
+    ) -> RuntimeResult<Value> {
+        let fields = args.as_object().ok_or("invalid closeout arguments")?;
+        if fields.len() != 4
+            || !["pr", "head", "tree", "merge_commit"]
+                .iter()
+                .all(|k| fields.contains_key(*k))
+        {
+            return Err("closeout takes only pr, head, tree and merge_commit".into());
+        }
+        self.validate_cleanup_scope(state, args)?;
+        let merge = state
+            .delivery_operations
+            .iter()
+            .rev()
+            .find(|op| {
+                op.operation == "merge"
+                    && op.contract_revision == state.contract_revision
+                    && op.post_merge_verified
+            })
+            .ok_or("closeout requires retained merge")?;
+        let saved: Value = serde_json::from_str(&merge.arguments_json)?;
+        let review: EngineeringReviewEvidence = serde_json::from_value(saved["review"].clone())?;
+        // The merge gate already verified registration, independence and exact
+        // artefacts. Publish that retained identity, never model-authored claims.
+        let receipt: Value = serde_json::from_slice(
+            &self.evidence(
+                merge
+                    .evidence_digest
+                    .as_deref()
+                    .ok_or("missing merge receipt")?,
+            )?,
+        )?;
+        let mut result = args.clone();
+        result["review_digest"] = json!(review.evidence_digest);
+        result["pre_merge_ci"] = receipt["pre_merge_ci"]["run"].clone();
+        result["post_merge_ci"] = receipt["post_merge_ci"]["run"].clone();
+        Ok(result)
+    }
     pub(super) fn validate_cleanup_scope(
         &self,
         state: &EngineeringOutcomeSnapshot,

@@ -48,9 +48,11 @@ PROBES = {
                  'github_delivery_replays_persisted_result_before_uncertain_commit_readback',
                  'github_tool_refuses_stale_and_unattributed_merge_before_host_call',
                  'delivery_receipt_rejects_boolean_only_and_mismatched_ci_and_cleanup',
+                 'closeout_reconciliation_uses_frozen_intent_after_contract_change',
                  'store::engineering::tests::github_delivery_requires_trusted_adapter_grant_and_current_execution',
                  'store::engineering::tests::github_delivery_replays_intent_and_result_after_reopen',
                  'store::engineering::tests::github_delivery_pending_intent_blocks_new_workers_and_acceptance',
+                 'store::engineering::tests::github_publication_roles_replay_and_verified_merge_requirements',
                  'store::engineering::tests::github_delivery_cancellation_retains_pending_intent_until_reconciled',
                  'store::engineering::tests::github_delivery_merge_needs_supervisor_ceased_workers_and_verified_post_merge']},
     'qualification_driver': {

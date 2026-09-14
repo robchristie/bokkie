@@ -19,6 +19,7 @@ import sys
 REPO = 'robchristie/pagefold'
 URL = 'https://github.com/' + REPO + '.git'
 _UNCERTAIN = ContextVar('delivery_mutation_started', default=False)
+DIGEST = re.compile(r'[0-9a-f]{64}\Z')
 SHA = re.compile(r'[0-9a-f]{40}\Z')
 BRANCH = re.compile(r'codex/[A-Za-z0-9][A-Za-z0-9_-]*(?:/[A-Za-z0-9][A-Za-z0-9_-]*)*\Z')
 
@@ -90,10 +91,10 @@ class Host:
         if self.git('rev-parse', '--show-toplevel').strip() != str(self.root):
             raise DeliveryError('workspace root mismatch')
 
-    def command(self, argv, *, host=False):
+    def command(self, argv, *, host=False, input=None):
         try:
             result = self.run(argv, cwd='/' if host else str(self.root), env=self.env,
-                              capture_output=True, text=True, timeout=90, check=False,
+                              capture_output=True, text=True, timeout=90, check=False, input=input,
                               **({'pass_fds': (self.lock_fd,)} if self.lock_fd is not None else {}))
         except (OSError, subprocess.SubprocessError):
             raise DeliveryError('host command failed or timed out; reconcile before retry') from None
@@ -117,6 +118,92 @@ class Host:
             return json.loads(self.gh('api', '--hostname', 'github.com', path))
         except (json.JSONDecodeError, TypeError):
             raise DeliveryError('invalid GitHub response') from None
+
+    def api_write(self, path, method, payload):
+        _UNCERTAIN.set(True)
+        self.command(['/usr/bin/gh', 'api', '--hostname', 'github.com', path,
+                      '--method', method, '--input', '-'], host=True,
+                     input=json.dumps(payload, ensure_ascii=False))
+
+    @staticmethod
+    def text_digest(pull):
+        return hashlib.sha256(json.dumps({'title': pull.get('title', ''),
+            'body': pull.get('body') or ''}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def pr_text_receipt(self, pull, arguments, disposition):
+        applied = all((pull.get(k) or '') == arguments[k] for k in ('title', 'body'))
+        return {'pr': pull['number'], 'head': pull['head']['sha'],
+                'disposition': disposition, 'existing': disposition != 'created',
+                'text_applied': applied, 'text_digest': self.text_digest(pull),
+                'next_action': None if applied else 'update_pr with observed text_digest'}
+
+    def update_pr(self, a, *, mutate):
+        pull = self.pull(a['pr'])
+        if pull['head']['sha'] != a['head'] or pull['state'] != 'open' or pull['merged']:
+            raise DeliveryError('PR update requires the exact open head')
+        receipt = self.pr_text_receipt(pull, a, 'unchanged')
+        if receipt['text_applied']:
+            return receipt
+        if not mutate:
+            return None
+        if receipt['text_digest'] != a['expected_text_digest']:
+            raise DeliveryError('PR text changed; inspect before updating')
+        self.api_write(f'repos/{REPO}/pulls/{a["pr"]}', 'PATCH',
+                       {k: a[k] for k in ('title', 'body')})
+        result = self.update_pr(a, mutate=False)
+        if result is None:
+            raise DeliveryError('PR text update needs reconciliation')
+        result['disposition'] = 'updated'
+        return result
+
+    def closeout(self, a, *, mutate):
+        status = self.status(a['pr'])
+        if (not status['post_merge_verified'] or status['head'] != a['head']
+                or status['head_tree'] != a['tree'] or status['merge_commit'] != a['merge_commit']
+                or status['human_review_required']):
+            raise DeliveryError('closeout requires exact verified merge and successful CI')
+        marker = f'<!-- bokkie-closeout-v1:{a["pr"]}:{a["head"]}:{a["merge_commit"]} -->'
+        # Stable CI identities are supplied from the retained merge receipt by
+        # the runtime and checked against current evidence before publication.
+        for phase in ('pre_merge_ci', 'post_merge_ci'):
+            if a[phase] != status[phase]['run']:
+                raise DeliveryError('closeout CI changed; inspect retained merge evidence')
+        body = (f'{marker}\nBokkie delivery closeout\n\n'
+                f'- Independent exact-head review: PASS for `{a["head"]}`.\n'
+                f'- Registered review evidence SHA-256: `{a["review_digest"]}`.\n'
+                f'- Reviewed and merged tree: `{a["tree"]}`.\n'
+                f'- Squash merge: `{a["merge_commit"]}`.\n')
+        for label, phase in (('PR CI', 'pre_merge_ci'), ('Post-merge CI', 'post_merge_ci')):
+            run = a[phase]
+            body += f'- {label}: [run {run["id"]}]({run["url"]}), attempt {run["attempt"]}, head `{run["head"]}` — success.\n'
+        body += '\nThis receipt records verified delivery. Product acceptance and cleanup are tracked separately in Bokkie.\n'
+        user = self.api('user')
+        if type(user.get('id')) is not int or user['id'] <= 0:
+            raise DeliveryError('closeout publisher identity unavailable')
+        comments = self.api(f'repos/{REPO}/issues/{a["pr"]}/comments?per_page=100')
+        if not isinstance(comments, list) or len(comments) >= 100:
+            raise DeliveryError('closeout comments exceed supported bound')
+        matches = [c for c in comments if marker in (c.get('body') or '')]
+        if matches:
+            if len(matches) != 1:
+                raise DeliveryError('ambiguous closeout comments')
+            comment = matches[0]
+            identity = comment.get('id')
+            if (type(identity) is not int or identity <= 0 or comment.get('body') != body
+                    or comment.get('user', {}).get('id') != user['id']
+                    or comment.get('html_url') != f'https://github.com/{REPO}/pull/{a["pr"]}#issuecomment-{identity}'):
+                raise DeliveryError('closeout comment identity or content mismatch')
+            return {'pr': a['pr'], 'head': a['head'], 'merge_commit': a['merge_commit'],
+                    'closeout': {'state': 'published', 'comment_id': identity,
+                                 'url': comment['html_url'], 'publisher_id': user['id'],
+                                 'body_sha256': hashlib.sha256(body.encode()).hexdigest()}}
+        if not mutate:
+            return None
+        self.api_write(f'repos/{REPO}/issues/{a["pr"]}/comments', 'POST', {'body': body})
+        result = self.closeout(a, mutate=False)
+        if result is None:
+            raise DeliveryError('closeout publication needs reconciliation')
+        return result
 
     def current(self):
         if self.git('symbolic-ref', '--short', 'HEAD').strip() != self.branch:
@@ -152,7 +239,7 @@ class Host:
         post_ci = self.ci_receipt(_head(p['merge_commit_sha'])) if merge_tree else {'state': 'unavailable', 'head': None, 'run': None, 'runs': [], 'jobs': []}
         tree_equal = merge_tree is not None and head_tree == merge_tree
         post_merge = bool(tree_equal and post_ci['state'] == 'success')
-        return {'head_tree': head_tree, 'merge_tree': merge_tree, 'tree_equal': tree_equal,
+        return {'text_digest': self.text_digest(p), 'head_tree': head_tree, 'merge_tree': merge_tree, 'tree_equal': tree_equal,
                 'pre_merge_ci': pre_ci, 'post_merge_ci': post_ci, 'post_merge_verified': post_merge, 'repo': REPO, 'base': 'main', 'branch': self.branch, 'pr': number, 'head': head,
                 'state': p['state'], 'merged': p['merged'], 'merge_commit': p.get('merge_commit_sha'),
                 'draft': p['draft'], 'mergeable': p.get('mergeable'), 'mergeable_state': p.get('mergeable_state'),
@@ -421,7 +508,9 @@ def preflight(config, workspace, *, run=subprocess.run):
 
 def _arguments(operation, args):
     schema = {'prepare_branch': set(), 'commit': {'paths', 'message'}, 'push': {'head'},
-              'open_pr': {'head', 'title', 'body'}, 'status': {'pr'}, 'merge': {'pr', 'head'},
+              'open_pr': {'head', 'title', 'body'},
+              'update_pr': {'pr', 'head', 'title', 'body', 'expected_text_digest'},
+              'closeout': {'pr', 'head', 'tree', 'merge_commit', 'review_digest', 'pre_merge_ci', 'post_merge_ci'}, 'status': {'pr'}, 'merge': {'pr', 'head'},
               'cleanup': {'pr', 'head', 'tree', 'merge_commit'}}
     if operation not in schema or not isinstance(args, dict) or set(args) != schema[operation]:
         raise DeliveryError('invalid delivery operation arguments')
@@ -429,9 +518,16 @@ def _arguments(operation, args):
         _head(args['head'])
     if 'pr' in args:
         _pr(args['pr'])
-    if operation == 'cleanup':
+    if operation in ('cleanup', 'closeout'):
         _head(args['tree'])
         _head(args['merge_commit'])
+    if operation in ('open_pr', 'update_pr'):
+        for key, bound in (('title', 256), ('body', 30000)):
+            if not isinstance(args[key], str) or not args[key].strip() or len(args[key].encode()) > bound or '\0' in args[key]:
+                raise DeliveryError('invalid pull request text')
+    for key in ('expected_text_digest', 'review_digest'):
+        if key in args and (not isinstance(args[key], str) or not DIGEST.fullmatch(args[key])):
+            raise DeliveryError('invalid delivery digest')
 
 
 def execute(config, workspace, operation, arguments, *, run=subprocess.run):
@@ -444,6 +540,11 @@ def execute(config, workspace, operation, arguments, *, run=subprocess.run):
     if operation == 'cleanup':
         with cleanup_ownership(h):
             return h.cleanup(a, mutate=True)
+    if operation == 'update_pr':
+        return h.update_pr(a, mutate=True)
+    if operation == 'closeout':
+        with cleanup_ownership(h):
+            return h.closeout(a, mutate=True)
     if operation == 'prepare_branch':
         branch = h.git('symbolic-ref', '--short', 'HEAD').strip()
         if branch != 'main' or h.git('status', '--porcelain').strip():
@@ -484,12 +585,9 @@ def execute(config, workspace, operation, arguments, *, run=subprocess.run):
               'push', '--porcelain', URL, head + ':refs/heads/' + h.branch)
         return {'head': head, 'branch': h.branch}
     if operation == 'open_pr':
-        for key, bound in (('title', 256), ('body', 30000)):
-            if not isinstance(a[key], str) or not a[key].strip() or len(a[key]) > bound or '\0' in a[key]:
-                raise DeliveryError('invalid pull request text')
         existing = h.find_pr(head)
         if existing:
-            return {'pr': existing['number'], 'head': head, 'existing': True}
+            return h.pr_text_receipt(existing, a, 'existing')
         remote = h.api(f'repos/{REPO}/git/ref/heads/{h.branch}')
         if remote['object']['sha'] != head:
             raise DeliveryError('remote head mismatch')
@@ -498,7 +596,7 @@ def execute(config, workspace, operation, arguments, *, run=subprocess.run):
         created = h.find_pr(head)
         if not created:
             raise DeliveryError('pull request creation needs reconciliation')
-        return {'pr': created['number'], 'head': head, 'existing': False}
+        return h.pr_text_receipt(created, a, 'created')
     status = h.status(a['pr'])
     if (status['head'] != head or status['state'] != 'open' or status['draft'] or status['mergeable'] is not True
             or status['mergeable_state'] != 'clean' or status['changes_requested'] or status['unresolved_threads']
@@ -520,6 +618,10 @@ def reconcile(config, workspace, operation, arguments, *, run=subprocess.run):
     if operation == 'cleanup':
         with cleanup_ownership(h):
             return h.cleanup(arguments, mutate=False)
+    if operation == 'update_pr':
+        return h.update_pr(arguments, mutate=False)
+    if operation == 'closeout':
+        return h.closeout(arguments, mutate=False)
     if operation == 'prepare_branch':
         return {'branch': h.branch, 'head': h.current()}
     if operation == 'commit':
@@ -531,7 +633,7 @@ def reconcile(config, workspace, operation, arguments, *, run=subprocess.run):
         return {'head': arguments['head'], 'branch': h.branch} if ref['object']['sha'] == arguments['head'] else None
     if operation == 'open_pr':
         p = h.find_pr(arguments['head'])
-        return {'pr': p['number'], 'head': arguments['head']} if p else None
+        return h.pr_text_receipt(p, arguments, 'reconciled') if p else None
     status = h.status(arguments['pr'])
     if operation == 'status' or (status['merged'] and status['head'] == arguments['head']):
         return status

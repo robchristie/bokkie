@@ -1,4 +1,4 @@
-# Pagefold GitHub supervision supplement, revision 1
+# Pagefold GitHub supervision supplement, revision 2
 
 The registered Pagefold GitHub scope is explicit existing operator authority.
 For that scope, ordinary branch, PR, review, CI and squash merge operations do
@@ -29,3 +29,16 @@ as accepted delivery. Arrange repair or a concrete escalation within existing
 bounds, preserving the operation and evidence identities. Acceptance additionally
 requires all normal contract criteria, assessments and final independent evidence.
 Historical preflight is readiness evidence, not proof that this outcome was merged.
+
+After verified merge and post-merge CI, use closeout with arguments
+{pr,head,tree,merge_commit} from the retained merge receipt, and expected from a
+fresh snapshot. The backend supplies the registered merge review identity and
+verified CI identities; the host publishes a fixed closeout comment and verifies
+its author, content and URL. It works before or after bounded cleanup. Track the
+closeout operation and receipt separately from product acceptance and cleanup;
+it does not assert either has completed. Complete publication before the normal
+final acceptance command; a publication failure is a delivery reporting issue,
+not evidence that the feature failed. Diagnose or escalate an unresolved
+publication within existing budgets and report its exact operation identity.
+Reconcile an uncertain closeout; absence of a comment is not permission to repost.
+A successful receipt records closeout.state=published and its GitHub comment URL.
