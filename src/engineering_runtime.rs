@@ -2259,10 +2259,11 @@ impl EngineeringRuntime {
                 // existed to reap. Reuse Store's durable repair state rather than
                 // turning proof of cessation into permission to retry unchanged.
                 let state = snapshot(store, &initial.id)?;
+                // Lease expiry also fences executions and writes cancel.json.
+                // Neither observation proves intentional cancellation of work.
+                // A recorded failed admission remains a fault after downtime.
                 let obsolete = state.cancellation_requested
-                    || execution.fenced
                     || execution.contract_revision != state.contract_revision
-                    || directory.join("cancel.json").exists()
                     || state.executions.iter().any(|other| {
                         other.obligation_id == execution.obligation_id
                             && other.claim.lease_generation > execution.claim.lease_generation
@@ -3304,6 +3305,50 @@ s.append('boundary_reaped',{'boundary':'fixture:segmented','exit_code':0},termin
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn failed_admission_after_lease_expiry_stays_parked() {
+        let mut f = Fixture::new();
+        f.event(&f.worker, 1, "launch_committed", json!({}));
+        f.event(
+            &f.worker,
+            2,
+            "failure",
+            json!({"message":"dependency storage bound exceeded"}),
+        );
+        f.event(&f.worker, 3, "not_started", json!({}));
+        f.event(
+            &f.supervisor,
+            1,
+            "boundary_reaped",
+            json!({"boundary":"supervisor:ceased"}),
+        );
+        let before = snapshot(&f.store, &f.id).unwrap();
+        // tick recovers leases first, fencing both old executions. The runtime
+        // writes cancellation diagnostics, but the admission fault remains real.
+        let result = f.runtime.tick(&mut f.store, 3000).unwrap();
+        assert_eq!(result["dispatched"], 0);
+        assert_eq!(result["errors"], json!([]));
+        let state = snapshot(&f.store, &f.id).unwrap();
+        assert_eq!(state.root.state, crate::ObligationState::Attention);
+        let proof = &state
+            .reconciliations
+            .iter()
+            .find(|r| r.input.execution_id == f.worker.id)
+            .unwrap()
+            .input;
+        assert!(proof.not_started && proof.runtime_failure.is_some());
+        assert!(f.directory(&f.worker).join("cancel.json").exists());
+        assert_eq!(state.turns_used, before.turns_used);
+        let recoveries = state.recoveries_used;
+        for now in 3001..3016 {
+            assert_eq!(f.runtime.tick(&mut f.store, now).unwrap()["dispatched"], 0);
+        }
+        let after = snapshot(&f.store, &f.id).unwrap();
+        assert_eq!(after.turns_used, before.turns_used);
+        assert_eq!(after.recoveries_used, recoveries);
+        assert_eq!(after.executions.len(), before.executions.len());
     }
 
     #[test]

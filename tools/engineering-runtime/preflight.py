@@ -26,6 +26,7 @@ PROBES = {
         'python_modules': ['test_engineering_dependencies'],
         'python': ['test_dependency_admission_failure_records_no_start_and_never_invokes_model'],
         'rust': ['failed_pre_spawn_admission_parks_once_across_controller_restart',
+                 'failed_admission_after_lease_expiry_stays_parked',
                  'pre_spawn_failure_without_cessation_proof_remains_uncertain',
                  'cancelled_failed_admission_settles_without_runtime_repair_charge',
                  'expired_claim_without_manifest_has_not_started_proof',

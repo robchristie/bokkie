@@ -43,7 +43,10 @@ Its exit condition is every selected production-path test running and passing:
   supervisor ceases without clearing attention. Authorised replanning can resume
   without resetting the spent allowance.
 - Store replay/reopen preserves the hold and cessation at both ordinary and
-  exhausted recovery budgets. Missing cessation evidence remains uncertain;
+  exhausted recovery budgets. Delayed first reconciliation after controller
+  downtime/lease expiry retains the admission cause despite recovery fencing and
+  cancellation diagnostics; repeated full ticks dispatch no replacements.
+  Missing cessation evidence remains uncertain;
   cancellation and expired undispatched intents preserve their existing behaviour.
 
 The supervisor-cessation regression initially reproduced an unintended transition
@@ -56,6 +59,12 @@ attributable PR #33 scheduling configuration for the existing tight timeout test
 No operator API, UI/toolchain or CI contract changed. Exact candidate focused
 results, independent review and pre-/post-merge CI belong to the owning PR.
 No live Codex run, broad fixture campaign or new Pagefold feature is required.
+
+Independent review also identified an expiry/recovery distinction: generic fencing
+and cancellation diagnostics were incorrectly treated as intentional cancellation.
+The delayed-first-observation regression reproduced two replacement dispatches.
+The repair preserves failed-admission evidence unless work was actually cancelled
+or superseded, and the regression now requires zero replacement dispatches.
 
 ## Compatibility
 
