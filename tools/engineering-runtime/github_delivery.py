@@ -199,6 +199,8 @@ class Host:
                                  'body_sha256': hashlib.sha256(body.encode()).hexdigest()}}
         if not mutate:
             return None
+        if len(comments) >= 99:
+            raise DeliveryError('closeout publication would exceed read-back capacity')
         self.api_write(f'repos/{REPO}/issues/{a["pr"]}/comments', 'POST', {'body': body})
         result = self.closeout(a, mutate=False)
         if result is None:

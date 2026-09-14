@@ -314,6 +314,23 @@ class AdapterTests(unittest.TestCase):
         self.assertIsNone(delivery.reconcile(CONFIG, self.root, 'closeout', args, run=runner))
         self.assertEqual(len(self.writes), 1)
 
+    def test_closeout_reserves_capacity_for_its_own_readback(self):
+        args = self.closeout_fixture()
+        runner = self.publication_runner()
+        comments = self.responses[f'repos/{delivery.REPO}/issues/1/comments?per_page=100']
+        comments[:] = [{'body': 'Other comment'}] * 99
+        with self.assertRaisesRegex(delivery.DeliveryError, 'read-back capacity') as caught:
+            delivery.execute(CONFIG, self.root, 'closeout', args, run=runner)
+        self.assertFalse(caught.exception.uncertain)
+        self.assertEqual(self.writes, [])
+        comments.pop()
+        result = delivery.execute(CONFIG, self.root, 'closeout', args, run=runner)
+        self.assertEqual(len(comments), 99)
+        self.assertEqual(result['closeout']['state'], 'published')
+        self.assertEqual(delivery.reconcile(CONFIG, self.root, 'closeout', args, run=runner), result)
+        self.assertEqual(delivery.execute(CONFIG, self.root, 'closeout', args, run=runner), result)
+        self.assertEqual(len(self.writes), 1)
+
     def test_closeout_rejects_unverified_merge_and_changed_ci(self):
         args = self.closeout_fixture()
         runner = self.publication_runner()

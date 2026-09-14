@@ -87,7 +87,8 @@ It can be published after cleanup has switched the checkout to main.
 A stable PR/head/merge marker, exact content, authenticated author ID and scoped
 comment URL support read-back after a lost acknowledgement. Duplicate, altered
 or foreign-author markers and truncated comment enumeration fail closed. The
-bounded reader supports fewer than 100 comments. Uncertain publication only
+bounded reader supports fewer than 100 comments; a new publication requires
+at most 98 existing comments so its own read-back still fits. Uncertain publication only
 reads back; an absent comment never authorises another POST. The normal durable
 intent freezes the publication inputs, serialises operations and retains
 responsibility across restart, cancellation and later contract revisions. A

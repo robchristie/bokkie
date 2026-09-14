@@ -2,7 +2,7 @@
 
 Initial canonical qualification on 14 September 2026 used the implementation
 at `2be76f8f42249d0f1cd0abf5499c1b89e5e89392`. The subsequent status-text inspection
-addition has a deterministic adapter regression; final committed-candidate
+addition and comment-capacity repair have deterministic adapter regressions; final committed-candidate
 qualification and review identities remain on the owning PR. The owning delivery is
 [Bokkie PR #36](https://github.com/robchristie/bokkie/pull/36).
 
@@ -22,11 +22,11 @@ claim that a new autonomous Pagefold feature has already exercised it live.
   Python fixtures also exercise their selected Rust boundary commands. The CLI,
   fixture binary and integration suites passed (3, 2 and 14 tests respectively).
   Plan/toolchain governance, Clippy and formatting passed.
-- [Adapter fixtures](../../tools/tests/test_github_delivery.py): all 36 tests
+- [Adapter fixtures](../../tools/tests/test_github_delivery.py): all 37 tests
   passed, including the original stale-description failure, explicit updates,
   read-back, literal multiline/Unicode text, moved head, changed text, lost
   acknowledgements, exact closeout evidence, duplicate/altered/foreign comments,
-  bounded enumeration, and publication after checkout has returned to main.
+  bounded enumeration including the final publication slot, and publication after checkout has returned to main.
 - [Store integration](../../src/store/engineering.rs) proves publication role
   separation, durable intent replay after reopen, blocking of overlapping
   operations, verified-merge/cessation prerequisites and separation from outcome
@@ -44,7 +44,8 @@ identities and cleanup receipts are retained on the owning PR.
 
 PR text updates use observed-content and head checks, not an atomic GitHub
 compare-and-swap. A detected head race remains uncertain. Closeout enumeration
-supports fewer than 100 comments and refuses ambiguous or altered markers.
+supports fewer than 100 comments and reserves a slot before POST (at most 98
+existing comments). It refuses ambiguous or altered markers.
 An absent read-back result never authorises blind reposting. Publication remains
 an explicit delivery operation; it does not complete product acceptance or
 cleanup. The supervisor instructions require publication before normal final
