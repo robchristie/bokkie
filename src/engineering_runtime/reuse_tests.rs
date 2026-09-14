@@ -1,13 +1,21 @@
 // Included in the runtime fixture module: no model or external service.
 #[test]
 fn replacement_reuses_bound_evidence_and_checks_coverage_before_submission() {
-    for segmented in [false, true] {
-        let mut f = Fixture::new();
+    for (segmented, github) in [(false, false), (true, false), (true, true)] {
+        let mut f = Fixture::with_package_input(github, Some("starting input"));
         fs::write(f.runtime.profile.workspace.join("reader.txt"), "page").unwrap();
         fs::write(f.runtime.profile.workspace.join("input.txt"), "fixed input").unwrap();
-        let (artefact, _) = f.runtime.file("reader.txt").unwrap();
+        let artefact = if github {
+            for args in [vec!["add", "."], vec!["-c", "commit.gpgsign=false", "commit", "-m", "Implement reader"]] {
+                assert!(Command::new("git").args(args).current_dir(&f.runtime.profile.workspace).output().unwrap().status.success());
+            }
+            let revision = |name: &str| String::from_utf8(Command::new("git").args(["rev-parse", name]).current_dir(&f.runtime.profile.workspace).output().unwrap().stdout).unwrap().trim().to_owned();
+            EngineeringArtefact::Git { repository: f.runtime.profile.workspace.to_string_lossy().into(), commit: revision("HEAD"), tree: revision("HEAD^{tree}") }
+        } else { f.runtime.file("reader.txt").unwrap().0 };
         let context = f.runtime.evidence_context().unwrap();
         let source = &context["source"];
+        // The package's immutable starting input has legitimately been edited
+        // before the successful validation. Reuse binds the validated source.
         let mut log = vec![Event { sequence:1, kind:"item/completed".into(),
             value:json!({"threadId":"root","turnId":"turn","item":{"id":"canonical","type":"commandExecution","command":"tools/check.sh","aggregatedOutput":"PASS","exitCode":0}}) }];
         for phase in ["item/started", "item/completed"] {
@@ -76,6 +84,20 @@ fn replacement_reuses_bound_evidence_and_checks_coverage_before_submission() {
         assert!(found["validations"].as_array().unwrap().is_empty());
         assert!(found["rejected"].to_string().contains("source or relevant inputs changed"));
         fs::write(f.runtime.profile.workspace.join("input.txt"),"fixed input").unwrap();
+        // Starting-input provenance is still required, even though its bytes
+        // differ legitimately from the validated source.
+        let EngineeringArtefact::File { sha256: input_digest, .. } = &state.packages[0].input.inputs[0] else { panic!("file input") };
+        let input_blob = f.runtime.profile.broker_root.join("blobs").join(input_digest);
+        let original = fs::read(&input_blob).unwrap();
+        fs::write(&input_blob, b"corrupt").unwrap();
+        let found = f.runtime.discover_evidence(&state,&replacement).unwrap();
+        assert!(found["validations"].as_array().unwrap().is_empty());
+        assert!(found["rejected"].to_string().contains("digest mismatch"));
+        fs::write(&input_blob, &original).unwrap();
+        let mut bad_length = state.clone();
+        if let EngineeringArtefact::File { bytes, .. } = &mut bad_length.packages[0].input.inputs[0] { *bytes += 1; }
+        // A changed declared input also changes the immutable package binding.
+        assert!(f.runtime.discover_evidence(&bad_length,&replacement).unwrap()["validations"].as_array().unwrap().is_empty());
         let index:Value = read_json(&f.directory(&f.worker).join("receipts/binding-registered.json")).unwrap();
         fs::write(f.runtime.profile.broker_root.join("blobs").join(index["binding_digest"].as_str().unwrap()),b"corrupt").unwrap();
         let found = f.runtime.discover_evidence(&state,&replacement).unwrap();
@@ -115,4 +137,29 @@ fn delivery_receipt_rejects_boolean_only_and_mismatched_ci_and_cleanup() {
     let mut wrong = args.clone();
     wrong["head"] = json!(merge);
     assert!(f.runtime.validate_cleanup_scope(&state,&wrong).is_err());
+}
+
+#[test]
+fn uncaptured_package_input_must_still_match_after_validation() {
+    let mut f = Fixture::with_package_input(true, Some("fixed input"));
+    fs::write(f.runtime.profile.workspace.join(".gitignore"), "input.txt\n").unwrap();
+    fs::write(f.runtime.profile.workspace.join("reader.txt"), "page").unwrap();
+    let (artefact, _) = f.runtime.file("reader.txt").unwrap();
+    let context = f.runtime.evidence_context().unwrap();
+    let source = &context["source"];
+    assert!(source["files"].get("input.txt").is_none());
+    let log = vec![
+        Event { sequence: 1, kind: "item/completed".into(), value: json!({"threadId":"root","turnId":"turn","item":{"id":"canonical","type":"commandExecution","command":"tools/check.sh","aggregatedOutput":"PASS","exitCode":0}}) },
+        Event { sequence: 2, kind: "command_source".into(), value: json!({"phase":"item/started","thread_id":"root","turn_id":"turn","item_id":"canonical","source":source}) },
+        Event { sequence: 3, kind: "command_source".into(), value: json!({"phase":"item/completed","thread_id":"root","turn_id":"turn","item_id":"canonical","source":source}) },
+    ];
+    let directory = f.directory(&f.worker);
+    f.runtime.dynamic(&mut f.store, &directory, &f.worker, "registered", &json!({"tool":"bokkie_validation","arguments":{"item_id":"canonical","artefact":artefact,"criterion_id":"reader"}}), &log, 105).unwrap();
+    let state = snapshot(&f.store, &f.id).unwrap();
+    assert_eq!(f.runtime.discover_evidence(&state, &f.worker).unwrap()["validations"].as_array().unwrap().len(), 1);
+    fs::write(f.runtime.profile.workspace.join("input.txt"), "changed input").unwrap();
+    assert_eq!(f.runtime.evidence_context().unwrap()["source"], *source);
+    let found = f.runtime.discover_evidence(&state, &f.worker).unwrap();
+    assert!(found["validations"].as_array().unwrap().is_empty());
+    assert!(found["rejected"].to_string().contains("source file no longer matches submission"));
 }

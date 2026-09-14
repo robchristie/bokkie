@@ -156,7 +156,29 @@ impl EngineeringRuntime {
             return Err("evidence source or relevant inputs changed".into());
         }
         for input in &package.input.inputs {
-            self.inspect(input)?;
+            match input {
+                EngineeringArtefact::File {
+                    store,
+                    path,
+                    bytes,
+                    sha256,
+                } if Path::new(store) == self.profile.workspace
+                    && source["files"].get(path).is_some() =>
+                {
+                    // Package inputs name immutable starting revisions. A worker
+                    // may edit one before validation; the exact source comparison
+                    // above binds its validated bytes, not its starting bytes.
+                    // Retain and verify the original input's provenance as well.
+                    if self.evidence(sha256)?.len() as u64 != *bytes {
+                        return Err("retained package input length mismatch".into());
+                    }
+                }
+                // An input outside the captured source has no command-bound
+                // replacement identity, so it must still match the original.
+                _ => {
+                    self.inspect(input)?;
+                }
+            }
         }
         self.inspect(&binding.evidence.artefact)?;
         self.evidence(&binding.evidence.command_digest)?;

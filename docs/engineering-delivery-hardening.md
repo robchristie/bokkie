@@ -78,6 +78,13 @@ new command. Reuse requires the same contract, package, relevant source/input se
 worker profile and observed environment. Changed or corrupt references return
 rejection reasons. Legacy commands without an environment binding remain usable
 by their original submission but cannot be transplanted to a replacement worker.
+Package file inputs are immutable starting revisions, verified when delegated.
+A worker may edit an input before validation when that file is included in the
+captured source. Reuse checks the unchanged validated source and the retained
+original input blob separately; it does not require reverting the input to its
+starting bytes. Inputs outside source capture (for example ignored files) must
+still match their original live identity. Missing/corrupt original evidence or
+changes after validation remain inapplicable.
 Both inline and segmented journal source references remain supported. Registered
 reviews retain their original independent thread/report provenance and are checked
 against their exact artefacts and current contract. Discovery does not grant a

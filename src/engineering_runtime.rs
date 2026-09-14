@@ -2322,6 +2322,9 @@ mod tests {
             Self::with_github(false)
         }
         fn with_github(github: bool) -> Self {
+            Self::with_package_input(github, None)
+        }
+        fn with_package_input(github: bool, input: Option<&str>) -> Self {
             let temp = tempfile::tempdir().unwrap();
             let workspace = temp.path().join("workspace");
             let root = temp.path().join("broker");
@@ -2406,6 +2409,13 @@ mod tests {
                 }),
             };
             let runtime = EngineeringRuntime::new(profile).unwrap();
+            let inputs = input
+                .map(|contents| {
+                    fs::write(runtime.profile.workspace.join("input.txt"), contents).unwrap();
+                    runtime.file("input.txt").unwrap().0
+                })
+                .into_iter()
+                .collect();
             let mut store = Store::open_in_memory().unwrap();
             let saved = intake(
                 &mut store,
@@ -2452,7 +2462,7 @@ mod tests {
                             dependencies: vec![],
                             instructions: "Implement reader".into(),
                             criteria: vec!["reader".into()],
-                            inputs: vec![],
+                            inputs,
                             workspace: runtime.profile.workspace.to_string_lossy().into(),
                             budget: runtime.profile.budget(100, true),
                         }),
