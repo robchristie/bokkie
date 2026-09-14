@@ -21,6 +21,15 @@ _spec.loader.exec_module(broker)
 # Each probe declares its question and smallest production-path regression set.
 # The acceptance condition is every named test actually running and passing.
 PROBES = {
+    'bounded_admission': {
+        'question': 'Does build growth preserve readiness, and does failed no-start admission park once across restart without losing cancellation or ownership?',
+        'python_modules': ['test_engineering_dependencies'],
+        'python': ['test_dependency_admission_failure_records_no_start_and_never_invokes_model'],
+        'rust': ['failed_pre_spawn_admission_parks_once_across_controller_restart',
+                 'pre_spawn_failure_without_cessation_proof_remains_uncertain',
+                 'cancelled_failed_admission_settles_without_runtime_repair_charge',
+                 'expired_claim_without_manifest_has_not_started_proof',
+                 'store::engineering::tests::failed_runtime_reaps_and_parks_without_repeating_even_at_budget_limit']},
     'dependency_preparation': {
         'question': 'Do isolated public locked preparation, restricted readiness and stale/incomplete admission hold?',
         'python_modules': ['test_engineering_dependencies', 'test_engineering_preflight']},

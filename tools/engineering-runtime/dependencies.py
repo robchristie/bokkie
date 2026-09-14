@@ -43,15 +43,31 @@ def read_input(path):
     return raw.decode('utf-8')
 
 
+def storage_paths(manifest):
+    """Keep bounded dependency material and growing build output in disjoint roots."""
+    workspace = Path(manifest['workspace']).resolve(strict=True)
+    storage = Path(manifest['dependency_preparation']['storage'])
+    build = storage.with_name(storage.name + '-build')
+    for label, path in (('dependency storage', storage), ('build storage', build)):
+        if path.is_symlink() or path.resolve() != path or not path.is_relative_to(workspace) or path == workspace:
+            raise ValueError(label + ' must be canonical and strictly inside workspace')
+        for parent in (path, *path.parents):
+            if parent.exists() and not parent.is_dir():
+                raise ValueError(label + ' must use real directories')
+            if parent == workspace:
+                break
+    if build.is_relative_to(storage) or storage.is_relative_to(build):
+        raise ValueError('dependency and build storage must not overlap')
+    return storage, build
+
+
 def configuration(manifest):
     config = manifest.get('dependency_preparation')
     if config is None:
         return None
     workspace = Path(manifest['workspace']).resolve(strict=True)
     inputs = {name: read_input(workspace / name) for name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml')}
-    storage = Path(config['storage'])
-    if storage.is_symlink() or storage.resolve() != storage or not storage.is_relative_to(workspace) or storage == workspace:
-        raise ValueError('dependency storage must be canonical and strictly inside workspace')
+    storage, build = storage_paths(manifest)
     for parent in [workspace, *workspace.parents]:
         for name in ('config', 'config.toml'):
             path = parent / '.cargo' / name
@@ -59,10 +75,11 @@ def configuration(manifest):
                 raise ValueError('dependency preparation does not support ancestor Cargo configuration: ' + str(path))
     if storage.exists():
         storage_entries(storage, config['max_bytes'])
-    ignored = subprocess.run(['git', '-C', str(workspace), 'check-ignore', '--quiet', str(storage)],
-                             env={'PATH': '/usr/bin:/bin', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null'}, timeout=10)
-    if ignored.returncode:
-        raise ValueError('dependency storage must be Git ignored')
+    for label, path in (('dependency storage', storage), ('build storage', build)):
+        ignored = subprocess.run(['git', '-C', str(workspace), 'check-ignore', '--quiet', str(path)],
+                                 env={'PATH': '/usr/bin:/bin', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null'}, timeout=10)
+        if ignored.returncode:
+            raise ValueError(label + ' must be Git ignored')
     for key, maximum in [('timeout_seconds', 1800), ('max_bytes', 10 * 1024**3)]:
         if type(config[key]) is not int or not 1 <= config[key] <= maximum:
             raise ValueError('dependency preparation requires finite ' + key)
@@ -113,9 +130,9 @@ def environment(manifest):
     config = manifest.get('dependency_preparation')
     if config is None:
         return {}
-    storage = Path(config['storage'])
+    storage, build = storage_paths(manifest)
     cargo = Path(config['cargo'])
-    return {'CARGO_HOME': str(storage / 'cargo'), 'CARGO_TARGET_DIR': str(storage / 'target'),
+    return {'CARGO_HOME': str(storage / 'cargo'), 'CARGO_TARGET_DIR': str(build),
             'RUSTC': str(cargo.with_name('rustc')), 'RUSTDOC': str(cargo.with_name('rustdoc')),
             'RUSTUP_TOOLCHAIN': tomllib.loads(read_input(Path(manifest['workspace']) / 'rust-toolchain.toml'))['toolchain']['channel'],
             'CARGO_NET_OFFLINE': 'true'}

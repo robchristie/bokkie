@@ -1813,7 +1813,20 @@ fn apply_command(
                         && !obligation.state.is_terminal()
                     {
                         if execution.role == EngineeringRole::Supervisor {
-                            if !waiting_for_operator(state) {
+                            // Cessation is not repair evidence. A supervisor that
+                            // was already alive when another execution failed
+                            // must not clear the current contract's repair hold.
+                            let runtime_repair_pending = obligation.state
+                                == ObligationState::Attention
+                                && state.reconciliations.iter().any(|receipt| {
+                                    receipt.input.runtime_failure.is_some()
+                                        && state.executions.iter().any(|failed| {
+                                            failed.id == receipt.input.execution_id
+                                                && failed.contract_revision
+                                                    == state.contract_revision
+                                        })
+                                });
+                            if !waiting_for_operator(state) && !runtime_repair_pending {
                                 apply_engineering_transition(
                                     tx,
                                     &execution.obligation_id,
@@ -3547,63 +3560,68 @@ mod tests {
 
     #[test]
     fn failed_runtime_reaps_and_parks_without_repeating_even_at_budget_limit() {
-        for exhausted in [false, true] {
-            let mut store = Store::open_in_memory().unwrap();
-            let id = create(&mut store);
-            let root = claim(&mut store, EngineeringRole::Supervisor, 100);
-            if exhausted {
-                let tx = store.connection.transaction().unwrap();
-                let mut state = load(&tx, &id).unwrap();
-                state.recoveries_used = state.contract().budget.max_recoveries;
-                save(&tx, &mut state, 101, "test_budget").unwrap();
-                tx.commit().unwrap();
-            }
-            let input = EngineeringReconciliationInput {
-                runtime_failure: Some("invalid task-scoped transport configuration".into()),
-                not_started: false,
-                execution_id: root.execution_id.clone(),
-                runtime_identity: "runtime-1".into(),
-                observation: "startup failed and namespace reaped".into(),
-                evidence_digest: sha("proof"),
-                reaped_boundary: Some("boundary-1".into()),
-                recovered_submission: None,
-            };
-            let env = envelope(&store, &id, EngineeringCommand::RecordReconciliation(input));
-            let reconciler = EngineeringActor::Reconciler {
-                adapter_id: "test-adapter".into(),
-            };
-            store
-                .engineering_command(reconciler.clone(), env.clone(), 102)
-                .unwrap();
-            store.engineering_command(reconciler, env, 103).unwrap();
-            let state = store.engineering_outcome(&id).unwrap().unwrap();
-            assert!(state.executions[0].cessation_verified);
-            assert_eq!(state.root.state, ObligationState::Attention);
-            assert!(
-                state
-                    .root
-                    .last_error
-                    .as_ref()
-                    .unwrap()
-                    .contains("invalid task-scoped")
-            );
-            assert!(
-                store
-                    .claim_due_engineering(EngineeringRole::Supervisor, 104, 600, 1)
-                    .unwrap()
-                    .is_empty()
-            );
-            assert_eq!(
-                state.recoveries_used,
+        for not_started in [false, true] {
+            for exhausted in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                let database = temp.path().join("admission.sqlite");
+                let mut store = Store::open(&database).unwrap();
+                let id = create(&mut store);
+                let root = claim(&mut store, EngineeringRole::Supervisor, 100);
                 if exhausted {
-                    state.contract().budget.max_recoveries
-                } else {
-                    1
+                    let tx = store.connection.transaction().unwrap();
+                    let mut state = load(&tx, &id).unwrap();
+                    state.recoveries_used = state.contract().budget.max_recoveries;
+                    save(&tx, &mut state, 101, "test_budget").unwrap();
+                    tx.commit().unwrap();
                 }
-            );
+                let input = EngineeringReconciliationInput {
+                    runtime_failure: Some("invalid task-scoped transport configuration".into()),
+                    not_started,
+                    execution_id: root.execution_id.clone(),
+                    runtime_identity: "runtime-1".into(),
+                    observation: "startup failed and namespace reaped".into(),
+                    evidence_digest: sha("proof"),
+                    reaped_boundary: (!not_started).then(|| "boundary-1".into()),
+                    recovered_submission: None,
+                };
+                let env = envelope(&store, &id, EngineeringCommand::RecordReconciliation(input));
+                let reconciler = EngineeringActor::Reconciler {
+                    adapter_id: "test-adapter".into(),
+                };
+                store
+                    .engineering_command(reconciler.clone(), env.clone(), 102)
+                    .unwrap();
+                store.engineering_command(reconciler, env, 103).unwrap();
+                drop(store);
+                let mut store = Store::open(&database).unwrap();
+                let state = store.engineering_outcome(&id).unwrap().unwrap();
+                assert!(state.executions[0].cessation_verified);
+                assert_eq!(state.root.state, ObligationState::Attention);
+                assert!(
+                    state
+                        .root
+                        .last_error
+                        .as_ref()
+                        .unwrap()
+                        .contains("invalid task-scoped")
+                );
+                assert!(
+                    store
+                        .claim_due_engineering(EngineeringRole::Supervisor, 104, 600, 1)
+                        .unwrap()
+                        .is_empty()
+                );
+                assert_eq!(
+                    state.recoveries_used,
+                    if exhausted {
+                        state.contract().budget.max_recoveries
+                    } else {
+                        1
+                    }
+                );
+            }
         }
     }
-
     #[test]
     fn repair_is_atomic_deduplicated_and_cannot_drop_criteria() {
         let mut store = Store::open_in_memory().unwrap();
