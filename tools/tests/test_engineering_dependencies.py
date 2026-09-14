@@ -61,6 +61,78 @@ class DependencyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'incomplete'):
             d.ready(self.peer)
 
+    def test_restricted_build_growth_preserves_dependency_readiness(self):
+        self.peer.manifest['worker_scratch'] = str(self.workspace / 'target/worker-scratch')
+        Path(self.peer.manifest['worker_scratch']).mkdir(parents=True)
+        prepared = d.ready(self.peer, prepare=True)
+        environment = self.peer.environment()
+        storage = Path(self.peer.manifest['dependency_preparation']['storage'])
+        build = Path(environment['CARGO_TARGET_DIR'])
+        self.assertEqual(build, storage.with_name('dependencies-build'))
+        self.assertFalse(build.is_relative_to(storage))
+        self.assertFalse(storage.is_relative_to(build))
+        identity = self.peer.command_environment_identity()
+        args = d.command(self.peer, 'metadata')
+        args[args.index('metadata')] = 'build'
+        args = args[:-2]  # Build uses the same restricted boundary without metadata's format.
+        subprocess.run(args, env=environment, check=True, capture_output=True, timeout=30)
+        self.assertTrue((build / 'debug/libdependency_fixture.rlib').is_file())
+        # Build output may exceed the entire dependency budget without entering
+        # either its allocation check or its reusable material identity.
+        (build / 'large-output').write_bytes(b'x' * (2 * self.peer.manifest['dependency_preparation']['max_bytes']))
+        self.assertEqual(identity, self.peer.command_environment_identity())
+        reused = d.ready(self.peer)
+        self.assertTrue(reused['reused'])
+        self.assertEqual(prepared['material'], reused['material'])
+
+    def test_build_path_rejects_aliases_special_nodes_and_unignored_paths(self):
+        storage, build = d.storage_paths(self.peer.manifest)
+        storage.mkdir(parents=True)
+        outside = self.root / 'outside'
+        outside.mkdir()
+        for destination in (outside, storage, self.root / 'missing'):
+            with self.subTest(destination=destination):
+                build.symlink_to(destination, target_is_directory=True)
+                for operation in (d.configuration, d.environment):
+                    with self.assertRaisesRegex(ValueError, 'build storage.*canonical'):
+                        operation(self.peer.manifest)
+                build.unlink()
+        for kind in ('file', 'fifo'):
+            with self.subTest(kind=kind):
+                if kind == 'file':
+                    build.write_text('invalid')
+                else:
+                    os.mkfifo(build)
+                with self.assertRaisesRegex(ValueError, 'real directories'):
+                    d.environment(self.peer.manifest)
+                build.unlink()
+        (self.workspace / '.gitignore').write_text('/target/dependencies/\n')
+        with self.assertRaisesRegex(ValueError, 'build storage must be Git ignored'):
+            d.configuration(self.peer.manifest)
+
+    def test_storage_paths_cannot_escape_workspace_or_alias_an_ancestor(self):
+        for location in (self.root / 'outside', self.workspace,
+                         self.workspace / 'target/../../outside'):
+            with self.subTest(location=location):
+                self.peer.manifest['dependency_preparation']['storage'] = str(location)
+                with self.assertRaisesRegex(ValueError, 'canonical and strictly inside'):
+                    d.environment(self.peer.manifest)
+        (self.workspace / 'target').symlink_to(self.root, target_is_directory=True)
+        self.peer.manifest['dependency_preparation']['storage'] = str(self.workspace / 'target/dependencies')
+        with self.assertRaisesRegex(ValueError, 'canonical and strictly inside'):
+            d.environment(self.peer.manifest)
+
+    def test_legacy_build_allocation_requires_explicit_repair(self):
+        d.ready(self.peer, prepare=True)
+        storage = Path(self.peer.manifest['dependency_preparation']['storage'])
+        legacy = storage / 'target'
+        legacy.mkdir()
+        retained = legacy / 'old-build'
+        retained.write_bytes(b'x' * (2 * self.peer.manifest['dependency_preparation']['max_bytes']))
+        with self.assertRaisesRegex(ValueError, 'storage bound exceeded'):
+            d.ready(self.peer, prepare=True)
+        self.assertTrue(retained.is_file())
+
     def test_rejects_alternate_sources_and_unignored_storage(self):
         with (self.workspace / 'Cargo.lock').open('a') as stream:
             stream.write('source="git+ssh://private.example/package#abc"\n')

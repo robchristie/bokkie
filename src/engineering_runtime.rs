@@ -2254,6 +2254,35 @@ impl EngineeringRuntime {
                 let hash = self.blob(&serde_json::to_vec(
                     &json!({"status":status,"journal_digest":journal_digest}),
                 )?)?;
+                let not_started = log.iter().any(|event| event.kind == "not_started");
+                // A failed admission is a startup failure even though no namespace
+                // existed to reap. Reuse Store's durable repair state rather than
+                // turning proof of cessation into permission to retry unchanged.
+                let state = snapshot(store, &initial.id)?;
+                // Lease expiry also fences executions and writes cancel.json.
+                // Neither observation proves intentional cancellation of work.
+                // A recorded failed admission remains a fault after downtime.
+                let obsolete = state.cancellation_requested
+                    || execution.contract_revision != state.contract_revision
+                    || state.executions.iter().any(|other| {
+                        other.obligation_id == execution.obligation_id
+                            && other.claim.lease_generation > execution.claim.lease_generation
+                    })
+                    || execution.package_id.as_ref().is_some_and(|id| {
+                        state.packages.iter().any(|package| {
+                            &package.id == id
+                                && (package.cancellation_requested
+                                    || package.superseded_by.is_some())
+                        })
+                    });
+                let runtime_failure = if not_started && !obsolete {
+                    log.iter().find(|event| event.kind == "failure").map(|event| {
+                        format!("Broker admission failed before namespace/model start; repair the runtime or prepared inputs before resuming. {}",
+                            event.value.to_string().chars().take(3000).collect::<String>())
+                    })
+                } else {
+                    None
+                };
                 self.activity(store,&directory,execution,"uncertain",EngineeringCommand::RecordReconciliation(EngineeringReconciliationInput {
                     execution_id:execution.id.clone(),runtime_identity:execution.id.clone(),
                     observation:if log.iter().any(|e| e.kind == "not_started") {
@@ -2261,7 +2290,7 @@ impl EngineeringRuntime {
                     } else {
                         "Broker died without a retained namespace reap receipt. Ownership uncertain; do not replace this writer. Operator must establish boundary cessation.".into()
                     },
-                    runtime_failure:None,not_started:log.iter().any(|e| e.kind == "not_started"),evidence_digest:hash,reaped_boundary:None,recovered_submission:None }),true,now)?;
+                    runtime_failure,not_started,evidence_digest:hash,reaped_boundary:None,recovered_submission:None }),true,now)?;
             }
         }
         Ok(())
@@ -3169,6 +3198,236 @@ s.append('boundary_reaped',{'boundary':'fixture:segmented','exit_code':0},termin
         assert!(proof.not_started);
         assert!(proof.reaped_boundary.is_none());
     }
+    #[test]
+    fn failed_pre_spawn_admission_parks_once_across_controller_restart() {
+        let mut f = Fixture::new();
+        f.event(
+            &f.worker,
+            1,
+            "launch_committed",
+            json!({"generation":"admission"}),
+        );
+        f.event(
+            &f.worker,
+            2,
+            "failure",
+            json!({"type":"ValueError","message":"dependency storage bound exceeded"}),
+        );
+        f.event(
+            &f.worker,
+            3,
+            "not_started",
+            json!({"generation":"admission","reason":"did not spawn"}),
+        );
+        let before = snapshot(&f.store, &f.id).unwrap();
+        f.runtime
+            .reconcile(&mut f.store, &before, &f.worker, 105)
+            .unwrap();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        assert_eq!(state.root.state, crate::ObligationState::Attention);
+        assert_eq!(state.turns_used, before.turns_used);
+        assert_eq!(state.recoveries_used, before.recoveries_used + 1);
+        let proof = &state.reconciliations.last().unwrap().input;
+        assert!(proof.not_started && proof.reaped_boundary.is_none());
+        assert!(
+            proof
+                .runtime_failure
+                .as_ref()
+                .unwrap()
+                .contains("dependency storage bound exceeded")
+        );
+        assert!(
+            state
+                .executions
+                .iter()
+                .find(|e| e.id == f.worker.id)
+                .unwrap()
+                .cessation_verified
+        );
+        // A supervisor already running when admission fails must cease without
+        // clearing the durable repair condition or spawning replacement turns.
+        f.event(
+            &f.supervisor,
+            1,
+            "boundary_reaped",
+            json!({"boundary":"supervisor:ceased"}),
+        );
+        f.runtime
+            .reconcile(&mut f.store, &state, &f.supervisor, 106)
+            .unwrap();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        assert_eq!(state.root.state, crate::ObligationState::Attention);
+        let profile = f.runtime.profile.clone();
+        drop(f.runtime);
+        f.runtime = EngineeringRuntime::new(profile).unwrap();
+        for now in 107..121 {
+            let state = snapshot(&f.store, &f.id).unwrap();
+            f.runtime
+                .reconcile(&mut f.store, &state, &f.worker, now)
+                .unwrap();
+            for role in [EngineeringRole::Worker, EngineeringRole::Supervisor] {
+                assert!(
+                    f.store
+                        .claim_due_engineering(role, now, 600, 1)
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+        }
+        let after = snapshot(&f.store, &f.id).unwrap();
+        assert_eq!(after.executions.len(), before.executions.len());
+        assert_eq!(after.turns_used, before.turns_used);
+        assert_eq!(after.recoveries_used, state.recoveries_used);
+        assert_eq!(after.reconciliations.len(), state.reconciliations.len());
+        // The existing authorised contract-revision route can replan after
+        // repair; polling alone never grants that transition or resets budgets.
+        let turns = after.turns_used;
+        f.store
+            .engineering_command(
+                EngineeringActor::Operator {
+                    name: "repair-owner".into(),
+                },
+                EngineeringCommandEnvelope {
+                    command_id: "replan-after-repair".into(),
+                    expected: Some(after.precondition()),
+                    command: EngineeringCommand::ReviseContract {
+                        contract: after.contract().clone(),
+                    },
+                },
+                122,
+            )
+            .unwrap();
+        assert_eq!(snapshot(&f.store, &f.id).unwrap().turns_used, turns);
+        assert_eq!(
+            f.store
+                .claim_due_engineering(EngineeringRole::Supervisor, 123, 600, 1)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn failed_admission_after_lease_expiry_stays_parked() {
+        let mut f = Fixture::new();
+        f.event(&f.worker, 1, "launch_committed", json!({}));
+        f.event(
+            &f.worker,
+            2,
+            "failure",
+            json!({"message":"dependency storage bound exceeded"}),
+        );
+        f.event(&f.worker, 3, "not_started", json!({}));
+        f.event(
+            &f.supervisor,
+            1,
+            "boundary_reaped",
+            json!({"boundary":"supervisor:ceased"}),
+        );
+        let before = snapshot(&f.store, &f.id).unwrap();
+        // tick recovers leases first, fencing both old executions. The runtime
+        // writes cancellation diagnostics, but the admission fault remains real.
+        let result = f.runtime.tick(&mut f.store, 3000).unwrap();
+        assert_eq!(result["dispatched"], 0);
+        assert_eq!(result["errors"], json!([]));
+        let state = snapshot(&f.store, &f.id).unwrap();
+        assert_eq!(state.root.state, crate::ObligationState::Attention);
+        let proof = &state
+            .reconciliations
+            .iter()
+            .find(|r| r.input.execution_id == f.worker.id)
+            .unwrap()
+            .input;
+        assert!(proof.not_started && proof.runtime_failure.is_some());
+        assert!(f.directory(&f.worker).join("cancel.json").exists());
+        assert_eq!(state.turns_used, before.turns_used);
+        let recoveries = state.recoveries_used;
+        for now in 3001..3016 {
+            assert_eq!(f.runtime.tick(&mut f.store, now).unwrap()["dispatched"], 0);
+        }
+        let after = snapshot(&f.store, &f.id).unwrap();
+        assert_eq!(after.turns_used, before.turns_used);
+        assert_eq!(after.recoveries_used, recoveries);
+        assert_eq!(after.executions.len(), before.executions.len());
+    }
+
+    #[test]
+    fn pre_spawn_failure_without_cessation_proof_remains_uncertain() {
+        let mut f = Fixture::new();
+        f.event(&f.worker, 1, "launch_committed", json!({}));
+        f.event(
+            &f.worker,
+            2,
+            "failure",
+            json!({"message":"unknown spawn outcome"}),
+        );
+        let before = snapshot(&f.store, &f.id).unwrap();
+        f.runtime
+            .reconcile(&mut f.store, &before, &f.worker, 105)
+            .unwrap();
+        let state = snapshot(&f.store, &f.id).unwrap();
+        let proof = &state.reconciliations.last().unwrap().input;
+        assert!(!proof.not_started);
+        assert!(proof.reaped_boundary.is_none() && proof.runtime_failure.is_none());
+        assert!(
+            !state
+                .executions
+                .iter()
+                .find(|e| e.id == f.worker.id)
+                .unwrap()
+                .cessation_verified
+        );
+        assert!(
+            f.store
+                .claim_due_engineering(EngineeringRole::Worker, 106, 600, 1)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn cancelled_failed_admission_settles_without_runtime_repair_charge() {
+        let mut f = Fixture::new();
+        f.event(&f.worker, 1, "launch_committed", json!({}));
+        f.event(
+            &f.worker,
+            2,
+            "failure",
+            json!({"message":"dependency readiness interrupted"}),
+        );
+        f.event(&f.worker, 3, "not_started", json!({}));
+        let state = snapshot(&f.store, &f.id).unwrap();
+        f.store
+            .engineering_command(
+                EngineeringActor::Operator {
+                    name: "fixture".into(),
+                },
+                EngineeringCommandEnvelope {
+                    command_id: "cancel-admission".into(),
+                    expected: Some(state.precondition()),
+                    command: EngineeringCommand::RequestCancellation { package_id: None },
+                },
+                105,
+            )
+            .unwrap();
+        let before = snapshot(&f.store, &f.id).unwrap();
+        f.runtime
+            .reconcile(&mut f.store, &before, &f.worker, 106)
+            .unwrap();
+        let after = snapshot(&f.store, &f.id).unwrap();
+        let proof = &after.reconciliations.last().unwrap().input;
+        assert!(proof.not_started && proof.runtime_failure.is_none());
+        assert_eq!(after.recoveries_used, before.recoveries_used);
+        assert!(
+            after
+                .executions
+                .iter()
+                .find(|e| e.id == f.worker.id)
+                .unwrap()
+                .cessation_verified
+        );
+    }
+
     #[test]
     fn failed_pre_turn_start_parks_attention_and_charges_once() {
         let mut f = Fixture::new();

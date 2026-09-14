@@ -95,6 +95,20 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(next(self.locks.iterdir()).stat().st_ino, inode)
         self.assertFalse(self.broker().spool.has('boundary_reaped'))
 
+    def test_dependency_admission_failure_records_no_start_and_never_invokes_model(self):
+        broker = self.broker()
+        broker.manifest['dependency_preparation'] = {'storage': 'unused'}
+        with patch.object(broker, 'command', return_value=['fake-peer']), patch.object(broker, 'spawn') as spawn, patch.object(b.dependencies, 'ready', side_effect=ValueError('dependency storage bound exceeded')):
+            broker.run()
+            spawn.assert_not_called()
+        self.assertTrue(broker.spool.has('not_started'))
+        self.assertFalse(broker.spool.has('boundary_started'))
+        self.assertFalse(broker.spool.has('turn_identity'))
+        failure = next(event for event in broker.spool.events if event['kind'] == 'failure')
+        self.assertEqual(failure['value']['message'], 'dependency storage bound exceeded')
+        successor = b.WorkspaceWriter(self.root, {'generation': 'after-failed-admission'})
+        successor.release_after_cessation()
+
     def test_supervisor_does_not_take_workspace_writer_lock(self):
         broker = self.broker()
         broker.manifest['role'] = 'supervisor'

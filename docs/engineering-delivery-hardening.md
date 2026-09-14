@@ -41,6 +41,33 @@ is possible before termination. Readiness proves dependency resolution, not a
 successful compile. Generated material stays ignored and separate from private
 authoritative broker evidence. Keep it while a worker owns the workspace.
 
+Build output is separate by construction: storage `target/bokkie-dependencies`
+uses `CARGO_TARGET_DIR=target/bokkie-dependencies-build`, a sibling inside the
+same authorised workspace. Both roots must be canonical and Git ignored. Build
+growth does not count against the dependency-preparation inventory or byte limit;
+existing execution deadlines, filesystem boundaries and host capacity still apply.
+No global Cargo configuration or manual target-directory override is required.
+
+Existing preparation receipts need `prepare-dependencies` again after this runtime
+update. Old `storage/target` build output is never automatically moved or deleted;
+if it already exceeds the dependency limit, preserve and relocate it as an
+explicit task-owned repair while no worker owns the workspace, then prepare and
+preflight. Historical Pagefold workspaces are not migrated by this change.
+
+A failed pre-spawn admission with verified `not_started` proof now enters Store's
+existing runtime-repair attention state, retaining the original cause and charging
+recovery at most once. Polling, controller/Store restart and cessation of an
+already-running supervisor cannot create repeated admissions or clear that state.
+The original attempted execution remains charged; no allowance is reset. Missing
+cessation proof remains uncertain, and cancellation still settles without turning
+an intentional stop into a runtime repair.
+
+After correcting the cause and passing preparation/preflight, use the existing
+operator contract-revision/replanning route to resume within the remaining budget.
+This is the existing authorised operator/automation interface, not a new approval
+gate. Merely changing files or sending a follow-up does not clear runtime attention.
+The focused no-model probe is `preflight.py probe bounded_admission`.
+
 ## Continue with attributable evidence
 
 Use `bokkie_commands` with `{"include_prior":true}` to discover compact validation
