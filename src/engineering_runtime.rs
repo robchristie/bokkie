@@ -620,8 +620,8 @@ fn dynamic_tools() -> Vec<Value> {
     vec![
         tool(
             "bokkie_github",
-            "Pagefold-scoped delivery. Worker: prepare_branch, commit(paths,message), push(head), open_pr(head,title,body). Supervisor: merge(pr,head,review evidence), cleanup(pr,head,tree,merge_commit) after verified merge and ceased workers. Both: status(pr), reconcile. All mutations require expected from bokkie_snapshot; status/reconcile observe saved operations. No arbitrary commands, repositories or URLs.",
-            json!({"operation":{"type":"string","enum":["prepare_branch","commit","push","open_pr","status","merge","cleanup","reconcile"]},"arguments":{"type":"object"},"expected":{"type":"object"},"review":{"type":"object"}}),
+            "Pagefold-scoped delivery. Worker: prepare_branch, commit(paths,message), push(head), open_pr(head,title,body), update_pr(pr,head,title,body,expected_text_digest). open_pr reports text_applied; existing PR text is not updated. Supervisor: merge(pr,head,review evidence), closeout(pr,head,tree,merge_commit) publishes retained review/CI identities, cleanup(pr,head,tree,merge_commit) after verified merge and ceased workers. Both: status(pr), reconcile. All mutations require expected from bokkie_snapshot; status/reconcile observe saved operations. No arbitrary commands, repositories or URLs.",
+            json!({"operation":{"type":"string","enum":["prepare_branch","commit","push","open_pr","update_pr","status","merge","closeout","cleanup","reconcile"]},"arguments":{"type":"object"},"expected":{"type":"object"},"review":{"type":"object"}}),
             &["operation", "arguments"],
         ),
         tool(
@@ -995,7 +995,9 @@ impl EngineeringRuntime {
         let settled = !result.is_null()
             && (!failed || result["uncertain"] == false)
             && (op.operation != "merge" || verified || failed)
-            && (op.operation != "cleanup" || result["cleanup"]["state"] == "success" || failed);
+            && (op.operation != "cleanup" || result["cleanup"]["state"] == "success" || failed)
+            && (op.operation != "update_pr" || result["text_applied"] == true || failed)
+            && (op.operation != "closeout" || result["closeout"]["state"] == "published" || failed);
         if settled {
             let execution = state
                 .executions
@@ -1057,7 +1059,15 @@ impl EngineeringRuntime {
             return Err("invalid retained delivery result command".into());
         }
         let saved: Value = serde_json::from_str(&op.arguments_json)?;
-        let result = self.github_adapter(&op.operation, &saved["arguments"], true)?;
+        let adapter_arguments = if op.operation == "closeout" {
+            saved
+                .get("_closeout_arguments")
+                .ok_or("missing retained closeout arguments")?
+                .clone()
+        } else {
+            saved["arguments"].clone()
+        };
+        let result = self.github_adapter(&op.operation, &adapter_arguments, true)?;
         // Read-back errors never prove a previously uncertain mutation did not occur.
         if result.get("error").is_some() {
             return Ok(json!({"operation_id":op.id,"pending":true,"result":result}));
@@ -1110,6 +1120,8 @@ impl EngineeringRuntime {
             "commit",
             "push",
             "open_pr",
+            "update_pr",
+            "closeout",
             "merge",
             "cleanup",
         ]
@@ -1118,9 +1130,18 @@ impl EngineeringRuntime {
             return Err("unsupported delivery operation".into());
         }
         let id = sha(format!("{}:{key}", execution.id).as_bytes());
-        let arguments_json = serde_json::to_string(args)?;
+        if args.get("_closeout_arguments").is_some() {
+            return Err("closeout evidence is owned by the runtime".into());
+        }
         if let Some(op) = state.delivery_operations.iter().find(|o| o.id == id) {
-            if op.arguments_json != arguments_json || op.operation != operation {
+            let mut original: Value = serde_json::from_str(&op.arguments_json)?;
+            if operation == "closeout" {
+                original
+                    .as_object_mut()
+                    .ok_or("invalid saved delivery request")?
+                    .remove("_closeout_arguments");
+            }
+            if original != *args || op.operation != operation {
                 return Err("delivery request replay conflict".into());
             }
             return self.reconcile_delivery(store, &state, op, now);
@@ -1166,6 +1187,18 @@ impl EngineeringRuntime {
         if operation == "cleanup" {
             self.validate_cleanup_scope(&state, &args["arguments"])?;
         }
+        let adapter_arguments = if operation == "closeout" {
+            self.closeout_arguments(&state, &args["arguments"])?
+        } else {
+            args["arguments"].clone()
+        };
+        let mut saved_arguments = args.clone();
+        if operation == "closeout" {
+            // Freeze publication inputs with intent so read-back after revision,
+            // cancellation or restart does not depend on the current contract.
+            saved_arguments["_closeout_arguments"] = adapter_arguments.clone();
+        }
+        let arguments_json = serde_json::to_string(&saved_arguments)?;
         let op = EngineeringDeliveryOperation {
             id: id.clone(),
             execution_id: execution.id.clone(),
@@ -1187,7 +1220,7 @@ impl EngineeringRuntime {
             },
             now,
         )?;
-        let result = self.github_adapter(operation, &args["arguments"], false)?;
+        let result = self.github_adapter(operation, &adapter_arguments, false)?;
         self.complete_delivery(store, &state, &op, result, now)
     }
     fn execution_limits(

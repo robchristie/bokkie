@@ -193,6 +193,173 @@ class AdapterTests(unittest.TestCase):
             delivery.execute(CONFIG, self.root, 'open_pr', args, run=self.runner)
         self.assertFalse(any('create' in argv for argv, _ in self.calls))
 
+    def text_fixture(self):
+        head = self.prepare()['head']
+        pull = self.evidence(head=head)
+        pull.update(title='Original', body='Review pending for old candidate')
+        self.responses[f'repos/{delivery.REPO}/pulls?state=all&head=robchristie:codex/test&base=main&per_page=100'] = [pull]
+        args = {'pr': 1, 'head': head, 'title': 'Addressable pages',
+                'body': 'Review PASS\nUnicode: café. Literal $(touch NEVER)',
+                'expected_text_digest': self.host().text_digest(pull)}
+        return pull, args
+
+    def publication_runner(self, *, lose_ack=False, retain=True, after_write=None):
+        self.writes = []
+        def runner(argv, **kwargs):
+            if argv[0] == '/usr/bin/gh' and '--method' in argv:
+                payload = json.loads(kwargs['input'])
+                self.writes.append((argv, payload))
+                if retain:
+                    if argv[argv.index('--method') + 1] == 'PATCH':
+                        self.responses[f'repos/{delivery.REPO}/pulls/1'].update(payload)
+                    else:
+                        self.responses[f'repos/{delivery.REPO}/issues/1/comments?per_page=100'].append({
+                            'id': 12, 'user': {'id': 7}, 'body': payload['body'],
+                            'html_url': f'https://github.com/{delivery.REPO}/pull/1#issuecomment-12'})
+                if after_write:
+                    after_write()
+                return subprocess.CompletedProcess(argv, 1 if lose_ack else 0, '', '')
+            return self.runner(argv, **kwargs)
+        return runner
+
+    def test_existing_pr_reports_unapplied_text_then_explicit_update_reads_back(self):
+        pull, args = self.text_fixture()
+        opening = {k: args[k] for k in ('head', 'title', 'body')}
+        for action in (delivery.execute, delivery.reconcile):
+            result = action(CONFIG, self.root, 'open_pr', opening, run=self.runner)
+            self.assertFalse(result['text_applied'])
+            self.assertIn('update_pr', result['next_action'])
+            self.assertEqual(result['text_digest'], args['expected_text_digest'])
+        observed = delivery.execute(CONFIG, self.root, 'status', {'pr': 1}, run=self.runner)
+        self.assertEqual(observed['pr_text'], {'title': pull['title'], 'body': pull['body']})
+        self.assertEqual(observed['text_digest'], args['expected_text_digest'])
+        runner = self.publication_runner()
+        result = delivery.execute(CONFIG, self.root, 'update_pr', args, run=runner)
+        self.assertTrue(result['text_applied'])
+        self.assertEqual(result['disposition'], 'updated')
+        self.assertEqual(pull['body'], args['body'])
+        self.assertEqual(len(self.writes), 1)
+        for action in (delivery.execute, delivery.reconcile):
+            self.assertTrue(action(CONFIG, self.root, 'update_pr', args, run=runner)['text_applied'])
+        self.assertEqual(len(self.writes), 1)
+        self.assertFalse((self.root / 'NEVER').exists())
+
+    def test_update_lost_ack_reconciles_without_second_mutation(self):
+        _, args = self.text_fixture()
+        runner = self.publication_runner(lose_ack=True)
+        with self.assertRaises(delivery.DeliveryError) as caught:
+            delivery.execute(CONFIG, self.root, 'update_pr', args, run=runner)
+        self.assertTrue(caught.exception.uncertain)
+        self.assertTrue(delivery.reconcile(CONFIG, self.root, 'update_pr', args, run=runner)['text_applied'])
+        self.assertEqual(len(self.writes), 1)
+
+    def test_update_requires_observed_text_open_head_and_readback(self):
+        pull, args = self.text_fixture()
+        runner = self.publication_runner()
+        for field, bad in [('expected_text_digest', 'f' * 64), ('head', 'f' * 40),
+                           ('title', ''), ('body', 'é' * 15001)]:
+            with self.subTest(field=field), self.assertRaises(delivery.DeliveryError):
+                delivery.execute(CONFIG, self.root, 'update_pr', dict(args, **{field: bad}), run=runner)
+        pull['state'] = 'closed'
+        with self.assertRaises(delivery.DeliveryError):
+            delivery.execute(CONFIG, self.root, 'update_pr', args, run=runner)
+        self.assertEqual(self.writes, [])
+        pull['state'] = 'open'
+        runner = self.publication_runner(retain=False)
+        with self.assertRaises(delivery.DeliveryError) as caught:
+            delivery.execute(CONFIG, self.root, 'update_pr', args, run=runner)
+        self.assertTrue(caught.exception.uncertain)
+        self.assertIsNone(delivery.reconcile(CONFIG, self.root, 'update_pr', args, run=runner))
+        self.assertEqual(len(self.writes), 1)
+
+    def test_update_detects_head_moving_during_patch(self):
+        pull, args = self.text_fixture()
+        runner = self.publication_runner(after_write=lambda: pull['head'].update(sha='f' * 40))
+        with self.assertRaises(delivery.DeliveryError) as caught:
+            delivery.execute(CONFIG, self.root, 'update_pr', args, run=runner)
+        self.assertTrue(caught.exception.uncertain)
+
+    def closeout_fixture(self):
+        self.evidence(merged=True)
+        self.responses['user'] = {'id': 7}
+        self.responses[f'repos/{delivery.REPO}/issues/1/comments?per_page=100'] = []
+        status = self.host().status(1)
+        return {'pr': 1, 'head': HEAD, 'tree': 'd' * 40, 'merge_commit': 'b' * 40,
+                'review_digest': 'e' * 64, 'pre_merge_ci': status['pre_merge_ci']['run'],
+                'post_merge_ci': status['post_merge_ci']['run']}
+
+    def test_closeout_exact_evidence_idempotent_after_cleanup_on_main(self):
+        args = self.closeout_fixture()
+        runner = self.publication_runner()
+        result = delivery.execute(CONFIG, self.root, 'closeout', args, run=runner)
+        self.assertEqual(result['closeout']['state'], 'published')
+        body = self.writes[0][1]['body']
+        for text in (HEAD, 'd' * 40, 'b' * 40, 'e' * 64, 'actions/runs/10', 'actions/runs/11',
+                     'Product acceptance and cleanup are tracked separately'):
+            self.assertIn(text, body)
+        for action in (delivery.execute, delivery.reconcile):
+            self.assertEqual(action(CONFIG, self.root, 'closeout', args, run=runner), result)
+        self.assertEqual(len(self.writes), 1)
+        self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'main')
+
+    def test_closeout_lost_ack_and_absence_never_blindly_repost(self):
+        args = self.closeout_fixture()
+        runner = self.publication_runner(lose_ack=True)
+        with self.assertRaises(delivery.DeliveryError) as caught:
+            delivery.execute(CONFIG, self.root, 'closeout', args, run=runner)
+        self.assertTrue(caught.exception.uncertain)
+        self.assertEqual(delivery.reconcile(CONFIG, self.root, 'closeout', args, run=runner)['closeout']['state'], 'published')
+        comments = self.responses[f'repos/{delivery.REPO}/issues/1/comments?per_page=100']
+        comments.clear()
+        self.assertIsNone(delivery.reconcile(CONFIG, self.root, 'closeout', args, run=runner))
+        self.assertEqual(len(self.writes), 1)
+
+    def test_closeout_reserves_capacity_for_its_own_readback(self):
+        args = self.closeout_fixture()
+        runner = self.publication_runner()
+        comments = self.responses[f'repos/{delivery.REPO}/issues/1/comments?per_page=100']
+        comments[:] = [{'body': 'Other comment'}] * 99
+        with self.assertRaisesRegex(delivery.DeliveryError, 'read-back capacity') as caught:
+            delivery.execute(CONFIG, self.root, 'closeout', args, run=runner)
+        self.assertFalse(caught.exception.uncertain)
+        self.assertEqual(self.writes, [])
+        comments.pop()
+        result = delivery.execute(CONFIG, self.root, 'closeout', args, run=runner)
+        self.assertEqual(len(comments), 99)
+        self.assertEqual(result['closeout']['state'], 'published')
+        self.assertEqual(delivery.reconcile(CONFIG, self.root, 'closeout', args, run=runner), result)
+        self.assertEqual(delivery.execute(CONFIG, self.root, 'closeout', args, run=runner), result)
+        self.assertEqual(len(self.writes), 1)
+
+    def test_closeout_rejects_unverified_merge_and_changed_ci(self):
+        args = self.closeout_fixture()
+        runner = self.publication_runner()
+        for field, value in [('head', 'f' * 40), ('tree', 'f' * 40), ('merge_commit', 'f' * 40),
+                             ('review_digest', 'not-a-digest'), ('pre_merge_ci', {})]:
+            with self.subTest(field=field), self.assertRaises(delivery.DeliveryError):
+                delivery.execute(CONFIG, self.root, 'closeout', dict(args, **{field: value}), run=runner)
+        self.responses[f'repos/{delivery.REPO}/actions/runs?head_sha={"b" * 40}&per_page=100']['workflow_runs'][0]['conclusion'] = 'failure'
+        with self.assertRaises(delivery.DeliveryError):
+            delivery.execute(CONFIG, self.root, 'closeout', args, run=runner)
+        self.assertEqual(self.writes, [])
+
+    def test_closeout_rejects_spoofed_modified_duplicate_and_unbounded_comments(self):
+        args = self.closeout_fixture()
+        runner = self.publication_runner()
+        delivery.execute(CONFIG, self.root, 'closeout', args, run=runner)
+        comments = self.responses[f'repos/{delivery.REPO}/issues/1/comments?per_page=100']
+        original = json.loads(json.dumps(comments[0]))
+        for field, value in [('user', {'id': 8}), ('body', original['body'] + 'changed'),
+                             ('html_url', 'https://evil.invalid/')]:
+            comments[:] = [dict(original, **{field: value})]
+            with self.subTest(field=field), self.assertRaises(delivery.DeliveryError):
+                delivery.reconcile(CONFIG, self.root, 'closeout', args, run=runner)
+        for count in (2, 100):
+            comments[:] = [original] * count
+            with self.assertRaises(delivery.DeliveryError):
+                delivery.execute(CONFIG, self.root, 'closeout', args, run=runner)
+        self.assertEqual(len(self.writes), 1)
+
     def test_merge_replay_and_post_merge_ci(self):
         self.evidence(merged=True)
         result = delivery.reconcile(CONFIG, self.root, 'merge', {'pr': 1, 'head': HEAD}, run=self.runner)

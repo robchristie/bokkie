@@ -61,6 +61,43 @@ and branch, clean candidate, current-base ancestry, mergeability, blocking GitHu
 reviews, supported policies and actual successful Pagefold CI on that head.
 No admin bypass or force update of a branch exists.
 
+### PR text and closeout publication
+
+`open_pr {head,title,body}` reports `disposition` (created, existing or reconciled),
+`text_applied`, the observed `text_digest` and an explicit `next_action` when the
+supplied text is absent. Finding an existing PR never edits its description.
+Workers use `update_pr {pr,head,title,body,expected_text_digest}` after repair and
+final review. `status.pr_text` exposes the observed title/body for conflict
+inspection. The digest comes from `open_pr` or `status`; it guards against
+replacing text changed since observation. The adapter restricts this operation
+to the configured PR branch/base/repository and exact open head, then reads back
+the head and complete title/body. Repeating already-applied text is a no-op.
+GitHub does not make the head/text check and metadata update atomic: a concurrent
+head change detected after PATCH leaves an uncertain operation. These guards do
+not promise an atomic compare-and-swap against concurrent human edits.
+
+The supervisor's `closeout {pr,head,tree,merge_commit}` binds to the retained
+verified merge and ceased workers. Bokkie derives the review digest and CI run,
+attempt and head identities from that merge receipt; models cannot supply a
+free-form closeout or substitute review/CI evidence. The host verifies the exact
+merged head/tree and successful CI, then publishes a deterministic comment.
+The comment distinguishes verified delivery from product acceptance and cleanup.
+It can be published after cleanup has switched the checkout to main.
+
+A stable PR/head/merge marker, exact content, authenticated author ID and scoped
+comment URL support read-back after a lost acknowledgement. Duplicate, altered
+or foreign-author markers and truncated comment enumeration fail closed. The
+bounded reader supports fewer than 100 comments; a new publication requires
+at most 98 existing comments so its own read-back still fits. Uncertain publication only
+reads back; an absent comment never authorises another POST. The normal durable
+intent freezes the publication inputs, serialises operations and retains
+responsibility across restart, cancellation and later contract revisions. A
+successful receipt records `closeout.state=published`, comment identity/URL and
+content digest. Publication remains a separate delivery operation; it does not
+set product acceptance or waive its gates. Supervisor instructions require
+publication before normal final acceptance. Historical outcomes are not reopened
+or their PRs edited automatically by this runtime upgrade.
+
 SQLite commits a fenced delivery intent before the host performs an effect.
 Successful results and pre-effect failures retain receipts. An uncertain effect
 is read back rather than repeated; new worker claims and final acceptance wait
@@ -139,13 +176,15 @@ credential helpers. Only a strict standalone repository configuration is support
 
 ## Focused qualification
 
-The calibration question is whether exact CI/tree receipts and partial cleanup
-can remain attributable without broadening authenticated execution. Its smallest
+The calibration question is whether PR updates, closeout publication, exact
+CI/tree receipts and partial cleanup remain attributable without broadening
+authenticated execution. Its smallest
 probe is `python3 -m unittest discover -s tools/tests -p test_github_delivery.py -v`:
 recorded GitHub responses and disposable standalone Git repositories cover
 attempt/head/URL mismatches, missing/pending/failed CI, pagination, unequal trees,
 dirty work, foreign worktrees, changed refs and a lost remote deletion
-acknowledgement. Tests own detailed evidence; the active delivery-hardening
-plan owns aggregate qualification. Exit requires these invariants plus the
+acknowledgement, ignored existing-PR text, explicit updates, changed text/head,
+closeout publication, duplicate/spoofed comments and lost publication replies.
+Tests own detailed evidence; the owning delivery plan retains aggregate results. Exit requires these invariants plus the
 Store/controller ownership and authority integration tests to pass. These
 fixtures perform no network mutation and establish no live delivery claim.

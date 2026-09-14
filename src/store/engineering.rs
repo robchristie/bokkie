@@ -1898,14 +1898,14 @@ fn apply_command(
                     "delivery authority, ownership or pending intent conflict",
                 ));
             }
-            if !["merge", "cleanup"].contains(&input.operation.as_str())
+            if !["merge", "cleanup", "closeout"].contains(&input.operation.as_str())
                 && execution.role != EngineeringRole::Worker
             {
                 return Err(conflict(
                     "only the workspace worker can prepare or publish delivery",
                 ));
             }
-            if ["merge", "cleanup"].contains(&input.operation.as_str())
+            if ["merge", "cleanup", "closeout"].contains(&input.operation.as_str())
                 && (execution.role != EngineeringRole::Supervisor
                     || state
                         .executions
@@ -1913,7 +1913,7 @@ fn apply_command(
                         .any(|e| e.role == EngineeringRole::Worker && !e.cessation_verified))
             {
                 return Err(conflict(
-                    "merge/cleanup requires supervisor and ceased writers",
+                    "merge/cleanup/closeout requires supervisor and ceased writers",
                 ));
             }
             if input.operation == "merge"
@@ -1926,7 +1926,7 @@ fn apply_command(
             {
                 return Err(conflict("merge requires all current packages accepted"));
             }
-            if input.operation == "cleanup"
+            if ["cleanup", "closeout"].contains(&input.operation.as_str())
                 && !state.delivery_operations.iter().any(|op| {
                     op.operation == "merge"
                         && op.contract_revision == state.contract_revision
@@ -1934,7 +1934,9 @@ fn apply_command(
                         && op.evidence_digest.is_some()
                 })
             {
-                return Err(conflict("cleanup requires a verified completed merge"));
+                return Err(conflict(
+                    "cleanup/closeout requires a verified completed merge",
+                ));
             }
             // Reuse normal lease fencing even though the trusted adapter supplies the record.
             validate_actor(
@@ -2471,6 +2473,8 @@ fn validate_envelope(
                 "commit",
                 "push",
                 "open_pr",
+                "update_pr",
+                "closeout",
                 "merge",
                 "cleanup",
             ]
@@ -4954,6 +4958,64 @@ mod tests {
     }
 
     #[test]
+    fn github_publication_roles_replay_and_verified_merge_requirements() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("publication.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let id = github_delivery_create(&mut store, true);
+        let root = claim(&mut store, EngineeringRole::Supervisor, 100);
+        new_package(&mut store, &root, 101);
+        let worker = claim(&mut store, EngineeringRole::Worker, 102);
+        for (owner, operation) in [
+            (&root, "update_pr"),
+            (&root, "closeout"),
+            (&worker, "closeout"),
+        ] {
+            let env = envelope(&store, &id, github_delivery_intent(owner, operation));
+            assert!(
+                store
+                    .engineering_command(github_delivery_adapter(), env, 103)
+                    .is_err()
+            );
+        }
+        let intent = envelope(&store, &id, github_delivery_intent(&worker, "update_pr"));
+        let first = store
+            .engineering_command(github_delivery_adapter(), intent.clone(), 103)
+            .unwrap();
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        assert_eq!(
+            store
+                .engineering_command(github_delivery_adapter(), intent, 104)
+                .unwrap()
+                .event_sequence,
+            first.event_sequence
+        );
+        let pending = envelope(&store, &id, github_delivery_intent(&worker, "update_pr"));
+        assert!(
+            store
+                .engineering_command(github_delivery_adapter(), pending, 104)
+                .is_err()
+        );
+        command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_result(first.record_id.as_ref().unwrap(), false, false),
+            105,
+        );
+        reconcile(&mut store, &worker, None, 106);
+        let env = envelope(&store, &id, github_delivery_intent(&root, "closeout"));
+        let error = store
+            .engineering_command(github_delivery_adapter(), env, 107)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("verified completed merge"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn github_delivery_pending_intent_blocks_new_workers_and_acceptance() {
         let mut store = Store::open_in_memory().unwrap();
         let id = github_delivery_create(&mut store, true);
@@ -5206,7 +5268,33 @@ mod tests {
             github_delivery_result(&cleanup, false, false),
             116,
         );
-        command(&mut store, &id, actor(&root), finish, 117);
+        let closeout = command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_intent(&root, "closeout"),
+            117,
+        )
+        .record_id
+        .unwrap();
+        let env = envelope(&store, &id, finish.clone());
+        assert!(store.engineering_command(actor(&root), env, 118).is_err());
+        command(
+            &mut store,
+            &id,
+            github_delivery_adapter(),
+            github_delivery_result(&closeout, false, false),
+            119,
+        );
+        assert!(
+            store
+                .engineering_outcome(&id)
+                .unwrap()
+                .unwrap()
+                .acceptance
+                .is_none()
+        );
+        command(&mut store, &id, actor(&root), finish, 120);
         assert_eq!(
             store.engineering_outcome(&id).unwrap().unwrap().root.state,
             ObligationState::Completed

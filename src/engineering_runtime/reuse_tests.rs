@@ -134,6 +134,24 @@ fn delivery_receipt_rejects_boolean_only_and_mismatched_ci_and_cleanup() {
     assert!(f.runtime.validate_cleanup_scope(&state,&args).unwrap_err().to_string().contains("execution"));
     for execution in &mut state.executions { execution.cessation_verified = true; }
     f.runtime.validate_cleanup_scope(&state,&args).unwrap();
+    // Closeout evidence comes exclusively from the verified merge operation.
+    let review = EngineeringReviewEvidence { reviewer_identity: "independent".into(),
+        artefacts: vec![], evidence_digest: "d".repeat(64) };
+    state.delivery_operations[0].arguments_json = json!({"review":review}).to_string();
+    let publication = f.runtime.closeout_arguments(&state,&args).unwrap();
+    assert_eq!(publication["review_digest"], review.evidence_digest);
+    assert_eq!(publication["pre_merge_ci"], receipt["pre_merge_ci"]["run"]);
+    assert_eq!(publication["post_merge_ci"], receipt["post_merge_ci"]["run"]);
+    let mut supplied = args.clone();
+    supplied["review_digest"] = json!("e".repeat(64));
+    assert!(f.runtime.closeout_arguments(&state,&supplied).is_err());
+    supplied = args.clone();
+    supplied["head"] = json!(merge);
+    assert!(f.runtime.closeout_arguments(&state,&supplied).is_err());
+    state.contract_revision += 1;
+    assert!(f.runtime.closeout_arguments(&state,&args).is_err());
+    state.contract_revision -= 1;
+
     let mut wrong = args.clone();
     wrong["head"] = json!(merge);
     assert!(f.runtime.validate_cleanup_scope(&state,&wrong).is_err());
@@ -162,4 +180,41 @@ fn uncaptured_package_input_must_still_match_after_validation() {
     let found = f.runtime.discover_evidence(&state, &f.worker).unwrap();
     assert!(found["validations"].as_array().unwrap().is_empty());
     assert!(found["rejected"].to_string().contains("source file no longer matches submission"));
+}
+
+#[test]
+fn closeout_reconciliation_uses_frozen_intent_after_contract_change() {
+    let mut f = Fixture::with_github(true);
+    let host = f.runtime.profile.broker_root.join("synthetic-host");
+    fs::create_dir_all(&host).unwrap();
+    f.runtime.profile.broker = host.join("broker.py");
+    fs::write(host.join("github_delivery.py"), r#"import json, sys
+from pathlib import Path
+request = json.load(sys.stdin)
+assert request['reconcile'] is True
+assert request['operation'] == 'closeout'
+assert request['arguments'] == {'frozen': 'original publication inputs'}
+Path(__file__).with_name('readback.json').write_text(json.dumps(request))
+print('null')
+"#).unwrap();
+    let mut state = snapshot(&f.store, &f.id).unwrap();
+    let op = EngineeringDeliveryOperation {
+        id: sha(b"frozen-closeout"), execution_id: f.supervisor.id.clone(),
+        contract_revision: state.contract_revision, operation: "closeout".into(),
+        arguments_json: json!({"arguments":{}, "_closeout_arguments":{"frozen":"original publication inputs"}}).to_string(),
+        evidence_digest: None, post_merge_verified: false,
+    };
+    state.contract_revision += 1;
+    state.cancellation_requested = true;
+    let result = f.runtime.reconcile_delivery(&mut f.store, &state, &op, 105).unwrap();
+    assert_eq!(result["pending"], true);
+    assert!(host.join("readback.json").exists());
+    // A successful process with no publication observation cannot settle either
+    // new operation, and does not manufacture a Store result or acceptance.
+    for operation in ["update_pr", "closeout"] {
+        let op = EngineeringDeliveryOperation { operation: operation.into(), ..op.clone() };
+        let result = f.runtime.complete_delivery(&mut f.store, &state, &op, json!({}), 106).unwrap();
+        assert_eq!(result["pending"], true);
+    }
+    assert!(snapshot(&f.store,&f.id).unwrap().delivery_operations.is_empty());
 }
