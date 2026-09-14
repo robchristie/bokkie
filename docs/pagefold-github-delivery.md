@@ -67,7 +67,8 @@ No admin bypass or force update of a branch exists.
 `text_applied`, the observed `text_digest` and an explicit `next_action` when the
 supplied text is absent. Finding an existing PR never edits its description.
 Workers use `update_pr {pr,head,title,body,expected_text_digest}` after repair and
-final review. The digest comes from `open_pr` or `status`; it guards against
+final review. `status.pr_text` exposes the observed title/body for conflict
+inspection. The digest comes from `open_pr` or `status`; it guards against
 replacing text changed since observation. The adapter restricts this operation
 to the configured PR branch/base/repository and exact open head, then reads back
 the head and complete title/body. Repeating already-applied text is a no-op.

@@ -239,7 +239,8 @@ class Host:
         post_ci = self.ci_receipt(_head(p['merge_commit_sha'])) if merge_tree else {'state': 'unavailable', 'head': None, 'run': None, 'runs': [], 'jobs': []}
         tree_equal = merge_tree is not None and head_tree == merge_tree
         post_merge = bool(tree_equal and post_ci['state'] == 'success')
-        return {'text_digest': self.text_digest(p), 'head_tree': head_tree, 'merge_tree': merge_tree, 'tree_equal': tree_equal,
+        return {'pr_text': {'title': p.get('title', ''), 'body': p.get('body') or ''},
+                'text_digest': self.text_digest(p), 'head_tree': head_tree, 'merge_tree': merge_tree, 'tree_equal': tree_equal,
                 'pre_merge_ci': pre_ci, 'post_merge_ci': post_ci, 'post_merge_verified': post_merge, 'repo': REPO, 'base': 'main', 'branch': self.branch, 'pr': number, 'head': head,
                 'state': p['state'], 'merged': p['merged'], 'merge_commit': p.get('merge_commit_sha'),
                 'draft': p['draft'], 'mergeable': p.get('mergeable'), 'mergeable_state': p.get('mergeable_state'),

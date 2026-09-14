@@ -1,8 +1,9 @@
 # GitHub publication closeout qualification
 
-Qualification on 14 September 2026 used the implementation at
-`2be76f8f42249d0f1cd0abf5499c1b89e5e89392`; subsequent plan/evidence closeout does
-not change the tested implementation. The owning delivery is
+Initial canonical qualification on 14 September 2026 used the implementation
+at `2be76f8f42249d0f1cd0abf5499c1b89e5e89392`. The subsequent status-text inspection
+addition has a deterministic adapter regression; final committed-candidate
+qualification and review identities remain on the owning PR. The owning delivery is
 [Bokkie PR #36](https://github.com/robchristie/bokkie/pull/36).
 
 ## Question and boundary

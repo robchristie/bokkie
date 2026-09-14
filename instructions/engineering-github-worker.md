@@ -16,7 +16,8 @@ update_pr {pr,head,title,body,expected_text_digest}; status {pr:number} is read-
 open_pr creates or finds the PR; it never edits existing text. Inspect text_applied
 and next_action in its receipt. After repairs and the final review, refresh the
 same PR with update_pr, using text_digest from open_pr/status as
-expected_text_digest. A changed digest requires inspection, not blind overwrite.
+expected_text_digest. A changed digest requires inspection of status.pr_text,
+not blind overwrite.
 Read back the receipt and require text_applied before claiming text was updated.
 Prepare the branch before editing. Commit only intended files; run canonical
 verification and inspect the complete diff. Source publication requires a clean
