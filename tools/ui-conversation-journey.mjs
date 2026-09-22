@@ -11,7 +11,7 @@ const evidence = resolve(process.env.BOKKIE_CONVERSATION_EVIDENCE ?? '.ui-qualif
 await mkdir(evidence, {recursive:true});
 const profile = process.env.BOKKIE_CONVERSATION_PROFILE;
 if (!preflight && !profile) throw Error('Live qualification requires an explicit private BOKKIE_CONVERSATION_PROFILE');
-const fixtureRoot = join('/tmp', `bokkie-conversation-journey-${randomUUID()}`);
+const fixtureRoot = process.env.BOKKIE_CONVERSATION_RESUME_ROOT ?? join('/tmp', `bokkie-conversation-journey-${randomUUID()}`);
 const endpoint = process.env.BOKKIE_UI_LANTERN_ENDPOINT ?? 'http://127.0.0.1:9336';
 const report = {mode:preflight?'no-model-preflight':'live-model',source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),budget:{calls:12,seconds:900,repair_calls:4,repair_seconds:300},calls:0,checks:[],errors:[],captures:[]};
 for(const file of ['target/debug/bokkie-conversation-fixture','apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm','tools/conversation-runtime/broker.py']) report[file]=createHash('sha256').update(await readFile(file)).digest('hex');
@@ -61,7 +61,7 @@ async function capture(name,focus){if(focus)await reveal(focus);await page.waitF
 }
 const deadline=setTimeout(()=>{report.errors.push('Aggregate time budget exceeded');fixture?.kill('SIGTERM');browser?.close();},900000);
 try{
- await start();
+ await start(Boolean(process.env.BOKKIE_CONVERSATION_RESUME_ROOT));
  browser=await chromium.launch({headless:true,env:{...process.env,LD_LIBRARY_PATH:process.env.BOKKIE_UI_SYSROOT?`${resolve(process.env.BOKKIE_UI_SYSROOT,'usr/lib')}:${process.env.LD_LIBRARY_PATH??''}`:(process.env.LD_LIBRARY_PATH??'')},args:['--no-sandbox','--enable-unsafe-webgpu','--enable-features=Vulkan','--use-angle=vulkan','--disable-vulkan-surface',`--remote-debugging-port=${new URL(endpoint).port}`]});
  report.browser=browser.version();page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>report.errors.push(String(e)));
  await page.goto(origin+'/ui/');await ready();await click('bokkie.conversation.open');await page.waitForTimeout(500);

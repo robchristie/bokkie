@@ -313,3 +313,29 @@ fn selection_uses_catalogue_and_conflicts_do_not_silently_choose() {
         Err(StoreError::NotFound(_))
     ));
 }
+
+#[test]
+fn model_schema_only_advertises_operations_for_trusted_selection() {
+    let operations = |managed, legacy| {
+        crate::conversation::operation_schema_for(managed, legacy)
+            .pointer("/properties/proposal/anyOf")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|op| {
+                op.pointer("/properties/operation/const")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        operations(false, false),
+        vec!["discuss", "lookup", "save_definition"]
+    );
+    assert_eq!(operations(false, true), vec!["discuss", "lookup"]);
+    assert!(operations(true, false).contains(&"preview".to_owned()));
+}

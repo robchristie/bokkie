@@ -408,3 +408,25 @@ pub fn operation_schema() -> Value {
     let operation = json!({"anyOf":[object(json!({"operation":{"type":"string","const":"discuss"},"message":text}),vec!["operation","message"]),object(json!({"operation":{"type":"string","const":"lookup"},"query":text}),vec!["operation","query"]),object(json!({"operation":{"type":"string","const":"save_definition"},"definition":definition,"message":text}),vec!["operation","definition","message"]),object(json!({"operation":{"type":"string","const":"preview"}}),vec!["operation"]),object(json!({"operation":{"type":"string","const":"propose"},"action":{"type":"string","enum":["activate","pause","resume"]}}),vec!["operation","action"])]});
     object(json!({"proposal":operation}), vec!["proposal"])
 }
+
+/// Advertise only operations legal for the current trusted selection. Validation
+/// still fences every proposal after the model returns.
+pub fn operation_schema_for(managed_selected: bool, legacy_selected: bool) -> Value {
+    let mut schema = operation_schema();
+    if let Some(operations) = schema
+        .pointer_mut("/properties/proposal/anyOf")
+        .and_then(Value::as_array_mut)
+    {
+        operations.retain(|operation| {
+            match operation
+                .pointer("/properties/operation/const")
+                .and_then(Value::as_str)
+            {
+                Some("preview" | "propose") => managed_selected,
+                Some("save_definition") => !legacy_selected,
+                _ => true,
+            }
+        });
+    }
+    schema
+}
