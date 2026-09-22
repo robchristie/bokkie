@@ -1,5 +1,5 @@
 {
-  "source_revision": "d838ac08d579da1bddfe20a4ad3bdf7d027487a7",
+  "source_revision": "635516d9e2e4121cf5628cb42e4f6ba44f560c03",
   "command": "tools/check.sh",
   "result": "passed",
   "python_tests": 182,
@@ -40,7 +40,7 @@
     "src/bin/bokkie-engineering.rs": "4c10c34190d5f7a328c49f18780603ded1c7312cc3ade50d1823405733db4dee",
     "src/bin/bokkie-ui-fixture.rs": "53fe9c19877933894eeef78aebd10f3931f9ca402412deedbae7b82c4768c22d",
     "src/conversation.rs": "2fd801b6e051086f64051019936afb3a29f4a69c0f0eacafda7b3bcd234fefdb",
-    "src/conversation_http.rs": "793dfb6eb67921010f3612a99228ca0f28470ccb0114475ed5a86aa21d9053ac",
+    "src/conversation_http.rs": "8e0f7d1547f31aa293e7dc3658b2ea97e4534aeb9b97fe233aeeec0767f94570",
     "src/conversation_runtime.rs": "cac913e3df75d0b94cae5f98f8f3736d58499cc49348f726d59021229a76e8b2",
     "src/conversation_tests.rs": "3f3a78bf2ae24b94b59fc9ea31dc45b8e27f367ab17a27ff3cb4564266d34a0e",
     "src/db_executor.rs": "1365998046c31edbd7be031a4d00f759a5533b81a05d100f6f55c472dbfc88ad",
@@ -76,7 +76,7 @@
     "src/store/managed.rs": "6bda51a143207613f15253fd68d642798ef2d1a6b83c825fcd7559a6894a9b73",
     "src/store_model_tests.rs": "b17eb98fb3cb3da66cf48e4b468feda5b8dd04e279996c606756fa0a8f8383f6",
     "tests/adapters.rs": "f36ea227929a86116432d4f7a3d86756422761a815c4f10f0e91f17edfae6542",
-    "tests/conversation_adapters.rs": "258a30087e19fd81eafcf22eb4d101cc9199d59039c579ca3ead0500359cd058",
+    "tests/conversation_adapters.rs": "04e14dbe54adc189de265780805def4fdbb4c49738b8884002edf57c01ab96b1",
     "tests/fixtures/README.md": "c595f25b5d13c825f5fea134cb7208c73d62dd749e1f32f185b255675b144184",
     "tests/fixtures/conversation_broker.py": "12a0f225f7e0b71f6874f94ab0e8b4b97fe8730514f640d0fd8cb32fef8009dc",
     "tools/check.sh": "8755a204cf70c2ee3687aadfd6b483a60e640c908648ee5f3040a673f2e1cea7",
@@ -110,5 +110,5 @@
     "tools/tests/test_qualification_runner.py": "0e20e70931ad367faa7f727512b8ff35e87d44451ebf0821811fef0d830f5d3c",
     "tools/tests/test_toolchain_contract.py": "d6064368623deff18a10a6a3b78b1567c843904781e0e652d2f06294be01f79c"
   },
-  "output_sha256": "d65b2ed11dd7210438381c9b87fa132b9fed72893206cd334b867ea02329011a"
+  "output_sha256": "51b5591e97fa7091666a2b3e2f352e86785851fd0c19b14ef9356d875f37b719"
 }
