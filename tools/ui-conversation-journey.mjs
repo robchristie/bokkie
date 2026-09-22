@@ -13,7 +13,7 @@ const profile = process.env.BOKKIE_CONVERSATION_PROFILE;
 if (!preflight && !profile) throw Error('Live qualification requires an explicit private BOKKIE_CONVERSATION_PROFILE');
 const fixtureRoot = process.env.BOKKIE_CONVERSATION_RESUME_ROOT ?? join('/tmp', `bokkie-conversation-journey-${randomUUID()}`);
 const endpoint = process.env.BOKKIE_UI_LANTERN_ENDPOINT ?? 'http://127.0.0.1:9336';
-const report = {mode:preflight?'no-model-preflight':'live-model',source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),budget:{calls:12,seconds:900,repair_calls:4,repair_seconds:300},calls:0,checks:[],errors:[],captures:[]};
+const report = {mode:preflight?'no-model-preflight':'live-model',source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),budget:{calls:12,seconds:900,repair_calls:4,repair_seconds:300},calls:Number(process.env.BOKKIE_CONVERSATION_PRIOR_CALLS??0),checks:[],errors:[],captures:[]};
 for(const file of ['target/debug/bokkie-conversation-fixture','apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm','tools/conversation-runtime/broker.py']) report[file]=createHash('sha256').update(await readFile(file)).digest('hex');
 let fixture,browser,page,origin,queue=[],pending=[],buffer='';
 async function line(){if(queue.length)return queue.shift();return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('fixture reply timed out')),20000);pending.push(v=>{clearTimeout(timer);resolve(v);});});}
@@ -41,9 +41,9 @@ async function views(){const list=await (await fetch(origin+'/conversations')).j
 let current;
 async function send(text){
  if(report.calls>=12)throw Error('Live model budget exhausted');
- await type(text);await click('bokkie.conversation.send');report.calls++;
+ await type(text);const dispatched=page.waitForRequest(r=>r.method()==='POST'&&r.url().endsWith('/conversations/turn'));await click('bokkie.conversation.send');const submitted=(await dispatched).postDataJSON();report.calls++;
  const started=Date.now();
- for(;;){const all=await views();const match=all.find(v=>v.messages.some(m=>m.role==='user'&&m.text===text));if(match&&!match.busy){current=match;if(match.request_error)throw Error(match.request_error);report.checks.push({text,view:match});await page.waitForTimeout(1200);return match;}
+ for(;;){const all=await views();const match=all.find(v=>v.id===submitted.conversation_id&&v.messages.some(m=>m.role==='user'&&m.request_id===submitted.command_id));if(match&&!match.busy){current=match;if(match.request_error)throw Error(match.request_error);report.checks.push({text,view:match});await page.waitForTimeout(1200);return match;}
   if(Date.now()-started>110000)throw Error('Conversation turn exceeded finite bound');await page.waitForTimeout(400);
  }
 }
