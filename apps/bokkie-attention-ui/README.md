@@ -41,6 +41,16 @@ Then open `http://127.0.0.1:7744/ui/`. The generated `web/pkg` directory is
 ignored. This arrangement adds no CORS policy, multi-user authentication, proxy,
 non-loopback listener or second database path.
 
+## Conversation workspace
+
+The persistent **Conversation** entry supports server-side task discovery,
+model-backed drafting, readable previews and one exact operator confirmation.
+Active definitions, proposed changes and completed local results remain distinct.
+Recent conversations and task selection survive service restart. Configure the
+[conversation runtime and local-note capability](../../docs/operator-guide.md#conversational-task-management)
+once; ordinary task changes stay in the UI. **Engineering intake** remains
+separate. Missing research/email adapters are visible activation blockers.
+
 ## Operate the workspace
 
 Needs attention collects decisions and failures. Tasks shows configured work

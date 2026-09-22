@@ -25,6 +25,17 @@ pub struct ActionRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApiRequest {
     Bootstrap,
+    Conversations,
+    Conversation {
+        id: String,
+    },
+    ConversationTurn(bokkie_operator_api::ConversationTurnRequest),
+    ConversationSelect(bokkie_operator_api::ConversationSelectRequest),
+    ConversationConfirm(bokkie_operator_api::ConversationConfirmRequest),
+    Catalogue {
+        query: String,
+        after: Option<String>,
+    },
     EngineeringIntake(bokkie_operator_api::EngineeringIntakeRequest),
     EngineeringFollowUp(bokkie_operator_api::EngineeringFollowUpRequest),
     EngineeringCancel(bokkie_operator_api::EngineeringCancellationRequest),
@@ -58,6 +69,9 @@ pub enum ApiRequest {
 #[derive(Debug)]
 pub enum ApiPayload {
     Bootstrap(ApiSession),
+    Conversations(bokkie_operator_api::ConversationList),
+    Conversation(Box<bokkie_operator_api::ConversationView>),
+    Catalogue(bokkie_operator_api::ManagedCataloguePage),
     SnapshotPage(OperatorSnapshot),
     TopicPage(ObligationTopic),
     Changes(ProjectionChangePage),
@@ -124,7 +138,11 @@ impl ApiSession {
         })
     }
 
-    fn matches(&self, service: &ServiceIdentity) -> bool {
+    pub(crate) fn session_id(&self) -> &str {
+        &self.service.session_id
+    }
+
+    pub(crate) fn matches(&self, service: &ServiceIdentity) -> bool {
         self.service == *service
     }
 }
@@ -207,11 +225,17 @@ impl Transport {
         let endpoint = self.endpoint(request);
         match request {
             ApiRequest::Bootstrap
+            | ApiRequest::Conversations
+            | ApiRequest::Conversation { .. }
+            | ApiRequest::Catalogue { .. }
             | ApiRequest::SnapshotPage { .. }
             | ApiRequest::TopicPage { .. }
             | ApiRequest::Changes { .. }
             | ApiRequest::Obligation { .. } => Ok(ehttp::Request::get(endpoint)),
             ApiRequest::Act(_)
+            | ApiRequest::ConversationTurn(_)
+            | ApiRequest::ConversationSelect(_)
+            | ApiRequest::ConversationConfirm(_)
             | ApiRequest::ConfigureTask { .. }
             | ApiRequest::EngineeringIntake(_)
             | ApiRequest::EngineeringFollowUp(_)
@@ -222,6 +246,15 @@ impl Transport {
                     )
                 })?;
                 let body = match request {
+                    ApiRequest::ConversationTurn(value) => {
+                        serde_json::to_vec(value).expect("serialisable turn")
+                    }
+                    ApiRequest::ConversationSelect(value) => {
+                        serde_json::to_vec(value).expect("serialisable selection")
+                    }
+                    ApiRequest::ConversationConfirm(value) => {
+                        serde_json::to_vec(value).expect("serialisable confirmation")
+                    }
                     ApiRequest::EngineeringIntake(request) => {
                         serde_json::to_vec(request).expect("serialisable intent")
                     }
@@ -253,6 +286,20 @@ impl Transport {
 
     fn endpoint(&self, request: &ApiRequest) -> String {
         let path = match request {
+            ApiRequest::Conversations => "/conversations".into(),
+            ApiRequest::Conversation { id } => {
+                format!("/conversations/{}", encode_path_segment(id))
+            }
+            ApiRequest::ConversationTurn(_) => "/conversations/turn".into(),
+            ApiRequest::ConversationSelect(_) => "/conversations/select".into(),
+            ApiRequest::ConversationConfirm(_) => "/conversations/confirm".into(),
+            ApiRequest::Catalogue { query, after } => {
+                let mut path = format!("/tasks/catalogue?limit=50&q={}", encode_query_value(query));
+                if let Some(after) = after {
+                    path.push_str(&format!("&after={}", encode_query_value(after)));
+                }
+                path
+            }
             ApiRequest::EngineeringIntake(_) => "/engineering/outcomes".to_owned(),
             ApiRequest::EngineeringCancel(request) => format!(
                 "/engineering/outcomes/{}/cancel",
@@ -396,6 +443,20 @@ fn decode(
         };
     }
     match request {
+        ApiRequest::Conversations => {
+            let value = decode_json::<bokkie_operator_api::ConversationList>(&response)?;
+            validate_response_identity(Some(&value.service), expected_session, "conversations")?;
+            Ok(ApiPayload::Conversations(value))
+        }
+        ApiRequest::Conversation { .. }
+        | ApiRequest::ConversationTurn(_)
+        | ApiRequest::ConversationSelect(_)
+        | ApiRequest::ConversationConfirm(_) => {
+            let value = decode_json::<bokkie_operator_api::ConversationView>(&response)?;
+            validate_response_identity(Some(&value.service), expected_session, "conversation")?;
+            Ok(ApiPayload::Conversation(Box::new(value)))
+        }
+        ApiRequest::Catalogue { .. } => decode_json(&response).map(ApiPayload::Catalogue),
         ApiRequest::Bootstrap => decode_json::<SessionBootstrap>(&response)
             .and_then(ApiSession::from_bootstrap)
             .map(ApiPayload::Bootstrap),
@@ -869,5 +930,35 @@ mod tests {
                 lifecycle_action.is_gardener()
             );
         }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn conversation_mutations_require_session_and_preserve_exact_command_body() {
+        let transport = Transport::new("http://127.0.0.1:7744").unwrap();
+        let request = ApiRequest::ConversationTurn(bokkie_operator_api::ConversationTurnRequest {
+            command_id: "retained-command".into(),
+            conversation_id: "chat".into(),
+            expected_revision: 7,
+            text: "Explain task".into(),
+        });
+        assert!(matches!(
+            transport.http_request(&request, None),
+            Err(ApiFailure::SessionChanged(_))
+        ));
+        let http = transport
+            .http_request(&request, Some(&session("current", &"a".repeat(64))))
+            .unwrap();
+        assert_eq!(http.url, "http://127.0.0.1:7744/conversations/turn");
+        assert_eq!(http.method, ehttp::Method::POST);
+        let decoded: bokkie_operator_api::ConversationTurnRequest =
+            serde_json::from_slice(&http.body).unwrap();
+        assert_eq!(ApiRequest::ConversationTurn(decoded), request);
+        assert_eq!(
+            transport.endpoint(&ApiRequest::Catalogue {
+                query: "garden & notes".into(),
+                after: Some("cursor/+".into())
+            }),
+            "http://127.0.0.1:7744/tasks/catalogue?limit=50&q=garden%20%26%20notes&after=cursor%2F%2B"
+        );
     }
 }

@@ -1,4 +1,9 @@
-//! Wasm-safe wire contract for Bokkie's authoritative operator projection.
+mod conversation;
+pub use conversation::*;
+// Wasm-safe wire contract for Bokkie's authoritative operator projection.
+
+mod managed;
+pub use managed::*;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -6,7 +11,7 @@ use serde_json::Value;
 /// Version of the HTTP contract consumed by the bundled operator UI.
 pub const API_CONTRACT_VERSION: u32 = 1;
 /// Exact SQLite migration version understood by this build of the UI.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 11;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 13;
 /// Stable package identity; the per-process session ID distinguishes restarts.
 pub const BOKKIE_BUILD_ID: &str = concat!("bokkie/", env!("CARGO_PKG_VERSION"));
 
@@ -136,6 +141,7 @@ pub enum DisabledReason {
     GardenerProposalRequiresExactDecision,
     NotGardenerProposal,
     EngineeringRequiresSupervisor,
+    ManagedRequiresDefinition,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -195,6 +201,7 @@ pub struct OperatorCapabilities {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperatorTaskKind {
+    LocalNote,
     GardenerInspection,
     GardenerImplementation,
     Simulated,
@@ -352,6 +359,7 @@ pub enum ProjectionEventProvenance {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProjectionEventSource {
+    DomainEvent { sequence: i64 },
     AuditEvent { sequence: i64 },
     GardenerEvent { sequence: i64 },
     GardenerRunEvent { sequence: i64 },
@@ -359,6 +367,10 @@ pub enum ProjectionEventSource {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectionChange {
+    #[serde(default)]
+    pub entity_kind: Option<String>,
+    #[serde(default)]
+    pub entity_id: Option<String>,
     pub revision: i64,
     pub provenance: ProjectionEventProvenance,
     pub source: ProjectionEventSource,

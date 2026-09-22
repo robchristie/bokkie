@@ -6,6 +6,9 @@
 //! deliberately invoked outside those transactions.
 
 pub mod app_server;
+pub mod conversation;
+pub mod conversation_http;
+pub mod conversation_runtime;
 pub mod db_executor;
 pub mod doctor;
 pub mod domain;
@@ -18,6 +21,7 @@ pub mod gardener_runner;
 pub mod git_workspace;
 pub mod http;
 pub mod http_security;
+pub mod managed;
 pub mod migrations;
 pub mod operator;
 pub mod pagination;
@@ -64,3 +68,6 @@ pub use runtime_trust::{
     GitHubCredential, ProcessPolicy, RuntimeTrustError,
 };
 pub use store::{ManualClock, Store, StoreError, SystemClock, UnixClock};
+
+#[cfg(test)]
+mod conversation_tests;

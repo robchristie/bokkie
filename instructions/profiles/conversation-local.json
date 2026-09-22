@@ -1,0 +1,11 @@
+{
+  "broker": "/absolute/bokkie/tools/conversation-runtime/broker.py",
+  "codex": "/absolute/path/to/codex",
+  "bwrap": "/usr/bin/bwrap",
+  "model": "gpt-5.6-terra",
+  "effort": "medium",
+  "timezone": "Australia/Adelaide",
+  "timeout_seconds": 90,
+  "max_context_bytes": 65536,
+  "max_output_bytes": 16384
+}

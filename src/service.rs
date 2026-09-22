@@ -322,6 +322,15 @@ impl Scheduler {
         config: SchedulerConfig,
         gardener: Option<GardenerRuntimeConfig>,
     ) -> Result<Self, SchedulerError> {
+        Self::start_with_notes(config, gardener, false)
+    }
+
+    /// Add the explicitly enabled deterministic note adapter to existing capacity.
+    pub fn start_with_notes(
+        config: SchedulerConfig,
+        gardener: Option<GardenerRuntimeConfig>,
+        notes: bool,
+    ) -> Result<Self, SchedulerError> {
         config.validate()?;
         // Startup owns migration. The scheduler and every worker are only
         // compatible-schema consumers.
@@ -341,7 +350,9 @@ impl Scheduler {
         let (exit_sender, exit) = oneshot::channel();
         let thread = thread::Builder::new()
             .name("bokkie-scheduler-supervisor".to_owned())
-            .spawn(move || scheduler_loop(config, gardener, supervisor_admission, exit_sender))
+            .spawn(move || {
+                scheduler_loop(config, gardener, notes, supervisor_admission, exit_sender)
+            })
             .map_err(SchedulerError::Thread)?;
         Ok(Self {
             admission,
@@ -381,6 +392,7 @@ impl Scheduler {
 fn scheduler_loop(
     config: SchedulerConfig,
     gardener: Option<GardenerRuntimeConfig>,
+    notes: bool,
     admission: ClaimAdmission,
     exit_sender: oneshot::Sender<()>,
 ) -> Result<(), SchedulerError> {
@@ -397,7 +409,7 @@ fn scheduler_loop(
             slot: slot + 1,
         };
         match spawn_worker(id, sender.clone(), admission.clone(), move || {
-            ordinary_lane_loop(&worker_config, &worker_admission)
+            ordinary_lane_loop_with_notes(&worker_config, &worker_admission, notes && slot == 0)
         }) {
             Ok(worker) => workers.push(worker),
             Err(cause) => {
@@ -566,14 +578,34 @@ fn spawn_worker(
     Ok(Worker { id, thread })
 }
 
-fn ordinary_lane_loop(
+fn ordinary_lane_loop_with_notes(
     config: &SchedulerConfig,
     admission: &ClaimAdmission,
+    notes: bool,
 ) -> Result<(), LaneFailureCause> {
     let mut store = close_on_error(admission, Store::open_compatible(&config.database))?;
     let clock = SystemClock;
 
     while !admission.is_closed() {
+        if notes {
+            let claims = admission.claim(ExecutionLane::Ordinary, || {
+                store.claim_due_notes(clock.now(), config.lease_seconds, 1)
+            })?;
+            let Some(mut claims) = claims else {
+                break;
+            };
+            if let Some(claim) = claims.pop() {
+                let definition = close_on_error(
+                    admission,
+                    store.managed_note_definition(&claim.obligation_id),
+                )?;
+                let result = crate::managed::render_local_note(&definition.definition);
+                close_on_error(
+                    admission,
+                    store.complete_managed_note(&claim, &result, clock.now()),
+                )?;
+            }
+        }
         let Some(mut claims) = admission.claim(ExecutionLane::Ordinary, || {
             store.claim_due(clock.now(), config.lease_seconds, 1)
         })?

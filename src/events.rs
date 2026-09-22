@@ -20,6 +20,7 @@ pub enum EventProvenance {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EventSource {
     AuditEvent { sequence: i64 },
+    DomainEvent { sequence: i64 },
     GardenerEvent { sequence: i64 },
     GardenerRunEvent { sequence: i64 },
 }
@@ -46,6 +47,8 @@ pub struct ChangeRecord {
     pub proposal_fingerprint: Option<String>,
     pub proposal_instance_id: Option<String>,
     pub run_id: Option<String>,
+    pub entity_kind: Option<String>,
+    pub entity_id: Option<String>,
 }
 
 /// A bounded slice of one stable event-envelope snapshot.
@@ -162,10 +165,10 @@ fn query_changes(
     let mut statement = transaction.prepare(
         "SELECT e.sequence, e.provenance, e.source_kind,
                 coalesce(e.audit_event_sequence, e.gardener_event_sequence,
-                         e.gardener_run_event_sequence) AS source_sequence,
-                coalesce(a.event_type, g.event_type, re.event_type) AS event_type,
-                coalesce(a.occurred_at, g.occurred_at, re.occurred_at) AS occurred_at,
-                coalesce(a.details_json, g.details_json, re.details_json) AS details_json,
+                         e.gardener_run_event_sequence, e.domain_event_sequence) AS source_sequence,
+                coalesce(a.event_type, g.event_type, re.event_type, de.event_type) AS event_type,
+                coalesce(a.occurred_at, g.occurred_at, re.occurred_at, de.occurred_at) AS occurred_at,
+                coalesce(a.details_json, g.details_json, re.details_json, de.details_json) AS details_json,
                 coalesce(a.obligation_id, gdpi.implementation_obligation_id,
                          gpi.implementation_obligation_id,
                          gi.obligation_id, run.obligation_id) AS obligation_id,
@@ -176,8 +179,9 @@ fn query_changes(
                          gdpi.proposal_fingerprint,
                          api.proposal_fingerprint) AS proposal_fingerprint,
                 coalesce(gdpi.id, gpi.id, ri.instance_id, api.id) AS proposal_instance_id,
-                re.run_id
+                re.run_id, de.entity_kind, de.entity_id
          FROM event_envelopes e
+         LEFT JOIN domain_events de ON de.sequence = e.domain_event_sequence
          LEFT JOIN audit_events a ON a.sequence = e.audit_event_sequence
          LEFT JOIN gardener_events g ON g.sequence = e.gardener_event_sequence
          LEFT JOIN gardener_run_events re ON re.sequence = e.gardener_run_event_sequence
@@ -226,6 +230,9 @@ fn change_record_from_row(row: &Row<'_>) -> rusqlite::Result<ChangeRecord> {
     };
     let source_sequence = row.get(3)?;
     let source = match row.get::<_, String>(2)?.as_str() {
+        "domain_event" => EventSource::DomainEvent {
+            sequence: source_sequence,
+        },
         "audit_event" => EventSource::AuditEvent {
             sequence: source_sequence,
         },
@@ -253,6 +260,8 @@ fn change_record_from_row(row: &Row<'_>) -> rusqlite::Result<ChangeRecord> {
         proposal_fingerprint: row.get(11)?,
         proposal_instance_id: row.get(12)?,
         run_id: row.get(13)?,
+        entity_kind: row.get(14)?,
+        entity_id: row.get(15)?,
     })
 }
 

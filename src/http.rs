@@ -38,6 +38,7 @@ pub struct ApiState {
     pub executor: DbExecutor,
     pub runtime: ApiRuntime,
     pub engineering_intake: Option<Arc<EngineeringIntakeConfig>>,
+    pub conversation: Option<crate::conversation_http::ConversationConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -202,6 +203,7 @@ fn router_core(executor: DbExecutor, runtime: ApiRuntime) -> Router {
         executor,
         runtime,
         engineering_intake: None,
+        conversation: None,
     })
 }
 
@@ -220,6 +222,7 @@ pub fn router_with_state(state: ApiState, ui_dir: Option<PathBuf>) -> Router {
 
 fn router_state_core(state: ApiState) -> Router {
     Router::new()
+        .merge(crate::conversation_http::routes())
         .route(
             "/engineering/outcomes",
             post(engineering_intake).get(engineering_list),
@@ -470,6 +473,9 @@ async fn operator_changes(
             .into_iter()
             .map(|item| {
                 let source = match item.envelope.source {
+                    crate::EventSource::DomainEvent { sequence } => {
+                        bokkie_operator_api::ProjectionEventSource::DomainEvent { sequence }
+                    }
                     crate::EventSource::AuditEvent { sequence } => {
                         bokkie_operator_api::ProjectionEventSource::AuditEvent { sequence }
                     }
@@ -500,6 +506,8 @@ async fn operator_changes(
                     proposal_fingerprint: item.proposal_fingerprint,
                     proposal_instance_id: item.proposal_instance_id,
                     run_id: item.run_id,
+                    entity_kind: item.entity_kind,
+                    entity_id: item.entity_id,
                 }
             })
             .collect();
@@ -1454,6 +1462,7 @@ mod tests {
         let executor = DbExecutor::start(database.clone()).unwrap();
         let application = router_with_state(
             ApiState {
+                conversation: None,
                 executor,
                 runtime: test_runtime(),
                 engineering_intake: Some(Arc::new(EngineeringIntakeConfig {
@@ -1495,6 +1504,7 @@ mod tests {
         changed_template.permitted_scope = vec!["a different configured workspace".into()];
         let restarted = router_with_state(
             ApiState {
+                conversation: None,
                 executor: DbExecutor::start(database.clone()).unwrap(),
                 runtime: test_runtime(),
                 engineering_intake: Some(Arc::new(EngineeringIntakeConfig {
