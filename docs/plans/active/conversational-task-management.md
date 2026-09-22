@@ -5,7 +5,7 @@
 - Reorientation budget: 180
 - Baseline: `277ab5587ed2cf6c215cf838c2f58f9c534688b4`
 - Landed pull requests: none
-- Next action: run the explicitly authorised final live qualification, then independent review and landing if it passes.
+- Next action: resolve the real-model draft-routing defect; no further live retry is authorised by the completed final attempt.
 
 ## Outcome and scope
 
@@ -30,8 +30,11 @@ by a harness response-identity bug. No accepted full live journey exists yet.
 On 22 September 2026 the user explicitly authorised one additional live attempt,
 capped at 12 model calls and 15 minutes, with no further live retries. The previous
 authority hold is discharged for that exact run.
-The conductor owns integration, qualification and landing; independent review
-will judge the eventual exact candidate.
+The additional attempt used two calls in 14.228 seconds and failed the first
+acceptance step: after an empty lookup the model returned discussion rather than
+a saved draft. No task, obligation or result was created. The contained runtime
+is available; natural-language routing remains unqualified. No further live
+retry was made. The conductor owns integration and eventual landing.
 
 ## Design and dependency graph
 
@@ -87,7 +90,7 @@ Model settings remain in runtime profiles; no global configuration mutation.
 | Managed Store and note adapter | verified | lifecycle, race, restart, real scheduler tests |
 | Conversation runtime | contained adapter implemented | Codex 0.155.1 no-model preflight / fake peers |
 | Conversation and UI | integrated | 75 UI checks; 12 legacy browser journeys; native result |
-| Integrated qualification | partial | canonical checks pass; live journey remains unproved |
+| Integrated qualification | blocked by product defect | final authorised live attempt did not save a draft |
 | Review and landing | pending | owning PR exact-head review and CI |
 
 The additional 12-call / 15-minute run was explicitly authorised by the user on

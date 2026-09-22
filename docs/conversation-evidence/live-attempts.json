@@ -26,5 +26,5 @@
     "Second request was interrupted after the harness matched an older identical message. Matching now uses durable request and conversation identities.",
     "Third response performed a successful empty catalogue lookup and stopped without drafting. The backend now permits one bounded continuation."
   ],
-  "further_live_run": "User explicitly authorised one final 12-call / 15-minute attempt on 22 September 2026, with no further live retries."
+  "further_live_run": "Additional authorised attempt completed: two calls, no task created; see live-authorised-attempt.json. No further live retries performed."
 }

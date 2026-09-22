@@ -667,6 +667,23 @@ async fn model_http_empty_lookup_continues_once_saves_only_a_draft_and_replay_is
             .contains("You help define")
     );
     assert!(calls[0]["context"].get("instruction").is_none());
+    assert!(calls[1]["context"].get("instruction").is_none());
+    assert!(
+        calls[1]["context"]["lookup_result"]
+            .get("instruction")
+            .is_none()
+    );
+    assert!(
+        calls[1]["instructions"].as_str().unwrap().contains(
+            "Continue the original user request: save a draft if they asked to create one"
+        )
+    );
+    assert!(
+        calls[1]["instructions"]
+            .as_str()
+            .unwrap()
+            .starts_with(calls[0]["instructions"].as_str().unwrap())
+    );
     fixture.replay_is_free(&turn, &view).await;
 }
 

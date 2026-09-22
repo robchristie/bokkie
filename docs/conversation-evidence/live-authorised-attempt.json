@@ -1,0 +1,47 @@
+{
+  "source_revision": "0db3d438bf3d39d3c7dfe62642baf30a36050fdf",
+  "started_at": "2026-09-22T11:51:27.824Z",
+  "finished_at": "2026-09-22T11:51:42.052Z",
+  "budget": {
+    "calls": 12,
+    "seconds": 900,
+    "repair_calls": 0,
+    "repair_seconds": 0
+  },
+  "calls": 2,
+  "prior_attempt_calls": 3,
+  "mode": "live-model",
+  "passed": false,
+  "failed_acceptance": "First request did not save an inactive draft. The model returned discussion after an empty catalogue lookup.",
+  "model_output": {
+    "operation": "discuss",
+    "message": "Draft a weekday 9 am Adelaide-time reminder to review the research queue; it will remain inactive until an operator confirms activation."
+  },
+  "observed_counts": {
+    "managed_tasks": 0,
+    "managed_definitions": 0,
+    "managed_bindings": 0,
+    "managed_results": 0,
+    "obligations": 0
+  },
+  "dispatch_steps": [
+    0,
+    1
+  ],
+  "profile": {
+    "model": "gpt-5.6-terra",
+    "effort": "medium",
+    "timezone": "Australia/Adelaide",
+    "timeout_seconds": 90,
+    "max_context_bytes": 65536,
+    "max_output_bytes": 16384
+  },
+  "artefacts": {
+    "target/debug/bokkie-conversation-fixture": "7336e187e8163d76b0f10bcfee9df86a63c21e145204596c0bea45deeef3ab69",
+    "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "b159e583b4c4768a1b20ab4362b96845637ad968cc0811b0fa47e29c9e51b157",
+    "tools/conversation-runtime/broker.py": "a0c1af741441e1ee05ec503f317a418974d2185db3a05eb0917f12bc40838b0c"
+  },
+  "raw_report_sha256": "6bcb76ddc29cbd25def248b1753768b0978b666b4fb137b92a2110bdc0afd699",
+  "opened_screenshot_sha256": "f1fd941c7a1409643c6a08e20808ce94d82b2900777e7222c5dc5e5301eebca2",
+  "authority": "User explicitly authorised this additional attempt on 22 September 2026. No further live retries were authorised or performed."
+}

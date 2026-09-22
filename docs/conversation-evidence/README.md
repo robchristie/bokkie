@@ -62,3 +62,27 @@ remain open until the integrated candidate is qualified.
 No research/email integration, external notification, deployment, publication,
 service installation or live operator database was involved. Private profiles,
 account paths and raw fixture databases are not committed.
+
+## Additional authorised attempt
+
+The user authorised one final 12-call / 15-minute attempt. Its
+[record](live-authorised-attempt.json) identifies exact source, binary, browser
+asset, model/profile settings and observed database counts. It ran for 14.228
+seconds and used two model calls. The first request led to an empty lookup and
+then a `discuss` operation describing a draft, instead of `save_definition`.
+The UI displayed that discussion; it had no selected task or saved definition.
+Read-only fixture verification found zero managed tasks, definitions, bindings,
+results and obligations. The opened screenshot corroborated that state.
+
+The runtime/account was available and the backend respected the operation and
+authority boundaries. The product failed ordinary draft creation, so the full
+real-model journey is still unqualified. No further live retry was made. The PR
+remains a draft and is not eligible for landing on this evidence.
+
+Read-only diagnosis found no demonstrated dropped primary instruction or lost
+save operation. The typed schema permitted discussion and the model chose it.
+A secondary inconsistency was corrected after this run: backend continuation
+instructions now join the trusted developer contract, while catalogue results
+remain data. The HTTP peer test asserts both message boundaries. This correction
+has deterministic coverage only; it is not presented as a qualified fix for the
+observed model operation-selection failure.
