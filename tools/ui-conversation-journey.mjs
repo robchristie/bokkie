@@ -12,10 +12,17 @@ const evidence = resolve(process.env.BOKKIE_CONVERSATION_EVIDENCE ?? '.ui-qualif
 await mkdir(evidence, {recursive:true});
 const profile = process.env.BOKKIE_CONVERSATION_PROFILE;
 if (!preflight && !profile) throw Error('Live qualification requires an explicit private BOKKIE_CONVERSATION_PROFILE');
-const fixtureRoot = process.env.BOKKIE_CONVERSATION_RESUME_ROOT ?? join('/tmp', `bokkie-conversation-journey-${randomUUID()}`);
+const prefixPath = process.env.BOKKIE_CONVERSATION_DISCOVERY_PREFIX;
+const prefixBytes = prefixPath ? await readFile(prefixPath) : null;
+const prefix = prefixBytes ? JSON.parse(prefixBytes) : null;
+if (prefix && (preflight || fakeModel || prefix.mode !== 'live-model' || prefix.passed || prefix.calls !== 5 || !prefix.checks.some(c => c.passed === 'Repeated tick does not duplicate local result'))) throw Error('Discovery continuation requires the retained real UI checkpoint');
+const maxCalls = prefix ? 7 : 12;
+const fixtureRoot = prefix?.initial.root ?? process.env.BOKKIE_CONVERSATION_RESUME_ROOT ?? join('/tmp', `bokkie-conversation-journey-${randomUUID()}`);
 const endpoint = process.env.BOKKIE_UI_LANTERN_ENDPOINT ?? 'http://127.0.0.1:9336';
-const report = {mode:preflight?'no-model-preflight':fakeModel?'fake-model-ui-regression':'live-model',source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),started_at:new Date().toISOString(),budget:{calls:12,seconds:900,repair_calls:0,repair_seconds:0},calls:0,prior_attempt_calls:Number(process.env.BOKKIE_CONVERSATION_PRIOR_CALLS??0),checks:[],errors:[],captures:[]};
+const report = {mode:preflight?'no-model-preflight':fakeModel?'fake-model-ui-regression':'live-model',source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),started_at:new Date().toISOString(),budget:{calls:maxCalls,seconds:900,repair_calls:0,repair_seconds:0},calls:0,prior_attempt_calls:Number(process.env.BOKKIE_CONVERSATION_PRIOR_CALLS??0),checks:[],errors:[],captures:[]};
 for(const file of ['target/debug/bokkie-conversation-fixture','apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm','tools/conversation-runtime/broker.py']) report[file]=createHash('sha256').update(await readFile(file)).digest('hex');
+if(prefix) report.reused_prefix={source:prefix.source,report_sha256:createHash('sha256').update(prefixBytes).digest('hex'),calls:prefix.calls,checks:prefix.checks.filter(c=>c.passed),artefacts:Object.fromEntries(Object.entries(prefix).filter(([key])=>key.includes('/')))};
+if(prefix && prefix['apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm'] !== report['apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm']) throw Error('Continuation requires unchanged browser assets');
 let fixture,browser,page,origin,queue=[],pending=[],buffer='';
 async function line(){if(queue.length)return queue.shift();return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('fixture reply timed out')),20000);pending.push(v=>{clearTimeout(timer);resolve(v);});});}
 async function start(resume=false){
@@ -41,7 +48,7 @@ async function type(text){await click('bokkie.conversation.text');const ok=await
 async function views(){const list=await (await fetch(origin+'/conversations')).json();return Promise.all(list.items.map(async i=>await(await fetch(origin+'/conversations/'+i.id)).json()));}
 let current, initialDispatches=0;
 async function send(text){
- if(report.calls+2>12)throw Error('Live model budget exhausted');
+ if(report.calls+2>maxCalls)throw Error('Live model budget exhausted');
  await type(text);const dispatched=page.waitForRequest(r=>r.method()==='POST'&&r.url().endsWith('/conversations/turn'));await click('bokkie.conversation.send');const submitted=(await dispatched).postDataJSON();report.user_interactions=(report.user_interactions??0)+1;
  const started=Date.now();
  for(;;){const all=await views();const match=all.find(v=>v.id===submitted.conversation_id&&v.messages.some(m=>m.role==='user'&&m.request_id===submitted.command_id));if(match&&!match.busy){current=match;report.calls=(await control()).model_calls-initialDispatches;if(match.request_error)throw Error(match.request_error);report.checks.push({text,view:match});await page.waitForTimeout(1200);return match;}
@@ -62,7 +69,7 @@ async function capture(name,focus){if(focus)await reveal(focus);await page.waitF
 }
 const deadline=setTimeout(()=>{report.errors.push('Aggregate time budget exceeded');fixture?.kill('SIGTERM');browser?.close();},900000);
 try{
- await start(Boolean(process.env.BOKKIE_CONVERSATION_RESUME_ROOT));
+ await start(Boolean(prefix || process.env.BOKKIE_CONVERSATION_RESUME_ROOT));
  initialDispatches=(await control()).model_calls;
  browser=await chromium.launch({headless:true,env:{...process.env,LD_LIBRARY_PATH:process.env.BOKKIE_UI_SYSROOT?`${resolve(process.env.BOKKIE_UI_SYSROOT,'usr/lib')}:${process.env.LD_LIBRARY_PATH??''}`:(process.env.LD_LIBRARY_PATH??'')},args:['--no-sandbox','--enable-unsafe-webgpu','--enable-features=Vulkan','--use-angle=vulkan','--disable-vulkan-surface',`--remote-debugging-port=${new URL(endpoint).port}`]});
  report.browser=browser.version();page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>report.errors.push(String(e)));
@@ -70,15 +77,23 @@ try{
  if(preflight){
   await capture('preflight-desktop','bokkie.conversation.text');await page.setViewportSize({width:480,height:720});await capture('preflight-narrow','bokkie.conversation.text');const stats=await control({tick:true});check(!stats.ran&&stats.catalogue.items.length===0,'No-model UI preflight creates no work');
  }else{
-  let v=await send("Help me set up a weekday reminder to review my research queue at 9 am Adelaide time. Don't activate it yet.");
-  check(v.task?.status==='draft'&&v.task.runs.length===0,'Draft created without execution');const taskId=v.task.id;
+  let v,taskId,due,stats;
+  if(!prefix){
+  v=await send("Help me set up a weekday reminder to review my research queue at 9 am Adelaide time. Don't activate it yet.");
+  check(v.task?.status==='draft'&&v.task.runs.length===0,'Draft created without execution');taskId=v.task.id;
   v=await send('Change the reminder text to: Review the research queue and choose one paper to read. Keep it inactive.');check(v.task.id===taskId&&!v.task.active,'Refinement preserves a single inactive task');
   v=await send('What exactly will happen? Preview it.');check(v.review.preview.definition.instructions==='Review the research queue and choose one paper to read.','Preview contains exact reminder text');check(v.review.preview.definition.trigger.timezone==='Australia/Adelaide'&&v.review.preview.occurrences.length>=3,'Preview shows named timezone and future occurrences');
   await capture('review-desktop','bokkie.conversation.confirm');await page.setViewportSize({width:480,height:720});await capture('review-narrow','bokkie.conversation.confirm');await page.setViewportSize({width:1440,height:900});
-  v=await confirm();check(v.task.status==='active','Operator confirmation activates exact draft');const due=v.task.next_wake_at;
-  let stats=await control({now:due,tick:true});check(stats.ran,'Kernel note runner completed due occurrence');stats=await control({tick:true});check(!stats.ran&&stats.details.find(t=>t.id===taskId).runs.filter(r=>r.result).length===1,'Repeated tick does not duplicate local result');
+  v=await confirm();check(v.task.status==='active','Operator confirmation activates exact draft');due=v.task.next_wake_at;
+  stats=await control({now:due,tick:true});check(stats.ran,'Kernel note runner completed due occurrence');stats=await control({tick:true});check(!stats.ran&&stats.details.find(t=>t.id===taskId).runs.filter(r=>r.result).length===1,'Repeated tick does not duplicate local result');
   const refresh=(await snapshot()).ui_snapshot.nodes.find(n=>n.actions.includes('refresh_operator_state'));if(!refresh)throw Error('Refresh control absent');await page.mouse.click((refresh.rect.min_x+refresh.rect.max_x)/2,(refresh.rect.min_y+refresh.rect.max_y)/2);await page.waitForTimeout(1200);
   const resultRun=stats.details.find(t=>t.id===taskId).runs.find(r=>r.result);await capture('completed-local-result','bokkie.conversation.result.'+resultRun.obligation_id);
+  }else{
+   const activation=prefix.checks.find(c=>c.confirmation?.task?.status==='active').confirmation;
+   taskId=activation.task.id;due=activation.task.next_wake_at;stats=await control();
+   const retained=stats.details.find(t=>t.id===taskId);
+   check(stats.catalogue.items.length===1&&retained?.status==='active'&&retained.runs.filter(r=>r.result).length===1,'Continuation retains the original active task and its single local result');
+  }
   await stop();await start(true);await page.goto(origin+'/ui/');await ready();await click('bokkie.conversation.open');await page.waitForTimeout(300);
   v=await send('Find the research queue reminder.');check(v.candidates.some(c=>c.id===taskId),'Fresh conversation discovers persisted task');await click('bokkie.conversation.candidate.'+taskId);await page.waitForTimeout(250);
   v=await send('Make it Monday mornings instead, still at 9 am Adelaide time.');check(v.task.id===taskId&&v.task.active.definition.trigger.cron!==v.task.candidate.definition.trigger.cron,'Schedule proposal leaves active timing unchanged');await confirm();

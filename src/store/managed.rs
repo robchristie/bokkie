@@ -732,18 +732,20 @@ impl Store {
         {
             return Err(invalid("catalogue search or page exceeds bounds"));
         }
+        let terms: Vec<_> = query.split_whitespace().collect();
+        let terms_json = encode(&terms)?;
         let tx = self.connection.unchecked_transaction()?;
         let items=tx.prepare("WITH catalogue AS (
             SELECT t.id AS id,'managed' AS kind,json_extract(d.definition_json,'$.name') AS name,
-                   json_extract(d.definition_json,'$.purpose') AS description,t.status AS status,t.id AS search_identity
+                   json_extract(d.definition_json,'$.purpose') AS description,t.status AS status,t.id AS search_identity,json_extract(d.definition_json,'$.instructions') || ' ' || CASE json_extract(d.definition_json,'$.capability') WHEN 'local_note' THEN 'local note reminder' ELSE replace(json_extract(d.definition_json,'$.capability'),'_',' ') END AS search_text
             FROM managed_tasks t JOIN managed_definitions d ON d.task_id=t.id AND d.revision=coalesce(t.active_revision,t.candidate_revision)
             UNION ALL
-            SELECT o.id,'gardener','Garden Bokkie',o.description,o.state,g.repository FROM gardener_repositories g JOIN obligations o ON o.id=g.inspection_obligation_id
+            SELECT o.id,'gardener','Garden Bokkie',o.description,o.state,g.repository,g.repository FROM gardener_repositories g JOIN obligations o ON o.id=g.inspection_obligation_id
             UNION ALL
-            SELECT o.id,'engineering',o.description,o.description,o.state,e.id FROM engineering_outcomes e JOIN obligations o ON o.id=e.root_obligation_id
+            SELECT o.id,'engineering',o.description,o.description,o.state,e.id,'' FROM engineering_outcomes e JOIN obligations o ON o.id=e.root_obligation_id
         ) SELECT id,kind,name,description,status FROM catalogue
-        WHERE kind||':'||id>?1 AND (?2='' OR instr(lower(id),lower(?2))>0 OR instr(lower(name),lower(?2))>0 OR instr(lower(description),lower(?2))>0 OR instr(lower(search_identity),lower(?2))>0)
-        ORDER BY kind,id LIMIT ?3")?.query_map(params![after.unwrap_or(""),query,limit as i64+1],|r|Ok(ManagedCatalogueEntry {
+        WHERE kind||':'||id>?1 AND (instr(lower(id),lower(?4))>0 OR instr(lower(search_identity),lower(?4))>0 OR NOT EXISTS (SELECT 1 FROM json_each(?2) term WHERE instr(lower(catalogue.kind || ' task ' || catalogue.name || ' ' || catalogue.description || ' ' || catalogue.search_text),lower(term.value))=0))
+        ORDER BY kind,id LIMIT ?3")?.query_map(params![after.unwrap_or(""),terms_json,limit as i64+1,query],|r|Ok(ManagedCatalogueEntry {
             id:r.get(0)?,kind:r.get(1)?,name:r.get(2)?,description:r.get(3)?,status:r.get(4)? }))?.collect::<Result<Vec<_>,_>>()?;
         let mut items = items;
         let next_after = if items.len() > limit {
@@ -1219,6 +1221,38 @@ mod tests {
                 .items
                 .len(),
             1
+        );
+    }
+    #[test]
+    fn catalogue_matches_separate_words_and_note_kind_without_literal_name_phrase() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut definition =
+            ManagedTaskDefinition::local_note("Review research queue", "Choose one paper to read.");
+        definition.purpose = "Remind the operator to review their research queue.".into();
+        let id = create(&mut store, &definition, 0);
+        for query in [
+            "research queue reminder",
+            "REMINDER research",
+            "paper queue",
+            "research    queue",
+        ] {
+            let matches = store.managed_catalogue(query, None, 20).unwrap();
+            assert_eq!(matches.items.len(), 1, "{query}");
+            assert_eq!(matches.items[0].id, id);
+        }
+        assert!(
+            store
+                .managed_catalogue("research unrelated", None, 20)
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        assert!(
+            store
+                .managed_catalogue("%", None, 20)
+                .unwrap()
+                .items
+                .is_empty()
         );
     }
     #[test]
