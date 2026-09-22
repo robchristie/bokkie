@@ -31,7 +31,15 @@ The tool method takes one to five unique Codex function specifications:
 `{"type":"function","name":"bokkie_lookup","description":"…","inputSchema":{"type":"object",…},"deferLoading":false}`.
 The allowed names are `bokkie_discuss`, `bokkie_lookup`, `bokkie_save_draft`,
 `bokkie_preview` and `bokkie_propose`; the backend offers only the operations
-legal for that interaction. Namespaces and deferred loading are forbidden.
+legal for that interaction. Caller-supplied namespaces and deferred loading are forbidden.
+The broker registers these functions within the fixed `bokkie` namespace and
+requires that exact namespace on every proposal request. It sets the process-only
+`features.code_mode.enabled = false` and
+`features.code_mode.direct_only_tool_namespaces = ["bokkie"]`, checking the
+effective configuration before starting a turn. Model metadata can require
+code-mode-only exposure despite disabled feature flags; this namespace exception
+keeps the proposal functions directly visible and excludes them from code-mode
+execution. No model metadata or account configuration is changed.
 The complete tool list is capped at 32 KiB. Arguments must be JSON objects and
 the complete returned proposal fits the profile's output bound. Domain argument
 validation remains with the backend.

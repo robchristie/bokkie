@@ -13,7 +13,8 @@ spec.loader.exec_module(broker)
 
 
 def config():
-    return {'features': {key: False for key in broker.DISABLED}, 'web_search': 'disabled',
+    return {'features': {**{key: False for key in broker.DISABLED},
+                         'code_mode': {'enabled': False, 'direct_only_tool_namespaces': ['bokkie']}}, 'web_search': 'disabled',
             'skills': {'include_instructions': False}, 'project_doc_max_bytes': 0,
             'notify': [], 'mcp_servers': {}}
 
@@ -46,7 +47,8 @@ for line in sys.stdin:
  if method=='initialize': result={'userAgent':'bokkie_conversation/0.155.1 (fixture)'}
  if method=='config/read': result={'config':config}
  if method=='thread/start':
-  assert r['params']['dynamicTools']==specs and r['params']['environments']==[]
+  assert r['params']['dynamicTools']==[{'type':'namespace','name':'bokkie','description':'Select one Bokkie proposal for trusted backend validation.','tools':specs}]
+  assert r['params']['environments']==[]
   result=started
  if method!='turn/start':
   send({'id':r['id'],'result':result}); continue
@@ -59,17 +61,18 @@ for line in sys.stdin:
   send({'method':'item/completed','params':{'threadId':'thread-1','turnId':'turn-1','item':{'type':'agentMessage','text':text,'phase':'final_answer'}}})
   send({'method':'turn/completed','params':{'threadId':'thread-1','turn':{'id':'turn-1','status':'completed'}}})
   continue
- params={'threadId':'thread-1','turnId':'turn-1','callId':'call-1','tool':'bokkie_lookup','arguments':{'query':'morning'},'namespace':None}
+ params={'threadId':'thread-1','turnId':'turn-1','callId':'call-1','tool':'bokkie_lookup','arguments':{'query':'morning'},'namespace':'bokkie'}
  if scenario=='thread': params['threadId']='other'
  if scenario=='turn': params['turnId']='other'
  if scenario=='missing_call': params.pop('callId')
  if scenario=='forbidden_name': params['tool']='bokkie_propose'
  if scenario=='namespace': params['namespace']='host'
+ if scenario=='missing_namespace': params.pop('namespace')
  if scenario=='malformed': params['arguments']='{"query":"morning"}'
  if scenario=='oversized': params['arguments']={'query':'x'*1024}
  if scenario=='nonfinite': params['arguments']={'query':float('nan')}
  if scenario in ('item','item_mismatch','multiple_items','builtin','completed_item'):
-  item={'type':'dynamicToolCall','id':'call-1','tool':'bokkie_lookup','arguments':{'query':'morning'},'status':'inProgress'}
+  item={'type':'dynamicToolCall','id':'call-1','tool':'bokkie_lookup','namespace':'bokkie','arguments':{'query':'morning'},'status':'inProgress'}
   if scenario=='builtin': item['type']='commandExecution'
   if scenario=='item_mismatch': item['id']='other-call'
   event={'method':'item/completed' if scenario=='completed_item' else 'item/started','params':{'threadId':'thread-1','turnId':'turn-1','item':item}}
@@ -112,7 +115,7 @@ for line in sys.stdin:
                                  {'tool': 'bokkie_lookup', 'arguments': {'query': 'morning'}})
 
     def test_tool_requests_fail_closed(self):
-        for scenario in ('thread', 'turn', 'missing_call', 'forbidden_name', 'namespace',
+        for scenario in ('thread', 'turn', 'missing_call', 'forbidden_name', 'namespace', 'missing_namespace',
                          'malformed', 'oversized', 'nonfinite', 'item_mismatch',
                          'multiple_items', 'builtin', 'completed_item', 'approval'):
             with self.subTest(scenario=scenario), self.assertRaises(ValueError):
@@ -190,6 +193,8 @@ for line in sys.stdin:
 
     def test_effective_config_cannot_broaden(self):
         for mutate in [lambda c: c['features'].update(shell_tool=True),
+                       lambda c: c['features'].update(code_mode=False),
+                       lambda c: c['features']['code_mode'].update(direct_only_tool_namespaces=['host']),
                        lambda c: c.update(mcp_servers={'unexpected': {}}),
                        lambda c: c['skills'].update(include_instructions=True)]:
             value = config(); mutate(value)
