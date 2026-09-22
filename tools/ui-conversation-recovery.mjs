@@ -26,6 +26,8 @@ try{
  const list=await(await fetch(origin+'/conversations')).json();
  check(list.items.length>=2,'Retained real conversations available after restart');
  const [a,b]=list.items.map(i=>i.id);
+ const expectedViews=await Promise.all([a,b].map(async id=>await(await fetch(origin+'/conversations/'+id)).json()));
+ const selectedName=view=>'Selected task: '+(view.task.candidate??view.task.active).definition.name;
  browser=await chromium.launch({headless:true,env:{...process.env,LD_LIBRARY_PATH:process.env.BOKKIE_UI_SYSROOT?`${resolve(process.env.BOKKIE_UI_SYSROOT,'usr/lib')}:${process.env.LD_LIBRARY_PATH??''}`:(process.env.LD_LIBRARY_PATH??'')},args:['--no-sandbox','--enable-unsafe-webgpu','--enable-features=Vulkan','--use-angle=vulkan','--disable-vulkan-surface']});
  page=await browser.newPage({viewport:{width:1440,height:900}});
  const snapshot=()=>page.evaluate(()=>window.__BOKKIE_ATTENTION_HANDLE.test_snapshot());
@@ -43,11 +45,11 @@ try{
  release();await page.waitForTimeout(500);
  await page.screenshot({path:join(evidence,'after-delayed-history.png')});
  const state=await snapshot();
- check(state.ui_snapshot.nodes.some(n=>n.id==='bokkie.conversation.text'),'Opening B while A is outstanding leaves the conversation usable');
+ check(state.ui_snapshot.nodes.some(n=>n.id==='bokkie.conversation.selected'&&n.name===selectedName(expectedViews[1])),'Opening B while A is outstanding leaves the conversation usable');
  const raw=JSON.stringify(state);
  check(!raw.includes('Loading conversation'),'Delayed A response does not strand history navigation');
  await click('bokkie.conversation.history.'+a);await page.waitForTimeout(500);
- check((await snapshot()).ui_snapshot.nodes.some(n=>n.id==='bokkie.conversation.text'),'Returning to A remains usable');
+ check((await snapshot()).ui_snapshot.nodes.some(n=>n.id==='bokkie.conversation.selected'&&n.name===selectedName(expectedViews[0])),'Returning to A remains usable');
  const after=await control();report.model_calls=after.model_calls-before.model_calls;
  check(report.model_calls===0,'Reading and switching histories makes no model calls');
  check(JSON.stringify(before.details)===JSON.stringify(after.details),'History navigation preserves all tasks and results');
