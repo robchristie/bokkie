@@ -758,6 +758,24 @@ impl Store {
         Ok(ManagedCataloguePage { items, next_after })
     }
 }
+/// Only a trusted, revision-fenced operator retry can recover a local note.
+/// It reuses the admitted occurrence; it cannot change configuration or release
+/// a lease. Other adapters must define their own recovery authority.
+pub(super) fn validate_fenced_retry(tx: &Transaction<'_>, id: &str) -> Result<(), StoreError> {
+    let binding: Option<(Option<i64>, String, String)> = tx.query_row(
+        "SELECT b.admitted_at,b.profile_revision,json_extract(d.definition_json,'$.capability')
+         FROM managed_bindings b JOIN managed_definitions d ON d.task_id=b.task_id AND d.revision=b.definition_revision WHERE b.obligation_id=?1",
+        [id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+    ).optional()?;
+    if let Some((admitted, profile, capability)) = binding {
+        if admitted.is_none() || profile != "local-note-v1" || capability != "local_note" {
+            return Err(conflict(
+                "this managed occurrence requires its designated recovery adapter",
+            ));
+        }
+    }
+    Ok(())
+}
 pub(super) fn reject_generic(tx: &Transaction<'_>, id: &str) -> Result<(), StoreError> {
     let managed: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM managed_bindings WHERE obligation_id=?1)",
@@ -1141,6 +1159,87 @@ mod tests {
         drop(store);
         let store = Store::open(&path).unwrap();
         assert_eq!(store.managed_detail(&id).unwrap(), state);
+    }
+    #[test]
+    fn exhausted_notes_recover_only_with_fenced_operator_retry_and_keep_original_binding() {
+        for pause in [false, true] {
+            let directory = TempDir::new().unwrap();
+            let path = directory.path().join("notes.sqlite");
+            let mut store = Store::open(&path).unwrap();
+            let id = create(&mut store, &recurring("original text"), 0);
+            activate(&mut store, &id, 0);
+            let mut now = 60;
+            let mut obligation_id = String::new();
+            for _ in 0..3 {
+                let claim = store.claim_due_notes(now, 1, 1).unwrap().pop().unwrap();
+                obligation_id = claim.obligation_id;
+                now += 1;
+                assert!(store.claim_due_notes(now, 1, 1).unwrap().is_empty());
+                if let Some(next) = store.get(&obligation_id).unwrap().unwrap().next_wake_at {
+                    now = next;
+                }
+            }
+            assert_eq!(
+                store.get(&obligation_id).unwrap().unwrap().state,
+                ObligationState::Attention
+            );
+            store
+                .managed_revise("future", &id, 2, &recurring("future text"), now)
+                .unwrap();
+            activate(&mut store, &id, now);
+            if pause {
+                let expected = store.managed_detail(&id).unwrap().configuration_revision;
+                store.managed_pause("pause", &id, expected, now).unwrap();
+            }
+            drop(store);
+            let mut store = Store::open(&path).unwrap();
+            let snapshot = store.operator_snapshot(now).unwrap();
+            let occurrence = snapshot
+                .obligations
+                .iter()
+                .find(|o| o.id == obligation_id)
+                .unwrap();
+            assert!(occurrence.capabilities.retry.available);
+            assert!(!occurrence.capabilities.cancel.available);
+            let fence = occurrence.capabilities.retry.precondition.clone().unwrap();
+            assert!(store.retry_attention(&obligation_id, now).is_err());
+            store
+                .retry_attention_if_current(&obligation_id, &fence, now)
+                .unwrap();
+            assert!(
+                store
+                    .retry_attention_if_current(&obligation_id, &fence, now)
+                    .is_err()
+            );
+            assert!(store.claim_due(now, 30, 10).unwrap().is_empty());
+            let claim = store.claim_due_notes(now, 30, 1).unwrap().pop().unwrap();
+            assert_eq!(claim.obligation_id, obligation_id);
+            assert_eq!(
+                store
+                    .managed_note_definition(&obligation_id)
+                    .unwrap()
+                    .revision,
+                1
+            );
+            store
+                .complete_managed_note(&claim, "original text", now)
+                .unwrap();
+            store
+                .complete_managed_note(&claim, "original text", now)
+                .unwrap();
+            let state = store.managed_detail(&id).unwrap();
+            assert_eq!(state.active.unwrap().revision, 2);
+            assert_eq!(
+                state.runs.iter().filter(|run| run.result.is_some()).count(),
+                1
+            );
+            if pause {
+                assert_eq!(state.status, ManagedTaskStatus::Paused);
+                assert!(state.next_wake_at.is_none());
+            } else {
+                assert!(state.next_wake_at.unwrap() > now);
+            }
+        }
     }
     #[test]
     fn overdue_recurrence_coalesces_backlog_strictly_after_completion() {

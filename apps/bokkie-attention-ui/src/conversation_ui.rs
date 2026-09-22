@@ -18,7 +18,7 @@ pub(super) struct ConversationState {
     text: String,
     pending: Option<ApiRequest>,
     in_flight: bool,
-    reading: bool,
+    reading: Option<(String, u64)>,
     catalogue_busy: bool,
     error: Option<String>,
     select_after_load: Option<String>,
@@ -26,6 +26,42 @@ pub(super) struct ConversationState {
 }
 
 impl ConversationState {
+    fn switch(&mut self, id: String, task: Option<String>) {
+        self.id = Some(id);
+        self.view = None;
+        self.text.clear();
+        self.pending = None;
+        self.reading = None;
+        self.error = None;
+        self.select_after_load = task;
+        self.poll_at = None;
+    }
+
+    fn begin_read(&mut self, generation: u64) -> Option<ApiRequest> {
+        if self.in_flight {
+            return None;
+        }
+        let id = self.id.clone()?;
+        if self.reading.is_some() {
+            return None;
+        }
+        self.reading = Some((id.clone(), generation));
+        Some(ApiRequest::Conversation { id, generation })
+    }
+
+    fn finish_read(&mut self, id: &str, generation: u64) -> bool {
+        if self.id.as_deref() != Some(id)
+            || self
+                .reading
+                .as_ref()
+                .is_none_or(|(owner, expected)| owner != id || *expected != generation)
+        {
+            return false;
+        }
+        self.reading = None;
+        true
+    }
+
     pub fn reset_session(&mut self) {
         if let Some(view) = &mut self.view {
             view.review = None;
@@ -34,7 +70,7 @@ impl ConversationState {
             self.pending = None;
         }
         self.in_flight = false;
-        self.reading = false;
+        self.reading = None;
         self.catalogue_busy = false;
         self.poll_at = None;
     }
@@ -91,12 +127,14 @@ impl AttentionApp {
         }
         self.conversation.open = true;
         if task.is_some() || self.conversation.id.is_none() {
-            self.conversation.id = Some(uuid::Uuid::new_v4().to_string());
-            self.conversation.view = None;
-            self.conversation.text.clear();
-            self.conversation.pending = None;
-            self.conversation.select_after_load = task;
+            self.conversation
+                .switch(uuid::Uuid::new_v4().to_string(), task);
         }
+        self.refresh_conversation(context);
+    }
+
+    fn open_saved_conversation(&mut self, id: String, context: &egui::Context) {
+        self.conversation.switch(id, None);
         self.refresh_conversation(context);
     }
 
@@ -116,12 +154,9 @@ impl AttentionApp {
                 context,
             );
         }
-        if !self.conversation.reading
-            && !self.conversation.in_flight
-            && let Some(id) = self.conversation.id.clone()
-        {
-            self.conversation.reading = true;
-            self.dispatch(ApiRequest::Conversation { id }, context);
+        let generation = self.fresh_generation();
+        if let Some(request) = self.conversation.begin_read(generation) {
+            self.dispatch(request, context);
         }
     }
 
@@ -138,7 +173,7 @@ impl AttentionApp {
                 | ApiRequest::ConversationConfirm(_)
         );
         let request_id = match &request {
-            ApiRequest::Conversation { id } => Some(id.as_str()),
+            ApiRequest::Conversation { id, .. } => Some(id.as_str()),
             ApiRequest::ConversationTurn(r) => Some(r.conversation_id.as_str()),
             ApiRequest::ConversationSelect(r) => Some(r.conversation_id.as_str()),
             ApiRequest::ConversationConfirm(r) => Some(r.conversation_id.as_str()),
@@ -150,8 +185,10 @@ impl AttentionApp {
         if mutation {
             self.conversation.in_flight = false;
         }
-        if matches!(request, ApiRequest::Conversation { .. }) {
-            self.conversation.reading = false;
+        if let ApiRequest::Conversation { id, generation } = &request
+            && !self.conversation.finish_read(id, *generation)
+        {
+            return;
         }
         if matches!(request, ApiRequest::Catalogue { .. }) {
             self.conversation.catalogue_busy = false;
@@ -248,11 +285,14 @@ impl AttentionApp {
             return;
         }
         if let Some(at) = self.conversation.poll_at {
-            if at <= Instant::now() && !self.conversation.reading && !self.conversation.in_flight {
+            if at <= Instant::now()
+                && self.conversation.reading.is_none()
+                && !self.conversation.in_flight
+            {
                 self.conversation.poll_at = None;
-                if let Some(id) = self.conversation.id.clone() {
-                    self.conversation.reading = true;
-                    self.dispatch(ApiRequest::Conversation { id }, context);
+                let generation = self.fresh_generation();
+                if let Some(request) = self.conversation.begin_read(generation) {
+                    self.dispatch(request, context);
                 }
             } else {
                 context.request_repaint_after(
@@ -274,7 +314,7 @@ impl AttentionApp {
         let safe = self.session.is_some()
             && self.model.connection.decisions_safe()
             && !self.conversation.in_flight
-            && !self.conversation.reading;
+            && self.conversation.reading.is_none();
         let busy = self.conversation.view.as_ref().is_some_and(|v| v.busy);
         let mutable = safe && !busy && self.conversation.pending.is_none();
         let state = &mut self.conversation;
@@ -428,10 +468,7 @@ impl AttentionApp {
                 self.open_conversation(None, &context);
             }
             Some(ConversationUiAction::Open(id)) => {
-                self.conversation.id = Some(id);
-                self.conversation.view = None;
-                self.conversation.text.clear();
-                self.refresh_conversation(&context);
+                self.open_saved_conversation(id, &context);
             }
             Some(ConversationUiAction::Search | ConversationUiAction::More) => {
                 let after = if matches!(action, Some(ConversationUiAction::More)) {
@@ -1048,5 +1085,160 @@ mod tests {
             local_time_in_zone(summer, "bad/zone"),
             "Invalid time zone: bad/zone"
         );
+    }
+    #[test]
+    fn history_switch_owns_new_read_and_ignores_delayed_previous_responses() {
+        let mut app = super::super::tests::test_app();
+        let context = egui::Context::default();
+        app.session = Some(session("current"));
+        app.conversation.open = true;
+        app.conversation.switch("chat-a".into(), None);
+        let generation = app.fresh_generation();
+        let delayed = app.conversation.begin_read(generation).unwrap();
+
+        app.open_saved_conversation("chat-b".into(), &context);
+        assert_eq!(
+            app.conversation.reading.as_ref().map(|(id, _)| id.as_str()),
+            Some("chat-b")
+        );
+        for response in [
+            Ok(ApiPayload::Conversation(Box::new(view(
+                "chat-a", "current", 4,
+            )))),
+            Err(ApiFailure::Other("Delayed connection failure".into())),
+            Err(ApiFailure::SessionChanged("Delayed stale session".into())),
+        ] {
+            app.conversation_response(delayed.clone(), response, &context);
+            assert_eq!(
+                app.conversation.reading.as_ref().map(|(id, _)| id.as_str()),
+                Some("chat-b")
+            );
+            assert!(app.conversation.view.is_none());
+            assert!(app.conversation.error.is_none());
+            assert!(app.conversation.begin_read(99).is_none());
+        }
+        app.conversation_response(
+            ApiRequest::Conversation {
+                id: "chat-b".into(),
+                generation: app.conversation.reading.as_ref().unwrap().1,
+            },
+            Ok(ApiPayload::Conversation(Box::new(view(
+                "chat-b", "current", 2,
+            )))),
+            &context,
+        );
+        assert!(app.conversation.reading.is_none());
+        assert_eq!(app.conversation.view.as_ref().unwrap().id, "chat-b");
+        assert_eq!(
+            app.conversation.begin_read(100),
+            Some(ApiRequest::Conversation {
+                id: "chat-b".into(),
+                generation: 100,
+            })
+        );
+    }
+
+    #[test]
+    fn task_context_switch_reads_new_chat_before_selecting_requested_task() {
+        let mut app = super::super::tests::test_app();
+        let context = egui::Context::default();
+        app.session = Some(session("current"));
+        app.conversation.open = true;
+        app.conversation
+            .switch("chat-a".into(), Some("old-task".into()));
+        let generation = app.fresh_generation();
+        let delayed = app.conversation.begin_read(generation).unwrap();
+
+        app.open_conversation(Some("new-task".into()), &context);
+        let next_id = app.conversation.id.clone().unwrap();
+        assert_ne!(next_id, "chat-a");
+        assert_eq!(
+            app.conversation.reading.as_ref().map(|(id, _)| id.as_str()),
+            Some(next_id.as_str())
+        );
+        app.conversation_response(
+            delayed,
+            Ok(ApiPayload::Conversation(Box::new(view(
+                "chat-a", "current", 4,
+            )))),
+            &context,
+        );
+        assert_eq!(
+            app.conversation.reading.as_ref().map(|(id, _)| id.as_str()),
+            Some(next_id.as_str())
+        );
+        assert_eq!(
+            app.conversation.select_after_load.as_deref(),
+            Some("new-task")
+        );
+        assert!(app.conversation.pending.is_none());
+
+        app.conversation_response(
+            ApiRequest::Conversation {
+                id: next_id.clone(),
+                generation: app.conversation.reading.as_ref().unwrap().1,
+            },
+            Ok(ApiPayload::Conversation(Box::new(view(
+                &next_id, "current", 0,
+            )))),
+            &context,
+        );
+        assert!(app.conversation.reading.is_none());
+        assert!(app.conversation.select_after_load.is_none());
+        let Some(ApiRequest::ConversationSelect(selection)) = &app.conversation.pending else {
+            panic!("the new conversation must select its requested task after loading");
+        };
+        assert_eq!(selection.conversation_id, next_id);
+        assert_eq!(selection.task_id, "new-task");
+        assert_eq!(selection.expected_revision, 0);
+    }
+    #[test]
+    fn returning_to_same_conversation_rejects_its_previous_read_generation() {
+        let mut app = super::super::tests::test_app();
+        let context = egui::Context::default();
+        app.session = Some(session("current"));
+        app.conversation.open = true;
+        app.open_saved_conversation("chat-a".into(), &context);
+        let old_generation = app.conversation.reading.as_ref().unwrap().1;
+        let delayed = ApiRequest::Conversation {
+            id: "chat-a".into(),
+            generation: old_generation,
+        };
+
+        app.open_saved_conversation("chat-b".into(), &context);
+        app.open_saved_conversation("chat-a".into(), &context);
+        let current_owner = app.conversation.reading.clone().unwrap();
+        assert_eq!(current_owner.0, "chat-a");
+        assert!(current_owner.1 > old_generation);
+        for response in [
+            Ok(ApiPayload::Conversation(Box::new(view(
+                "chat-a", "current", 99,
+            )))),
+            Err(ApiFailure::Other("Old A connection failed".into())),
+            Err(ApiFailure::SessionChanged("Old A session failed".into())),
+        ] {
+            app.conversation_response(delayed.clone(), response, &context);
+            assert_eq!(app.conversation.reading.as_ref(), Some(&current_owner));
+            assert!(app.conversation.view.is_none());
+            assert!(app.conversation.error.is_none());
+            assert!(
+                app.session
+                    .as_ref()
+                    .unwrap()
+                    .matches(&view("chat-a", "current", 0).service)
+            );
+        }
+        app.conversation_response(
+            ApiRequest::Conversation {
+                id: "chat-a".into(),
+                generation: current_owner.1,
+            },
+            Ok(ApiPayload::Conversation(Box::new(view(
+                "chat-a", "current", 2,
+            )))),
+            &context,
+        );
+        assert!(app.conversation.reading.is_none());
+        assert_eq!(app.conversation.view.as_ref().unwrap().revision, 2);
     }
 }

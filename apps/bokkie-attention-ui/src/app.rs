@@ -4704,7 +4704,7 @@ mod tests {
         assert!(draft.pending.is_none());
     }
 
-    fn test_app() -> AttentionApp {
+    pub(super) fn test_app() -> AttentionApp {
         let (sender, receiver) = mpsc::channel();
         AttentionApp {
             conversation: conversation_ui::ConversationState::default(),

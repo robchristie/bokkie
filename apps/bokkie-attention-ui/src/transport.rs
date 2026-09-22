@@ -28,6 +28,8 @@ pub enum ApiRequest {
     Conversations,
     Conversation {
         id: String,
+        /// Client-only read ownership; never included in the HTTP request.
+        generation: u64,
     },
     ConversationTurn(bokkie_operator_api::ConversationTurnRequest),
     ConversationSelect(bokkie_operator_api::ConversationSelectRequest),
@@ -287,7 +289,7 @@ impl Transport {
     fn endpoint(&self, request: &ApiRequest) -> String {
         let path = match request {
             ApiRequest::Conversations => "/conversations".into(),
-            ApiRequest::Conversation { id } => {
+            ApiRequest::Conversation { id, .. } => {
                 format!("/conversations/{}", encode_path_segment(id))
             }
             ApiRequest::ConversationTurn(_) => "/conversations/turn".into(),
@@ -960,5 +962,22 @@ mod tests {
             }),
             "http://127.0.0.1:7744/tasks/catalogue?limit=50&q=garden%20%26%20notes&after=cursor%2F%2B"
         );
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn conversation_read_generation_is_not_sent_to_server() {
+        let transport = Transport::new("http://127.0.0.1:7744").unwrap();
+        for generation in [1, 3] {
+            let request = ApiRequest::Conversation {
+                id: "chat/a".into(),
+                generation,
+            };
+            let http = transport
+                .http_request(&request, Some(&session("current", &"a".repeat(64))))
+                .unwrap();
+            assert_eq!(http.url, "http://127.0.0.1:7744/conversations/chat%2Fa");
+            assert_eq!(http.method, ehttp::Method::GET);
+            assert!(http.body.is_empty());
+        }
     }
 }

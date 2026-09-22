@@ -620,6 +620,9 @@ runtime is unavailable. Runtime failure retains the draft and reports the error.
 **Engineering intake** and existing gardener details retain their specialised
 contracts and legal actions. A legacy schedule cannot be changed by converting
 its task into a managed note. Note pause does not cancel work already admitted;
-its run remains visible with the original revision and ownership. Resume avoids
+its run remains visible with the original revision and ownership. If note retries
+are exhausted, open **Needs attention**, select that occurrence and confirm
+**Retry**. This preserves the original definition and can finish owned work even
+while its task is paused. Resume avoids
 backlog replay; an overdue unadmitted dated one-off needs a new explicit date.
 See [definition and timing semantics](conversational-tasks.md).

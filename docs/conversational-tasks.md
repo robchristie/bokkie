@@ -47,7 +47,11 @@ its original definition and lease through retry/reconciliation. Its completion
 consults the current configuration, so an old run cannot restore an old schedule.
 Pause retires unadmitted wake-ups and serialises against claim admission in an
 immediate Store transaction. Admitted work may still complete or retry while
-paused. Pausing never releases another adapter's lease or writer reservation.
+paused. Pausing never releases another adapter's lease or writer reservation. If a local
+note exhausts its automatic retries, **Needs attention → Retry** uses the existing
+operator confirmation and occurrence revision fence to retry that same admitted
+work. Its original definition/profile remain pinned, including while paused or
+a newer definition is active. Unfenced retry and generic cancellation stay blocked.
 
 The missed-tick policy retains one persisted due occurrence and coalesces
 intervening recurring ticks; completion schedules strictly after the current

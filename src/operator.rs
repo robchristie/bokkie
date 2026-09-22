@@ -1082,7 +1082,6 @@ impl Store {
             for action in [
                 &mut projected_capabilities.approve,
                 &mut projected_capabilities.reject,
-                &mut projected_capabilities.retry,
                 &mut projected_capabilities.cancel,
                 &mut projected_capabilities.approve_gardener_proposal,
                 &mut projected_capabilities.reject_gardener_proposal,

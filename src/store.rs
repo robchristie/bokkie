@@ -2831,7 +2831,11 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         engineering::reject_generic(&transaction, id)?;
-        managed::reject_generic(&transaction, id)?;
+        if precondition.is_some() {
+            managed::validate_fenced_retry(&transaction, id)?;
+        } else {
+            managed::reject_generic(&transaction, id)?;
+        }
         if proposal_instance_for_obligation(&transaction, id)?
             .is_some_and(|instance| instance.superseded_by.is_some())
         {

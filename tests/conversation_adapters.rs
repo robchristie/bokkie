@@ -846,3 +846,90 @@ async fn model_http_repeated_lookup_exhausts_two_calls_without_creating_a_task()
     );
     fixture.replay_is_free(&turn, &view).await;
 }
+
+#[tokio::test]
+async fn managed_attention_retry_uses_existing_fenced_operator_http_and_preserves_occurrence() {
+    let temporary = TempDir::new().unwrap();
+    let database = temporary.path().join("retry.sqlite");
+    let mut store = Store::open(&database).unwrap();
+    let mut definition = ManagedTaskDefinition::local_note("Recover note", "Original result");
+    definition.max_attempts = 1;
+    let task = store.managed_create("draft", &definition, 0).unwrap();
+    let preview = store
+        .managed_preview(&task.task_id, "session", &profiles(), 0)
+        .unwrap();
+    store
+        .managed_activate("activate", &preview, "session", &profiles(), 0)
+        .unwrap();
+    let claim = store.claim_due_notes(0, 1, 1).unwrap().pop().unwrap();
+    assert!(store.claim_due_notes(1, 1, 1).unwrap().is_empty());
+    let snapshot = store.operator_snapshot(1).unwrap();
+    let item = snapshot
+        .obligations
+        .iter()
+        .find(|o| o.id == claim.obligation_id)
+        .unwrap();
+    let payload = json!({"actor":"operator", "note":null, "precondition":item.capabilities.retry.precondition.clone().unwrap()});
+    let executor = DbExecutor::start(database).unwrap();
+    let app = application(&executor, runtime(), true);
+    let token = bootstrap(&app).await.mutation_token;
+    let route = format!("/operator/obligations/{}/retry", claim.obligation_id);
+    assert_eq!(
+        request(&app, Method::POST, &route, None, Some(payload.clone()))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(
+            &app,
+            Method::POST,
+            &format!("/obligations/{}/retry", claim.obligation_id),
+            Some(&token),
+            Some(json!({}))
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        request(
+            &app,
+            Method::POST,
+            &route,
+            Some(&token),
+            Some(payload.clone())
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    // A lost response cannot authorise a second retry of a different state.
+    assert_eq!(
+        request(&app, Method::POST, &route, Some(&token), Some(payload))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let due = store
+        .get(&claim.obligation_id)
+        .unwrap()
+        .unwrap()
+        .next_wake_at
+        .unwrap();
+    let recovered = store.claim_due_notes(due, 30, 1).unwrap().pop().unwrap();
+    assert_eq!(recovered.obligation_id, claim.obligation_id);
+    store
+        .complete_managed_note(&recovered, "Original result", due)
+        .unwrap();
+    assert_eq!(
+        store
+            .managed_detail(&task.task_id)
+            .unwrap()
+            .runs
+            .iter()
+            .filter(|r| r.result.is_some())
+            .count(),
+        1
+    );
+}
