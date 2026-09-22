@@ -76,23 +76,50 @@ pub(super) fn show_task_detail(
     intents: &mut Vec<OperatorIntent>,
     presentation: &mut PresentationContext,
 ) {
+    if button(
+        ui,
+        "bokkie.task.conversation",
+        "Discuss this task",
+        true,
+        presentation,
+    ) {
+        intents.push(OperatorIntent::OpenConversation(Some(
+            obligation
+                .task
+                .as_ref()
+                .filter(|task| task.kind == OperatorTaskKind::LocalNote)
+                .and_then(|task| task.parent_task_id.clone())
+                .unwrap_or_else(|| obligation.id.clone()),
+        )));
+    }
     let Some(task) = &obligation.task else {
         return;
     };
-    if let Some(parent_id) = &task.parent_task_id
-        && let Some(parent) = read
+    if let Some(parent_id) = &task.parent_task_id {
+        if task.kind == OperatorTaskKind::LocalNote {
+            if button(
+                ui,
+                &format!("bokkie.task.parent.{parent_id}"),
+                "Back to managed task",
+                true,
+                presentation,
+            ) {
+                intents.push(OperatorIntent::OpenConversation(Some(parent_id.clone())));
+            }
+        } else if let Some(parent) = read
             .related_obligations
             .iter()
             .find(|item| item.id == *parent_id)
-    {
-        open_task(
-            ui,
-            parent_id,
-            &format!("Back to {}", attention_title(parent)),
-            true,
-            intents,
-            presentation,
-        );
+        {
+            open_task(
+                ui,
+                parent_id,
+                &format!("Back to {}", attention_title(parent)),
+                true,
+                intents,
+                presentation,
+            );
+        }
     }
     if let Some(engineering) = &task.engineering {
         presentation.heading(ui, "engineering-heading", "Engineering outcome");

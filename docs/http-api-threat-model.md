@@ -96,3 +96,25 @@ usable until that Bokkie process exits. Process restart rotates it, but does not
 change durable SQLite state. Browser and native clients must therefore treat
 both runtime identity and durable Store preconditions as necessary, independent
 checks.
+
+## Conversation and managed definitions
+
+The same Host, Origin and session-token middleware protects `/conversations/*`.
+Task catalogue and definition reads are bounded server queries. Conversation
+turns persist dispatch before invoking a configured model outside the database
+owner. The model receives bounded supplied data and may select only the offered
+subset of five closed custom proposal tools. The broker verifies name, arguments,
+thread/turn identity and byte bounds, then tears down its process without answering
+the tool request. Trusted backend code validates and applies the proposal after
+that boundary. Unknown tools and ambient approvals fail closed; it cannot call SQL, shell, connected applications, the HTTP API or
+confirmation routes. A fresh ephemeral, environment-free runtime is checked
+against the qualified installed protocol before its model turn. Runtime
+containment details and finite limits are owned by the conversation runtime guide.
+
+Definition changes and operator confirmations remain trusted Store operations.
+A saved review binds its task, configuration, candidate, process session and
+capability profile. Confirming revalidates those bindings and commits the task
+mutation, both receipts and global projection event atomically. Models cannot
+supply actors or authority grants. Task text and context references are data;
+they cannot expand the allowed effects or cause external access. Restart fences
+old confirmations and marks interrupted model requests without replaying them.

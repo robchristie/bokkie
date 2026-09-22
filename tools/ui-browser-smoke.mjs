@@ -635,9 +635,30 @@ try {
     throw new Error('resizing discarded the ledger scroll position');
   }
   const listBounds = node(narrowScrolled, 'pane.2').rect;
-  const visibleLedgerRow = narrowScrolled.ui_snapshot.nodes.find(candidate =>
-    candidate.id.startsWith('bokkie.obligation-row.')
-    && candidate.rect.min_y > listBounds.min_y + 100 && candidate.rect.max_y < listBounds.max_y);
+  // Materialised overscan rows may sit beneath the collection controls. Use a
+  // fully observed painted title inside its clip, rather than a fixed header height.
+  const visibleLedgerRow = narrowScrolled.ui_snapshot.nodes.find(candidate => {
+    if (!candidate.id.startsWith('bokkie.obligation-row.')
+        || candidate.rect.min_y < listBounds.min_y
+        || candidate.rect.max_y > listBounds.max_y) return false;
+    const centre = {
+      x: (candidate.rect.min_x + candidate.rect.max_x) / 2,
+      y: (candidate.rect.min_y + candidate.rect.max_y) / 2,
+    };
+    const hasVisibleTitle = narrowScrolled.ui_snapshot.text.some(text =>
+      text.role === 'body'
+      && text.allocated_rect.min_y >= candidate.rect.min_y
+      && text.allocated_rect.max_y <= candidate.rect.max_y
+      && text.allocated_rect.min_y >= text.clip_rect.min_y
+      && text.allocated_rect.max_y <= text.clip_rect.max_y
+      && text.painted_rect.min_y >= text.clip_rect.min_y
+      && text.painted_rect.min_y < text.clip_rect.max_y);
+    const hasControlOverlay = narrowScrolled.ui_snapshot.nodes.some(control =>
+      ['button', 'combo_box', 'tab'].includes(control.role)
+      && centre.x >= control.rect.min_x && centre.x <= control.rect.max_x
+      && centre.y >= control.rect.min_y && centre.y <= control.rect.max_y);
+    return hasVisibleTitle && !hasControlOverlay;
+  });
   if (!visibleLedgerRow) throw new Error('scrolled ledger has no selectable visible row');
   await clickId(page, visibleLedgerRow.id);
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()

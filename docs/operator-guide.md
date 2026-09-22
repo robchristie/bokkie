@@ -14,7 +14,7 @@ external work and must not be mistaken for a production executor.
 
 The coding gardener is limited to `robchristie/bokkie`. Registration and
 runtime enablement are separate operator decisions: registering the checkout
-does not allow execution, and an ordinary `serve` remains fake-only.
+does not allow execution, and an ordinary `serve` remains fake-only unless local notes are explicitly enabled.
 
 Repository verification has two explicit compiler boundaries. `tools/check.sh`
 uses the backend/shared-contract MSRV Rust 1.85 with the exact root 1.85.0 pin,
@@ -576,3 +576,53 @@ Current limitations include no user authentication, no remote exposure, no
 notification delivery or outbox worker, no automatic merge or deployment, and
 a coding-gardener runtime restricted to the canonical repository and explicit
 service opt-in. There is no supported destructive migration or downgrade path.
+
+## Conversational task management
+
+Configure the model adapter and allowed local capability once. Copy
+[`conversation-local.json`](../instructions/profiles/conversation-local.json)
+to a private path outside the checkout. Set its absolute broker path to
+`tools/conversation-runtime/broker.py` in this checkout, its installed Codex path,
+and the desired model/effort and finite limits. Keep `instructions.md` beside the
+broker. The configured local account must already be authorised and usable;
+Bokkie does not obtain credentials or alter global account settings. See the
+[runtime guide](../tools/conversation-runtime/README.md) for Linux/Bubblewrap and
+installed-protocol preflight requirements.
+
+Build the service and browser assets using the [UI build instructions](../apps/bokkie-attention-ui/README.md),
+then start one ordinary local instance:
+
+```sh
+cargo build --locked --bin bokkie
+./target/debug/bokkie --database /absolute/private/bokkie.sqlite serve \
+  --bind 127.0.0.1:7744 \
+  --conversation-profile /absolute/private/conversation.json \
+  --enable-local-notes \
+  --ui-dir /absolute/bokkie/apps/bokkie-attention-ui/web
+```
+
+Open `/ui/` at that origin and select **Conversation**. Describe the task, refine
+the text, inspect its preview and press **Confirm reviewed action** once. Ask to
+find an existing task and select the intended candidate before changing it.
+“Make it weekly”, “pause this reminder” and “resume it” produce review cards;
+unchanged scope needs no second permission prompt. **New conversation** begins
+an independent discussion; **Recent conversations** restores saved context.
+Normal tasks need no per-task profile file or service restart.
+
+Only local notes execute in this milestone. Their results appear within the
+selected task; no OS notification, email delivery, research retrieval or model
+call accompanies an occurrence. A research/email draft shows blockers instead
+of claiming activation. Without `--enable-local-notes`, activation is blocked and
+existing occurrences remain durable but are not claimed. Without a conversation
+profile, saved tasks/history remain readable and the UI explains that the model
+runtime is unavailable. Runtime failure retains the draft and reports the error.
+
+**Engineering intake** and existing gardener details retain their specialised
+contracts and legal actions. A legacy schedule cannot be changed by converting
+its task into a managed note. Note pause does not cancel work already admitted;
+its run remains visible with the original revision and ownership. If note retries
+are exhausted, open **Needs attention**, select that occurrence and confirm
+**Retry**. This preserves the original definition and can finish owned work even
+while its task is paused. Resume avoids
+backlog replay; an overdue unadmitted dated one-off needs a new explicit date.
+See [definition and timing semantics](conversational-tasks.md).

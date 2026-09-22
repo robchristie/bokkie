@@ -1,4 +1,5 @@
 mod engineering;
+pub(crate) mod managed;
 
 use std::{
     path::Path,
@@ -322,6 +323,7 @@ impl Store {
             validate_action_precondition(&transaction, id, precondition, None, None)?;
         }
         engineering::reject_generic(&transaction, id)?;
+        managed::reject_generic(&transaction, id)?;
         let is_gardener_proposal = transaction.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM gardener_proposal_instances
@@ -420,6 +422,7 @@ impl Store {
                AND o.next_wake_at <= ?1
                AND {binding_predicate}
                AND NOT EXISTS (SELECT 1 FROM engineering_bindings e WHERE e.obligation_id = o.id)
+               AND NOT EXISTS (SELECT 1 FROM managed_bindings m WHERE m.obligation_id = o.id)
                AND NOT EXISTS (
                    SELECT 1
                    FROM gardener_proposal_instances pi
@@ -2792,6 +2795,7 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         engineering::reject_generic(&transaction, &claim.obligation_id)?;
+        managed::reject_generic(&transaction, &claim.obligation_id)?;
         apply_transition(
             &transaction,
             Transition::Complete {
@@ -2827,6 +2831,11 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         engineering::reject_generic(&transaction, id)?;
+        if precondition.is_some() {
+            managed::validate_fenced_retry(&transaction, id)?;
+        } else {
+            managed::reject_generic(&transaction, id)?;
+        }
         if proposal_instance_for_obligation(&transaction, id)?
             .is_some_and(|instance| instance.superseded_by.is_some())
         {
@@ -2865,6 +2874,7 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         engineering::reject_generic(&transaction, id)?;
+        managed::reject_generic(&transaction, id)?;
         if let Some(precondition) = precondition {
             validate_action_precondition(&transaction, id, precondition, None, None)?;
         }
@@ -5975,7 +5985,9 @@ mod tests {
                 (8, "0008_typed_failure_dispositions.sql".to_owned()),
                 (9, "0009_global_event_envelope.sql".to_owned()),
                 (10, "0010_gardener_task_configuration.sql".to_owned()),
-                (11, "0011_engineering_supervision.sql".to_owned())
+                (11, "0011_engineering_supervision.sql".to_owned()),
+                (12, "0012_managed_tasks.sql".to_owned()),
+                (13, "0013_conversations.sql".to_owned())
             ]
         );
         drop(store);

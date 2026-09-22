@@ -1,3 +1,6 @@
+#[path = "conversation_ui.rs"]
+mod conversation_ui;
+
 #[path = "task_ui.rs"]
 mod task_ui;
 
@@ -160,6 +163,7 @@ impl ActionKey for LifecycleAction {
 enum OperatorIntent {
     Refresh,
     ComposeEngineering,
+    OpenConversation(Option<String>),
     CancelEngineering {
         expected: bokkie_operator_api::EngineeringOutcomePrecondition,
     },
@@ -235,6 +239,7 @@ struct EngineeringDraft {
 }
 
 pub struct AttentionApp {
+    conversation: conversation_ui::ConversationState,
     engineering_draft: Option<EngineeringDraft>,
     engineering_saved_notice: bool,
     workspace: Workspace,
@@ -302,6 +307,7 @@ impl AttentionApp {
             model.mark_stale(error);
         }
         let mut app = Self {
+            conversation: conversation_ui::ConversationState::default(),
             engineering_draft: None,
             engineering_saved_notice: false,
             workspace: operator_workspace(),
@@ -453,6 +459,7 @@ impl AttentionApp {
             return;
         };
         match &request {
+            request if conversation_ui::is_request(request) => {}
             ApiRequest::Bootstrap => self.model.snapshot_busy = true,
             ApiRequest::SnapshotPage { .. }
             | ApiRequest::Changes { .. }
@@ -463,6 +470,7 @@ impl AttentionApp {
             | ApiRequest::EngineeringIntake(_)
             | ApiRequest::EngineeringFollowUp(_)
             | ApiRequest::EngineeringCancel(_) => self.model.action_busy = true,
+            _ => {}
         }
         transport.send(
             request,
@@ -474,6 +482,10 @@ impl AttentionApp {
 
     fn poll_transport(&mut self, context: &egui::Context) {
         while let Ok(message) = self.receiver.try_recv() {
+            if conversation_ui::is_request(&message.request) {
+                self.conversation_response(message.request, message.result, context);
+                continue;
+            }
             match (message.request, message.result) {
                 (
                     ApiRequest::EngineeringIntake(_)
@@ -515,6 +527,7 @@ impl AttentionApp {
                 }
                 (ApiRequest::Bootstrap, Ok(ApiPayload::Bootstrap(session))) => {
                     self.session = Some(session);
+                    self.refresh_conversation(context);
                     self.begin_full_rebuild(false, context);
                 }
                 (
@@ -651,7 +664,7 @@ impl AttentionApp {
                         .mark_stale(format!("Lifecycle request failed: {error}"));
                     self.next_poll_at = Some(Instant::now() + RECONNECT_DELAY);
                 }
-                (_, Ok(_)) => {
+                (_, Ok(_)) | (_, Err(_)) => {
                     self.model
                         .mark_stale("Bokkie returned an unexpected response");
                 }
@@ -713,6 +726,7 @@ impl AttentionApp {
 
     fn request_is_current(&self, request: &ApiRequest) -> bool {
         match request {
+            request if conversation_ui::is_request(request) => true,
             ApiRequest::Bootstrap
             | ApiRequest::Act(_)
             | ApiRequest::ConfigureTask { .. }
@@ -735,6 +749,7 @@ impl AttentionApp {
                 .affected_refresh
                 .as_ref()
                 .is_some_and(|refresh| refresh.generation == *generation),
+            _ => false,
         }
     }
 
@@ -896,6 +911,14 @@ impl AttentionApp {
                 ambiguous,
             }) => {
                 self.change_assembly = None;
+                if self
+                    .model
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| watermark > snapshot.watermark)
+                {
+                    self.refresh_conversation(context);
+                }
                 let extra_affected = std::mem::take(&mut self.change_extra_affected);
                 match projection_refresh_plan(affected, ambiguous, extra_affected) {
                     ProjectionRefreshPlan::FullRebuild => self.recover_projection(
@@ -1047,6 +1070,7 @@ impl AttentionApp {
     }
 
     fn restart_session(&mut self, message: &str, context: &egui::Context) {
+        self.conversation.reset_session();
         self.session = None;
         self.model.record_session_change(message);
         self.model.topic_busy = false;
@@ -1074,6 +1098,7 @@ impl AttentionApp {
     fn apply_intents(&mut self, intents: Vec<OperatorIntent>, context: &egui::Context) {
         for intent in intents {
             match intent {
+                OperatorIntent::OpenConversation(task) => self.open_conversation(task, context),
                 OperatorIntent::ComposeEngineering => {
                     if self.engineering_draft.is_none() {
                         self.engineering_draft = Some(EngineeringDraft {
@@ -1118,6 +1143,7 @@ impl AttentionApp {
                     }
                 }
                 OperatorIntent::Refresh => {
+                    self.refresh_conversation(context);
                     self.next_poll_at = None;
                     if self.session.is_some() {
                         if self.model.snapshot.is_some()
@@ -1314,6 +1340,7 @@ impl eframe::App for AttentionApp {
         let context = root_ui.ctx().clone();
         self.poll_transport(&context);
         self.drive_polling(&context);
+        self.drive_conversation_poll(&context);
         let tokens = self.theme.resolve(
             self.preferences
                 .theme_variant(context.theme() == egui::Theme::Dark),
@@ -1333,15 +1360,17 @@ impl eframe::App for AttentionApp {
                     ui.heading("Bokkie");
                     if engineering_button(
                         ui,
-                        "bokkie.engineering.new",
-                        "New task",
+                        "bokkie.conversation.open",
+                        "Conversation",
                         !self.model.action_busy,
                         &mut semantic_nodes,
                     ) {
-                        intents.push(OperatorIntent::ComposeEngineering);
+                        intents.push(OperatorIntent::OpenConversation(None));
                     }
                     ui.add_space(12.0);
-                    if ui.max_rect().width() - 32.0 >= NARROW_WORKSPACE_WIDTH {
+                    if !self.conversation.open
+                        && ui.max_rect().width() - 32.0 >= NARROW_WORKSPACE_WIDTH
+                    {
                         show_collection_tabs(
                             ui,
                             self.collection,
@@ -1416,6 +1445,19 @@ impl eframe::App for AttentionApp {
                     .inner_margin(16.0),
             )
             .show(root_ui, |ui| {
+                if self.conversation.open {
+                    self.show_conversation(ui, &mut semantic_nodes, &mut intents);
+                    return;
+                }
+                if engineering_button(
+                    ui,
+                    "bokkie.engineering.new",
+                    "Engineering intake",
+                    !self.model.action_busy,
+                    &mut semantic_nodes,
+                ) {
+                    intents.push(OperatorIntent::ComposeEngineering);
+                }
                 if self.engineering_saved_notice {
                     ui.vertical(|ui| {
                         ui.label(
@@ -2377,6 +2419,9 @@ fn show_detail_actions(
                             "engineering-supervisor"
                         }
                         Some(DisabledReason::NotGardenerProposal) => "not-gardener-proposal",
+                        Some(DisabledReason::ManagedRequiresDefinition) => {
+                            "Use the task conversation to review its definition"
+                        }
                         None => "unavailable",
                     }
                 };
@@ -2774,6 +2819,7 @@ fn obligation_source(obligation: &OperatorObligation) -> &str {
         Some(OperatorTaskKind::EngineeringSupervisor) => "Engineering supervision",
         Some(OperatorTaskKind::EngineeringWorker) => "Engineering work package",
         Some(OperatorTaskKind::Simulated) => "Simulated execution",
+        Some(bokkie_operator_api::OperatorTaskKind::LocalNote) => "Local note",
         None => "Bokkie obligation",
     }
 }
@@ -3471,7 +3517,10 @@ fn observe_engineering_control(
     if button {
         record_native_text_control(response, NativeTextControlKind::Button);
     }
-    let parent = if id == "bokkie.engineering.new" || id == "bokkie.engineering.dismiss-saved" {
+    let parent = if id == "bokkie.engineering.new"
+        || id == "bokkie.engineering.dismiss-saved"
+        || id == "bokkie.conversation.open"
+    {
         SemanticUiId::root()
     } else {
         SemanticUiId::new("bokkie.engineering.compose")
@@ -4655,9 +4704,10 @@ mod tests {
         assert!(draft.pending.is_none());
     }
 
-    fn test_app() -> AttentionApp {
+    pub(super) fn test_app() -> AttentionApp {
         let (sender, receiver) = mpsc::channel();
         AttentionApp {
+            conversation: conversation_ui::ConversationState::default(),
             engineering_draft: None,
             engineering_saved_notice: false,
             workspace: operator_workspace(),
@@ -4886,6 +4936,8 @@ mod tests {
             let instance_id = format!("instance-{revision}");
             let mut changes = ChangeAssembly::new(1, revision - 1);
             let exact_change = ProjectionChange {
+                entity_id: None,
+                entity_kind: None,
                 revision,
                 provenance: ProjectionEventProvenance::LiveAppend,
                 source: ProjectionEventSource::GardenerEvent { sequence: revision },
@@ -5135,5 +5187,63 @@ mod tests {
             ]
         );
         assert_eq!(gardener.prompt, "Implement the exact reviewed goal");
+    }
+    #[test]
+    fn conversation_workspace_controls_are_visible_at_desktop_and_narrow_widths() {
+        for width in [1440.0, 480.0, 390.0] {
+            let mut app = test_app();
+            app.conversation.open = true;
+            let context = egui::Context::default();
+            let mut nodes = Vec::new();
+            for _ in 0..3 {
+                nodes.clear();
+                context
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 800.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            app.show_conversation(ui, &mut nodes, &mut Vec::new());
+                        },
+                    )
+                    .textures_delta
+                    .clear();
+            }
+            let engineering = nodes
+                .iter()
+                .find(|node| node.id == SemanticUiId::new("bokkie.conversation.engineering"))
+                .unwrap();
+            let back = nodes
+                .iter()
+                .find(|node| node.id == SemanticUiId::new("bokkie.conversation.back"))
+                .unwrap();
+            assert_eq!(
+                engineering.rect.max_y - engineering.rect.min_y,
+                back.rect.max_y - back.rect.min_y,
+                "navigation label wrapped inside its button at {width}"
+            );
+            for id in [
+                "bokkie.conversation",
+                "bokkie.conversation.new",
+                "bokkie.conversation.engineering",
+                "bokkie.conversation.search",
+                "bokkie.conversation.text",
+                "bokkie.conversation.send",
+            ] {
+                let node = nodes
+                    .iter()
+                    .find(|node| node.id == SemanticUiId::new(id))
+                    .unwrap_or_else(|| panic!("missing {id} at {width}"));
+                assert!(
+                    node.rect.max_x <= width + 1.0,
+                    "overflow for {id} at {width}: {:?}",
+                    node.rect
+                );
+            }
+        }
     }
 }

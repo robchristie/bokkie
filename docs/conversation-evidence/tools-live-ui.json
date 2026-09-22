@@ -1,0 +1,135 @@
+{
+  "result": "passed across the original checkpoint and one focused discovery repair continuation",
+  "calibration_calls": 8,
+  "ui_calls": 11,
+  "aggregate_calls": 19,
+  "aggregate_started_at": "2026-09-22T12:22:24.092Z",
+  "aggregate_finished_at": "2026-09-22T12:33:34.898Z",
+  "segments": [
+    {
+      "source_revision": "f83ac1228aa512d6fac759121c4e474542ae6b7e",
+      "started_at": "2026-09-22T12:29:16.013Z",
+      "finished_at": "2026-09-22T12:29:51.710Z",
+      "calls": 5,
+      "passed": false,
+      "errors": [
+        "Error: Fresh conversation discovers persisted task"
+      ],
+      "checks": [
+        "Draft created without execution",
+        "Refinement preserves a single inactive task",
+        "Preview contains exact reminder text",
+        "Preview shows named timezone and future occurrences",
+        "Operator confirmation activates exact draft",
+        "Kernel note runner completed due occurrence",
+        "Repeated tick does not duplicate local result"
+      ],
+      "raw_report_sha256": "505c6411818cb90c77ac3a6b62d897e90d6b2e576a27efdcdf525e13b8a16c30",
+      "artefacts": {
+        "target/debug/bokkie-conversation-fixture": "0e09565d71ddae36c7d2d0ac619b7fd35e99d5adac6bcfb3f3b496df3c23cf18",
+        "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "b159e583b4c4768a1b20ab4362b96845637ad968cc0811b0fa47e29c9e51b157",
+        "tools/conversation-runtime/broker.py": "46229f092f9a889554d1d25272d86fa3cb60c37b71ca43ff7bcb6a0ff13b0b27"
+      },
+      "opened_captures": {
+        "review-desktop": "b69a7744e7fb06e6c94ce1ea7a95491ff303846e9db75393d775d3fdccec2785",
+        "review-narrow": "90330ce5fe5df0084a5d39f117b646ac2f0583f9701978a6c662656249854681",
+        "completed-local-result": "4f42b0d12bea44b3bb2c0f17fb6b951424cc0622733beb34288ac85492b45409"
+      },
+      "receipts": [
+        {
+          "command_id": "operator-1790080178493-0.839736724046664-3",
+          "task_id": "task-39f9341d-33d5-4dd3-a7ad-28c2de11ae51",
+          "configuration_revision": 3
+        }
+      ]
+    },
+    {
+      "source_revision": "baab5432b99ae95d7de809c72c1082c3d802bf92",
+      "started_at": "2026-09-22T12:32:49.076Z",
+      "finished_at": "2026-09-22T12:33:34.898Z",
+      "calls": 6,
+      "passed": true,
+      "errors": [],
+      "checks": [
+        "Continuation retains the original active task and its single local result",
+        "Fresh conversation discovers persisted task",
+        "Schedule proposal leaves active timing unchanged",
+        "Pause prevents new admission past a due time",
+        "Resume chooses future timing without backlog",
+        "One-off note completes through kernel",
+        "Refresh does not repeat one-off completion",
+        "Unavailable research capability remains draft with activation blocked",
+        "Exactly three intended tasks exist after full journey"
+      ],
+      "raw_report_sha256": "cbb12a8c97864904fa9c3866e0048ea28d99fdca63b351773e7de8f2e04bbd33",
+      "artefacts": {
+        "target/debug/bokkie-conversation-fixture": "3fa8bd50461bf1b4020fa159a5da6f300c4c8091e1b4241bddac63437eef9bda",
+        "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "b159e583b4c4768a1b20ab4362b96845637ad968cc0811b0fa47e29c9e51b157",
+        "tools/conversation-runtime/broker.py": "46229f092f9a889554d1d25272d86fa3cb60c37b71ca43ff7bcb6a0ff13b0b27"
+      },
+      "opened_captures": {
+        "unavailable-draft": "cf44a1a30e49a176f56566afab1351ca4e6f962e163fa743fb1133063d164366"
+      },
+      "receipts": [
+        {
+          "command_id": "operator-1790080385358-0.9906613565321195-3",
+          "task_id": "task-39f9341d-33d5-4dd3-a7ad-28c2de11ae51",
+          "configuration_revision": 5
+        },
+        {
+          "command_id": "operator-1790080391384-0.8703904232808619-5",
+          "task_id": "task-39f9341d-33d5-4dd3-a7ad-28c2de11ae51",
+          "configuration_revision": 6
+        },
+        {
+          "command_id": "operator-1790080398420-0.33690490332859024-7",
+          "task_id": "task-39f9341d-33d5-4dd3-a7ad-28c2de11ae51",
+          "configuration_revision": 7
+        },
+        {
+          "command_id": "operator-1790080405268-0.7421582299689505-9",
+          "task_id": "task-02c37a9e-1a21-4419-b885-5d4589238c92",
+          "configuration_revision": 2
+        }
+      ]
+    }
+  ],
+  "final_tasks": [
+    {
+      "id": "task-02c37a9e-1a21-4419-b885-5d4589238c92",
+      "status": "completed",
+      "configuration_revision": 3,
+      "active_revision": 1,
+      "candidate_revision": null,
+      "results": [
+        {
+          "obligation_id": "note-2148e079-c60f-48ea-bc9a-fa0121630641",
+          "definition_revision": 1,
+          "result_sha256": "a2fbf6b69ff0f5f292eac77cbddbf648e27e5b28b863ba0959fbc0639a41b593"
+        }
+      ]
+    },
+    {
+      "id": "task-24d590be-3e30-482b-9384-defd4cb6c2eb",
+      "status": "draft",
+      "configuration_revision": 1,
+      "active_revision": null,
+      "candidate_revision": 1,
+      "results": []
+    },
+    {
+      "id": "task-39f9341d-33d5-4dd3-a7ad-28c2de11ae51",
+      "status": "active",
+      "configuration_revision": 7,
+      "active_revision": 3,
+      "candidate_revision": null,
+      "results": [
+        {
+          "obligation_id": "note-f39e8bea-ea57-4175-a811-65bd494cfc65",
+          "definition_revision": 2,
+          "result_sha256": "7a44d434f7f312bf52932d881d8b047411a341cffbe2c4cc385555e68bd43466"
+        }
+      ]
+    }
+  ]
+}

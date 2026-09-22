@@ -1,0 +1,540 @@
+{
+  "budget": {
+    "calls": 8,
+    "aggregate_campaign_calls": 20,
+    "aggregate_campaign_seconds": 1800
+  },
+  "actual_calls": 8,
+  "attempts": [
+    {
+      "source_revision": "9447c367f0add2f610f6c9834a1d44db83098755",
+      "started_at": "2026-09-22T12:22:24.092Z",
+      "elapsed_seconds": 10.808,
+      "calls": 1,
+      "passed": false,
+      "errors": [
+        "Error: Original request creates only an inactive draft without work"
+      ],
+      "checks": [
+        {
+          "criterion": "Runtime containment preflight dispatches no model",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is isolated, marked synthetic and manually scheduled",
+          "passed": true
+        },
+        {
+          "criterion": "Synthetic marker matches the fixture contract",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is loopback only",
+          "passed": true
+        },
+        {
+          "criterion": "original starts with an empty catalogue and zero model calls",
+          "passed": true
+        },
+        {
+          "criterion": "Two dispatches remain reserved before each model interaction",
+          "passed": true
+        },
+        {
+          "criterion": "original respects the durable dispatch budget",
+          "passed": true
+        },
+        {
+          "criterion": "original completed without runtime error: none",
+          "passed": true
+        },
+        {
+          "criterion": "Original request creates only an inactive draft without work",
+          "passed": false
+        }
+      ],
+      "profile": {
+        "model": "gpt-5.6-terra",
+        "effort": "medium",
+        "timezone": "Australia/Adelaide",
+        "timeout_seconds": 90,
+        "max_context_bytes": 65536,
+        "max_output_bytes": 16384
+      },
+      "artifacts": {
+        "fixture": {
+          "sha256": "f7c0cdbeb70efcdf7eae0905a99a9c3495d376870264eb2242687bf382356c4d"
+        },
+        "configured_broker": {
+          "sha256": "62c279358e992f3e2468bb55e5766e7bc69181af08a07beabbaab25e2ffe72bb"
+        },
+        "broker_instructions": {
+          "sha256": "26e16614236944d162ee4b34eb92ff21059feba760785d061dd6f0d1da3ff638"
+        },
+        "profile": {
+          "sha256": "b91828e9602f80c8bf44d05945e4f2a4c762068b0f4ab05e9ea35adb43f46b0f"
+        }
+      },
+      "raw_report_sha256": "0b0547a95a9c960d1fbe2b5c360c0fc5430ed760c49a91877a815154df827d30",
+      "interactions": [
+        {
+          "name": "original",
+          "input_sha256": "347f33639f70261ded0cdac5fd07d409bc62d74ddabc0e7d4473b002b847606c",
+          "command_id": "1832ffe0-6f29-4836-8627-d343f9ee11e0",
+          "dispatches": 1,
+          "task_id": null,
+          "configuration_revision": null,
+          "candidate_revision": null
+        }
+      ]
+    },
+    {
+      "source_revision": "28b3fffca849cdce3d3945f45a0dcc4984b4ff53",
+      "started_at": "2026-09-22T12:27:41.743Z",
+      "elapsed_seconds": 12.792,
+      "calls": 2,
+      "passed": false,
+      "errors": [
+        "Error: Schedule revision preserves all other task behaviour and the named timezone"
+      ],
+      "checks": [
+        {
+          "criterion": "Runtime containment preflight dispatches no model",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is isolated, marked synthetic and manually scheduled",
+          "passed": true
+        },
+        {
+          "criterion": "Synthetic marker matches the fixture contract",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is loopback only",
+          "passed": true
+        },
+        {
+          "criterion": "original starts with an empty catalogue and zero model calls",
+          "passed": true
+        },
+        {
+          "criterion": "Two dispatches remain reserved before each model interaction",
+          "passed": true
+        },
+        {
+          "criterion": "original respects the durable dispatch budget",
+          "passed": true
+        },
+        {
+          "criterion": "original completed without runtime error: none",
+          "passed": true
+        },
+        {
+          "criterion": "Original request creates only an inactive draft without work",
+          "passed": true
+        },
+        {
+          "criterion": "Original request uses local reminder capability and the Adelaide timezone",
+          "passed": true
+        },
+        {
+          "criterion": "Original request retains the requested research queue review text",
+          "passed": true
+        },
+        {
+          "criterion": "Original request has a valid review with future occurrences",
+          "passed": true
+        },
+        {
+          "criterion": "Original request preview occurrences are weekdays at 09:00 Adelaide",
+          "passed": true
+        },
+        {
+          "criterion": "Original request covers every weekday at 09:00 across the weekend boundary",
+          "passed": true
+        },
+        {
+          "criterion": "Original request creates exactly one draft",
+          "passed": true
+        },
+        {
+          "criterion": "Explicit operator HTTP confirmation activates the exact draft",
+          "passed": true
+        },
+        {
+          "criterion": "Two dispatches remain reserved before each model interaction",
+          "passed": true
+        },
+        {
+          "criterion": "revision respects the durable dispatch budget",
+          "passed": true
+        },
+        {
+          "criterion": "revision completed without runtime error: none",
+          "passed": true
+        },
+        {
+          "criterion": "Revision preserves the active definition, scheduled work and selected identity until confirmation",
+          "passed": true
+        },
+        {
+          "criterion": "Revision creates a distinct valid candidate",
+          "passed": true
+        },
+        {
+          "criterion": "Schedule revision preserves all other task behaviour and the named timezone",
+          "passed": false
+        }
+      ],
+      "profile": {
+        "model": "gpt-5.6-terra",
+        "effort": "medium",
+        "timezone": "Australia/Adelaide",
+        "timeout_seconds": 90,
+        "max_context_bytes": 65536,
+        "max_output_bytes": 16384
+      },
+      "artifacts": {
+        "fixture": {
+          "sha256": "f7c0cdbeb70efcdf7eae0905a99a9c3495d376870264eb2242687bf382356c4d"
+        },
+        "configured_broker": {
+          "sha256": "46229f092f9a889554d1d25272d86fa3cb60c37b71ca43ff7bcb6a0ff13b0b27"
+        },
+        "broker_instructions": {
+          "sha256": "d29a986e89ed0b0ba03dcf68a5e05ae600a9b65e084f162f43f3edd4a41346f0"
+        },
+        "profile": {
+          "sha256": "b91828e9602f80c8bf44d05945e4f2a4c762068b0f4ab05e9ea35adb43f46b0f"
+        }
+      },
+      "raw_report_sha256": "809a60ee5b347a96d8b59fc8bc2012fbe814a9f9bb1180df3352c003f693185e",
+      "interactions": [
+        {
+          "name": "original",
+          "input_sha256": "347f33639f70261ded0cdac5fd07d409bc62d74ddabc0e7d4473b002b847606c",
+          "command_id": "875aa5f4-d9a0-444d-9db2-0fb523c933cb",
+          "dispatches": 1,
+          "task_id": "task-79b30d36-c6f0-4518-a266-ac537cb77637",
+          "configuration_revision": 1,
+          "candidate_revision": 1
+        },
+        {
+          "name": "revision",
+          "input_sha256": "7aab1d904268b2ea1abde52da449fa8640f427aef42894e1b465bc65e89e4faf",
+          "command_id": "4bb0a60f-7c6f-4198-8313-aefb7b59cbbe",
+          "dispatches": 1,
+          "task_id": "task-79b30d36-c6f0-4518-a266-ac537cb77637",
+          "configuration_revision": 3,
+          "candidate_revision": 2
+        }
+      ]
+    },
+    {
+      "source_revision": "f83ac1228aa512d6fac759121c4e474542ae6b7e",
+      "started_at": "2026-09-22T12:28:35.498Z",
+      "elapsed_seconds": 27.306,
+      "calls": 5,
+      "passed": true,
+      "errors": [],
+      "checks": [
+        {
+          "criterion": "Runtime containment preflight dispatches no model",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is isolated, marked synthetic and manually scheduled",
+          "passed": true
+        },
+        {
+          "criterion": "Synthetic marker matches the fixture contract",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is loopback only",
+          "passed": true
+        },
+        {
+          "criterion": "original starts with an empty catalogue and zero model calls",
+          "passed": true
+        },
+        {
+          "criterion": "Two dispatches remain reserved before each model interaction",
+          "passed": true
+        },
+        {
+          "criterion": "original respects the durable dispatch budget",
+          "passed": true
+        },
+        {
+          "criterion": "original completed without runtime error: none",
+          "passed": true
+        },
+        {
+          "criterion": "Original request creates only an inactive draft without work",
+          "passed": true
+        },
+        {
+          "criterion": "Original request uses local reminder capability and the Adelaide timezone",
+          "passed": true
+        },
+        {
+          "criterion": "Original request retains the requested research queue review text",
+          "passed": true
+        },
+        {
+          "criterion": "Original request has a valid review with future occurrences",
+          "passed": true
+        },
+        {
+          "criterion": "Original request preview occurrences are weekdays at 09:00 Adelaide",
+          "passed": true
+        },
+        {
+          "criterion": "Original request covers every weekday at 09:00 across the weekend boundary",
+          "passed": true
+        },
+        {
+          "criterion": "Original request creates exactly one draft",
+          "passed": true
+        },
+        {
+          "criterion": "Explicit operator HTTP confirmation activates the exact draft",
+          "passed": true
+        },
+        {
+          "criterion": "Two dispatches remain reserved before each model interaction",
+          "passed": true
+        },
+        {
+          "criterion": "revision respects the durable dispatch budget",
+          "passed": true
+        },
+        {
+          "criterion": "revision completed without runtime error: none",
+          "passed": true
+        },
+        {
+          "criterion": "Revision preserves the active definition, scheduled work and selected identity until confirmation",
+          "passed": true
+        },
+        {
+          "criterion": "Revision creates a distinct valid candidate",
+          "passed": true
+        },
+        {
+          "criterion": "Schedule revision preserves reminder text, context, identity and execution settings; purpose may describe the revised timing",
+          "passed": true
+        },
+        {
+          "criterion": "Revision previews Monday 09:00 Adelaide occurrences",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is isolated, marked synthetic and manually scheduled",
+          "passed": true
+        },
+        {
+          "criterion": "Synthetic marker matches the fixture contract",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is loopback only",
+          "passed": true
+        },
+        {
+          "criterion": "paraphrase starts with an empty catalogue and zero model calls",
+          "passed": true
+        },
+        {
+          "criterion": "Two dispatches remain reserved before each model interaction",
+          "passed": true
+        },
+        {
+          "criterion": "paraphrase respects the durable dispatch budget",
+          "passed": true
+        },
+        {
+          "criterion": "paraphrase completed without runtime error: none",
+          "passed": true
+        },
+        {
+          "criterion": "Paraphrased request creates only an inactive draft without work",
+          "passed": true
+        },
+        {
+          "criterion": "Paraphrased request uses local reminder capability and the Adelaide timezone",
+          "passed": true
+        },
+        {
+          "criterion": "Paraphrased request retains the requested research queue review text",
+          "passed": true
+        },
+        {
+          "criterion": "Paraphrased request has a valid review with future occurrences",
+          "passed": true
+        },
+        {
+          "criterion": "Paraphrased request preview occurrences are weekdays at 09:00 Adelaide",
+          "passed": true
+        },
+        {
+          "criterion": "Paraphrased request covers every weekday at 09:00 across the weekend boundary",
+          "passed": true
+        },
+        {
+          "criterion": "Independent paraphrase creates exactly one draft",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is isolated, marked synthetic and manually scheduled",
+          "passed": true
+        },
+        {
+          "criterion": "Synthetic marker matches the fixture contract",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is loopback only",
+          "passed": true
+        },
+        {
+          "criterion": "ambiguous starts with an empty catalogue and zero model calls",
+          "passed": true
+        },
+        {
+          "criterion": "Ambiguous catalogue contains two fixed inactive synthetic tasks",
+          "passed": true
+        },
+        {
+          "criterion": "Two dispatches remain reserved before each model interaction",
+          "passed": true
+        },
+        {
+          "criterion": "ambiguous respects the durable dispatch budget",
+          "passed": true
+        },
+        {
+          "criterion": "ambiguous completed without runtime error: none",
+          "passed": true
+        },
+        {
+          "criterion": "Ambiguous lookup exposes both candidates without selecting or changing either",
+          "passed": true
+        },
+        {
+          "criterion": "Ambiguous lookup leaves both stored definitions unchanged",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is isolated, marked synthetic and manually scheduled",
+          "passed": true
+        },
+        {
+          "criterion": "Synthetic marker matches the fixture contract",
+          "passed": true
+        },
+        {
+          "criterion": "Fixture is loopback only",
+          "passed": true
+        },
+        {
+          "criterion": "vague starts with an empty catalogue and zero model calls",
+          "passed": true
+        },
+        {
+          "criterion": "Two dispatches remain reserved before each model interaction",
+          "passed": true
+        },
+        {
+          "criterion": "vague respects the durable dispatch budget",
+          "passed": true
+        },
+        {
+          "criterion": "vague completed without runtime error: none",
+          "passed": true
+        },
+        {
+          "criterion": "Vague exploration creates no active work",
+          "passed": true
+        },
+        {
+          "criterion": "Vague research idea remains discussion or an honestly blocked research draft",
+          "passed": true
+        }
+      ],
+      "profile": {
+        "model": "gpt-5.6-terra",
+        "effort": "medium",
+        "timezone": "Australia/Adelaide",
+        "timeout_seconds": 90,
+        "max_context_bytes": 65536,
+        "max_output_bytes": 16384
+      },
+      "artifacts": {
+        "fixture": {
+          "sha256": "0e09565d71ddae36c7d2d0ac619b7fd35e99d5adac6bcfb3f3b496df3c23cf18"
+        },
+        "configured_broker": {
+          "sha256": "46229f092f9a889554d1d25272d86fa3cb60c37b71ca43ff7bcb6a0ff13b0b27"
+        },
+        "broker_instructions": {
+          "sha256": "d29a986e89ed0b0ba03dcf68a5e05ae600a9b65e084f162f43f3edd4a41346f0"
+        },
+        "profile": {
+          "sha256": "b91828e9602f80c8bf44d05945e4f2a4c762068b0f4ab05e9ea35adb43f46b0f"
+        }
+      },
+      "raw_report_sha256": "6b8596260618ce053efce0b6c5f1af75c2db13c02836ba27849e038ad2586174",
+      "interactions": [
+        {
+          "name": "original",
+          "input_sha256": "347f33639f70261ded0cdac5fd07d409bc62d74ddabc0e7d4473b002b847606c",
+          "command_id": "e2dadae4-e289-4f92-92c8-330b08ba8feb",
+          "dispatches": 1,
+          "task_id": "task-84c09641-f9fd-484d-856d-db78f0c63049",
+          "configuration_revision": 1,
+          "candidate_revision": 1
+        },
+        {
+          "name": "revision",
+          "input_sha256": "7aab1d904268b2ea1abde52da449fa8640f427aef42894e1b465bc65e89e4faf",
+          "command_id": "6ebb7b02-5a0e-4bda-86e3-ab7594138eb4",
+          "dispatches": 1,
+          "task_id": "task-84c09641-f9fd-484d-856d-db78f0c63049",
+          "configuration_revision": 3,
+          "candidate_revision": 2
+        },
+        {
+          "name": "paraphrase",
+          "input_sha256": "58cdfb6c85058adde04f5a2e3b416c534849e650f0143d05aa34b94a7009da78",
+          "command_id": "1b73fb4e-7dca-4fc1-9615-84ad3ec5e56a",
+          "dispatches": 1,
+          "task_id": "task-e109b87e-17fc-4387-96d7-59e799de5161",
+          "configuration_revision": 1,
+          "candidate_revision": 1
+        },
+        {
+          "name": "ambiguous",
+          "input_sha256": "0fca7090e58ef9de91e4c4def5ea29bf6985630ddb6c15f59f5cfb5734c44924",
+          "command_id": "c493af63-540b-4c8c-a17c-5cdccfb8d04c",
+          "dispatches": 1,
+          "task_id": null,
+          "configuration_revision": null,
+          "candidate_revision": null
+        },
+        {
+          "name": "vague",
+          "input_sha256": "dedc362088b6ea5c3ba449b8f99108948ea7d29b80f26e07eec49895fa04d048",
+          "command_id": "09e580e1-2e64-4f4e-a69a-413a4ceea99a",
+          "dispatches": 1,
+          "task_id": null,
+          "configuration_revision": null,
+          "candidate_revision": null
+        }
+      ]
+    }
+  ],
+  "assessment": "The intermediate revision changed purpose wording to reflect Monday timing. The final assertion checks unchanged executable text, context, identity and execution settings while allowing that descriptive update."
+}

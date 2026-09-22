@@ -1075,6 +1075,22 @@ impl Store {
                 action.precondition = None;
             }
         }
+        if self.is_managed_obligation(&obligation.id)? {
+            task.kind = OperatorTaskKind::LocalNote;
+            task.parent_task_id = self.managed_task_for_obligation(&obligation.id)?;
+            task.title = obligation.description.clone();
+            for action in [
+                &mut projected_capabilities.approve,
+                &mut projected_capabilities.reject,
+                &mut projected_capabilities.cancel,
+                &mut projected_capabilities.approve_gardener_proposal,
+                &mut projected_capabilities.reject_gardener_proposal,
+            ] {
+                action.available = false;
+                action.disabled_reason = Some(DisabledReason::ManagedRequiresDefinition);
+                action.precondition = None;
+            }
+        }
         Ok(OperatorObligation {
             task: Some(task),
             id: obligation.id.clone(),

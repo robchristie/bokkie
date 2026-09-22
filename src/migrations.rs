@@ -84,6 +84,18 @@ pub(crate) const MIGRATIONS: &[MigrationManifestEntry] = &[
         sql: include_str!("../migrations/0011_engineering_supervision.sql"),
         sha256: "32ef4d95c5083896abc7d35c3594728803a6990b107eaf647f5fd11b24758386",
     },
+    MigrationManifestEntry {
+        version: 12,
+        name: "0012_managed_tasks.sql",
+        sql: include_str!("../migrations/0012_managed_tasks.sql"),
+        sha256: "fec7c6d5e353e4b52a5763fbb537bf07f0a219563a52efded22356737e30b16a",
+    },
+    MigrationManifestEntry {
+        version: 13,
+        name: "0013_conversations.sql",
+        sql: include_str!("../migrations/0013_conversations.sql"),
+        sha256: "81ac9ef9c61e0d0d493a612dbb5413940822e816468b6949e9f877b408a0b9f2",
+    },
 ];
 
 pub(crate) fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
@@ -534,5 +546,61 @@ mod tests {
             let error = connection.execute(sql, []).unwrap_err();
             assert!(error.to_string().contains("immutable"));
         }
+    }
+    #[test]
+    fn domain_event_upgrade_preserves_envelope_cursors_and_append_only_guards() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("v11.sqlite");
+        let connection = legacy_v6(&path);
+        for migration in &MIGRATIONS[6..11] {
+            connection.execute_batch(migration.sql).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations(version,name,sha256) VALUES (?1,?2,?3)",
+                    params![migration.version, migration.name, migration.sha256],
+                )
+                .unwrap();
+        }
+        connection.execute("INSERT INTO obligations(id,description,state,occurrence,scheduled_at,next_wake_at,
+            approval_required,attempts_made,max_attempts,retry_base_seconds,retry_max_seconds,lease_generation,created_at,updated_at)
+            VALUES ('retained','retained','pending',1,10,10,0,0,3,60,3600,0,10,10)",[]).unwrap();
+        connection.execute("INSERT INTO audit_events(obligation_id,occurrence,event_type,occurred_at,to_state,details_json)
+            VALUES ('retained',1,'created',10,'pending','{}')",[]).unwrap();
+        let before: (i64, String, i64) = connection
+            .query_row(
+                "SELECT sequence,source_kind,audit_event_sequence FROM event_envelopes",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        drop(connection);
+        let store = Store::open(&path).unwrap();
+        let after: (i64, String, i64) = store
+            .connection
+            .query_row(
+                "SELECT sequence,source_kind,audit_event_sequence FROM event_envelopes",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(before, after);
+        store.connection.execute("INSERT INTO domain_events(entity_kind,entity_id,event_type,occurred_at,details_json)
+            VALUES ('managed_task','draft','created',20,'{}')",[]).unwrap();
+        let events = store.change_page(before.0, None, 100).unwrap();
+        assert_eq!(events.items.len(), 1);
+        assert_eq!(events.items[0].envelope.sequence, before.0 + 1);
+        assert_eq!(events.items[0].entity_id.as_deref(), Some("draft"));
+        assert!(
+            store
+                .connection
+                .execute("DELETE FROM event_envelopes", [])
+                .is_err()
+        );
+        assert!(
+            store
+                .connection
+                .execute("UPDATE domain_events SET entity_id='changed'", [])
+                .is_err()
+        );
     }
 }

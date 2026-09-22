@@ -1,0 +1,31 @@
+{
+  "kind": "deterministic UI regression, not real-model acceptance",
+  "source_revision": "8d0d728a44cfab6676c67ca4590f02ef0470f0bf",
+  "passed": true,
+  "fake_dispatches": 10,
+  "browser": "151.0.7922.34",
+  "checks": [
+    "Draft created without execution",
+    "Refinement preserves a single inactive task",
+    "Preview contains exact reminder text",
+    "Preview shows named timezone and future occurrences",
+    "Operator confirmation activates exact draft",
+    "Kernel note runner completed due occurrence",
+    "Repeated tick does not duplicate local result",
+    "Fresh conversation discovers persisted task",
+    "Schedule proposal leaves active timing unchanged",
+    "Pause prevents new admission past a due time",
+    "Resume chooses future timing without backlog",
+    "One-off note completes through kernel",
+    "Refresh does not repeat one-off completion",
+    "Unavailable research capability remains draft with activation blocked",
+    "Exactly three intended tasks exist after full journey"
+  ],
+  "artefacts": {
+    "target/debug/bokkie-conversation-fixture": "d9ced7f6edf20ffef2d44bee5eb77da3b2cd8c140e48a1797993bf2de67e837c",
+    "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "b1a5e7bebcabbdbaeb6282dc2bbfacdeb024dc70e0aec336f8013b4388954e7c",
+    "tools/conversation-runtime/broker.py": "46229f092f9a889554d1d25272d86fa3cb60c37b71ca43ff7bcb6a0ff13b0b27"
+  },
+  "errors": [],
+  "raw_report_sha256": "4131f6527882b418794b93548c839f36ab207ac633d41d1aa8c009de2bb47148"
+}

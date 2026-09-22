@@ -10,6 +10,8 @@ The initial implementation is intentionally narrow:
 - a Rust daemon and command-line client;
 - SQLite-backed obligations, attempts, approvals, leases, and audit events;
 - cron recurrence with named time zones;
+- persistent model-backed task drafting and exact reviewed definition changes;
+- an explicitly enabled deterministic local-note runner with in-app results;
 - a deterministic fake runner for qualification;
 - an explicitly enabled coding gardener restricted to `robchristie/bokkie`;
 - persisted inspection, proposal, implementation, and verification evidence;
@@ -114,6 +116,16 @@ the environment, executable, Git, credential, worktree, candidate-code and
 draft/check/ready publication boundaries. Its worker service profile is a
 separate, non-installed example and does not replace the kernel service.
 
+## Conversational task management
+
+Choose **Conversation** in the attention UI to describe, find, refine, preview,
+activate, revise or pause/resume a managed task. The first executable capability
+creates durable local notes; research/email capabilities remain drafts with
+explicit blockers. One private conversation profile and `--enable-local-notes`
+enable ordinary UI task setup without per-task files or restarts. See the
+[operator setup](docs/operator-guide.md#conversational-task-management) and
+[definition/timing contract](docs/conversational-tasks.md).
+
 ## Engineering supervision
 
 The task-scoped engineering adapter extends the same Store lifecycle with durable
@@ -133,7 +145,7 @@ cargo run --locked --bin bokkie -- \
   --ui-dir /absolute/bokkie/apps/bokkie-attention-ui/web
 ```
 
-Open the same origin at `/ui/`, choose **New task**, and describe the outcome in
+Open the same origin at `/ui/`, choose **Engineering intake**, and describe the outcome in
 ordinary language. The saved acknowledgement identifies the durable task. Its
 detail shows responsibility, the next action and acceptance, and supports linked
 follow-up messages and cancellation. The operator configures execution scope and

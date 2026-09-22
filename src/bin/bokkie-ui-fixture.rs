@@ -112,6 +112,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         listener,
         router_with_state(
             ApiState {
+                conversation: None,
                 executor: database_executor.clone(),
                 runtime,
                 engineering_intake: Some(Arc::new(EngineeringIntakeConfig {

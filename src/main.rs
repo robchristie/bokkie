@@ -192,6 +192,12 @@ enum Command {
         /// Explicit task-scoped engineering runtime profile; enables conversational supervision.
         #[arg(long)]
         engineering_profile: Option<PathBuf>,
+        /// Explicit bounded model adapter for task definition conversation.
+        #[arg(long)]
+        conversation_profile: Option<PathBuf>,
+        /// Enable the deterministic in-app local note capability.
+        #[arg(long)]
+        enable_local_notes: bool,
         /// Explicit static UI asset directory served at /ui on this loopback origin.
         #[arg(long)]
         ui_dir: Option<PathBuf>,
@@ -401,6 +407,8 @@ struct ServeOptions {
     gardener_process_timeout_ms: u64,
     ui_dir: Option<PathBuf>,
     engineering_profile: Option<PathBuf>,
+    conversation_profile: Option<PathBuf>,
+    enable_local_notes: bool,
 }
 
 impl From<FakeOutcomeArg> for ServiceFakeOutcome {
@@ -512,6 +520,8 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             gardener_heartbeat_ms,
             gardener_process_timeout_ms,
             engineering_profile,
+            conversation_profile,
+            enable_local_notes,
             ui_dir,
         } => {
             serve(
@@ -538,6 +548,8 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                     gardener_heartbeat_ms,
                     gardener_process_timeout_ms,
                     engineering_profile,
+                    conversation_profile,
+                    enable_local_notes,
                     ui_dir,
                 },
             )
@@ -928,6 +940,18 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         }
     }
 
+    let conversation_profile = options
+        .conversation_profile
+        .as_deref()
+        .map(bokkie::conversation_runtime::ConversationProfile::load)
+        .transpose()
+        .map_err(AppError::Configuration)?;
+    let conversation = Some(bokkie::conversation_http::ConversationConfig {
+        profile: conversation_profile.map(Arc::new),
+        notes_enabled: options.enable_local_notes,
+        clock: None,
+    });
+
     let engineering_profile = options
         .engineering_profile
         .as_deref()
@@ -1048,9 +1072,9 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         if let Some(credential) = credential {
             gardener = gardener.with_github_credential(credential);
         }
-        Scheduler::start_configured(scheduler_config, Some(gardener))?
+        Scheduler::start_with_notes(scheduler_config, Some(gardener), options.enable_local_notes)?
     } else {
-        Scheduler::start(scheduler_config)?
+        Scheduler::start_with_notes(scheduler_config, None, options.enable_local_notes)?
     };
     let admission = scheduler.admission();
     let scheduler_exit = scheduler.take_exit_signal();
@@ -1062,11 +1086,19 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
     let mut engineering_controller = engineering_profile
         .map(|profile| EngineeringController::start(database.clone(), profile, options.poll_ms))
         .transpose()?;
+    let conversation_session = api_runtime.identity().session_id;
+    database_executor
+        .execute(move |store| {
+            store.conversation_interrupt(&conversation_session, SystemClock.now())
+        })
+        .await
+        .map_err(|e| AppError::Configuration(e.to_string()))?;
     let application = router_with_state(
         ApiState {
             executor: database_executor.clone(),
             runtime: api_runtime,
             engineering_intake,
+            conversation,
         },
         options.ui_dir,
     );

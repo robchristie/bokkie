@@ -897,6 +897,9 @@ pub fn disabled_reason(capability: &ActionCapability) -> &'static str {
         }
         Some(DisabledReason::NotGardenerProposal) => "This is not a gardener proposal",
         None if capability.available => "",
+        Some(bokkie_operator_api::DisabledReason::ManagedRequiresDefinition) => {
+            "Use the task conversation to review its definition"
+        }
         None => "The backend did not authorise this action",
     }
 }
@@ -1054,6 +1057,8 @@ mod tests {
 
     fn change(revision: i64, obligation_id: Option<&str>) -> ProjectionChange {
         ProjectionChange {
+            entity_id: None,
+            entity_kind: None,
             revision,
             provenance: ProjectionEventProvenance::LiveAppend,
             source: ProjectionEventSource::AuditEvent { sequence: revision },
