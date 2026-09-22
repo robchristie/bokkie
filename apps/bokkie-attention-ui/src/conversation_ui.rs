@@ -1,6 +1,6 @@
 use super::*;
 use bokkie_operator_api::{
-    ConversationConfirmRequest, ConversationSelectRequest, ConversationSummary,
+    ConversationAction, ConversationConfirmRequest, ConversationSelectRequest, ConversationSummary,
     ConversationTurnRequest, ConversationView, ManagedCatalogueEntry, ManagedTaskDefinition,
     ManagedTaskDetail, ManagedTrigger,
 };
@@ -363,9 +363,13 @@ impl AttentionApp {
                 }
                 if let Some(review) = &view.review {
                     egui::Frame::group(ui.style()).inner_margin(12.0).show(ui, |ui| {
-                        ui.heading(format!("Review {:?}", review.action));
+                        ui.heading(match review.action {
+                            ConversationAction::Activate => "Activate task",
+                            ConversationAction::Pause => "Pause future runs",
+                            ConversationAction::Resume => "Resume future runs",
+                        });
                         ui.label(&review.explanation);
-                        ui.label(format!("Task {} · configuration {}", review.task_id, review.configuration_revision));
+
                         for blocker in &review.blockers { ui.label(format!("Unavailable: {blocker}")); }
                         if let Some(preview) = &review.preview {
                             definition(ui, &preview.definition);
@@ -373,6 +377,18 @@ impl AttentionApp {
                             for blocker in &preview.blockers { ui.label(format!("Unavailable: {blocker}")); }
                             for occurrence in &preview.occurrences { ui.label(format!("Scheduled: {}", local_time_in_zone(*occurrence, trigger_timezone(&preview.definition.trigger)))); }
                         }
+                        egui::CollapsingHeader::new("Review provenance")
+                            .id_salt(("review-provenance", &review.id))
+                            .show(ui, |ui| {
+                                ui.label(format!("Task ID: {}", review.task_id));
+                                ui.label(format!("Configuration revision: {}", review.configuration_revision));
+                                ui.label(format!("Review ID: {}", review.id));
+                                ui.label(format!("Process session: {}", review.session_id));
+                                if let Some(preview) = &review.preview {
+                                    ui.label(format!("Definition revision: {}", preview.candidate_revision));
+                                    ui.label(format!("Capability profile revision: {}", preview.profile_revision));
+                                }
+                            });
                         let session_current = self.session.as_ref().is_some_and(|s| s.session_id() == review.session_id);
                         let revision_current = view.task.as_ref().is_some_and(|task| task.configuration_revision == review.configuration_revision);
                         let enabled = mutable && review_is_current(view, self.session.as_ref());
@@ -382,7 +398,14 @@ impl AttentionApp {
                         ui.label("Confirmation saves this change. Run completion and local results appear separately in the task history.");
                     });
                 }
-                if let Some(receipt) = &view.receipt { ui.label(format!("Authoritative action receipt · task {} · configuration {}. This confirms a saved change, not a completed run.", receipt.task_id, receipt.configuration_revision)); }
+                if let Some(receipt) = &view.receipt {
+                    ui.label("Change saved. Run completion and local results appear separately in the task history.");
+                    egui::CollapsingHeader::new("Saved receipt details").id_salt(("receipt-provenance", &receipt.command_id)).show(ui, |ui| {
+                        ui.label(format!("Task ID: {}", receipt.task_id));
+                        ui.label(format!("Configuration revision: {}", receipt.configuration_revision));
+                        ui.label(format!("Command ID: {}", receipt.command_id));
+                    });
+                }
                 if let Some(error) = &view.request_error { ui.label(format!("Bokkie could not complete this turn: {error}")); }
                 if busy { ui.spinner(); ui.label("Bokkie is preparing a response. This conversation is saved."); }
             } else { ui.label("Loading conversation…"); }
@@ -581,28 +604,48 @@ fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
         } => format!("Timing: {local_datetime} ({timezone})"),
         ManagedTrigger::Recurring { cron, timezone } => recurring_description(cron, timezone),
     });
-    if let ManagedTrigger::Recurring { cron, timezone } = &value.trigger {
-        egui::CollapsingHeader::new("Technical schedule details")
-            .id_salt(("technical-schedule", cron, timezone))
-            .show(ui, |ui| {
-                ui.label(format!("Cron expression: {cron}"));
-                ui.label(format!("Time zone: {timezone}"));
-            });
+    ui.label(match value.capability.as_str() {
+        "local_note" => "Capability: Local note",
+        _ => "This task requires a capability that is unavailable.",
+    });
+    ui.label(match value.destination.as_str() {
+        "task_results" => "Results: In-app task results",
+        _ => "This task requires a result destination that is unavailable.",
+    });
+    for effect in &value.effects {
+        ui.label(match effect.as_str() {
+            "store_local_result" => "Save the supplied text as a local result",
+            _ => "This task requests an effect that is unavailable.",
+        });
     }
-    ui.label(format!(
-        "Capability: {} · destination: {}",
-        value.capability, value.destination
-    ));
     for context in &value.context_refs {
         ui.label(format!("Context: {context}"));
     }
-    ui.label(format!(
-        "Effects: {} · attempts: {} · output limit: {} characters",
-        value.effects.join(", "),
-        value.max_attempts,
-        value.max_output_chars
-    ));
+    egui::CollapsingHeader::new("Definition provenance")
+        .id_salt(("definition-provenance", &value.name))
+        .show(ui, |ui| {
+            ui.label(format!("Capability identifier: {}", value.capability));
+            ui.label(format!(
+                "Capability profile revision: {}",
+                value.profile_revision
+            ));
+            ui.label(format!(
+                "Result destination identifier: {}",
+                value.destination
+            ));
+            ui.label(format!("Effect identifiers: {}", value.effects.join(", ")));
+            ui.label(format!("Attempt limit: {}", value.max_attempts));
+            ui.label(format!(
+                "Output limit: {} characters",
+                value.max_output_chars
+            ));
+            if let ManagedTrigger::Recurring { cron, timezone } = &value.trigger {
+                ui.label(format!("Cron expression: {cron}"));
+                ui.label(format!("Time zone: {timezone}"));
+            }
+        });
 }
+
 fn recurring_description(expression: &str, timezone: &str) -> String {
     let mut fields = expression.split_whitespace().collect::<Vec<_>>();
     if fields.len() == 5 {
@@ -745,8 +788,8 @@ fn local_time_in_zone(seconds: i64, timezone: &str) -> String {
 mod tests {
     use super::*;
     use bokkie_operator_api::{
-        API_CONTRACT_VERSION, BOKKIE_BUILD_ID, ConversationAction, ConversationMessage,
-        ConversationReview, SUPPORTED_SCHEMA_VERSION, ServiceIdentity, SessionBootstrap,
+        API_CONTRACT_VERSION, BOKKIE_BUILD_ID, ConversationMessage, ConversationReview,
+        SUPPORTED_SCHEMA_VERSION, ServiceIdentity, SessionBootstrap,
     };
 
     fn session(id: &str) -> ApiSession {
