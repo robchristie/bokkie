@@ -1,88 +1,75 @@
 # Conversational task qualification
 
-This is a **partial qualification record**, not a delivered-milestone claim. The
-[owning plan](../plans/active/conversational-task-management.md) remains active.
-Source, migrations, runtime, UI, local execution and deterministic verification
-are integrated. A complete real-model UI journey remains unproved.
+The integrated real-model UI journey passed, using the existing authorised local
+account and isolated synthetic databases. The [owning plan](../plans/active/conversational-task-management.md)
+tracks independent review and delivery. Local notes are executable; research and
+email capabilities remain drafts with activation blocked.
 
-## Verified evidence
+## Current evidence
 
-- [Backend check](backend-checkpoint.json): `tools/check.sh` passed at the recorded
-  source revision: 182 Python tests, 301 Rust library tests (two intentional ignored
-  tests), 14 existing adapter tests, seven conversation adapter tests and the
-  remaining executable/fixture checks; governance, Clippy and formatting passed.
+- [Backend check](backend-checkpoint.json): `tools/check.sh` passed on the recorded
+  candidate: 182 Python tests, 306 Rust library tests (two intentional ignored
+  tests), 14 existing adapter tests, seven conversation adapter tests, fixture
+  checks, governance, Clippy and formatting. Source and log digests are retained.
 - [UI check](ui-checkpoint.json): `tools/check-ui.sh` passed 75 tests, Clippy,
-  native/Wasm builds and formatting. The manifest records source and artefact
-  digests; the browser assets were regenerated from those sources.
-- [Offline browser journey](offline-ui-checkpoint.json): physical pointer and
-  browser text input exercised the real UI, HTTP, Store and note runner with a
-  clearly synthetic broker peer. Draft/refinement/preview, operator confirmation,
-  one durable result without duplication, restart/discovery, Monday revision,
-  pause/resume without backlog, completed one-off and blocked research draft
-  passed. This is not real-model evidence.
-- [Existing browser regression](legacy-ui-checkpoint.json) covered 12 journeys including gardener review,
-  token rotation, stale confirmation, cancellation, bounded projections and
-  engineering intake/follow-up. Native interaction retained its durable result.
-  Desktop and narrow captures were opened; legacy details and actions remained
-  readable. The new conversation's review, result and blocker screens were also
-  opened at desktop and narrow sizes.
+  native/Wasm builds and formatting. The UI sources and browser artefacts are
+  unchanged by the subsequent runtime/catalogue repairs; their evidence is reused.
+- [Tool calibration](tools-calibration.json): the actual configured model passed
+  the original reminder request, a paraphrase, a revision preserving executable
+  behaviour, ambiguous catalogue selection and non-executing research exploration.
+- [Real browser journey](tools-live-ui.json): physical pointer/text input exercised
+  draft, text refinement, preview, confirmation, one durable local result and
+  repeated-tick deduplication. After a catalogue repair, one focused continuation
+  on the same synthetic fixture proved restart/discovery, Monday revision,
+  pause/resume without backlog, one-off completion/refresh and a blocked research
+  draft. Exactly three intended tasks remained. Both source revisions, immutable
+  receipt identities, artefact/report hashes and opened screenshots are retained.
+- [Existing browser regression](legacy-ui-checkpoint.json): 12 journeys include
+  gardener review, token rotation, stale confirmation, cancellation, bounded
+  projections and engineering intake/follow-up; native interaction retained its
+  durable result. The [offline browser journey](offline-ui-checkpoint.json) remains
+  useful deterministic evidence, explicitly labelled as a fake model peer.
 
-Deterministic tests additionally cover retained ownership during edits/pause,
-restart/retry, finite recurrence exhaustion, search beyond the first page,
-ambiguous names, failed reads, unavailable runtime/profile changes, invalid local
-and daylight-saving times, migration/cursor compatibility, unexpected peer tools,
-malformed operations and attempted authority fields. A fast successful broker
-exit race found by the new HTTP peers was repaired by parsing bounded final
-process output. No sleeps were added to conceal it.
+The real journey used the same compiled browser assets throughout. Desktop and
+narrow review cards, the completed local result and the unavailable capability
+screen were opened and inspected. The repaired suffix consumed the original
+active task/result, verified its identity and count, and required unchanged
+browser artefacts. It did not recreate the task or substitute a canned reply.
 
-## Real model boundary and remaining gap
+Deterministic tests additionally cover ownership during edits/pause, restart and
+retry, finite recurrence exhaustion, search beyond the first page, ambiguity,
+failed reads, unavailable runtime/profile changes, invalid local/DST times,
+migration/cursor compatibility, malformed peers and attempted authority fields.
 
-The installed Codex 0.155.1 no-model preflight observed an ephemeral thread,
-empty execution environments, disabled integrations and isolated instructions.
-It used the existing authorised local account without changing account settings.
-All databases and task contents used for qualification were synthetic.
+## Finite live campaign and repairs
 
-[Live attempts](live-attempts.json) conservatively account for three dispatches:
-an invalid preview operation, one interrupted request during a harness identity
-failure, and a valid empty lookup that did not continue to drafting. The backend
-rejected unsupported operations; no active task or local result was created by
-these attempts. Selection-specific schemas, exact request matching and one
-bounded empty-lookup continuation now address those failures and pass offline
-checks. They have **not** yet passed a subsequent real-model journey.
+The user authorised 20 dispatches / 30 minutes, split into at most eight
+calibration calls and twelve UI calls. The campaign used **19 dispatches**:
+eight calibration and eleven UI, from 12:22:24 to 12:33:34 UTC on 22 September
+2026. The model and effort stayed fixed in the private runtime profile. There
+were no further model calls after the focused UI continuation passed.
 
-The original budget was one representative journey (12 calls / 15 minutes), with
-at most one focused repair rerun (four calls / five minutes). The repair-rerun
-boundary has been reached. The user explicitly authorised one further attempt on 22 September 2026, capped
-at 12 calls / 15 minutes with no further live retries. That authority is carried
-through qualification and landing; no second approval is needed for that run. This is the
-remaining product acceptance gap, not an unavailable account or a permission
-requirement for ordinary source work. Independent landing review and delivery
-remain open until the integrated candidate is qualified.
+The first custom-tool probe exposed a runtime integration defect: the configured
+model's tool mode hid ordinary functions despite successful registration. The
+adapter now uses the fixed `bokkie` namespace and verifies its direct-only
+exposure in installed Codex 0.155.1 before inference. A zero-model preflight and
+eleven offline peer tests cover that boundary. No shell, browser, app, SQL or
+operator-confirmation tool is available to the model.
 
-No research/email integration, external notification, deployment, publication,
-service installation or live operator database was involved. Private profiles,
-account paths and raw fixture databases are not committed.
+An intermediate calibration assertion rejected purpose wording changing from
+weekdays to Monday mornings. The executable text and settings were unchanged.
+The corrected assertion separates descriptive purpose from execution behaviour;
+all five cases then passed. The first UI segment found a real discovery defect:
+contiguous-phrase matching missed an ordinary paraphrase of a task name. Search
+now matches bounded identifying words across descriptive text and capability
+kind while retaining identity lookup. Focused Store tests and canonical checks
+passed before the single continuation.
 
-## Additional authorised attempt
+Earlier [attempts](live-attempts.json) and the [previous authorised attempt](live-authorised-attempt.json)
+remain historical failure evidence. Their old exhausted limits were explicitly
+superseded by the repair campaign above; they are not claimed as successful
+qualification or silently replaced by fake peers.
 
-The user authorised one final 12-call / 15-minute attempt. Its
-[record](live-authorised-attempt.json) identifies exact source, binary, browser
-asset, model/profile settings and observed database counts. It ran for 14.228
-seconds and used two model calls. The first request led to an empty lookup and
-then a `discuss` operation describing a draft, instead of `save_definition`.
-The UI displayed that discussion; it had no selected task or saved definition.
-Read-only fixture verification found zero managed tasks, definitions, bindings,
-results and obligations. The opened screenshot corroborated that state.
-
-The runtime/account was available and the backend respected the operation and
-authority boundaries. The product failed ordinary draft creation, so the full
-real-model journey is still unqualified. No further live retry was made. The PR
-remains a draft and is not eligible for landing on this evidence.
-
-Read-only diagnosis found no demonstrated dropped primary instruction or lost
-save operation. The typed schema permitted discussion and the model chose it.
-A secondary inconsistency was corrected after this run: backend continuation
-instructions now join the trusted developer contract, while catalogue results
-remain data. The HTTP peer test asserts both message boundaries. This correction
-has deterministic coverage only; it is not presented as a qualified fix for the
-observed model operation-selection failure.
+No live operator database, account settings, credentials, deployment, service
+installation, external notification or research/email integration was involved.
+Private profiles, account paths and raw fixture databases are not committed.

@@ -5,7 +5,7 @@
 - Reorientation budget: 180
 - Baseline: `277ab5587ed2cf6c215cf838c2f58f9c534688b4`
 - Landed pull requests: none
-- Next action: implement narrow tools and trusted defaults, verify offline, calibrate, then qualify the UI and land.
+- Next action: independently review the qualified candidate, pass CI, squash-merge PR #37 and verify post-merge CI.
 
 ## Outcome and scope
 
@@ -22,9 +22,9 @@ Origin/token/session and specialised engineering/gardener contracts remain.
 
 ## Current phase
 
-Repair/calibration authorised on 22 September 2026. Preserve the integrated
-Store, kernel and UI work in draft PR #37. Replace model-generated operation JSON
-with a narrow custom-tool proposal interface and backend-owned execution defaults.
+Qualification passed on 22 September 2026. The integrated Store, kernel and UI
+work is in [PR #37](https://github.com/robchristie/bokkie/pull/37). A narrow
+custom-tool proposal interface uses backend-owned execution defaults.
 The contained runtime stops at the selected tool; trusted Store code applies it.
 Model tools cannot confirm activation or manufacture authority.
 
@@ -32,7 +32,10 @@ The user authorised one aggregate live budget of 20 dispatches / 30 minutes:
 at most eight calibration dispatches and twelve final UI dispatches. This
 supersedes the exhausted previous attempt limits. Keep the configured model
 fixed. Complete offline protocol/contract tests before live calls. The parent
-owns all live monitoring, budget accounting and final integration.
+owns all live monitoring, budget accounting and final integration. The campaign
+finished at 19 calls (eight calibration, eleven UI) in about eleven minutes.
+No further live campaign is planned; [evidence](../../conversation-evidence/README.md)
+records the original checkpoint and one focused discovery continuation.
 
 ## Design and dependency graph
 
@@ -63,7 +66,7 @@ is never silently rearmed. At most one admitted occurrence per managed task.
 - Verified: unavailable capabilities/runtime, malformed peers and rejected authority fields.
 - Verified: DST/invalid local times, pause/admission race, migrations and kernel regressions.
 - Verified: canonical backend/UI checks; existing 12 browser journeys and native result.
-- Open: real-model completion of the integrated UI journey after the bounded attempts.
+- Verified: real-model completion of the integrated UI journey, including restart/discovery.
 - Open: independent exact-head review, CI, authorised merge and post-merge CI.
 
 ## Calibration and qualification bounds
@@ -86,7 +89,7 @@ Prior failed attempts remain historical evidence, never substituted with fake pe
 | Owner | State | Evidence / next proof |
 | --- | --- | --- |
 | Managed Store and note adapter | verified | lifecycle, race, restart, real scheduler tests |
-| Conversation runtime | contained adapter implemented | Codex 0.155.1 no-model preflight / fake peers |
+| Conversation runtime | qualified | direct-only Bokkie namespace; Codex 0.155.1 preflight and real calls |
 | Conversation and UI | integrated | 75 UI checks; 12 legacy browser journeys; native result |
-| Integrated qualification | blocked by product defect | final authorised live attempt did not save a draft |
+| Integrated qualification | passed | 19 calls total; real browser journey and focused discovery repair |
 | Review and landing | pending | owning PR exact-head review and CI |

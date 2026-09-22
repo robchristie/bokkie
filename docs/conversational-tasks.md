@@ -77,7 +77,8 @@ request ends the contained runtime before Store applies the proposal. No tool
 response or further inference is needed to claim success: the backend supplies
 the receipt and saved-change message. Plain model text remains discussion data. Backend code owns target selection,
 validation, profiles, actor authority and confirmation. Catalogue lookup searches
-SQLite across identity, name and descriptive text, including gardener and
+SQLite by identity or bounded identifying words across name, descriptive text,
+reminder instructions and capability kind, including gardener and
 engineering roots. Multiple matches require explicit selection. A lookup error
 is displayed as failure, not evidence that no task exists. Legacy tasks link to
 their existing details and specialised legal actions; conversational drafting
