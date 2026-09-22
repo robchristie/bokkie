@@ -1,8 +1,8 @@
 # Conversational task qualification
 
 The integrated real-model UI journey passed, using the existing authorised local
-account and isolated synthetic databases. The [owning plan](../plans/active/conversational-task-management.md)
-tracks independent review and delivery. Local notes are executable; research and
+account and isolated synthetic databases. The [owning plan](../plans/completed/conversational-task-management.md)
+records accepted scope; PR #37 owns live delivery observations. Local notes are executable; research and
 email capabilities remain drafts with activation blocked.
 
 ## Current evidence

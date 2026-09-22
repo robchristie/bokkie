@@ -1,11 +1,13 @@
 # Conversational task management
 
-- Status: active
+- Status: complete
+- Delivery state: acceptance-complete
+- Acceptance state: passed
+- Acceptance evidence: [Qualification](../../conversation-evidence/README.md)
+- Landing evidence: https://github.com/robchristie/bokkie/pull/37
 - Owner: Bokkie integration conductor
 - Reorientation budget: 180
 - Baseline: `277ab5587ed2cf6c215cf838c2f58f9c534688b4`
-- Landed pull requests: none
-- Next action: independently review the qualified candidate, pass CI, squash-merge PR #37 and verify post-merge CI.
 
 ## Outcome and scope
 
@@ -20,7 +22,7 @@ One explicit private runtime profile enables conversation and local notes.
 Ordinary task management needs no profile edits or restart. Existing loopback,
 Origin/token/session and specialised engineering/gardener contracts remain.
 
-## Current phase
+## Accepted result
 
 Qualification passed on 22 September 2026. The integrated Store, kernel and UI
 work is in [PR #37](https://github.com/robchristie/bokkie/pull/37). A narrow
@@ -67,7 +69,7 @@ is never silently rearmed. At most one admitted occurrence per managed task.
 - Verified: DST/invalid local times, pause/admission race, migrations and kernel regressions.
 - Verified: canonical backend/UI checks; existing 12 browser journeys and native result.
 - Verified: real-model completion of the integrated UI journey, including restart/discovery.
-- Open: independent exact-head review, CI, authorised merge and post-merge CI.
+- Exact review, CI, merge and cleanup observations belong to the owning PR landing record.
 
 ## Calibration and qualification bounds
 
@@ -92,4 +94,4 @@ Prior failed attempts remain historical evidence, never substituted with fake pe
 | Conversation runtime | qualified | direct-only Bokkie namespace; Codex 0.155.1 preflight and real calls |
 | Conversation and UI | integrated | 75 UI checks; 12 legacy browser journeys; native result |
 | Integrated qualification | passed | 19 calls total; real browser journey and focused discovery repair |
-| Review and landing | pending | owning PR exact-head review and CI |
+| Delivery observations | PR-owned | exact-head review, CI, merge and cleanup recorded on PR #37 |
