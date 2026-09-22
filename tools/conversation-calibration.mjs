@@ -222,9 +222,9 @@ try {
     view = await send('revision', 'Make it Monday mornings instead, still at 9 am Adelaide time.', view);
     check(view.task?.id === taskId && view.task.status === 'active' && canonical(view.task.active) === activeDefinition && view.task.next_wake_at === nextWake && canonical(view.task.runs) === runs, 'Revision preserves the active definition, scheduled work and selected identity until confirmation');
     check(view.task.candidate && canonical(view.task.candidate.definition) !== canonical(view.task.active.definition) && view.review?.blockers.length === 0, 'Revision creates a distinct valid candidate');
-    const {trigger: previousTrigger, ...previousBehaviour} = view.task.active.definition;
-    const {trigger: proposedTrigger, ...proposedBehaviour} = view.task.candidate.definition;
-    check(previousTrigger.timezone === 'Australia/Adelaide' && proposedTrigger.kind === 'recurring' && proposedTrigger.timezone === 'Australia/Adelaide' && canonical(previousBehaviour) === canonical(proposedBehaviour), 'Schedule revision preserves all other task behaviour and the named timezone');
+    const {trigger: previousTrigger, purpose: previousPurpose, ...previousBehaviour} = view.task.active.definition;
+    const {trigger: proposedTrigger, purpose: proposedPurpose, ...proposedBehaviour} = view.task.candidate.definition;
+    check(previousTrigger.timezone === 'Australia/Adelaide' && proposedTrigger.kind === 'recurring' && proposedTrigger.timezone === 'Australia/Adelaide' && canonical(previousBehaviour) === canonical(proposedBehaviour), 'Schedule revision preserves reminder text, context, identity and execution settings; purpose may describe the revised timing');
     const monday = view.review?.preview?.occurrences ?? [];
     check(monday.length >= 3 && monday.every(epoch => {const time = localTime(epoch); return time.weekday === 'Mon' && time.hour === '09' && time.minute === '00';}), 'Revision previews Monday 09:00 Adelaide occurrences');
     await stopFixture();
