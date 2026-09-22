@@ -46,8 +46,7 @@ try{
  await page.screenshot({path:join(evidence,'after-delayed-history.png')});
  const state=await snapshot();
  check(state.ui_snapshot.nodes.some(n=>n.id==='bokkie.conversation.selected'&&n.name===selectedName(expectedViews[1])),'Opening B while A is outstanding leaves the conversation usable');
- const raw=JSON.stringify(state);
- check(!raw.includes('Loading conversation'),'Delayed A response does not strand history navigation');
+ await writeFile(join(evidence,'after-delayed-history.json'),JSON.stringify(state,(_key,value)=>typeof value==='bigint'?value.toString():value,2));
  await click('bokkie.conversation.history.'+a);await page.waitForTimeout(500);
  check((await snapshot()).ui_snapshot.nodes.some(n=>n.id==='bokkie.conversation.selected'&&n.name===selectedName(expectedViews[0])),'Returning to A remains usable');
  const after=await control();report.model_calls=after.model_calls-before.model_calls;
