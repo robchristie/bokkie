@@ -29,6 +29,28 @@ struct Control {
     tick: bool,
     #[serde(default)]
     stop: bool,
+    #[serde(default)]
+    seed_calibration: bool,
+}
+
+// Fixed inactive synthetic data, available only on this marked fixture's stdin.
+// The production HTTP router has no seeding operation.
+fn seed_calibration(store: &mut Store, now: i64) -> Result<(), bokkie::StoreError> {
+    if !store.managed_catalogue("", None, 1)?.items.is_empty()
+        || store.conversation_model_dispatch_count()? != 0
+    {
+        return Err(bokkie::StoreError::Invalid(
+            "calibration seed requires an empty unused synthetic fixture".into(),
+        ));
+    }
+    for suffix in ["morning", "afternoon"] {
+        let definition = bokkie::ManagedTaskDefinition::local_note(
+            format!("Research queue reminder {suffix}"),
+            "Review the synthetic research queue.",
+        );
+        store.managed_create(&format!("synthetic-calibration-{suffix}"), &definition, now)?;
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -56,7 +78,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .map(Arc::new);
     if preflight {
         let profile = profile.ok_or("--preflight requires --profile")?;
-        println!("{}", profile.preflight().map_err(io::Error::other)?);
+        println!(
+            "{}",
+            profile
+                .preflight_tools(bokkie::conversation_tools::tools(false, false))
+                .map_err(io::Error::other)?
+        );
         return Ok(());
     }
     let root = root.unwrap_or_else(|| {
@@ -155,6 +182,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     continue;
                 }
             };
+            if control.seed_calibration && (control.now.is_some() || control.tick || control.stop) {
+                println!(
+                    "{}",
+                    json!({"error":"seed_calibration cannot be combined with other controls"})
+                );
+                continue;
+            }
             if control.stop {
                 break;
             }
@@ -175,6 +209,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let now = clock.now();
             let result = controls_executor
                 .execute(move |store| {
+                    if control.seed_calibration {
+                        seed_calibration(store, now)?;
+                    }
                     let ran = if control.tick {
                         bokkie::managed::run_one_note(store, now)?
                     } else {
@@ -205,4 +242,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
     executor.shutdown()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calibration_seed_is_fixed_inactive_and_refuses_reuse() {
+        let mut store = Store::open_in_memory().unwrap();
+        seed_calibration(&mut store, INITIAL_NOW).unwrap();
+        let catalogue = store
+            .managed_catalogue("research queue", None, 100)
+            .unwrap();
+        assert_eq!(catalogue.items.len(), 2);
+        for item in catalogue.items {
+            let detail = store.managed_detail(&item.id).unwrap();
+            assert_eq!(detail.status, bokkie::ManagedTaskStatus::Draft);
+            assert!(detail.active.is_none());
+            assert!(detail.runs.is_empty());
+            assert!(detail.next_wake_at.is_none());
+        }
+        assert_eq!(store.conversation_model_dispatch_count().unwrap(), 0);
+        assert!(seed_calibration(&mut store, INITIAL_NOW).is_err());
+        assert_eq!(
+            store.managed_catalogue("", None, 100).unwrap().items.len(),
+            2
+        );
+    }
 }

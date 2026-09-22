@@ -9,6 +9,17 @@ assert request['profile']['bwrap'] == '/usr/bin/true'
 context = request['context']
 text = next(message['text'] for message in reversed(context['messages'])
             if message['role'] == 'user')
+def output(proposal):
+    operation = proposal['operation']
+    names = {'save_definition': 'bokkie_save_draft', 'discuss': 'bokkie_discuss',
+             'lookup': 'bokkie_lookup', 'preview': 'bokkie_preview', 'propose': 'bokkie_propose'}
+    if operation == 'save_definition':
+        definition = proposal['definition']
+        args = {key: definition[key] for key in ('name', 'purpose', 'instructions', 'capability', 'trigger', 'context_refs') if key in definition}
+    else:
+        args = {key: value for key, value in proposal.items() if key != 'operation'}
+    print(json.dumps({'tool': names[operation], 'arguments': args}))
+
 scenario = request['profile']['model']
 assert scenario in ('fixture-ui', 'fixture-empty', 'fixture-matches', 'fixture-fail',
                     'fixture-invalid-json', 'fixture-malformed', 'fixture-read-fail',
@@ -68,9 +79,7 @@ if scenario == 'fixture-ui':
         proposal = save(definition)
     else:
         raise ValueError('input is outside the closed synthetic UI journey')
-    allowed = request['output_schema']['properties']['proposal']['anyOf']
-    assert any(choice['properties']['operation']['const'] == proposal['operation'] for choice in allowed)
-    print(json.dumps({'proposal': proposal}))
+    output(proposal)
     sys.exit(0)
 
 control = json.loads(text)
@@ -91,8 +100,7 @@ elif scenario == 'fixture-repeat' or 'lookup_result' not in context:
 else:
     assert context['lookup_result']['successful'] is True
     assert context['lookup_result']['items'] == []
-    choices = request['output_schema']['properties']['proposal']['anyOf']
-    assert all(choice['properties']['operation']['const'] != 'lookup' for choice in choices)
+    assert all(tool['name'] != 'bokkie_lookup' for tool in request['tools'])
     proposal = {
         'operation': 'save_definition', 'message': 'Prepared the requested local note.',
         'definition': {
@@ -103,4 +111,4 @@ else:
             'max_attempts': 3, 'max_output_chars': 8192, 'destination': 'task_results',
         },
     }
-print(json.dumps({'proposal': proposal}))
+output(proposal)

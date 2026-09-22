@@ -5,7 +5,7 @@
 - Reorientation budget: 180
 - Baseline: `277ab5587ed2cf6c215cf838c2f58f9c534688b4`
 - Landed pull requests: none
-- Next action: resolve the real-model draft-routing defect; no further live retry is authorised by the completed final attempt.
+- Next action: implement narrow tools and trusted defaults, verify offline, calibrate, then qualify the UI and land.
 
 ## Outcome and scope
 
@@ -22,19 +22,17 @@ Origin/token/session and specialised engineering/gardener contracts remain.
 
 ## Current phase
 
-Integrated implementation is on the task branch. Canonical backend and UI checks
-and existing browser/native journeys pass. Live qualification exposed proposal
-routing and empty-search continuation defects, now repaired with focused tests.
-Three model dispatches were attempted conservatively, including one interrupted
-by a harness response-identity bug. No accepted full live journey exists yet.
-On 22 September 2026 the user explicitly authorised one additional live attempt,
-capped at 12 model calls and 15 minutes, with no further live retries. The previous
-authority hold is discharged for that exact run.
-The additional attempt used two calls in 14.228 seconds and failed the first
-acceptance step: after an empty lookup the model returned discussion rather than
-a saved draft. No task, obligation or result was created. The contained runtime
-is available; natural-language routing remains unqualified. No further live
-retry was made. The conductor owns integration and eventual landing.
+Repair/calibration authorised on 22 September 2026. Preserve the integrated
+Store, kernel and UI work in draft PR #37. Replace model-generated operation JSON
+with a narrow custom-tool proposal interface and backend-owned execution defaults.
+The contained runtime stops at the selected tool; trusted Store code applies it.
+Model tools cannot confirm activation or manufacture authority.
+
+The user authorised one aggregate live budget of 20 dispatches / 30 minutes:
+at most eight calibration dispatches and twelve final UI dispatches. This
+supersedes the exhausted previous attempt limits. Keep the configured model
+fixed. Complete offline protocol/contract tests before live calls. The parent
+owns all live monitoring, budget accounting and final integration.
 
 ## Design and dependency graph
 
@@ -70,18 +68,18 @@ is never silently rearmed. At most one admitted occurrence per managed task.
 
 ## Calibration and qualification bounds
 
-Question: can the installed Codex protocol deliver a bounded typed drafting turn
-without ambient tools, and can the existing canvas UI complete the integrated
-journey? Inspect local protocol/schema and preflight without a model first.
-Evidence owner: `docs/conversation-evidence/`; private raw journals and synthetic
-fixture databases stay outside the repository. Exit calibration on one supported
-contained adapter and passing representative fixture, or record the precise live
-dependency failure. Do not substitute scripted replies for live qualification.
+Question: can the installed contained model choose the appropriate narrow tool
+with backend-owned defaults? Smallest probe: original reminder request produces
+an inactive persisted draft with the intended text, weekday timing and named zone.
+Then probe a paraphrase, non-executing exploration, ambiguous lookup and a revision
+that leaves active behaviour unchanged. Evidence owner: `docs/conversation-evidence/`;
+retain supplied instructions/tool arguments and exact receipts for synthetic inputs.
 
-Live budget: one representative journey, at most 12 model turns and 15 minutes;
-at most one focused repair rerun, capped at 4 turns and 5 minutes. No model
-comparison or full engineering campaign. Use only the existing authorised account.
-Model settings remain in runtime profiles; no global configuration mutation.
+Exit calibration only when those cases pass; then run the complete real UI journey
+on one committed candidate. Within the aggregate budget, repair observed causes
+using focused checks. Do not start a model comparison, account change, or repeated
+full engineering campaign. No provisional checkpoint is a delivered dependency.
+Prior failed attempts remain historical evidence, never substituted with fake peers.
 
 ## Checkpoints
 
@@ -92,6 +90,3 @@ Model settings remain in runtime profiles; no global configuration mutation.
 | Conversation and UI | integrated | 75 UI checks; 12 legacy browser journeys; native result |
 | Integrated qualification | blocked by product defect | final authorised live attempt did not save a draft |
 | Review and landing | pending | owning PR exact-head review and CI |
-
-The additional 12-call / 15-minute run was explicitly authorised by the user on
-22 September 2026. It does not authorise another repair rerun.

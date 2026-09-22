@@ -9,6 +9,7 @@ pub mod app_server;
 pub mod conversation;
 pub mod conversation_http;
 pub mod conversation_runtime;
+pub mod conversation_tools;
 pub mod db_executor;
 pub mod doctor;
 pub mod domain;

@@ -69,8 +69,13 @@ catalogue lookup permits one bounded continuation to finish the original request
 each interaction has at most two model invocations, each durably recorded. No model is
 started by a timer, refresh, note occurrence or unchanged-state poll.
 
-The typed output surface permits discussion, catalogue lookup, saving a candidate,
-preview and proposing activation/pause/resume. Backend code owns target selection,
+Five named model tools propose discussion, catalogue lookup, saving a candidate,
+preview and activation/pause/resume. Draft arguments contain user-facing fields;
+trusted code supplies capability profile, effects, destination and finite bounds,
+preserving those settings on revisions of the same capability. A valid custom-tool
+request ends the contained runtime before Store applies the proposal. No tool
+response or further inference is needed to claim success: the backend supplies
+the receipt and saved-change message. Plain model text remains discussion data. Backend code owns target selection,
 validation, profiles, actor authority and confirmation. Catalogue lookup searches
 SQLite across identity, name and descriptive text, including gardener and
 engineering roots. Multiple matches require explicit selection. A lookup error

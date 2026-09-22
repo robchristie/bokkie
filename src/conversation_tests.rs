@@ -315,29 +315,24 @@ fn selection_uses_catalogue_and_conflicts_do_not_silently_choose() {
 }
 
 #[test]
-fn model_schema_only_advertises_operations_for_trusted_selection() {
+fn model_tools_only_advertise_operations_for_trusted_selection() {
     let operations = |managed, legacy| {
-        crate::conversation::operation_schema_for(managed, legacy)
-            .pointer("/properties/proposal/anyOf")
-            .unwrap()
+        crate::conversation_tools::tools(managed, legacy)
             .as_array()
             .unwrap()
             .iter()
-            .map(|op| {
-                op.pointer("/properties/operation/const")
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .to_owned()
-            })
+            .map(|op| op.get("name").unwrap().as_str().unwrap().to_owned())
             .collect::<Vec<_>>()
     };
     assert_eq!(
         operations(false, false),
-        vec!["discuss", "lookup", "save_definition"]
+        vec!["bokkie_discuss", "bokkie_lookup", "bokkie_save_draft"]
     );
-    assert_eq!(operations(false, true), vec!["discuss", "lookup"]);
-    assert!(operations(true, false).contains(&"preview".to_owned()));
+    assert_eq!(
+        operations(false, true),
+        vec!["bokkie_discuss", "bokkie_lookup"]
+    );
+    assert!(operations(true, false).contains(&"bokkie_preview".to_owned()));
 }
 
 #[test]

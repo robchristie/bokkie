@@ -3,7 +3,7 @@ use crate::{Store, StoreError};
 use bokkie_operator_api::*;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Value, json};
+use serde_json::json;
 
 pub(crate) fn encode<T: Serialize>(value: &T) -> Result<String, StoreError> {
     serde_json::to_string(value).map_err(|e| StoreError::Invalid(e.to_string()))
@@ -418,51 +418,4 @@ impl Store {
         })
         .transpose()
     }
-}
-
-/// A deliberately small model output grammar. No actor, SQL, shell, credentials or confirmation tool.
-pub fn operation_schema() -> Value {
-    let text = json!({"type":"string"});
-    let object = |properties: Value, required: Vec<&str>| json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
-    let trigger = json!({"anyOf":[object(json!({"kind":{"type":"string","const":"immediate"}}),vec!["kind"]),object(json!({"kind":{"type":"string","const":"once"},"local_datetime":text,"timezone":text}),vec!["kind","local_datetime","timezone"]),object(json!({"kind":{"type":"string","const":"recurring"},"cron":text,"timezone":text}),vec!["kind","cron","timezone"])]});
-    let definition = object(
-        json!({"name":text,"purpose":text,"instructions":text,"context_refs":{"type":"array","items":text},"trigger":trigger,"capability":text,"profile_revision":text,"effects":{"type":"array","items":text},"max_attempts":{"type":"integer"},"max_output_chars":{"type":"integer"},"destination":text}),
-        vec![
-            "name",
-            "purpose",
-            "instructions",
-            "context_refs",
-            "trigger",
-            "capability",
-            "profile_revision",
-            "effects",
-            "max_attempts",
-            "max_output_chars",
-            "destination",
-        ],
-    );
-    let operation = json!({"anyOf":[object(json!({"operation":{"type":"string","const":"discuss"},"message":text}),vec!["operation","message"]),object(json!({"operation":{"type":"string","const":"lookup"},"query":text}),vec!["operation","query"]),object(json!({"operation":{"type":"string","const":"save_definition"},"definition":definition,"message":text}),vec!["operation","definition","message"]),object(json!({"operation":{"type":"string","const":"preview"}}),vec!["operation"]),object(json!({"operation":{"type":"string","const":"propose"},"action":{"type":"string","enum":["activate","pause","resume"]}}),vec!["operation","action"])]});
-    object(json!({"proposal":operation}), vec!["proposal"])
-}
-
-/// Advertise only operations legal for the current trusted selection. Validation
-/// still fences every proposal after the model returns.
-pub fn operation_schema_for(managed_selected: bool, legacy_selected: bool) -> Value {
-    let mut schema = operation_schema();
-    if let Some(operations) = schema
-        .pointer_mut("/properties/proposal/anyOf")
-        .and_then(Value::as_array_mut)
-    {
-        operations.retain(|operation| {
-            match operation
-                .pointer("/properties/operation/const")
-                .and_then(Value::as_str)
-            {
-                Some("preview" | "propose") => managed_selected,
-                Some("save_definition") => !legacy_selected,
-                _ => true,
-            }
-        });
-    }
-    schema
 }

@@ -16,13 +16,40 @@ Model, effort, request deadline, context/output byte bounds and the default
 note identity/revision and provides those facts with each bounded context.
 
 `ConversationProfile::preflight()` checks the installed runtime without starting
-a model turn. `generate(context, output_schema)` creates a fresh process and
+a model turn. `preflight_tools(tools)` additionally registers the exact offered
+catalogue with `thread/start` and reports its names, still with zero model turns.
+`generate_tools(context, tools)` creates a fresh process and
 fresh ephemeral thread for each invocation. Callers should bound the number of
 invocations per interaction (Bokkie permits at most two, including a necessary
 continuation after a successful empty lookup) and deserialise the returned JSON into their closed
-operation enum. Structured-output schemas should use an object root; put any
-operation union under a required object property. Schema and supplied context
-are bounded independently. There is no retry or thread-resume path.
+operation enum. Tools and supplied context are bounded independently. There is
+no retry or thread-resume path. The compatibility method
+`generate(context, output_schema)` still accepts an object-root structured-output
+schema, with any operation union under a required object property.
+
+The tool method takes one to five unique Codex function specifications:
+`{"type":"function","name":"bokkie_lookup","description":"…","inputSchema":{"type":"object",…},"deferLoading":false}`.
+The allowed names are `bokkie_discuss`, `bokkie_lookup`, `bokkie_save_draft`,
+`bokkie_preview` and `bokkie_propose`; the backend offers only the operations
+legal for that interaction. Namespaces and deferred loading are forbidden.
+The complete tool list is capped at 32 KiB. Arguments must be JSON objects and
+the complete returned proposal fits the profile's output bound. Domain argument
+validation remains with the backend.
+
+On the first valid `item/tool/call` request the broker checks thread, turn, call
+identity, offered name and arguments, then tears down the namespace before
+returning `{"tool":"bokkie_lookup","arguments":{"query":"…"}}`. It never
+answers the tool request or executes an operation. Any subsequent queued calls
+are discarded with the process; multiple tool items observed before the first
+selection fail closed. One dispatched turn counts as one invocation, and there
+is no follow-up inference using a tool receipt. Backend receipts are produced
+only after backend execution.
+
+The installed protocol has no required-tool selection setting. If the model
+finishes with plain text, the broker returns a `bokkie_discuss` proposal with
+`message` set to that text and `reason: "answer"`, only when discussion was
+offered. Otherwise it returns a recoverable missing-proposal error. JSON-looking
+prose remains discussion data and cannot select an operation.
 
 ## Containment
 
@@ -40,9 +67,10 @@ its model thread has a read-only, network-off sandbox and **no selected executio
 environments**. Shell, filesystem/image access, apps, browser, web search, MCP,
 plugins, skills injection, hooks, memory and delegation are disabled. The broker
 checks the effective feature configuration and returned thread settings before
-starting a turn. It rejects server tool/approval requests and any tool item.
+starting a turn. It rejects approval requests, built-in tools and unoffered
+dynamic functions. Only the bounded proposal selection described above is allowed.
 The model receives fixed conversation instructions plus the backend's supplied
-context and schema, with no project instruction sources. The broker is trusted
+context and tools or schema, with no project instruction sources. The broker is trusted
 adapter code; model responses remain untrusted proposals.
 
 The Rust process supervisor bounds the broker's deadline, input, output and
@@ -50,7 +78,8 @@ lifetime. The broker separately caps the app-server wire at 2 MiB and enforces
 its deadline and final-answer byte bound. Namespace teardown terminates
 app-server descendants. No token-count ceiling is claimed: the enforced budgets
 are elapsed time, supplied bytes, observed wire bytes, final bytes, one turn,
-zero permitted tool calls and the caller's finite request count.
+one permitted proposal selection, zero executed tools and the caller's finite
+request count.
 
 The installed protocol was inspected using Codex CLI 0.155.1's
 `app-server generate-json-schema --experimental`. The no-model probe observed
@@ -70,9 +99,12 @@ python3 -m unittest discover -s tools/conversation-runtime -p 'test_*.py'
 cargo test --locked --lib conversation_runtime
 ```
 
-The fake peers exercise a successful structured response, fresh requests,
-no-model preflight, unexpected tools, identity mismatches, malformed/oversized
-answers, timeout and containment drift. These tests make no model requests.
+The fake peers exercise structured responses and dynamic proposals, fresh
+requests, no-model preflight, unexpected tools/approvals, identity mismatches,
+malformed/oversized arguments and answers, multiple selections, timeout and
+containment drift. They verify process teardown without a tool response or a
+second turn, including a selection received before the turn-start response.
+These tests make no model requests.
 Live qualification must separately record its finite aggregate call budget,
 profile, scenario, result and retained backend receipts.
 

@@ -664,7 +664,7 @@ async fn model_http_empty_lookup_continues_once_saves_only_a_draft_and_replay_is
         calls[0]["instructions"]
             .as_str()
             .unwrap()
-            .contains("You help define")
+            .contains("You are Bokkie")
     );
     assert!(calls[0]["context"].get("instruction").is_none());
     assert!(calls[1]["context"].get("instruction").is_none());
@@ -825,7 +825,7 @@ async fn model_http_repeated_lookup_exhausts_two_calls_without_creating_a_task()
         view.request_error
             .as_deref()
             .unwrap()
-            .contains("continuation exhausted"),
+            .contains("unavailable tool"),
         "{:?}",
         view.request_error
     );

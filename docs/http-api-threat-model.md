@@ -102,8 +102,11 @@ checks.
 The same Host, Origin and session-token middleware protects `/conversations/*`.
 Task catalogue and definition reads are bounded server queries. Conversation
 turns persist dispatch before invoking a configured model outside the database
-owner. The model receives bounded supplied data and returns one closed typed
-proposal; it cannot call SQL, shell, connected applications, the HTTP API or
+owner. The model receives bounded supplied data and may select only the offered
+subset of five closed custom proposal tools. The broker verifies name, arguments,
+thread/turn identity and byte bounds, then tears down its process without answering
+the tool request. Trusted backend code validates and applies the proposal after
+that boundary. Unknown tools and ambient approvals fail closed; it cannot call SQL, shell, connected applications, the HTTP API or
 confirmation routes. A fresh ephemeral, environment-free runtime is checked
 against the qualified installed protocol before its model turn. Runtime
 containment details and finite limits are owned by the conversation runtime guide.

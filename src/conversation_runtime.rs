@@ -104,6 +104,81 @@ impl ConversationProfile {
         self.invoke(json!({"profile": self, "context": context, "output_schema": output_schema, "instructions": instructions}))
     }
 
+    /// Selects one offered operation without executing it or resuming the model.
+    /// The caller owns argument validation, authorisation and durable receipts.
+    pub fn generate_tools(&self, mut context: Value, tools: Value) -> Result<Value, String> {
+        Self::validate_tools(&tools)?;
+        if serde_json::to_vec(&context)
+            .map_err(|e| e.to_string())?
+            .len()
+            > self.max_context_bytes
+        {
+            return Err("conversation context or tools exceeded their contract".into());
+        }
+        let instructions = context
+            .as_object_mut()
+            .and_then(|object| object.remove("instruction"))
+            .unwrap_or(Value::Null);
+        if !instructions.is_null() && instructions.as_str().is_none_or(|text| text.len() > 16384) {
+            return Err("conversation instructions exceeded their contract".into());
+        }
+        self.invoke(json!({"profile": self, "context": context, "tools": tools, "instructions": instructions}))
+    }
+
+    /// Checks the exact offered catalogue without dispatching a model turn.
+    pub fn preflight_tools(&self, tools: Value) -> Result<Value, String> {
+        Self::validate_tools(&tools)?;
+        self.invoke(json!({"profile": self, "preflight": true, "tools": tools}))
+    }
+
+    fn validate_tools(tools: &Value) -> Result<(), String> {
+        const NAMES: [&str; 5] = [
+            "bokkie_discuss",
+            "bokkie_lookup",
+            "bokkie_save_draft",
+            "bokkie_preview",
+            "bokkie_propose",
+        ];
+        let specs = tools
+            .as_array()
+            .filter(|specs| !specs.is_empty() && specs.len() <= NAMES.len())
+            .ok_or("conversation tools exceeded their contract")?;
+        let mut names = std::collections::HashSet::new();
+        for spec in specs {
+            let valid = spec.as_object().is_some_and(|object| {
+                object.keys().all(|key| {
+                    matches!(
+                        key.as_str(),
+                        "type" | "name" | "description" | "inputSchema" | "deferLoading"
+                    )
+                })
+            }) && spec.get("type").and_then(Value::as_str) == Some("function")
+                && spec
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| NAMES.contains(&name) && names.insert(name))
+                && spec
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.is_empty())
+                && spec
+                    .get("inputSchema")
+                    .and_then(|schema| schema.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("object")
+                && spec
+                    .get("deferLoading")
+                    .is_none_or(|value| value == &Value::Bool(false));
+            if !valid {
+                return Err("conversation tools exceeded their contract".into());
+            }
+        }
+        if serde_json::to_vec(tools).map_err(|e| e.to_string())?.len() > 32768 {
+            return Err("conversation tools exceeded their contract".into());
+        }
+        Ok(())
+    }
+
     fn invoke(&self, request: Value) -> Result<Value, String> {
         self.validate()?;
         let limits = ProcessLimits {
@@ -206,5 +281,32 @@ mod tests {
                 .contains("context")
         );
         assert!(p.generate(json!({}), json!({"type":"string"})).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_tool_surface_before_process_start() {
+        let p = profile();
+        let tool = json!({"type":"function", "name":"bokkie_lookup", "description":"Look up tasks", "inputSchema":{"type":"object"}});
+        for invalid in [
+            json!([]),
+            json!([tool.clone(), tool.clone()]),
+            json!([{
+                "type":"function", "name":"shell", "description":"Forbidden", "inputSchema":{"type":"object"}
+            }]),
+            json!([{
+                "type":"function", "name":"bokkie_lookup", "description":"Deferred", "inputSchema":{"type":"object"}, "deferLoading":true
+            }]),
+        ] {
+            assert!(
+                p.generate_tools(json!({}), invalid)
+                    .unwrap_err()
+                    .contains("tools")
+            );
+        }
+        assert!(
+            p.generate_tools(json!({"message":"x".repeat(1025)}), json!([tool]))
+                .unwrap_err()
+                .contains("context")
+        );
     }
 }
