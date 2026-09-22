@@ -1,0 +1,19 @@
+{
+  "time": "2026-09-22T11:01:22.666457+00:00",
+  "browser_exit": 0,
+  "native_exit": 0,
+  "hashes": {
+    "tools/ui-browser-smoke.mjs": "006ae2caae29a322c4ddc615d1a2505e85db1d0b9bda0d4189bb4c689cd3537d",
+    "tools/ui-native-smoke.sh": "4598bc4bf965f24713e41a69d2740936ac3bdeedf2c06a5e16b85ec0097b3c0f",
+    "target/debug/bokkie-ui-fixture": "e06589caa5d1ba250035eeec90817215489ed2931dc9311532fccad5a0d3a279",
+    "target/debug/bokkie-attention-ui": "fd071a97616eeadb6590b272584a556f1a76daad6e17db33d333a5ed1d3776d3",
+    "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "6822fe18b5d2f131370512569ce682abda4adb1d16a6e66cf80e7f2203c44dd9",
+    "browser-smoke.log": "2832990f6b3ff9e760257ceb49899089e9fb0c0dcebff6c333f438a46565ad03",
+    "native-smoke.log": "3510669dd0647bce114017cf37fd5bf4084651b5b9f6ec68f5d00f8655b3b97e",
+    "browser-interactions.json": "f4657d88f086be94c51211b105e7280cf810884cde474f30ef5848bde0579c35",
+    "native-interaction.json": "4ff16dabb4acce0eefe2ad81da058d22ca93e170cc79ee40a8139f7615c8bc8b",
+    "native-durable-result.json": "61cc88df7bb4c519a075f6b9b8b51da2acbfef41223e757c7ee89f1c8be7a48b"
+  },
+  "journeys": 12,
+  "scope": "Existing attention, gardener and engineering browser/native regression. Reused after isolated conversation text/disclosure changes."
+}

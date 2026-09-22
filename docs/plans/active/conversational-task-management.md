@@ -53,16 +53,16 @@ is never silently rearmed. At most one admitted occurrence per managed task.
 
 ## Acceptance
 
-- Pending: Draft, refine, preview and exact confirmation through a real model/UI path.
-- Pending: Bounded authoritative discovery, ambiguous candidates and restart continuity.
-- Pending: Immutable revisions, replay receipts, session/profile fences and atomic changes.
-- Pending: Real local note results, duplicate/retry reconciliation and runner exclusions.
-- Pending: Future revision/pause/resume semantics, admitted ownership, one-off recovery.
-- Pending: Honest research/email capability gaps and unavailable runtime behaviour.
-- Pending: Model failure/interruption, malicious content and bounded context containment.
-- Pending: DST/invalid local times, race, migration and existing lifecycle regressions.
-- Pending: Canonical backend/UI checks and observed browser journey with source identities.
-- Pending: Independent exact-head review, CI, authorised merge and post-merge CI.
+- Verified offline: full physical-input UI journey with a clearly synthetic model peer.
+- Verified: bounded catalogue, ambiguous selection, persisted definitions/conversations.
+- Verified: immutable revisions, replay, session/profile fences and atomic confirmation.
+- Verified: real local results through the kernel, retry/deduplication, worker exclusions.
+- Verified: future revision/pause/resume, retained admission, one-off and finite recurrence.
+- Verified: unavailable capabilities/runtime, malformed peers and rejected authority fields.
+- Verified: DST/invalid local times, pause/admission race, migrations and kernel regressions.
+- Verified: canonical backend/UI checks; existing 12 browser journeys and native result.
+- Open: real-model completion of the integrated UI journey after the bounded attempts.
+- Open: independent exact-head review, CI, authorised merge and post-merge CI.
 
 ## Calibration and qualification bounds
 

@@ -1,0 +1,30 @@
+{
+  "status": "not accepted",
+  "conservative_total_dispatches": 3,
+  "attempts": [
+    {
+      "source": "37b7f0dca2fa18246b99c4a3ee4385b7b9ef191d",
+      "reported_calls": 1,
+      "passed": false,
+      "report_sha256": "73d3eadb5173b968caf9ca60278871a239a679e76dbb5f3b92791181217a6a49"
+    },
+    {
+      "source": "9626f7550d372e34d20d8964d25079c5af10b18a",
+      "reported_calls": 1,
+      "passed": false,
+      "report_sha256": "24cd900f3447717b82cad07396b6a5abf2b05ec6af7ae67f811b9f5529432202"
+    },
+    {
+      "source": "ca036978dcff1a8f06e5ec0f6ab389374178a98b",
+      "reported_calls": 3,
+      "passed": false,
+      "report_sha256": "dbfad572ef2b20b31aa56f733adf638bcd7cf92ec95c9949b997dba123462123"
+    }
+  ],
+  "explanation": [
+    "First response proposed preview without a selected task; backend rejected it. Operation schema now follows trusted selection.",
+    "Second request was interrupted after the harness matched an older identical message. Matching now uses durable request and conversation identities.",
+    "Third response performed a successful empty catalogue lookup and stopped without drafting. The backend now permits one bounded continuation."
+  ],
+  "further_live_run": "Awaiting explicit extension to the original single repair-rerun limit. No further live requests made."
+}
