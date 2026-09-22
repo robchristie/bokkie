@@ -181,22 +181,65 @@ async fn run_turn(
         messages.drain(..messages.len() - 10);
     }
     let selected_task=view.task.as_ref().map(|task|json!({"id":task.id,"configuration_revision":task.configuration_revision,"status":task.status,"active":task.active,"candidate":task.candidate,"next_wake_at":task.next_wake_at}));
-    let context = json!({"instruction":CONVERSATION_INSTRUCTIONS,"now_unix":now,"timezone":profile.timezone,"messages":messages,"selected_task_id":view.selected_task_id,"selected_task":selected_task,"available_capabilities":profiles});
-    let schema = operation_schema_for(
+    let mut context = json!({"instruction":CONVERSATION_INSTRUCTIONS,"now_unix":now,"timezone":profile.timezone,"messages":messages,"selected_task_id":view.selected_task_id,"selected_task":selected_task,"available_capabilities":profiles});
+    let mut schema = operation_schema_for(
         view.task.is_some(),
         view.selected_task_id.is_some() && view.task.is_none(),
     );
-    let output = tokio::task::spawn_blocking(move || profile.generate(context, schema))
-        .await
-        .map_err(|_| StoreError::Invalid("conversation runtime worker failed".into()))?
-        .map_err(StoreError::Invalid)?;
-    let operation: ConversationOperation = serde_json::from_value(
-        output
-            .get("proposal")
-            .cloned()
-            .ok_or_else(|| StoreError::Invalid("model response requires proposal".into()))?,
-    )
-    .map_err(|e| StoreError::Invalid(format!("invalid conversation operation: {e}")))?;
+    // A successful empty lookup may require one bounded continuation to finish
+    // the user's request. Failed reads never become evidence of absence.
+    let mut step = 0;
+    let operation = loop {
+        let r = request.clone();
+        state
+            .executor
+            .execute(move |s| s.conversation_model_dispatch(&r, step, now))
+            .await?;
+        let runtime = profile.clone();
+        let input = context.clone();
+        let output_schema = schema.clone();
+        let output = tokio::task::spawn_blocking(move || runtime.generate(input, output_schema))
+            .await
+            .map_err(|_| StoreError::Invalid("conversation runtime worker failed".into()))?
+            .map_err(StoreError::Invalid)?;
+        let operation: ConversationOperation = serde_json::from_value(
+            output
+                .get("proposal")
+                .cloned()
+                .ok_or_else(|| StoreError::Invalid("model response requires proposal".into()))?,
+        )
+        .map_err(|e| StoreError::Invalid(format!("invalid conversation operation: {e}")))?;
+        if let ConversationOperation::Lookup { query } = &operation {
+            if step != 0 {
+                return Err(StoreError::Invalid(
+                    "conversation lookup continuation exhausted".into(),
+                )
+                .into());
+            }
+            let q = query.clone();
+            let page = state
+                .executor
+                .execute(move |s| s.managed_catalogue(&q, None, 20))
+                .await?;
+            if page.items.is_empty() {
+                context["lookup_result"] = json!({"query":query,"items":[],"successful":true,
+                    "instruction":"This bounded catalogue search returned no matches. Continue the original user request: save a draft if they asked to create one; otherwise explain the lookup result and ask for another identifying phrase. Do not treat this query as proof that no task exists."});
+                schema
+                    .pointer_mut("/properties/proposal/anyOf")
+                    .unwrap()
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|op| {
+                        op.pointer("/properties/operation/const")
+                            .and_then(serde_json::Value::as_str)
+                            != Some("lookup")
+                    });
+                step += 1;
+                continue;
+            }
+        }
+        break operation;
+    };
     let r = request.clone();
     let op = operation.clone();
     state

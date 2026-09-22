@@ -64,7 +64,9 @@ SQLite stores messages, selection, requests, proposed reviews and command
 receipts. Reads return at most 24 recent messages, 20 runs per task and bounded
 catalogue pages; the model receives at most ten bounded messages plus the
 selected definition. Each user interaction starts a fresh ephemeral model turn
-with that reconstructed context, never copied runtime history. No model is
+with that reconstructed context, never copied runtime history. A successful empty
+catalogue lookup permits one bounded continuation to finish the original request;
+each interaction has at most two model invocations, each durably recorded. No model is
 started by a timer, refresh, note occurrence or unchanged-state poll.
 
 The typed output surface permits discussion, catalogue lookup, saving a candidate,

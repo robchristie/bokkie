@@ -339,3 +339,18 @@ fn model_schema_only_advertises_operations_for_trusted_selection() {
     assert_eq!(operations(false, true), vec!["discuss", "lookup"]);
     assert!(operations(true, false).contains(&"preview".to_owned()));
 }
+
+#[test]
+fn model_dispatches_are_bounded_durable_and_never_replayed() {
+    let mut store = Store::open_in_memory().unwrap();
+    let req = request("dispatch", 0);
+    assert!(store.conversation_model_dispatch(&req, 0, 100).is_err());
+    store.conversation_begin(&req, "session", 100).unwrap();
+    store.conversation_model_dispatch(&req, 0, 100).unwrap();
+    assert!(store.conversation_model_dispatch(&req, 0, 100).is_err());
+    store.conversation_model_dispatch(&req, 1, 101).unwrap();
+    assert!(store.conversation_model_dispatch(&req, 2, 102).is_err());
+    assert_eq!(store.conversation_model_dispatch_count().unwrap(), 2);
+    store.conversation_interrupt("rotated", 103).unwrap();
+    assert!(store.conversation_model_dispatch(&req, 1, 103).is_err());
+}

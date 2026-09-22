@@ -149,6 +149,42 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+    /// Record each bounded dispatch before leaving the database boundary. Recovery
+    /// never automatically repeats it; the operator can start a fresh request.
+    pub fn conversation_model_dispatch(
+        &mut self,
+        request: &ConversationTurnRequest,
+        step: u8,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        if step > 1 {
+            return Err(StoreError::Invalid(
+                "conversation continuation bound exceeded".into(),
+            ));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let running: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM conversation_requests WHERE command_id=?1 AND conversation_id=?2 AND status='running')", params![request.command_id, request.conversation_id], |r|r.get(0))?;
+        if !running {
+            return Err(StoreError::Conflict(
+                "conversation request is no longer running".into(),
+            ));
+        }
+        let details = encode(&json!({"request_id":request.command_id,"step":step}))?;
+        let duplicate: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM domain_events WHERE entity_kind='conversation' AND entity_id=?1 AND event_type='conversation_model_dispatch' AND details_json=?2)",params![request.conversation_id,details],|r|r.get(0))?;
+        if duplicate {
+            return Err(StoreError::Conflict(
+                "conversation dispatch already recorded".into(),
+            ));
+        }
+        tx.execute("INSERT INTO domain_events(entity_kind,entity_id,event_type,occurred_at,details_json) VALUES ('conversation',?1,'conversation_model_dispatch',?2,?3)",params![request.conversation_id,now,details])?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn conversation_model_dispatch_count(&self) -> Result<i64, StoreError> {
+        Ok(self.connection.query_row("SELECT COUNT(*) FROM domain_events WHERE entity_kind='conversation' AND event_type='conversation_model_dispatch'", [], |r|r.get(0))?)
+    }
     pub fn conversation_record_output(
         &mut self,
         request_id: &str,

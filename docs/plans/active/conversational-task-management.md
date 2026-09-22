@@ -5,7 +5,7 @@
 - Reorientation budget: 180
 - Baseline: `277ab5587ed2cf6c215cf838c2f58f9c534688b4`
 - Landed pull requests: none
-- Next action: stabilise managed-task contracts and integrate persistent conversation with the existing UI.
+- Next action: finish deterministic UI qualification; await the requested extension before any further live model qualification.
 
 ## Outcome and scope
 
@@ -22,11 +22,15 @@ Origin/token/session and specialised engineering/gardener contracts remain.
 
 ## Current phase
 
-Implementation/calibration. Clean baseline and authenticated remote reconciled.
-The conductor owns integration, shared boundaries, qualification and landing.
-Bounded workers own managed Store semantics and the conversation runtime adapter;
-UI implementation follows the stabilised wire contract. Independent review is a
-separate read-only judgement on the eventual exact candidate.
+Integrated implementation is on the task branch. Canonical backend and UI checks
+and existing browser/native journeys pass. Live qualification exposed proposal
+routing and empty-search continuation defects, now repaired with focused tests.
+Three model dispatches were attempted conservatively, including one interrupted
+by a harness response-identity bug. No accepted full live journey exists yet.
+The original single repair-rerun boundary has been reached; a further bounded
+run requires the requested user extension. Deterministic qualification continues.
+The conductor owns integration, qualification and landing; independent review
+will judge the eventual exact candidate.
 
 ## Design and dependency graph
 
@@ -79,8 +83,8 @@ Model settings remain in runtime profiles; no global configuration mutation.
 
 | Owner | State | Evidence / next proof |
 | --- | --- | --- |
-| Managed Store and note adapter | implementation | deterministic lifecycle tests |
-| Conversation runtime | protocol calibration | local schema / fake peer tests |
-| Conversation and UI | contract integration | bounded durable requests and review cards |
-| Integrated qualification | pending | canonical checks and finite live UI journey |
+| Managed Store and note adapter | verified | lifecycle, race, restart, real scheduler tests |
+| Conversation runtime | contained adapter implemented | Codex 0.155.1 no-model preflight / fake peers |
+| Conversation and UI | integrated | 75 UI checks; 12 legacy browser journeys; native result |
+| Integrated qualification | partial | canonical checks pass; live journey remains unproved |
 | Review and landing | pending | owning PR exact-head review and CI |

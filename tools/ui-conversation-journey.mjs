@@ -6,6 +6,7 @@ import { resolve, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 const preflight = process.argv.includes('--preflight');
+const fakeModel = process.argv.includes('--fake-model');
 const root = process.cwd();
 const evidence = resolve(process.env.BOKKIE_CONVERSATION_EVIDENCE ?? '.ui-qualification-runtime/conversation');
 await mkdir(evidence, {recursive:true});
@@ -13,7 +14,7 @@ const profile = process.env.BOKKIE_CONVERSATION_PROFILE;
 if (!preflight && !profile) throw Error('Live qualification requires an explicit private BOKKIE_CONVERSATION_PROFILE');
 const fixtureRoot = process.env.BOKKIE_CONVERSATION_RESUME_ROOT ?? join('/tmp', `bokkie-conversation-journey-${randomUUID()}`);
 const endpoint = process.env.BOKKIE_UI_LANTERN_ENDPOINT ?? 'http://127.0.0.1:9336';
-const report = {mode:preflight?'no-model-preflight':'live-model',source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),budget:{calls:12,seconds:900,repair_calls:4,repair_seconds:300},calls:Number(process.env.BOKKIE_CONVERSATION_PRIOR_CALLS??0),checks:[],errors:[],captures:[]};
+const report = {mode:preflight?'no-model-preflight':fakeModel?'fake-model-ui-regression':'live-model',source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),budget:{calls:12,seconds:900,repair_calls:4,repair_seconds:300},calls:0,prior_attempt_calls:Number(process.env.BOKKIE_CONVERSATION_PRIOR_CALLS??0),checks:[],errors:[],captures:[]};
 for(const file of ['target/debug/bokkie-conversation-fixture','apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm','tools/conversation-runtime/broker.py']) report[file]=createHash('sha256').update(await readFile(file)).digest('hex');
 let fixture,browser,page,origin,queue=[],pending=[],buffer='';
 async function line(){if(queue.length)return queue.shift();return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('fixture reply timed out')),20000);pending.push(v=>{clearTimeout(timer);resolve(v);});});}
@@ -38,13 +39,13 @@ async function reveal(id){
 async function click(id){const n=await reveal(id);if(!n.enabled)throw Error(`Disabled control: ${id}`);await page.mouse.click((n.rect.min_x+n.rect.max_x)/2,(n.rect.min_y+n.rect.max_y)/2);await page.waitForTimeout(100);}
 async function type(text){await click('bokkie.conversation.text');const ok=await page.evaluate(text=>{const i=document.activeElement;if(!(i instanceof HTMLInputElement))return false;i.value=text;i.dispatchEvent(new InputEvent('input',{bubbles:true,data:text,inputType:'insertText'}));return true;},text);if(!ok)throw Error('Browser IME agent not focused');await page.waitForTimeout(100);}
 async function views(){const list=await (await fetch(origin+'/conversations')).json();return Promise.all(list.items.map(async i=>await(await fetch(origin+'/conversations/'+i.id)).json()));}
-let current;
+let current, initialDispatches=0;
 async function send(text){
- if(report.calls>=12)throw Error('Live model budget exhausted');
- await type(text);const dispatched=page.waitForRequest(r=>r.method()==='POST'&&r.url().endsWith('/conversations/turn'));await click('bokkie.conversation.send');const submitted=(await dispatched).postDataJSON();report.calls++;
+ if(report.calls+2>12)throw Error('Live model budget exhausted');
+ await type(text);const dispatched=page.waitForRequest(r=>r.method()==='POST'&&r.url().endsWith('/conversations/turn'));await click('bokkie.conversation.send');const submitted=(await dispatched).postDataJSON();report.user_interactions=(report.user_interactions??0)+1;
  const started=Date.now();
- for(;;){const all=await views();const match=all.find(v=>v.id===submitted.conversation_id&&v.messages.some(m=>m.role==='user'&&m.request_id===submitted.command_id));if(match&&!match.busy){current=match;if(match.request_error)throw Error(match.request_error);report.checks.push({text,view:match});await page.waitForTimeout(1200);return match;}
-  if(Date.now()-started>110000)throw Error('Conversation turn exceeded finite bound');await page.waitForTimeout(400);
+ for(;;){const all=await views();const match=all.find(v=>v.id===submitted.conversation_id&&v.messages.some(m=>m.role==='user'&&m.request_id===submitted.command_id));if(match&&!match.busy){current=match;report.calls=(await control()).model_calls-initialDispatches;if(match.request_error)throw Error(match.request_error);report.checks.push({text,view:match});await page.waitForTimeout(1200);return match;}
+  if(Date.now()-started>200000)throw Error('Conversation turn exceeded finite bound');await page.waitForTimeout(400);
  }
 }
 async function confirm(){
@@ -62,6 +63,7 @@ async function capture(name,focus){if(focus)await reveal(focus);await page.waitF
 const deadline=setTimeout(()=>{report.errors.push('Aggregate time budget exceeded');fixture?.kill('SIGTERM');browser?.close();},900000);
 try{
  await start(Boolean(process.env.BOKKIE_CONVERSATION_RESUME_ROOT));
+ initialDispatches=(await control()).model_calls;
  browser=await chromium.launch({headless:true,env:{...process.env,LD_LIBRARY_PATH:process.env.BOKKIE_UI_SYSROOT?`${resolve(process.env.BOKKIE_UI_SYSROOT,'usr/lib')}:${process.env.LD_LIBRARY_PATH??''}`:(process.env.LD_LIBRARY_PATH??'')},args:['--no-sandbox','--enable-unsafe-webgpu','--enable-features=Vulkan','--use-angle=vulkan','--disable-vulkan-surface',`--remote-debugging-port=${new URL(endpoint).port}`]});
  report.browser=browser.version();page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>report.errors.push(String(e)));
  await page.goto(origin+'/ui/');await ready();await click('bokkie.conversation.open');await page.waitForTimeout(500);
@@ -92,4 +94,4 @@ try{
  }
  report.passed=true;
 }catch(e){report.passed=false;report.errors.push(String(e.stack??e));if(page)await page.screenshot({path:join(evidence,'failure.png')}).catch(()=>{});throw e;
-}finally{clearTimeout(deadline);if(browser)await browser.close();await stop();await writeFile(join(evidence,'qualification.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({passed:report.passed,calls:report.calls,evidence,errors:report.errors}));}
+}finally{clearTimeout(deadline);if(fixture?.exitCode==null){try{report.calls=(await control()).model_calls-initialDispatches;}catch{}}if(browser)await browser.close();await stop();await writeFile(join(evidence,'qualification.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({passed:report.passed,calls:report.calls,evidence,errors:report.errors}));}

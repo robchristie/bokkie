@@ -187,7 +187,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             details.push(store.managed_detail(&entry.id)?);
                         }
                     }
-                    Ok(json!({"now":now,"ran":ran,"catalogue":catalogue,"details":details}))
+                    Ok(json!({"now":now,"ran":ran,"catalogue":catalogue,"details":details,"model_calls":store.conversation_model_dispatch_count()?}))
                 })
                 .await;
             match result {

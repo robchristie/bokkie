@@ -18,7 +18,8 @@ note identity/revision and provides those facts with each bounded context.
 `ConversationProfile::preflight()` checks the installed runtime without starting
 a model turn. `generate(context, output_schema)` creates a fresh process and
 fresh ephemeral thread for each invocation. Callers should bound the number of
-invocations per interaction and deserialise the returned JSON into their closed
+invocations per interaction (Bokkie permits at most two, including a necessary
+continuation after a successful empty lookup) and deserialise the returned JSON into their closed
 operation enum. Structured-output schemas should use an object root; put any
 operation union under a required object property. Schema and supplied context
 are bounded independently. There is no retry or thread-resume path.
