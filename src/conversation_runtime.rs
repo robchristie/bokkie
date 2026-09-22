@@ -1,7 +1,6 @@
 //! Bounded model proposals; trusted conversation handlers own all state changes.
 use crate::process::{
-    CancellationToken, EffectRisk, JsonlReceive, NoopHeartbeat, ProcessLimits, ProcessOutcome,
-    ProcessSupervisor,
+    CancellationToken, EffectRisk, NoopHeartbeat, ProcessLimits, ProcessOutcome, ProcessSupervisor,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -137,48 +136,34 @@ impl ConversationProfile {
             return Err("conversation request could not be written within bounds".into());
         }
         child.close_stdin();
-        let mut result = None;
-        loop {
-            match child
-                .receive_jsonl(&mut heartbeat)
-                .map_err(|e| e.to_string())?
-            {
-                JsonlReceive::Line(line) => {
-                    if result.is_some() {
-                        child.abort().map_err(|e| e.to_string())?;
-                        return Err("conversation broker returned multiple results".into());
-                    }
-                    result = Some(
-                        serde_json::from_str::<Value>(&line)
-                            .map_err(|_| "conversation broker returned invalid JSON")?,
-                    );
-                }
-                JsonlReceive::Eof => break,
-                JsonlReceive::Terminal(_) => {
-                    return Err("conversation broker exceeded its process bounds".into());
-                }
-            }
-        }
+        // This adapter accepts one finite response, so collect the bounded final
+        // output. Streaming receive may report normal completion before handing
+        // buffered lines to a caller when a broker exits quickly.
         match child.wait(&mut heartbeat).map_err(|e| e.to_string())? {
-            ProcessOutcome::Completed { status, .. } if status.success() => {
-                let value = result.ok_or("conversation broker returned no proposal")?;
+            ProcessOutcome::Completed { status, evidence } => {
+                if evidence.stdout.truncated {
+                    return Err("conversation broker exceeded its output bound".into());
+                }
+                let value: Value = serde_json::from_slice(&evidence.stdout.tail_bytes)
+                    .map_err(|_| "conversation broker must return exactly one JSON response")?;
+                if !status.success() {
+                    let diagnostic = value
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .filter(|text| text.len() <= 512)
+                        .unwrap_or("broker exited unsuccessfully");
+                    return Err(format!(
+                        "conversation runtime failed: {diagnostic}; no proposal was applied"
+                    ));
+                }
                 if !value.is_object() {
                     return Err("conversation proposal must be an object".into());
                 }
                 Ok(value)
             }
-            ProcessOutcome::Completed { .. } => {
-                let diagnostic = result
-                    .as_ref()
-                    .and_then(|value| value.get("error"))
-                    .and_then(Value::as_str)
-                    .filter(|text| text.len() <= 512)
-                    .unwrap_or("broker exited unsuccessfully");
-                Err(format!(
-                    "conversation runtime failed: {diagnostic}; no proposal was applied"
-                ))
-            }
-            _ => Err("conversation runtime failed; no proposal was applied".into()),
+            _ => Err(
+                "conversation broker exceeded its process bounds; no proposal was applied".into(),
+            ),
         }
     }
 }

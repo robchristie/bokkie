@@ -485,3 +485,347 @@ async fn unavailable_runtime_does_not_dispatch_and_http_catalogue_searches_beyon
     assert_eq!(unknown.0, StatusCode::UNPROCESSABLE_ENTITY);
     executor.shutdown().unwrap();
 }
+
+// Serialise only tests that exercise the two-slot production model admission.
+// Their subprocess peers are deterministic; clocks never advance while polling.
+static MODEL_PEER_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct ModelApplication {
+    _temporary: TempDir,
+    store: Store,
+    executor: DbExecutor,
+    app: Router,
+    token: String,
+    record: std::path::PathBuf,
+}
+impl ModelApplication {
+    async fn new(scenario: &str) -> Self {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("model-http.sqlite");
+        let store = Store::open(&database).unwrap();
+        let executor = DbExecutor::start(database).unwrap();
+        let profile = bokkie::conversation_runtime::ConversationProfile {
+            broker: Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/conversation_broker.py"),
+            codex: "/usr/bin/true".into(),
+            bwrap: "/usr/bin/true".into(),
+            model: scenario.into(),
+            effort: "medium".into(),
+            timezone: "Australia/Adelaide".into(),
+            timeout_seconds: 5,
+            max_context_bytes: 65536,
+            max_output_bytes: 16384,
+        };
+        profile.validate().unwrap();
+        let app = router_with_state(
+            ApiState {
+                executor: executor.clone(),
+                runtime: runtime(),
+                engineering_intake: None,
+                conversation: Some(ConversationConfig {
+                    profile: Some(Arc::new(profile)),
+                    notes_enabled: true,
+                    clock: Some(Arc::new(ManualClock::new(100))),
+                }),
+            },
+            None,
+        );
+        let token = bootstrap(&app).await.mutation_token;
+        let record = temporary.path().join("broker-calls.jsonl");
+        Self {
+            _temporary: temporary,
+            store,
+            executor,
+            app,
+            token,
+            record,
+        }
+    }
+
+    fn turn_request(&self, revision: i64) -> ConversationTurnRequest {
+        ConversationTurnRequest {
+            command_id: "model-turn".into(),
+            conversation_id: "model-conversation".into(),
+            expected_revision: revision,
+            text: json!({"record":self.record,"intent":"Find or prepare the requested reminder"})
+                .to_string(),
+        }
+    }
+
+    async fn post_turn(&self, turn: &ConversationTurnRequest) -> ConversationView {
+        decoded(
+            request(
+                &self.app,
+                Method::POST,
+                "/conversations/turn",
+                Some(&self.token),
+                Some(serde_json::to_value(turn).unwrap()),
+            )
+            .await,
+        )
+    }
+
+    async fn finished(&self) -> ConversationView {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let view: ConversationView = decoded(
+                request(
+                    &self.app,
+                    Method::GET,
+                    "/conversations/model-conversation",
+                    None,
+                    None,
+                )
+                .await,
+            );
+            if !view.busy {
+                return view;
+            }
+            assert!(Instant::now() < deadline, "model peer did not finish");
+            tokio::task::yield_now().await;
+        }
+    }
+
+    fn calls(&self) -> Vec<Value> {
+        std::fs::read_to_string(&self.record)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    async fn replay_is_free(&self, turn: &ConversationTurnRequest, previous: &ConversationView) {
+        let calls = self.calls().len();
+        let dispatches = self.store.conversation_model_dispatch_count().unwrap();
+        let watermark = self.store.change_page(0, None, 1000).unwrap().through;
+        let replay = self.post_turn(turn).await;
+        assert_eq!(replay, *previous);
+        assert_eq!(self.calls().len(), calls);
+        assert_eq!(
+            self.store.conversation_model_dispatch_count().unwrap(),
+            dispatches
+        );
+        assert_eq!(
+            self.store.change_page(0, None, 1000).unwrap().through,
+            watermark
+        );
+    }
+}
+impl Drop for ModelApplication {
+    fn drop(&mut self) {
+        self.executor.clone().shutdown().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn model_http_empty_lookup_continues_once_saves_only_a_draft_and_replay_is_free() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let fixture = ModelApplication::new("fixture-empty").await;
+    let turn = fixture.turn_request(0);
+    fixture.post_turn(&turn).await;
+    let view = fixture.finished().await;
+    assert_eq!(view.request_error, None, "{:?}", view.messages);
+    let task = view
+        .task
+        .as_ref()
+        .expect("continuation saved the requested draft");
+    assert_eq!(task.status, ManagedTaskStatus::Draft);
+    assert!(task.active.is_none());
+    assert!(task.runs.is_empty());
+    assert_eq!(
+        task.candidate.as_ref().unwrap().definition.instructions,
+        "Keep this supplied reminder text."
+    );
+    assert_eq!(view.selected_task_id.as_ref(), Some(&task.id));
+    assert!(view.review.is_some());
+    assert_eq!(
+        fixture
+            .store
+            .managed_catalogue("", None, 100)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+    assert_eq!(
+        fixture.store.conversation_model_dispatch_count().unwrap(),
+        2
+    );
+    let calls = fixture.calls();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[0]["context"].get("lookup_result").is_none());
+    assert_eq!(calls[1]["context"]["lookup_result"]["successful"], true);
+    assert_eq!(calls[1]["context"]["lookup_result"]["items"], json!([]));
+    assert_eq!(
+        calls[1]["context"]["messages"],
+        calls[0]["context"]["messages"]
+    );
+    assert!(
+        calls[0]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("You help define")
+    );
+    assert!(calls[0]["context"].get("instruction").is_none());
+    fixture.replay_is_free(&turn, &view).await;
+}
+
+#[tokio::test]
+async fn model_http_nonempty_lookup_stops_at_candidates_until_operator_selects() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let mut fixture = ModelApplication::new("fixture-matches").await;
+    let mut before = Vec::new();
+    for index in 0..2 {
+        let receipt = fixture
+            .store
+            .managed_create(
+                &format!("seed-{index}"),
+                &ManagedTaskDefinition::local_note(
+                    format!("Adapter needle {index}"),
+                    "Original reminder",
+                ),
+                100,
+            )
+            .unwrap();
+        before.push(fixture.store.managed_detail(&receipt.task_id).unwrap());
+    }
+    let turn = fixture.turn_request(0);
+    fixture.post_turn(&turn).await;
+    let view = fixture.finished().await;
+    assert!(view.request_error.is_none());
+    assert_eq!(view.candidates.len(), 2);
+    assert!(view.selected_task_id.is_none());
+    assert!(view.task.is_none());
+    assert!(view.review.is_none());
+    assert_eq!(fixture.calls().len(), 1);
+    assert_eq!(
+        fixture.store.conversation_model_dispatch_count().unwrap(),
+        1
+    );
+    for original in &before {
+        assert_eq!(
+            fixture.store.managed_detail(&original.id).unwrap(),
+            *original
+        );
+    }
+    fixture.replay_is_free(&turn, &view).await;
+    let selection = ConversationSelectRequest {
+        command_id: "choose-match".into(),
+        conversation_id: turn.conversation_id.clone(),
+        expected_revision: view.revision,
+        task_id: before[1].id.clone(),
+    };
+    let selected: ConversationView = decoded(
+        request(
+            &fixture.app,
+            Method::POST,
+            "/conversations/select",
+            Some(&fixture.token),
+            Some(serde_json::to_value(selection).unwrap()),
+        )
+        .await,
+    );
+    assert_eq!(selected.task.as_ref(), Some(&before[1]));
+    assert_eq!(fixture.calls().len(), 1);
+    assert_eq!(
+        fixture
+            .store
+            .managed_catalogue("", None, 100)
+            .unwrap()
+            .items
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn model_http_failed_or_malformed_peer_preserves_selected_draft_and_replay() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    for scenario in [
+        "fixture-fail",
+        "fixture-malformed",
+        "fixture-invalid-json",
+        "fixture-read-fail",
+    ] {
+        let mut fixture = ModelApplication::new(scenario).await;
+        let receipt = fixture
+            .store
+            .managed_create(
+                "seed",
+                &ManagedTaskDefinition::local_note("Existing draft", "Preserve this exact text"),
+                100,
+            )
+            .unwrap();
+        let original = fixture.store.managed_detail(&receipt.task_id).unwrap();
+        let selected: ConversationView = decoded(
+            request(
+                &fixture.app,
+                Method::POST,
+                "/conversations/select",
+                Some(&fixture.token),
+                Some(
+                    json!({"command_id":"select-existing","conversation_id":"model-conversation",
+                        "expected_revision":0,"task_id":receipt.task_id}),
+                ),
+            )
+            .await,
+        );
+        let turn = fixture.turn_request(selected.revision);
+        fixture.post_turn(&turn).await;
+        let view = fixture.finished().await;
+        assert!(view.request_error.is_some(), "{scenario}");
+        assert_eq!(view.task.as_ref(), Some(&original), "{scenario}");
+        assert_eq!(
+            fixture.store.managed_detail(&original.id).unwrap(),
+            original
+        );
+        assert_eq!(
+            fixture
+                .store
+                .managed_catalogue("", None, 100)
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
+        assert_eq!(fixture.calls().len(), 1, "{scenario}");
+        assert_eq!(
+            fixture.store.conversation_model_dispatch_count().unwrap(),
+            1
+        );
+        fixture.replay_is_free(&turn, &view).await;
+    }
+}
+
+#[tokio::test]
+async fn model_http_repeated_lookup_exhausts_two_calls_without_creating_a_task() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let fixture = ModelApplication::new("fixture-repeat").await;
+    let turn = fixture.turn_request(0);
+    fixture.post_turn(&turn).await;
+    let view = fixture.finished().await;
+    assert!(
+        view.request_error
+            .as_deref()
+            .unwrap()
+            .contains("continuation exhausted"),
+        "{:?}",
+        view.request_error
+    );
+    assert!(view.task.is_none());
+    assert!(view.review.is_none());
+    assert!(
+        fixture
+            .store
+            .managed_catalogue("", None, 100)
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert_eq!(fixture.calls().len(), 2);
+    assert_eq!(
+        fixture.store.conversation_model_dispatch_count().unwrap(),
+        2
+    );
+    fixture.replay_is_free(&turn, &view).await;
+}
