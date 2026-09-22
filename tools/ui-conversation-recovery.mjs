@@ -37,7 +37,7 @@ try{
  await page.screenshot({path:join(evidence,'before-history.png')});
  await page.mouse.click(105,137);await page.waitForTimeout(250);
  let release,heldResolve;const held=new Promise(ok=>heldResolve=ok);let intercepted=false;
- await page.context().route('**/conversations/'+a,async route=>{if(intercepted)return route.continue();intercepted=true;await new Promise(ok=>{release=ok;heldResolve();});await route.continue();});
+ await page.context().route(url=>decodeURIComponent(url.pathname)==='/conversations/'+a,async route=>{if(intercepted)return route.continue();intercepted=true;await new Promise(ok=>{release=ok;heldResolve();});await route.continue();});
  await click('bokkie.conversation.history.'+a);await Promise.race([held,new Promise((_,fail)=>setTimeout(()=>fail(Error('Old conversation read was not intercepted')),5000))]);
  await click('bokkie.conversation.history.'+b);await page.waitForTimeout(500);
  release();await page.waitForTimeout(500);
