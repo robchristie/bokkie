@@ -8,12 +8,12 @@ email capabilities remain drafts with activation blocked.
 ## Current evidence
 
 - [Backend check](backend-checkpoint.json): `tools/check.sh` passed on the recorded
-  candidate: 182 Python tests, 306 Rust library tests (two intentional ignored
-  tests), 14 existing adapter tests, seven conversation adapter tests, fixture
+  candidate: 182 Python tests, 307 Rust library tests (two intentional ignored
+  tests), 14 existing adapter tests, eight conversation adapter tests, fixture
   checks, governance, Clippy and formatting. Source and log digests are retained.
-- [UI check](ui-checkpoint.json): `tools/check-ui.sh` passed 75 tests, Clippy,
-  native/Wasm builds and formatting. The UI sources and browser artefacts are
-  unchanged by the subsequent runtime/catalogue repairs; their evidence is reused.
+- [UI check](ui-checkpoint.json): `tools/check-ui.sh` passed 79 tests, Clippy,
+  native/Wasm builds and formatting. The UI sources and browser artefacts were
+  rebuilt and rechecked after the conversation-read recovery repair.
 - [Tool calibration](tools-calibration.json): the actual configured model passed
   the original reminder request, a paraphrase, a revision preserving executable
   behaviour, ambiguous catalogue selection and non-executing research exploration.
@@ -30,7 +30,7 @@ email capabilities remain drafts with activation blocked.
   durable result. The [offline browser journey](offline-ui-checkpoint.json) remains
   useful deterministic evidence, explicitly labelled as a fake model peer.
 
-The real journey used the same compiled browser assets throughout. Desktop and
+The real-model campaign used the same compiled browser assets throughout. Desktop and
 narrow review cards, the completed local result and the unavailable capability
 screen were opened and inspected. The repaired suffix consumed the original
 active task/result, verified its identity and count, and required unchanged
@@ -73,3 +73,19 @@ qualification or silently replaced by fake peers.
 No live operator database, account settings, credentials, deployment, service
 installation, external notification or research/email integration was involved.
 Private profiles, account paths and raw fixture databases are not committed.
+
+## Independent-review recovery checks
+
+Independent review blocked head `5ff392cbf8337a743875adf7f0f1480a001ccfa5`
+on two recovery defects. [Repair evidence](review-recovery.json) records their
+correction: conversation reads now carry identity and generation, and exhausted
+notes have an explicit fenced retry through Needs attention. The original binding
+and result identity survive recovery, including paused/newer task definitions.
+
+The rebuilt browser passed the full deterministic journey and a focused physical
+history-switch probe against the retained real-conversation fixture: hold A's GET,
+open B, deliver A late, then return to A. Task identities/results were unchanged and
+no model call occurred. Deterministic tests also cover A → B → A with stale success,
+connection failure and session-error responses. The runtime/model contract is
+unchanged, so the finite live interpretation evidence is reused alongside these
+affected-path checks. Both canonical check scripts passed again after the repairs.

@@ -1,0 +1,32 @@
+{
+  "source": "a591eafbe10331e80e80ca3718575f12f0595724",
+  "mode": "zero-model-read-recovery",
+  "prefix_sha256": "cbb12a8c97864904fa9c3866e0048ea28d99fdca63b351773e7de8f2e04bbd33",
+  "checks": [
+    "Retained real conversations available after restart",
+    "Opening B while A is outstanding leaves the conversation usable",
+    "Returning to A remains usable",
+    "Reading and switching histories makes no model calls",
+    "History navigation preserves all tasks and results"
+  ],
+  "passed": true,
+  "target/debug/bokkie-conversation-fixture": "d9ced7f6edf20ffef2d44bee5eb77da3b2cd8c140e48a1797993bf2de67e837c",
+  "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "b1a5e7bebcabbdbaeb6282dc2bbfacdeb024dc70e0aec336f8013b4388954e7c",
+  "model_calls": 0,
+  "raw_report_sha256": "4e1080ba2d1c2c7917d9e4b0ef6ac1893d47220658e081bb460b7614b914fd5c",
+  "opened_capture_sha256": "a3256b17a6fac7d711c9fb545b6547d2b9c2501f68fa1a15f53e3eb276d2d5f9",
+  "snapshot_sha256": "5e72e4b605d19b3d62a92f6b99bbfe8d43bbbe16bb45b1911421966a57dde6c1",
+  "rejected_head": "5ff392cbf8337a743875adf7f0f1480a001ccfa5",
+  "repairs": [
+    "Conversation reads carry identity and monotonically increasing generation; stale success/failure cannot own a later read, including A-B-A.",
+    "Managed local-note Attention can be retried only through the existing revision-fenced operator action. Original binding, paused configuration and newer active revision survive."
+  ],
+  "tests": [
+    "Delayed A success/network/session failure after B selection",
+    "A-B-A old A reply before fresh A response",
+    "Task-context switch preserves new selected target",
+    "HTTP retry requires token and exact occurrence revision; unfenced and stale retry rejected",
+    "Exhaustion, restart, paused/newer definition, original occurrence and single result"
+  ],
+  "probe_adjustments": "Offline browser interception was corrected for encoded identities; assertions use the visible selected-task identity and serialise snapshot integers explicitly. No additional model calls were made."
+}

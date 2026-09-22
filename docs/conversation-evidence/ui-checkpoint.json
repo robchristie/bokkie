@@ -1,29 +1,30 @@
 {
-  "checked_at": "2026-09-22T11:15:10.002022+00:00",
-  "sources_unchanged": true,
+  "checked_at": "2026-09-22T12:46:54.931998+00:00",
   "sources": {
     "Cargo.lock": "cbdcd8002c59ee1401afeb6c26e3379ba3fe45bf3b1a2ea93a9f0d6fa788ceb2",
     "apps/bokkie-attention-ui/Cargo.toml": "ad7eb195040bae0b40353c8c914fec8cf6e2255b79d63bdc0120f2addad3c771",
-    "apps/bokkie-attention-ui/src/app.rs": "dd52067f0e2b26b6203c3c8bbcfa4c78b4be97f80d8c5c742ec4afed0fd810d3",
+    "apps/bokkie-attention-ui/src/app.rs": "0c48ecea4060229eff04bce68c75cbacd474e1ac1e5d299b6a9fc6fca529a529",
     "apps/bokkie-attention-ui/src/appearance.rs": "f698e6189ed5cb412e2c25604574008908c1e2f22b83f42be97812af3a44e485",
-    "apps/bokkie-attention-ui/src/conversation_ui.rs": "fb3a630c0b95b874ade72dac1af5f4e6f32b8b5178a85115c2aa0bde649cfdbd",
+    "apps/bokkie-attention-ui/src/conversation_ui.rs": "dc8b5022854faf81e687913a8ca07ccd35f1101bbe1ecad36ea0f34e34ecd850",
     "apps/bokkie-attention-ui/src/lib.rs": "0403df55ef82950b17e4c1863572497da232fa2cd918b6f25314561b32fa84d8",
     "apps/bokkie-attention-ui/src/main.rs": "4d85cc9aac3502edf5a04784180b0052390eadc4f45750c615b15023d93ed687",
     "apps/bokkie-attention-ui/src/model.rs": "8ad9b3fa2dfb2f678a8fdcddfbfe2a82f7846eb71c3c4988ceefde91a197a559",
     "apps/bokkie-attention-ui/src/task_ui.rs": "50b53c1e4637705d25eabd61dce57b4b361d1a8e55cae5fd759af4633ae34b5b",
-    "apps/bokkie-attention-ui/src/transport.rs": "5ef1480a6bf2284aae372a0aac732d40903cfc8a73085027e9b31a8619e5174f",
+    "apps/bokkie-attention-ui/src/transport.rs": "bfb69bfd2f088aba28ad45bba6494d1503243887df32ccadb86036f2c80f3956",
     "apps/bokkie-attention-ui/src/ui_observation.rs": "1dbe377c9080be57b033d7bb56fc16382aa385822aa303f90b753fa892a96a1a",
     "crates/bokkie-operator-api/src/conversation.rs": "3f915cee13adc08601f24ed7a95220248e5c8e02d3021d26c719e1a58d736b4e",
     "crates/bokkie-operator-api/src/lib.rs": "ee25e2b061a817cff53f618a8a5fd48cf2646760ea9f4b7de8813cc5c454392e",
     "crates/bokkie-operator-api/src/managed.rs": "20708660d974af5a6de5a2945976678430111e0f49ee84ffc67dfb0d9aa00ca9"
   },
   "artifacts": {
-    "target/wasm32-unknown-unknown/debug/bokkie_attention_ui.wasm": "af900e243bf09d5882e5d800c78f4189c6d75abb1bd64fefd4c71de498021423",
-    "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "b159e583b4c4768a1b20ab4362b96845637ad968cc0811b0fa47e29c9e51b157",
+    "target/wasm32-unknown-unknown/debug/bokkie_attention_ui.wasm": "e29503b1cb2cebaaae001839cb6dc7f0d0d34ef0fde219d82a5e095fc5030eb5",
+    "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "b1a5e7bebcabbdbaeb6282dc2bbfacdeb024dc70e0aec336f8013b4388954e7c",
     "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui.js": "81150457972d9ea5b7d41125da3cfb39b1f5fffabaf1747df5eaa655af0c770c"
   },
   "command": "tools/check-ui.sh",
-  "tests": 75,
+  "tests": 79,
   "result": "passed",
-  "check_log_sha256": "4e0a6029bc386f1168fbce9eb9a517ad2445cdac9dd285147c8c433e235f9ac8"
+  "check_log_sha256": "bd25b09aa63a27c8264fdf0668c321fe116b100dfc3b439be673abb839a815be",
+  "source_revision": "3a34e1c4e9bdeeacddc99f140f9f8c48732aa160",
+  "attribution": "Check ran on the repair working tree subsequently committed at the identified revision; retained source and generated artefact hashes identify the checked build."
 }

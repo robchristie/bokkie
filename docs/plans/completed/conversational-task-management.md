@@ -92,6 +92,11 @@ Prior failed attempts remain historical evidence, never substituted with fake pe
 | --- | --- | --- |
 | Managed Store and note adapter | verified | lifecycle, race, restart, real scheduler tests |
 | Conversation runtime | qualified | direct-only Bokkie namespace; Codex 0.155.1 preflight and real calls |
-| Conversation and UI | integrated | 75 UI checks; 12 legacy browser journeys; native result |
+| Conversation and UI | integrated | 79 UI checks; 12 legacy browser journeys; native result |
 | Integrated qualification | passed | 19 calls total; real browser journey and focused discovery repair |
 | Delivery observations | PR-owned | exact-head review, CI, merge and cleanup recorded on PR #37 |
+
+Independent review identified read-ownership and exhausted-note recovery gaps.
+Both now have focused regression coverage and repeated canonical checks; the
+[recovery record](../../conversation-evidence/review-recovery.json) retains the
+rebuilt-browser proof without additional model calls.
