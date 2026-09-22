@@ -14,7 +14,7 @@ const profile = process.env.BOKKIE_CONVERSATION_PROFILE;
 if (!preflight && !profile) throw Error('Live qualification requires an explicit private BOKKIE_CONVERSATION_PROFILE');
 const fixtureRoot = process.env.BOKKIE_CONVERSATION_RESUME_ROOT ?? join('/tmp', `bokkie-conversation-journey-${randomUUID()}`);
 const endpoint = process.env.BOKKIE_UI_LANTERN_ENDPOINT ?? 'http://127.0.0.1:9336';
-const report = {mode:preflight?'no-model-preflight':fakeModel?'fake-model-ui-regression':'live-model',source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),budget:{calls:12,seconds:900,repair_calls:4,repair_seconds:300},calls:0,prior_attempt_calls:Number(process.env.BOKKIE_CONVERSATION_PRIOR_CALLS??0),checks:[],errors:[],captures:[]};
+const report = {mode:preflight?'no-model-preflight':fakeModel?'fake-model-ui-regression':'live-model',source:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),started_at:new Date().toISOString(),budget:{calls:12,seconds:900,repair_calls:0,repair_seconds:0},calls:0,prior_attempt_calls:Number(process.env.BOKKIE_CONVERSATION_PRIOR_CALLS??0),checks:[],errors:[],captures:[]};
 for(const file of ['target/debug/bokkie-conversation-fixture','apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm','tools/conversation-runtime/broker.py']) report[file]=createHash('sha256').update(await readFile(file)).digest('hex');
 let fixture,browser,page,origin,queue=[],pending=[],buffer='';
 async function line(){if(queue.length)return queue.shift();return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('fixture reply timed out')),20000);pending.push(v=>{clearTimeout(timer);resolve(v);});});}
@@ -94,4 +94,4 @@ try{
  }
  report.passed=true;
 }catch(e){report.passed=false;report.errors.push(String(e.stack??e));if(page)await page.screenshot({path:join(evidence,'failure.png')}).catch(()=>{});throw e;
-}finally{clearTimeout(deadline);if(fixture?.exitCode==null){try{report.calls=(await control()).model_calls-initialDispatches;}catch{}}if(browser)await browser.close();await stop();await writeFile(join(evidence,'qualification.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({passed:report.passed,calls:report.calls,evidence,errors:report.errors}));}
+}finally{report.finished_at=new Date().toISOString();clearTimeout(deadline);if(fixture?.exitCode==null){try{report.calls=(await control()).model_calls-initialDispatches;}catch{}}if(browser)await browser.close();await stop();await writeFile(join(evidence,'qualification.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({passed:report.passed,calls:report.calls,evidence,errors:report.errors}));}

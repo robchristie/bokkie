@@ -5,7 +5,7 @@
 - Reorientation budget: 180
 - Baseline: `277ab5587ed2cf6c215cf838c2f58f9c534688b4`
 - Landed pull requests: none
-- Next action: finish deterministic UI qualification; await the requested extension before any further live model qualification.
+- Next action: run the explicitly authorised final live qualification, then independent review and landing if it passes.
 
 ## Outcome and scope
 
@@ -27,8 +27,9 @@ and existing browser/native journeys pass. Live qualification exposed proposal
 routing and empty-search continuation defects, now repaired with focused tests.
 Three model dispatches were attempted conservatively, including one interrupted
 by a harness response-identity bug. No accepted full live journey exists yet.
-The original single repair-rerun boundary has been reached; a further bounded
-run requires the requested user extension. Deterministic qualification continues.
+On 22 September 2026 the user explicitly authorised one additional live attempt,
+capped at 12 model calls and 15 minutes, with no further live retries. The previous
+authority hold is discharged for that exact run.
 The conductor owns integration, qualification and landing; independent review
 will judge the eventual exact candidate.
 
@@ -88,3 +89,6 @@ Model settings remain in runtime profiles; no global configuration mutation.
 | Conversation and UI | integrated | 75 UI checks; 12 legacy browser journeys; native result |
 | Integrated qualification | partial | canonical checks pass; live journey remains unproved |
 | Review and landing | pending | owning PR exact-head review and CI |
+
+The additional 12-call / 15-minute run was explicitly authorised by the user on
+22 September 2026. It does not authorise another repair rerun.

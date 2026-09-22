@@ -52,8 +52,9 @@ checks. They have **not** yet passed a subsequent real-model journey.
 
 The original budget was one representative journey (12 calls / 15 minutes), with
 at most one focused repair rerun (four calls / five minutes). The repair-rerun
-boundary has been reached. A further capped attempt requires the explicit user
-extension already requested; no further live calls have been made. This is the
+boundary has been reached. The user explicitly authorised one further attempt on 22 September 2026, capped
+at 12 calls / 15 minutes with no further live retries. That authority is carried
+through qualification and landing; no second approval is needed for that run. This is the
 remaining product acceptance gap, not an unavailable account or a permission
 requirement for ordinary source work. Independent landing review and delivery
 remain open until the integrated candidate is qualified.
