@@ -113,10 +113,13 @@ def persistence(stage):
         doctor = run(['bokkie', '--database', database, 'doctor'])
         if shown.returncode or doctor.returncode:
             raise RuntimeError(shown.stderr + doctor.stderr)
+        health = json.loads(doctor.stdout)
+        if not health['summary']['healthy'] or health['summary']['failed'] != 0:
+            raise RuntimeError('persisted database failed doctor: ' + doctor.stdout)
         if values[-1] != expected['fixture'] or json.loads(shown.stdout) != expected['obligation']:
             raise RuntimeError('persisted domain identity or state changed')
         emit({'result': 'passed', 'fixture': values[-1], 'obligation': json.loads(shown.stdout),
-              'doctor': json.loads(doctor.stdout), 'model_calls': 0})
+              'doctor': health, 'model_calls': 0})
     else:
         raise ValueError('invalid persistence stage')
     return 0

@@ -3,6 +3,7 @@
 - Status: active
 - Reorientation budget: 100
 - Landed pull requests: none
+- Next Action: Finish kernel persistence and retain the default-policy result.
 
 ## Outcome and scope
 
@@ -38,7 +39,3 @@ The boundary makes the root read-only; it does not hide the database from reads.
 Evidence owner: `docs/container-evidence/`; full private logs stay with the
 operator's experiment directory. The reusable probe is `tools/container-probe/`.
 No existing successful container evidence covers this host/runtime combination.
-
-## Next action
-
-Build the runtime probe image and run the default-policy boundary checkpoint.

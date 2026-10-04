@@ -17,7 +17,11 @@ ENTRYPOINT ["python3", "/opt/probe.py"]
 
 FROM rust:1.85.0-bookworm@sha256:16a7f242108de02f10fe4a392991679bafa7694e59f5b40a54d5af1be9b40d03 AS builder
 WORKDIR /source
-COPY . .
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY src/ src/
+COPY migrations/ migrations/
+COPY crates/ crates/
+COPY apps/ apps/
 RUN cargo build --locked --release --bin bokkie --bin bokkie-conversation-fixture
 
 FROM runtime AS kernel

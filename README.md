@@ -72,6 +72,11 @@ The supplied systemd unit is an example artefact only. Installing or enabling
 it is deliberately outside repository verification and requires an explicit
 operator decision.
 
+The [disposable container probe](tools/container-probe/README.md) tests packaging
+and synthetic state persistence without deploying a service. Its
+[observed results](docs/container-evidence/README.md) describe the limits of the
+tested configuration; the probe is not a production Compose stack.
+
 ## Command and service adapters
 
 The `bokkie` executable provides JSON-producing `create`, `list`, `show`,
