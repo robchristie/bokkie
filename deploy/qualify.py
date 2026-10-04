@@ -12,7 +12,7 @@ assert (root/'.synthetic-bokkie-deployment').read_text() == 'Synthetic deploymen
 cfg=json.loads((root/'release.json').read_text()); host=cfg['hostname']
 assert cfg['name']=='bokkie-calibration' and cfg['codex_auth'] is None
 assert cfg['conversation_profile'] is None
-inspect=json.loads(subprocess.check_output(['docker','inspect',cfg['name']+'-runtime']))[0]
+inspect=json.loads(subprocess.check_output(['docker','--host','unix:///var/run/docker.sock','inspect',cfg['name']+'-runtime']))[0]
 ip=inspect['NetworkSettings']['Networks']['proxy']['IPAddress']
 auth='Basic '+base64.b64encode(b'calibration:bokkie-synthetic-only').decode()
 class TLS(http.client.HTTPSConnection):
@@ -35,7 +35,7 @@ for mode in ('tls','direct'):
     check(mode+' wrong host',404 if mode=='tls' else 421,path='/bootstrap',mode=mode,extra={'Host':'wrong.yutani.tech'})
     check(mode+' wrong origin',403,path='/bootstrap',mode=mode,extra={'Origin':'https://wrong.yutani.tech','X-Forwarded-Host':host,'X-Forwarded-Proto':'https'})
     check(mode+' UI',200,path='/ui/',mode=mode)
-    check(mode+' root UI',200,path='/',mode=mode)
+    check(mode+' root UI redirect',307,path='/',mode=mode)
 try:
     socket.create_connection((ip,7744),timeout=2)
     raise AssertionError('backend reachable via bridge')

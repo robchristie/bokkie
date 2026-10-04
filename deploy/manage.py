@@ -176,7 +176,6 @@ http {{
     auth_basic "Bokkie";
     auth_basic_user_file /run/bokkie-web-auth;
     client_max_body_size 128k;
-    location = / {{ rewrite ^ /ui/ last; }}
     location / {{
       proxy_pass http://127.0.0.1:7744;
       proxy_set_header Host $http_host;

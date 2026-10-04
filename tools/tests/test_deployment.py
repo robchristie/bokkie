@@ -190,11 +190,10 @@ class DeploymentTests(unittest.TestCase):
     def test_ingress_authentication_applies_to_every_proxied_path(self):
         MODULE.render(self.config, self.root)
         nginx = (self.root / 'nginx.conf').read_text()
-        # The root only rewrites internally into the authenticated catch-all;
+        # Every route, including the backend-owned root redirect, uses the catch-all;
         # no asset or API route may opt out or reach a separate upstream.
         locations = re.findall(r'\blocation\s+([^{}]+)\{([^{}]*)\}', nginx)
-        self.assertEqual([selector.strip() for selector, _ in locations], ['= /', '/'])
-        self.assertEqual(' '.join(locations[0][1].split()), 'rewrite ^ /ui/ last;')
+        self.assertEqual([selector.strip() for selector, _ in locations], ['/'])
         self.assertEqual(len(re.findall(r'\bserver\s*\{', nginx)), 1)
         self.assertRegex(nginx, r'auth_basic\s+"Bokkie";')
         self.assertIn('auth_basic_user_file /run/bokkie-web-auth;', nginx)
