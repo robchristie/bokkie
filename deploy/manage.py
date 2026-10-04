@@ -157,7 +157,8 @@ def edge(config, root):
 
 def render(config, root):
     hostname = config['hostname']
-    (root / 'nginx.conf').write_text(f'''master_process off;
+    (root / 'nginx.conf').write_text(f'''user root root;
+master_process off;
 pid /tmp/nginx.pid;
 error_log /dev/stderr warn;
 events {{ worker_connections 128; }}
@@ -165,6 +166,9 @@ http {{
   access_log off;
   client_body_temp_path /tmp/client;
   proxy_temp_path /tmp/proxy;
+  fastcgi_temp_path /tmp/fastcgi;
+  uwsgi_temp_path /tmp/uwsgi;
+  scgi_temp_path /tmp/scgi;
   server {{
     listen 8080 default_server;
     server_name {hostname};

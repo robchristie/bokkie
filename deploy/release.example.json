@@ -1,0 +1,13 @@
+{
+  "name": "bokkie",
+  "source": "REPLACE_WITH_FULL_MERGED_COMMIT_SHA",
+  "image": "REPLACE_WITH_IMMUTABLE_LOCAL_IMAGE_ID",
+  "edge_image": "REPLACE_WITH_IMMUTABLE_NGINX_IMAGE_ID",
+  "hostname": "bokkie.yutani.tech",
+  "uid": 10001,
+  "gid": 10001,
+  "data": "/srv/data/bokkie",
+  "web_auth": "/srv/secrets/core/traefik_dashboard_htpasswd.txt",
+  "codex_auth": null,
+  "conversation_profile": null
+}

@@ -209,6 +209,12 @@ impl Transport {
         };
         http.timeout = Some(Duration::from_secs(5));
         http.headers.insert("Accept", "application/json");
+        // The browser authenticates to the same-origin deployment proxy. ehttp
+        // otherwise omits even cached Basic credentials and session cookies.
+        #[cfg(target_arch = "wasm32")]
+        {
+            http.credentials = ehttp::Credentials::SameOrigin;
+        }
         let expected_session = session.cloned();
         ehttp::fetch(http, move |response| {
             let result = response
