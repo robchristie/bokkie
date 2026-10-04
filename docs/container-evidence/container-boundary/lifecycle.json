@@ -1,0 +1,137 @@
+{
+  "exit": 0,
+  "result": {
+    "cases": [
+      {
+        "all_reaped": true,
+        "identities": [
+          {
+            "pid": 45,
+            "start": "55673010",
+            "state": "S"
+          },
+          {
+            "pid": 46,
+            "start": "55673011",
+            "state": "S"
+          },
+          {
+            "pid": 47,
+            "start": "55673011",
+            "state": "S"
+          },
+          {
+            "pid": 48,
+            "start": "55673012",
+            "state": "S"
+          },
+          {
+            "pid": 49,
+            "start": "55673017",
+            "state": "R"
+          }
+        ],
+        "mode": "normal"
+      },
+      {
+        "all_reaped": true,
+        "identities": [
+          {
+            "pid": 50,
+            "start": "55673022",
+            "state": "S"
+          },
+          {
+            "pid": 51,
+            "start": "55673024",
+            "state": "S"
+          },
+          {
+            "pid": 52,
+            "start": "55673024",
+            "state": "S"
+          },
+          {
+            "pid": 53,
+            "start": "55673024",
+            "state": "S"
+          },
+          {
+            "pid": 54,
+            "start": "55673030",
+            "state": "R"
+          }
+        ],
+        "mode": "cancel"
+      },
+      {
+        "all_reaped": true,
+        "identities": [
+          {
+            "pid": 55,
+            "start": "55673036",
+            "state": "S"
+          },
+          {
+            "pid": 56,
+            "start": "55673043",
+            "state": "S"
+          },
+          {
+            "pid": 57,
+            "start": "55673045",
+            "state": "S"
+          },
+          {
+            "pid": 58,
+            "start": "55673045",
+            "state": "S"
+          },
+          {
+            "pid": 59,
+            "start": "55673045",
+            "state": "S"
+          },
+          {
+            "pid": 60,
+            "start": "55673051",
+            "state": "R"
+          }
+        ],
+        "mode": "parent-death"
+      },
+      {
+        "all_reaped": true,
+        "constructor_barrier": "post-mount and UID remap, before do_init",
+        "identities": [
+          {
+            "pid": 61,
+            "start": "55673053",
+            "state": "S"
+          },
+          {
+            "pid": 62,
+            "start": "55673059",
+            "state": "S"
+          },
+          {
+            "pid": 63,
+            "start": "55673061",
+            "state": "S"
+          },
+          {
+            "pid": 64,
+            "start": "55673067",
+            "state": "S"
+          }
+        ],
+        "mode": "startup-death",
+        "reaped_before_barrier_release": true
+      }
+    ],
+    "container_alive_during_checks": true,
+    "model_calls": 0,
+    "result": "passed"
+  },
+  "stderr": ""
+}

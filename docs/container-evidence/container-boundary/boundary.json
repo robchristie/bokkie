@@ -1,0 +1,470 @@
+{
+  "exit": 0,
+  "result": {
+    "bad_filter_rejected": "bwrap: bwrap: Unable to set up system call filtering as requested: prctl(PR_SET_SECCOMP) reported EINVAL. (Hint: this requires a kernel configured with CONFIG_SECCOMP and CONFIG_SECCOMP_FILTER.)\nUnable to set up system call filtering as requested: prctl(PR_SET_SECCOMP) reported EINVAL. (Hint: this requires a kernel configured with CONFIG_SECCOMP and CONFIG_SECCOMP_FILTER.)",
+    "credentials": false,
+    "inner": {
+      "context": {
+        "apparmor": "bokkie-boundary-a73c9e42 (enforce)",
+        "gid_map": "     10001          0          1\n",
+        "mounts": [
+          "3148 2248 0:159 / / ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109724/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109721/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109720/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109703/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109702/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109439/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1565/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1564/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1563/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1562/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1561/fs,upperdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109725/fs,workdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109725/work",
+          "3161 3148 0:230 / /proc ro,nosuid,nodev,noexec,relatime - proc proc rw",
+          "3162 3148 0:231 / /dev ro,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3163 3162 0:232 / /dev/pts ro,nosuid,nodev,noexec,relatime - devpts devpts rw,gid=5,mode=620,ptmxmode=666",
+          "3175 3162 0:204 / /dev/mqueue ro,nosuid,nodev,noexec,relatime - mqueue mqueue rw",
+          "3191 3162 0:234 / /dev/shm ro,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=65536k,inode64",
+          "3206 3148 0:233 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro",
+          "3217 3206 0:27 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw,nsdelegate,memory_recursiveprot",
+          "3228 3206 0:240 / /sys/devices/virtual/powercap ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3229 3206 0:240 / /sys/firmware ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3230 3206 0:240 / /sys/devices/system/cpu/cpu0/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3233 3206 0:240 / /sys/devices/system/cpu/cpu1/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3234 3206 0:240 / /sys/devices/system/cpu/cpu2/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3235 3206 0:240 / /sys/devices/system/cpu/cpu3/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3263 3206 0:240 / /sys/devices/system/cpu/cpu4/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3310 3206 0:240 / /sys/devices/system/cpu/cpu5/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3368 3206 0:240 / /sys/devices/system/cpu/cpu6/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3384 3206 0:240 / /sys/devices/system/cpu/cpu7/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3385 3206 0:240 / /sys/devices/system/cpu/cpu8/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3387 3206 0:240 / /sys/devices/system/cpu/cpu9/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3396 3206 0:240 / /sys/devices/system/cpu/cpu10/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3397 3206 0:240 / /sys/devices/system/cpu/cpu11/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3398 3148 8:2 /usr/libexec/docker/docker-init /usr/sbin/docker-init ro,nosuid,nodev,relatime master:1 - ext4 /dev/sda2 rw,errors=remount-ro",
+          "3513 3148 8:2 /var/lib/docker/volumes/bokkie-boundary-72f2f5a7aa4b4c2695f2accee0d24454/_data /data ro,nosuid,nodev,relatime master:1 - ext4 /dev/sda2 rw,errors=remount-ro",
+          "3517 3148 0:237 / /tmp ro,nosuid,nodev,noexec,relatime - tmpfs tmpfs rw,size=131072k,inode64",
+          "3521 3148 8:2 /var/lib/docker/containers/5c2bb413ba2552d3373e83687568048ea21e02f9c61a087bc8f0f7794b227c81/hostname /etc/hostname ro,nosuid,nodev,relatime - ext4 /dev/sda2 rw,errors=remount-ro",
+          "3522 3148 8:2 /var/lib/docker/containers/5c2bb413ba2552d3373e83687568048ea21e02f9c61a087bc8f0f7794b227c81/hosts /etc/hosts ro,nosuid,nodev,relatime - ext4 /dev/sda2 rw,errors=remount-ro",
+          "3523 3148 8:2 /var/lib/docker/containers/5c2bb413ba2552d3373e83687568048ea21e02f9c61a087bc8f0f7794b227c81/resolv.conf /etc/resolv.conf ro,nosuid,nodev,relatime - ext4 /dev/sda2 rw,errors=remount-ro",
+          "3589 3148 0:238 / /home/probe/.codex ro,nosuid,nodev,noexec,relatime - tmpfs tmpfs rw,size=16384k,mode=700,uid=10001,gid=10001,inode64",
+          "3603 3162 0:263 / /dev rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=10001,gid=10001,inode64",
+          "3604 3603 0:231 /null /dev/null rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3605 3603 0:231 /zero /dev/zero rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3608 3603 0:231 /full /dev/full rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3610 3603 0:231 /random /dev/random rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3612 3603 0:231 /urandom /dev/urandom rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3620 3603 0:231 /tty /dev/tty rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3629 3603 0:264 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,mode=620,ptmxmode=666",
+          "3639 3161 0:267 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw",
+          "3640 3517 0:274 / /tmp rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=10001,gid=10001,inode64",
+          "3647 3589 0:283 / /home/probe/.codex rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=10001,gid=10001,inode64"
+        ],
+        "namespaces": {
+          "mnt": "mnt:[4026537193]",
+          "pid": "pid:[4026537195]",
+          "user": "user:[4026537196]"
+        },
+        "status": {
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1",
+          "Seccomp": "2",
+          "Seccomp_filters": "2"
+        },
+        "uid_map": "     10001          0          1\n"
+      },
+      "fork_exec_inheritance": {
+        "chroot": {
+          "errno": 1,
+          "result": -1
+        },
+        "clone": {
+          "errno": 1,
+          "result": -1
+        },
+        "clone3": {
+          "errno": 38,
+          "result": -1
+        },
+        "fsconfig": {
+          "errno": 1,
+          "result": -1
+        },
+        "fsmount": {
+          "errno": 1,
+          "result": -1
+        },
+        "fsopen": {
+          "errno": 1,
+          "result": -1
+        },
+        "fspick": {
+          "errno": 1,
+          "result": -1
+        },
+        "mount": {
+          "errno": 1,
+          "result": -1
+        },
+        "mount_setattr": {
+          "errno": 1,
+          "result": -1
+        },
+        "move_mount": {
+          "errno": 1,
+          "result": -1
+        },
+        "open_tree": {
+          "errno": 1,
+          "result": -1
+        },
+        "pidfd_getfd": {
+          "errno": 1,
+          "result": -1
+        },
+        "pivot_root": {
+          "errno": 1,
+          "result": -1
+        },
+        "process_vm_readv": {
+          "errno": 1,
+          "result": -1
+        },
+        "process_vm_writev": {
+          "errno": 1,
+          "result": -1
+        },
+        "ptrace": {
+          "errno": 1,
+          "result": -1
+        },
+        "setns": {
+          "errno": 1,
+          "result": -1
+        },
+        "umount2": {
+          "errno": 1,
+          "result": -1
+        },
+        "unshare": {
+          "errno": 1,
+          "result": -1
+        }
+      },
+      "helper_fds": {
+        "/proc/1/fd/0": {
+          "errno": 0,
+          "shared_stdio": true
+        },
+        "/proc/1/fd/1": {
+          "errno": 0,
+          "shared_stdio": true
+        },
+        "/proc/1/fd/2": {
+          "errno": 0,
+          "shared_stdio": true
+        },
+        "/proc/1/fd/5": {
+          "errno": 13,
+          "shared_stdio": false
+        },
+        "/proc/1/task/1/fd/0": {
+          "errno": 0,
+          "shared_stdio": true
+        },
+        "/proc/1/task/1/fd/1": {
+          "errno": 0,
+          "shared_stdio": true
+        },
+        "/proc/1/task/1/fd/2": {
+          "errno": 0,
+          "shared_stdio": true
+        },
+        "/proc/1/task/1/fd/5": {
+          "errno": 13,
+          "shared_stdio": false
+        }
+      },
+      "helper_memory": {
+        "/proc/1/mem": 13,
+        "/proc/1/root/proc/1/mem": 13,
+        "/proc/1/task/1/mem": 13,
+        "/proc/self/root/proc/1/task/1/mem": 13
+      },
+      "init": {
+        "apparmor": "bokkie-boundary-a73c9e42 (enforce)",
+        "gid_map": "     10001          0          1\n",
+        "mounts": [
+          "3148 2248 0:159 / / ro,nosuid,nodev,relatime - overlay overlay rw,lowerdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109724/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109721/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109720/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109703/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109702/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109439/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1565/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1564/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1563/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1562/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1561/fs,upperdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109725/fs,workdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109725/work",
+          "3161 3148 0:230 / /proc ro,nosuid,nodev,noexec,relatime - proc proc rw",
+          "3162 3148 0:231 / /dev ro,nosuid,nodev - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3163 3162 0:232 / /dev/pts ro,nosuid,nodev,noexec,relatime - devpts devpts rw,gid=5,mode=620,ptmxmode=666",
+          "3175 3162 0:204 / /dev/mqueue ro,nosuid,nodev,noexec,relatime - mqueue mqueue rw",
+          "3191 3162 0:234 / /dev/shm ro,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=65536k,inode64",
+          "3206 3148 0:233 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro",
+          "3217 3206 0:27 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw,nsdelegate,memory_recursiveprot",
+          "3228 3206 0:240 / /sys/devices/virtual/powercap ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3229 3206 0:240 / /sys/firmware ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3230 3206 0:240 / /sys/devices/system/cpu/cpu0/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3233 3206 0:240 / /sys/devices/system/cpu/cpu1/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3234 3206 0:240 / /sys/devices/system/cpu/cpu2/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3235 3206 0:240 / /sys/devices/system/cpu/cpu3/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3263 3206 0:240 / /sys/devices/system/cpu/cpu4/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3310 3206 0:240 / /sys/devices/system/cpu/cpu5/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3368 3206 0:240 / /sys/devices/system/cpu/cpu6/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3384 3206 0:240 / /sys/devices/system/cpu/cpu7/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3385 3206 0:240 / /sys/devices/system/cpu/cpu8/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3387 3206 0:240 / /sys/devices/system/cpu/cpu9/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3396 3206 0:240 / /sys/devices/system/cpu/cpu10/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3397 3206 0:240 / /sys/devices/system/cpu/cpu11/thermal_throttle ro,nosuid,nodev,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+          "3398 3148 8:2 /usr/libexec/docker/docker-init /usr/sbin/docker-init ro,nosuid,nodev,relatime master:1 - ext4 /dev/sda2 rw,errors=remount-ro",
+          "3513 3148 8:2 /var/lib/docker/volumes/bokkie-boundary-72f2f5a7aa4b4c2695f2accee0d24454/_data /data ro,nosuid,nodev,relatime master:1 - ext4 /dev/sda2 rw,errors=remount-ro",
+          "3517 3148 0:237 / /tmp ro,nosuid,nodev,noexec,relatime - tmpfs tmpfs rw,size=131072k,inode64",
+          "3521 3148 8:2 /var/lib/docker/containers/5c2bb413ba2552d3373e83687568048ea21e02f9c61a087bc8f0f7794b227c81/hostname /etc/hostname ro,nosuid,nodev,relatime - ext4 /dev/sda2 rw,errors=remount-ro",
+          "3522 3148 8:2 /var/lib/docker/containers/5c2bb413ba2552d3373e83687568048ea21e02f9c61a087bc8f0f7794b227c81/hosts /etc/hosts ro,nosuid,nodev,relatime - ext4 /dev/sda2 rw,errors=remount-ro",
+          "3523 3148 8:2 /var/lib/docker/containers/5c2bb413ba2552d3373e83687568048ea21e02f9c61a087bc8f0f7794b227c81/resolv.conf /etc/resolv.conf ro,nosuid,nodev,relatime - ext4 /dev/sda2 rw,errors=remount-ro",
+          "3589 3148 0:238 / /home/probe/.codex ro,nosuid,nodev,noexec,relatime - tmpfs tmpfs rw,size=16384k,mode=700,uid=10001,gid=10001,inode64",
+          "3603 3162 0:263 / /dev rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=10001,gid=10001,inode64",
+          "3604 3603 0:231 /null /dev/null rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3605 3603 0:231 /zero /dev/zero rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3608 3603 0:231 /full /dev/full rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3610 3603 0:231 /random /dev/random rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3612 3603 0:231 /urandom /dev/urandom rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3620 3603 0:231 /tty /dev/tty rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+          "3629 3603 0:264 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,mode=620,ptmxmode=666",
+          "3639 3161 0:267 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw",
+          "3640 3517 0:274 / /tmp rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=10001,gid=10001,inode64",
+          "3647 3589 0:283 / /home/probe/.codex rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=755,uid=10001,gid=10001,inode64"
+        ],
+        "namespaces": {
+          "mnt": "mnt:[4026537193]",
+          "pid": "pid:[4026537195]",
+          "user": "user:[4026537196]"
+        },
+        "status": {
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1",
+          "Seccomp": "2",
+          "Seccomp_filters": "2"
+        },
+        "uid_map": "     10001          0          1\n"
+      },
+      "nested_bwrap": "bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>.",
+      "payload_fds": {
+        "0": "pipe:[162866491]",
+        "1": "pipe:[162866492]",
+        "2": "pipe:[162866493]"
+      },
+      "proc": {
+        "masked_replacements": {
+          "/proc/1/root/proc/interrupts": 13,
+          "/proc/1/root/proc/kcore": 13,
+          "/proc/1/root/proc/keys": 13,
+          "/proc/1/root/proc/timer_list": 13,
+          "/proc/1/task/1/root/proc/interrupts": 13,
+          "/proc/1/task/1/root/proc/kcore": 13,
+          "/proc/1/task/1/root/proc/keys": 13,
+          "/proc/1/task/1/root/proc/timer_list": 13,
+          "/proc/interrupts": 13,
+          "/proc/kcore": 13,
+          "/proc/keys": 13,
+          "/proc/self/root/proc/interrupts": 13,
+          "/proc/self/root/proc/kcore": 13,
+          "/proc/self/root/proc/keys": 13,
+          "/proc/self/root/proc/timer_list": 13,
+          "/proc/timer_list": 13
+        },
+        "readonly_replacements": {
+          "/proc/1/root/proc/sys/kernel/shmmax": 13,
+          "/proc/1/root/proc/sys/net/ipv4/ip_forward": 13,
+          "/proc/1/root/proc/sysrq-trigger": 13,
+          "/proc/1/task/1/root/proc/sys/kernel/shmmax": 13,
+          "/proc/1/task/1/root/proc/sys/net/ipv4/ip_forward": 13,
+          "/proc/1/task/1/root/proc/sysrq-trigger": 13,
+          "/proc/self/root/proc/sys/kernel/shmmax": 13,
+          "/proc/self/root/proc/sys/net/ipv4/ip_forward": 13,
+          "/proc/self/root/proc/sysrq-trigger": 13,
+          "/proc/sys/kernel/shmmax": 13,
+          "/proc/sys/net/ipv4/ip_forward": 13,
+          "/proc/sysrq-trigger": 13
+        }
+      },
+      "processes": {
+        "1": "bwrap",
+        "2": "python3"
+      },
+      "syscalls": {
+        "chroot": {
+          "errno": 1,
+          "result": -1
+        },
+        "clone": {
+          "errno": 1,
+          "result": -1
+        },
+        "clone3": {
+          "errno": 38,
+          "result": -1
+        },
+        "fsconfig": {
+          "errno": 1,
+          "result": -1
+        },
+        "fsmount": {
+          "errno": 1,
+          "result": -1
+        },
+        "fsopen": {
+          "errno": 1,
+          "result": -1
+        },
+        "fspick": {
+          "errno": 1,
+          "result": -1
+        },
+        "mount": {
+          "errno": 1,
+          "result": -1
+        },
+        "mount_setattr": {
+          "errno": 1,
+          "result": -1
+        },
+        "move_mount": {
+          "errno": 1,
+          "result": -1
+        },
+        "open_tree": {
+          "errno": 1,
+          "result": -1
+        },
+        "pidfd_getfd": {
+          "errno": 1,
+          "result": -1
+        },
+        "pivot_root": {
+          "errno": 1,
+          "result": -1
+        },
+        "process_vm_readv": {
+          "errno": 1,
+          "result": -1
+        },
+        "process_vm_writev": {
+          "errno": 1,
+          "result": -1
+        },
+        "ptrace": {
+          "errno": 1,
+          "result": -1
+        },
+        "setns": {
+          "errno": 1,
+          "result": -1
+        },
+        "umount2": {
+          "errno": 1,
+          "result": -1
+        },
+        "unshare": {
+          "errno": 1,
+          "result": -1
+        }
+      },
+      "thread": true,
+      "writes": {
+        "/data/boundary-canary": 30,
+        "/proc/1/root/data/boundary-canary": 30,
+        "/proc/1/task/1/root/data/boundary-canary": 30,
+        "/proc/self/fd/3/boundary-canary": 30,
+        "/proc/self/root/data/boundary-canary": 30
+      }
+    },
+    "model_calls": 0,
+    "outer": {
+      "apparmor": "bokkie-boundary-a73c9e42 (enforce)",
+      "gid_map": "         0          0 4294967295\n",
+      "mounts": [
+        "3644 1366 0:159 / / ro,relatime - overlay overlay rw,lowerdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109724/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109721/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109720/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109703/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109702/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109439/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1565/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1564/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1563/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1562/fs:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1561/fs,upperdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109725/fs,workdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/109725/work",
+        "3648 3644 0:230 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw",
+        "3649 3644 0:231 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755,inode64",
+        "3651 3649 0:232 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,gid=5,mode=620,ptmxmode=666",
+        "3676 3644 0:233 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro",
+        "3678 3676 0:27 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw,nsdelegate,memory_recursiveprot",
+        "3679 3649 0:204 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw",
+        "3682 3649 0:234 / /dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=65536k,inode64",
+        "3683 3644 8:2 /usr/libexec/docker/docker-init /usr/sbin/docker-init ro,relatime master:1 - ext4 /dev/sda2 rw,errors=remount-ro",
+        "3779 3644 8:2 /var/lib/docker/volumes/bokkie-boundary-72f2f5a7aa4b4c2695f2accee0d24454/_data /data rw,relatime master:1 - ext4 /dev/sda2 rw,errors=remount-ro",
+        "3790 3644 0:237 / /tmp rw,nosuid,nodev,noexec,relatime - tmpfs tmpfs rw,size=131072k,inode64",
+        "3805 3644 8:2 /var/lib/docker/containers/5c2bb413ba2552d3373e83687568048ea21e02f9c61a087bc8f0f7794b227c81/hostname /etc/hostname ro,relatime - ext4 /dev/sda2 rw,errors=remount-ro",
+        "3814 3644 8:2 /var/lib/docker/containers/5c2bb413ba2552d3373e83687568048ea21e02f9c61a087bc8f0f7794b227c81/hosts /etc/hosts ro,relatime - ext4 /dev/sda2 rw,errors=remount-ro",
+        "3838 3644 8:2 /var/lib/docker/containers/5c2bb413ba2552d3373e83687568048ea21e02f9c61a087bc8f0f7794b227c81/resolv.conf /etc/resolv.conf ro,relatime - ext4 /dev/sda2 rw,errors=remount-ro",
+        "3848 3644 0:238 / /home/probe/.codex rw,nosuid,nodev,noexec,relatime - tmpfs tmpfs rw,size=16384k,mode=700,uid=10001,gid=10001,inode64",
+        "1394 3676 0:240 / /sys/devices/virtual/powercap ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1461 3676 0:240 / /sys/firmware ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1470 3676 0:240 / /sys/devices/system/cpu/cpu0/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1517 3676 0:240 / /sys/devices/system/cpu/cpu1/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1532 3676 0:240 / /sys/devices/system/cpu/cpu2/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1535 3676 0:240 / /sys/devices/system/cpu/cpu3/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1542 3676 0:240 / /sys/devices/system/cpu/cpu4/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1544 3676 0:240 / /sys/devices/system/cpu/cpu5/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1546 3676 0:240 / /sys/devices/system/cpu/cpu6/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1547 3676 0:240 / /sys/devices/system/cpu/cpu7/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1608 3676 0:240 / /sys/devices/system/cpu/cpu8/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1729 3676 0:240 / /sys/devices/system/cpu/cpu9/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1732 3676 0:240 / /sys/devices/system/cpu/cpu10/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64",
+        "1742 3676 0:240 / /sys/devices/system/cpu/cpu11/thermal_throttle ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1,inode64"
+      ],
+      "namespaces": {
+        "mnt": "mnt:[4026532812]",
+        "pid": "pid:[4026532815]",
+        "user": "user:[4026531837]"
+      },
+      "status": {
+        "CapBnd": "0000000000000000",
+        "CapEff": "0000000000000000",
+        "CapPrm": "0000000000000000",
+        "NoNewPrivs": "1",
+        "Seccomp": "2",
+        "Seccomp_filters": "1"
+      },
+      "uid_map": "         0          0 4294967295\n"
+    },
+    "outer_proc": {
+      "masked_replacements": {
+        "/proc/1/root/proc/interrupts": 13,
+        "/proc/1/root/proc/kcore": 13,
+        "/proc/1/root/proc/keys": 13,
+        "/proc/1/root/proc/timer_list": 13,
+        "/proc/1/task/1/root/proc/interrupts": 13,
+        "/proc/1/task/1/root/proc/kcore": 13,
+        "/proc/1/task/1/root/proc/keys": 13,
+        "/proc/1/task/1/root/proc/timer_list": 13,
+        "/proc/interrupts": 13,
+        "/proc/kcore": 13,
+        "/proc/keys": 13,
+        "/proc/self/root/proc/interrupts": 13,
+        "/proc/self/root/proc/kcore": 13,
+        "/proc/self/root/proc/keys": 13,
+        "/proc/self/root/proc/timer_list": 13,
+        "/proc/timer_list": 13
+      },
+      "readonly_replacements": {
+        "/proc/1/root/proc/sys/kernel/shmmax": 13,
+        "/proc/1/root/proc/sys/net/ipv4/ip_forward": 13,
+        "/proc/1/root/proc/sysrq-trigger": 13,
+        "/proc/1/task/1/root/proc/sys/kernel/shmmax": 13,
+        "/proc/1/task/1/root/proc/sys/net/ipv4/ip_forward": 13,
+        "/proc/1/task/1/root/proc/sysrq-trigger": 13,
+        "/proc/self/root/proc/sys/kernel/shmmax": 13,
+        "/proc/self/root/proc/sys/net/ipv4/ip_forward": 13,
+        "/proc/self/root/proc/sysrq-trigger": 13,
+        "/proc/sys/kernel/shmmax": 13,
+        "/proc/sys/net/ipv4/ip_forward": 13,
+        "/proc/sysrq-trigger": 13
+      }
+    },
+    "result": "passed",
+    "versions": {
+      "bwrap": "bubblewrap 0.8.0",
+      "codex": "codex-cli 0.155.1",
+      "libseccomp": "2.5.4-1+deb12u1",
+      "node": "v22.22.3",
+      "python": "Python 3.11.2"
+    }
+  },
+  "stderr": ""
+}

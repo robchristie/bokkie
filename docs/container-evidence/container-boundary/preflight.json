@@ -1,0 +1,9 @@
+{
+  "exit": 0,
+  "result": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "{\"codex_version\":\"0.155.1\",\"model\":\"gpt-5.6-terra\",\"effort\":\"medium\",\"environments\":[],\"ephemeral\":true,\"approval_policy\":\"never\",\"sandbox\":{\"type\":\"readOnly\",\"networkAccess\":false},\"instruction_sources\":[],\"offered_tools\":[],\"tool_namespace\":\"bokkie\",\"tool_exposure\":\"direct_model_only\",\"disabled_features\":[\"apps\",\"browser_use\",\"browser_use_external\",\"browser_use_full_cdp_access\",\"computer_use\",\"code_mode\",\"code_mode_host\",\"code_mode_only\",\"deferred_executor\",\"goals\",\"hooks\",\"image_generation\",\"in_app_browser\",\"in_app_local_automation\",\"memories\",\"multi_agent\",\"multi_agent_v2\",\"plugins\",\"remote_plugin\",\"recommended_plugins\",\"request_permissions_tool\",\"shell_tool\",\"shell_snapshot\",\"skill_search\",\"sleep_tool\",\"token_budget\",\"tool_suggest\",\"unified_exec\",\"view_image\",\"workspace_dependencies\",\"current_time_reminder\",\"default_mode_request_user_input\"],\"mcp_servers_enabled\":[],\"model_calls\":0,\"filesystem\":\"read-only root; private temporary directory\"}\n"
+  },
+  "stderr": ""
+}

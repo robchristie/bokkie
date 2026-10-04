@@ -1,0 +1,514 @@
+{
+  "source": "361ccd8328f4e2ec5077be41167bdbe196aa39ed",
+  "baseline": "../systempaths-ab/a.json",
+  "method": "Start with all sys masks; try each proc mask, then each read-only entry; retain only if fresh proc succeeds. Incomplete tmpfs policy is the success sentinel; no payload runs.",
+  "rows": [
+    {
+      "kind": "MaskedPaths",
+      "path": "/proc/acpi",
+      "retained": false,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/acpi"
+      ],
+      "readonly": [],
+      "exit": 20,
+      "error": "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+    },
+    {
+      "kind": "MaskedPaths",
+      "path": "/proc/asound",
+      "retained": false,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/asound"
+      ],
+      "readonly": [],
+      "exit": 20,
+      "error": "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+    },
+    {
+      "kind": "MaskedPaths",
+      "path": "/proc/interrupts",
+      "retained": false,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/interrupts"
+      ],
+      "readonly": [],
+      "exit": 20,
+      "error": "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+    },
+    {
+      "kind": "MaskedPaths",
+      "path": "/proc/kcore",
+      "retained": false,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/kcore"
+      ],
+      "readonly": [],
+      "exit": 20,
+      "error": "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+    },
+    {
+      "kind": "MaskedPaths",
+      "path": "/proc/keys",
+      "retained": false,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/keys"
+      ],
+      "readonly": [],
+      "exit": 20,
+      "error": "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+    },
+    {
+      "kind": "MaskedPaths",
+      "path": "/proc/latency_stats",
+      "retained": true,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/latency_stats"
+      ],
+      "readonly": [],
+      "exit": 20,
+      "error": "bwrap: Can't mount tmpfs on /newroot/tmp: Permission denied"
+    },
+    {
+      "kind": "MaskedPaths",
+      "path": "/proc/sched_debug",
+      "retained": true,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/latency_stats",
+        "/proc/sched_debug"
+      ],
+      "readonly": [],
+      "exit": 20,
+      "error": "bwrap: Can't mount tmpfs on /newroot/tmp: Permission denied"
+    },
+    {
+      "kind": "MaskedPaths",
+      "path": "/proc/scsi",
+      "retained": true,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/latency_stats",
+        "/proc/sched_debug",
+        "/proc/scsi"
+      ],
+      "readonly": [],
+      "exit": 20,
+      "error": "bwrap: Can't mount tmpfs on /newroot/tmp: Permission denied"
+    },
+    {
+      "kind": "MaskedPaths",
+      "path": "/proc/timer_list",
+      "retained": false,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/latency_stats",
+        "/proc/sched_debug",
+        "/proc/scsi",
+        "/proc/timer_list"
+      ],
+      "readonly": [],
+      "exit": 20,
+      "error": "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+    },
+    {
+      "kind": "MaskedPaths",
+      "path": "/proc/timer_stats",
+      "retained": true,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/latency_stats",
+        "/proc/sched_debug",
+        "/proc/scsi",
+        "/proc/timer_stats"
+      ],
+      "readonly": [],
+      "exit": 20,
+      "error": "bwrap: Can't mount tmpfs on /newroot/tmp: Permission denied"
+    },
+    {
+      "kind": "ReadonlyPaths",
+      "path": "/proc/bus",
+      "retained": false,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/latency_stats",
+        "/proc/sched_debug",
+        "/proc/scsi",
+        "/proc/timer_stats"
+      ],
+      "readonly": [
+        "/proc/bus"
+      ],
+      "exit": 20,
+      "error": "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+    },
+    {
+      "kind": "ReadonlyPaths",
+      "path": "/proc/fs",
+      "retained": false,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/latency_stats",
+        "/proc/sched_debug",
+        "/proc/scsi",
+        "/proc/timer_stats"
+      ],
+      "readonly": [
+        "/proc/fs"
+      ],
+      "exit": 20,
+      "error": "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+    },
+    {
+      "kind": "ReadonlyPaths",
+      "path": "/proc/irq",
+      "retained": false,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/latency_stats",
+        "/proc/sched_debug",
+        "/proc/scsi",
+        "/proc/timer_stats"
+      ],
+      "readonly": [
+        "/proc/irq"
+      ],
+      "exit": 20,
+      "error": "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+    },
+    {
+      "kind": "ReadonlyPaths",
+      "path": "/proc/sys",
+      "retained": false,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/latency_stats",
+        "/proc/sched_debug",
+        "/proc/scsi",
+        "/proc/timer_stats"
+      ],
+      "readonly": [
+        "/proc/sys"
+      ],
+      "exit": 20,
+      "error": "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+    },
+    {
+      "kind": "ReadonlyPaths",
+      "path": "/proc/sysrq-trigger",
+      "retained": false,
+      "image": "sha256:a99a769c3966622048325d3f91b3678039b40fa19a252b675276b2c18d2cd6e0",
+      "policy_sha256": {
+        "bokkie-boundary-a73c9e42.apparmor": "679935286e3097c92b428ee4c51ca378e48bcf416c7e084cfe23b9bb612f405a",
+        "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+      },
+      "masked": [
+        "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+        "/sys/devices/system/cpu/cpu0/thermal_throttle",
+        "/sys/devices/system/cpu/cpu1/thermal_throttle",
+        "/sys/devices/system/cpu/cpu2/thermal_throttle",
+        "/sys/devices/system/cpu/cpu3/thermal_throttle",
+        "/sys/devices/system/cpu/cpu4/thermal_throttle",
+        "/sys/devices/system/cpu/cpu5/thermal_throttle",
+        "/sys/devices/system/cpu/cpu6/thermal_throttle",
+        "/sys/devices/system/cpu/cpu7/thermal_throttle",
+        "/sys/devices/system/cpu/cpu8/thermal_throttle",
+        "/sys/devices/system/cpu/cpu9/thermal_throttle",
+        "/sys/devices/system/cpu/cpu10/thermal_throttle",
+        "/sys/devices/system/cpu/cpu11/thermal_throttle",
+        "/proc/latency_stats",
+        "/proc/sched_debug",
+        "/proc/scsi",
+        "/proc/timer_stats"
+      ],
+      "readonly": [
+        "/proc/sysrq-trigger"
+      ],
+      "exit": 20,
+      "error": "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+    }
+  ],
+  "selected": {
+    "MaskedPaths": [
+      "/sys/devices/virtual/powercap",
+      "/sys/firmware",
+      "/sys/devices/system/cpu/cpu0/thermal_throttle",
+      "/sys/devices/system/cpu/cpu1/thermal_throttle",
+      "/sys/devices/system/cpu/cpu2/thermal_throttle",
+      "/sys/devices/system/cpu/cpu3/thermal_throttle",
+      "/sys/devices/system/cpu/cpu4/thermal_throttle",
+      "/sys/devices/system/cpu/cpu5/thermal_throttle",
+      "/sys/devices/system/cpu/cpu6/thermal_throttle",
+      "/sys/devices/system/cpu/cpu7/thermal_throttle",
+      "/sys/devices/system/cpu/cpu8/thermal_throttle",
+      "/sys/devices/system/cpu/cpu9/thermal_throttle",
+      "/sys/devices/system/cpu/cpu10/thermal_throttle",
+      "/sys/devices/system/cpu/cpu11/thermal_throttle",
+      "/proc/latency_stats",
+      "/proc/sched_debug",
+      "/proc/scsi",
+      "/proc/timer_stats"
+    ],
+    "ReadonlyPaths": []
+  }
+}
