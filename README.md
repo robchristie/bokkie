@@ -101,6 +101,8 @@ fragments and IP literals are rejected. Forwarding headers never select the
 origin. The proxy must authenticate every API and static UI ingress path and
 prevent access to the backend that bypasses authentication. This option does not
 provide authentication or permit a non-loopback bind.
+The [Nostromo deployment recipe](docs/deployment.md) packages the service and
+Polyorama UI with an authenticated edge and the qualified conversation sandbox.
 Browser requests must also be same-origin, and every HTTP mutation
 requires a high-entropy per-process token obtained from the same-origin
 `/bootstrap` contract. This is CSRF and DNS-rebinding protection for a local

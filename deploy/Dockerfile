@@ -23,10 +23,7 @@ RUN cargo +1.97.1 build --locked --release -p bokkie-attention-ui --lib --target
         /source/target/wasm32-unknown-unknown/release/bokkie_attention_ui.wasm
 
 FROM node:22-bookworm-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732 AS runtime
-ARG BOKKIE_SOURCE
-RUN case "$BOKKIE_SOURCE" in ''|*[!0-9a-f]*) exit 1;; esac \
-    && test "${#BOKKIE_SOURCE}" -eq 40 \
-    && apt-get update \
+RUN apt-get update \
     && apt-get install -y --no-install-recommends bubblewrap python3 ca-certificates libseccomp2 \
     && test "$(bwrap --version)" = 'bubblewrap 0.8.0' \
     && rm -rf /var/lib/apt/lists/* \
@@ -48,6 +45,9 @@ COPY --from=backend /source/target/release/bokkie /source/target/release/bokkie-
 COPY --from=ui /source/apps/bokkie-attention-ui/web/ /opt/ui/
 COPY apps/bokkie-attention-ui/assets/fonts/Inter-LICENSE.txt /opt/ui/licenses/Inter-LICENSE.txt
 COPY LICENSE /usr/share/doc/bokkie/LICENSE
+ARG BOKKIE_SOURCE
+RUN case "$BOKKIE_SOURCE" in ''|*[!0-9a-f]*) exit 1;; esac \
+    && test "${#BOKKIE_SOURCE}" -eq 40
 LABEL org.opencontainers.image.title="Bokkie" \
       org.opencontainers.image.source="https://github.com/robchristie/bokkie" \
       org.opencontainers.image.revision=$BOKKIE_SOURCE

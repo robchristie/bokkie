@@ -22,13 +22,14 @@ print(manage.profile_name(config))
 PY
 )
 destination="/etc/apparmor.d/$profile"
+# Reject unsupported rules before creating a persistent boot-time policy file.
+apparmor_parser -Q -K --warn=rule-not-enforced --Werror=rule-not-enforced "$stack/apparmor.profile"
 if [[ -e "$destination" ]]; then
   cmp "$stack/apparmor.profile" "$destination"
 else
   install -o root -g root -m 0644 "$stack/apparmor.profile" "$destination"
 fi
 # No alternate feature discovery: the native parser observes the actual kernel.
-apparmor_parser -Q -K --warn=rule-not-enforced --Werror=rule-not-enforced "$destination"
 apparmor_parser -r -K --warn=rule-not-enforced --Werror=rule-not-enforced "$destination"
 grep -Fx "$profile (enforce)" /sys/kernel/security/apparmor/profiles >/dev/null
 unit=/etc/systemd/system/bokkie.service
