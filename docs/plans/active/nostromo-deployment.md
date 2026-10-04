@@ -3,7 +3,7 @@
 - Status: active
 - Reorientation budget: 160
 - Landed pull requests: [Qualified runtime #41](https://github.com/robchristie/bokkie/pull/41)
-- Next action: resolve the Compose/runtime and authenticated ingress contracts, then package and qualify the service.
+- Next action: land the qualified source component, resolve the pending login/account and private DNS inputs, then install merged artefacts and verify the live journey.
 
 ## Outcome and authority
 
@@ -31,32 +31,38 @@ checkpoint is pushed and verified before the component PR is opened.
 
 ## Current phase
 
-Bounded design/calibration. Compose 5.5.1 cannot express the qualified individual
-system-path lists. Select a maintainable operator-side arrangement which keeps
-those lists exact, rather than broadening the application sandbox. Bokkie remains
-private behind an authenticated proxy with an explicit canonical HTTPS origin;
-its Host, Origin, fetch-context and mutation-token checks must remain effective.
+The source component is qualified through the [synthetic deployment evidence](../../deployment-evidence/README.md).
+An Engine-managed runtime retains the exact qualified path policy; a Compose
+nginx edge shares its network namespace and authenticates every ingress path.
+A single systemd controller owns ordered restart/recreation. HTTPS origin
+validation retains loopback binding and the original request-security checks.
+Browser qualification found and repaired omitted same-origin credentials and an
+incorrect root rewrite. Backend/UI canonical checks, the networked sandbox,
+transient-systemd failure recovery and desktop/narrow browser checks passed.
 
-The smallest probe is an isolated credential-free deployment using the packaged
-image, representative ingress and persistent synthetic state. Evidence is owned
-by `docs/deployment.md` and `docs/deployment-evidence/`, with detailed transient
-logs under the operator's task evidence directory. Select an arrangement only
-after its effective Engine settings, sandbox preflight, ingress negatives and
-restart behaviour pass. Reconsider the design if it needs a broader sandbox,
-credential copying or an unauthenticated backend exposure.
+The user has been asked to select the existing shared web login or Authentik,
+and the existing Rob Codex account or initially disabled model access. Those
+answers have not arrived. The current source supplies the existing shared-login
+recipe without connecting real credentials. The production hostname does not
+yet resolve through private DNS; the available authenticated infrastructure
+browser channel did not establish DNS administration access. No production
+service, account mount or DNS record has been installed. This plan remains active;
+source-component landing is not terminal deployment acceptance.
 
 ## Acceptance
 
-- Pending: Immutable image packages backend, browser UI and the qualified runtime.
-- Pending: Persistent launch preserves exact path policy, payload filter, lifetime
+- Passed: Immutable image packages backend, browser UI and the qualified runtime.
+- Passed in the synthetic deployment: Launch preserves exact path policy, payload filter, lifetime
   supervision, non-root/capability/NNP/read-only controls and bounded resources.
-- Pending: Explicit HTTPS origin support retains loopback defaults and rejects wrong
+- Passed: Explicit HTTPS origin support retains loopback defaults and rejects wrong
   Host/Origin, forged forwarding, cross-site mutation and missing/stale tokens.
-- Pending: Authentication covers static assets and API; direct backend and alternate
-  ingress cannot bypass it. Credentials stay with their authorised owner.
-- Pending: SQLite state survives controlled restart/recreation; service and policy
-  startup ordering is durable, with documented backup/rollback operations.
-- Pending: Actual browser renders useful Polyorama content through trusted HTTPS;
-  a bounded conversation/local-note journey proves the intended enabled flow.
+- Passed with synthetic credentials: Authentication covers static assets and API; direct backend and alternate
+  ingress cannot bypass it. Real account/login selection is pending.
+- Passed: SQLite persistence and four transient-systemd recovery cases; backup,
+  rollback and persistent startup contracts are documented. Installing the host
+  unit/profile and observing boot recovery remain pending.
+- Passed: Linux browser renders useful Polyorama content through trusted HTTPS
+  using diagnostic address mapping. Normal DNS, real-account conversation and
+  local-note acceptance remain pending.
 - Pending: Final installation consumes independently reviewed, merged source and
   immutable artefacts; deployment identities and residual limits are recorded.
