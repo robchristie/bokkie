@@ -3,6 +3,7 @@
 Run only inside the disposable, network-off container. No sensitive proc content
 is read and no kernel setting or helper memory is written.
 """
+from contextlib import contextmanager
 import ctypes
 import errno
 import json
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+from unittest.mock import patch
 
 sys.path.insert(0, '/opt/conversation')
 import broker
@@ -48,10 +50,13 @@ def open_errno(path, flags):
 
 def proc_checks():
     # These opens do not read kernel contents or write settings.
-    inaccessible = {path: open_errno(path, os.O_RDONLY) for path in (
-        '/proc/kcore', '/proc/keys', '/proc/interrupts', '/proc/timer_list')}
-    readonly = {path: open_errno(path, os.O_WRONLY) for path in (
-        '/proc/sys/kernel/shmmax', '/proc/sys/net/ipv4/ip_forward', '/proc/sysrq-trigger')}
+    prefixes = ('', '/proc/self/root', '/proc/1/root', '/proc/1/task/1/root')
+    inaccessible = {prefix + path: open_errno(prefix + path, os.O_RDONLY)
+                    for prefix in prefixes for path in (
+                        '/proc/kcore', '/proc/keys', '/proc/interrupts', '/proc/timer_list')}
+    readonly = {prefix + path: open_errno(prefix + path, os.O_WRONLY)
+                for prefix in prefixes for path in (
+                    '/proc/sys/kernel/shmmax', '/proc/sys/net/ipv4/ip_forward', '/proc/sysrq-trigger')}
     assert all(v in (errno.EACCES, errno.EPERM, errno.ENOENT) for v in inaccessible.values()), inaccessible
     assert all(v in (errno.EACCES, errno.EPERM, errno.EROFS) for v in readonly.values()), readonly
     return {'masked_replacements': inaccessible, 'readonly_replacements': readonly}
@@ -112,8 +117,13 @@ def inner():
     for directory in ('/proc/1/fd', '/proc/1/task/1/fd'):
         for item in Path(directory).iterdir():
             # Opening an eventfd or pipe must not recover the helper's handles.
-            helper_fds[str(item)] = open_errno(item, os.O_RDWR | os.O_NONBLOCK)
-    assert helper_fds and all(v in (errno.EACCES, errno.EPERM) for v in helper_fds.values()), helper_fds
+            error = open_errno(item, os.O_RDWR | os.O_NONBLOCK)
+            shared_stdio = (item.name in ('0', '1', '2') and
+                            os.stat(item).st_ino == os.fstat(int(item.name)).st_ino and
+                            os.stat(item).st_dev == os.fstat(int(item.name)).st_dev)
+            helper_fds[str(item)] = {'errno': error, 'shared_stdio': shared_stdio}
+    assert helper_fds and all(v['errno'] in (errno.EACCES, errno.EPERM) or v['shared_stdio']
+                              for v in helper_fds.values()), helper_fds
     fds = {}
     for item in Path('/proc/self/fd').iterdir():
         try:
@@ -155,6 +165,23 @@ def boundary():
     Path('/data/boundary-canary').write_text('outer writable state')
     outer = context()
     outer_proc = proc_checks()
+    # A valid FD with invalid BPF must not be treated as optional hardening.
+    @contextmanager
+    def malformed_filter():
+        import payload_filter
+        descriptor = payload_filter._memfd()
+        try:
+            os.write(descriptor, bytes(8))
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            yield descriptor
+        finally:
+            os.close(descriptor)
+    with patch.object(broker, 'payload_filter_fd', malformed_filter):
+        invalid = broker.spawn(PROFILE, {}, dict(os.environ),
+                               payload=['/bin/echo', 'UNEXPECTED_PAYLOAD'])
+        invalid_out, invalid_err = invalid.communicate(timeout=5)
+        assert invalid.returncode != 0 and b'UNEXPECTED_PAYLOAD' not in invalid_out
+        assert b'seccomp' in invalid_err.lower(), invalid_err
     child = broker.spawn(PROFILE, {}, dict(os.environ), payload=[sys.executable, SELF, 'inner'])
     stdout, stderr = child.communicate(timeout=20)
     assert child.returncode == 0, (child.returncode, stdout, stderr)
@@ -164,7 +191,12 @@ def boundary():
         assert int(observed[who]['status']['Seccomp_filters']) > int(outer['status']['Seccomp_filters'])
     assert not Path('/tmp/private-write').exists()
     assert Path('/data/boundary-canary').read_text() == 'outer writable state'
-    emit({'result': 'passed', 'outer': outer, 'outer_proc': outer_proc, 'inner': observed,
+    versions = {name: subprocess.check_output(command, text=True).strip() for name, command in {
+        'bwrap': ['bwrap', '--version'], 'codex': ['codex', '--version'],
+        'python': [sys.executable, '--version'], 'node': ['node', '--version'],
+        'libseccomp': ['dpkg-query', '-W', '-f=${Version}', 'libseccomp2']}.items()}
+    emit({'result': 'passed', 'versions': versions, 'outer': outer, 'outer_proc': outer_proc, 'inner': observed,
+          'bad_filter_rejected': invalid_err.decode().strip(),
           'credentials': False, 'model_calls': 0})
 
 
@@ -212,13 +244,47 @@ def lifecycle_payload(token):
     sys.stdin.buffer.read(1)
 
 
-def launch_parent(token):
+def launch_parent(token, barrier=None):
+    # Inject a trusted wrapper only in this probe process. Production launch
+    # still forwards exactly its sealed filter, never an arbitrary control FD.
+    if barrier is not None:
+        original = broker._command
+        def blocked(*args, **kwargs):
+            return [sys.executable, SELF, 'constructor-wrapper', barrier,
+                    *original(*args, **kwargs)]
+        broker._command = blocked
     child = broker.spawn(PROFILE, {}, dict(os.environ),
                          payload=[sys.executable, SELF, 'lifecycle-payload', token])
-    emit({'monitor': child.pid})
-    # Leave its pipes open while the test kills this actual launch parent.
+    if barrier is None:
+        ready_line(child.stdout)
+    emit({'supervisor': child.pid})
+    # Leave pipes open while the test kills this actual launch parent.
     while True:
         time.sleep(1)
+
+
+def constructor_wrapper(barrier, command):
+    descriptor = os.open(barrier, os.O_RDONLY)
+    os.set_inheritable(descriptor, True)
+    os.execv(command[0], [command[0], '--block-fd', str(descriptor), *command[1:]])
+
+
+def blocked_constructor(supervisor):
+    deadline = time.monotonic() + 10
+    while True:
+        monitors = Path(f'/proc/{supervisor}/task/{supervisor}/children').read_text().split()
+        for monitor in monitors:
+            children = Path(f'/proc/{monitor}/task/{monitor}/children').read_text().split()
+            for leader in children:
+                root = Path('/proc') / leader
+                waiting = (root / 'wchan').read_text().strip()
+                mapping = (root / 'uid_map').read_text().split()
+                if (waiting in ('pipe_read', 'anon_pipe_read') and
+                        (root / 'root/tmp/conversation').is_dir() and
+                        mapping == ['10001', '10001', '1']):
+                    return [process_id(monitor), process_id(leader)]
+        assert time.monotonic() < deadline, 'constructor did not reach post-remap barrier'
+        time.sleep(0.01)
 
 
 def ready_line(pipe):
@@ -232,34 +298,59 @@ def lifecycle():
     results = []
     for mode in ('normal', 'cancel', 'parent-death', 'startup-death'):
         token = 'bokkie-lifetime-' + mode + '-' + str(os.getpid())
-        if mode in ('normal', 'cancel'):
-            child = broker.spawn(PROFILE, {}, dict(os.environ),
-                                 payload=[sys.executable, SELF, 'lifecycle-payload', token])
-            ready_line(child.stdout)
-            identities = tagged_processes(token)
-            assert len(identities) >= 3, identities  # monitor, initial payload, detached daemon
-            if mode == 'normal':
-                child.stdin.write(b'x'); child.stdin.flush()
+        barrier = Path('/tmp') / (token + '.fifo')
+        held = None
+        parent = child = None
+        try:
+            if mode in ('normal', 'cancel'):
+                child = broker.spawn(PROFILE, {}, dict(os.environ),
+                                     payload=[sys.executable, SELF, 'lifecycle-payload', token])
+                ready_line(child.stdout)
+                identities = tagged_processes(token)
+                assert len(identities) >= 4, identities  # supervisor, monitor, payload, daemon
+                if mode == 'normal':
+                    child.stdin.write(b'x'); child.stdin.flush()
+                else:
+                    broker.terminate(child)  # Actual broker cancellation and wait.
+                stdout, stderr = child.communicate(timeout=5)
+                assert child.returncode == (0 if mode == 'normal' else 125), (stdout, stderr)
             else:
-                child.kill()  # The same outer-monitor cancellation used by broker.run.
-            child.communicate(timeout=5)
-        else:
-            parent = subprocess.Popen([sys.executable, SELF, 'launch-parent', token],
-                                      stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            monitor = ready_line(parent.stdout)['monitor']
-            if mode == 'parent-death':
-                deadline = time.monotonic() + 10
-                while len(tagged_processes(token)) < 4:
-                    assert time.monotonic() < deadline, 'detached descendant not ready'
-                    time.sleep(0.01)
-            identities = tagged_processes(token)
-            monitor_identity = process_id(monitor)
-            if monitor_identity and monitor_identity not in identities:
-                identities.append(monitor_identity)
-            parent.kill(); parent.communicate(timeout=5)
-        wait_gone(identities)
-        assert tagged_processes(token) == []
-        results.append({'mode': mode, 'identities': identities, 'all_reaped': True})
+                command = [sys.executable, SELF, 'launch-parent', token]
+                if mode == 'startup-death':
+                    os.mkfifo(barrier)
+                    held = os.open(barrier, os.O_RDWR | os.O_NONBLOCK)
+                    command.append(str(barrier))
+                parent = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                supervisor = ready_line(parent.stdout)['supervisor']
+                blocked = blocked_constructor(supervisor) if held is not None else []
+                identities = tagged_processes(token)
+                for observed in blocked + [process_id(supervisor)]:
+                    if observed and observed not in identities:
+                        identities.append(observed)
+                parent.kill(); parent.communicate(timeout=5)
+            # Check before releasing the constructor barrier: the leader must
+            # be reaped, with no chance to run its payload after parent death.
+            wait_gone(identities)
+            assert tagged_processes(token) == []
+            result = {'mode': mode, 'identities': identities, 'all_reaped': True}
+            if held is not None:
+                result['constructor_barrier'] = 'post-mount and UID remap, before do_init'
+                result['reaped_before_barrier_release'] = True
+            results.append(result)
+        finally:
+            if held is not None:
+                os.close(held)
+                barrier.unlink()
+            if child is not None:
+                broker.terminate(child)
+                for stream in (child.stdin, child.stdout, child.stderr):
+                    stream.close()
+            if parent is not None:
+                if parent.poll() is None:
+                    parent.kill(); parent.wait(timeout=5)
+                for stream in (parent.stdout, parent.stderr):
+                    stream.close()
     emit({'result': 'passed', 'cases': results, 'container_alive_during_checks': True, 'model_calls': 0})
 
 
@@ -270,7 +361,8 @@ if __name__ == '__main__':
     elif mode == 'syscalls': emit(syscalls())
     elif mode == 'lifecycle': lifecycle()
     elif mode == 'lifecycle-payload': lifecycle_payload(sys.argv[2])
-    elif mode == 'launch-parent': launch_parent(sys.argv[2])
+    elif mode == 'launch-parent': launch_parent(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
+    elif mode == 'constructor-wrapper': constructor_wrapper(sys.argv[2], sys.argv[3:])
     elif mode == 'daemon':
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)

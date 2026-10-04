@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """One bounded, ephemeral, environment-free Codex conversation turn."""
+import ctypes
 import importlib.util
 import json
 import os
@@ -146,19 +147,54 @@ def _command(profile, config, filter_fd, payload=None):
     return args
 
 
+def pidfd_open(pid):
+    # Some CPython builds omit os.pidfd_open despite a supporting Linux/libc.
+    if hasattr(os, 'pidfd_open'):
+        return os.pidfd_open(pid)
+    libc = ctypes.CDLL(None, use_errno=True)
+    operation = libc.pidfd_open
+    operation.argtypes = [ctypes.c_int, ctypes.c_uint]
+    operation.restype = ctypes.c_int
+    descriptor = operation(pid, 0)
+    if descriptor < 0:
+        raise OSError(ctypes.get_errno(), 'cannot observe conversation parent lifetime')
+    os.set_inheritable(descriptor, False)
+    return descriptor
+
+
 def spawn(profile, config, environment, *, payload=None):
     """Launch the fixed boundary; payload is trusted qualification code only.
 
     Bubblewrap consumes and closes the filter descriptor after filesystem setup,
     applying it to namespace PID 1 and the payload before exec. Callers cannot
-    supply a filter or disable confinement. The parent closes its copy as soon as
-    Popen returns, including on failed launches.
+    supply a filter or disable confinement. A trusted subreaper owns construction
+    and teardown; Popen tracks that supervisor. The parent closes its descriptors
+    as soon as Popen returns, including on failed launches.
     """
     with payload_filter_fd() as descriptor:
-        return subprocess.Popen(_command(profile, config, descriptor, payload),
-                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, env=environment,
-                                pass_fds=(descriptor,))
+        parent_fd = pidfd_open(os.getpid())
+        try:
+            command = [sys.executable, '-I', str(Path(__file__).with_name('supervisor.py')),
+                       str(parent_fd), str(descriptor),
+                       *_command(profile, config, descriptor, payload)]
+            # Rust cancellation kills the broker process group. Keep its reaper
+            # outside that group so the pidfd can drive complete teardown.
+            return subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, env=environment,
+                                    pass_fds=(parent_fd, descriptor), start_new_session=True)
+        finally:
+            os.close(parent_fd)
+
+
+def terminate(child):
+    """Request complete descendant teardown and wait for its acknowledgement.
+
+    A timeout is a failed invocation, never permission to kill the trusted
+    reaper and abandon its descendants. It retains ownership until ECHILD.
+    """
+    if child.poll() is None:
+        child.terminate()
+    child.wait(timeout=5)
 
 
 class ProposalSelected(Exception):
@@ -359,13 +395,7 @@ def run(request):
     except ProposalSelected:
         return peer.proposal
     finally:
-        if child.poll() is None:
-            # Popen tracks Bubblewrap's outer monitor, not namespace PID 1.
-            # --die-with-parent propagates its death to PID 1; the kernel then
-            # kills all members of that private PID namespace, including setsid
-            # and double-fork descendants. Qualify this chain on the target host.
-            child.kill()
-        child.wait(timeout=5)
+        terminate(child)
         peer.selector.close()
         for stream in (child.stdin, child.stdout, child.stderr):
             stream.close()

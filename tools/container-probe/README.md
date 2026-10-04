@@ -5,43 +5,100 @@ Compose stack. It installs its own Node, Python, Bubblewrap and the conversation
 broker's qualified Codex 0.155.1. Host installations and account files are not
 inputs. It has no published ports, external network or credentials at runtime.
 Image builds need public registry/package access. Never supply build secrets.
-The image includes `strace` for tracing a blocked harmless payload. The
-[policy calibration record](../../docs/container-evidence/bubblewrap-policy/README.md)
-describes the separately authorised host-policy experiment and its remaining
-private-proc failure; its policies are not installed by this probe.
-
-Use a committed source archive as the build context so unrelated files, local
-configuration and credentials cannot enter the image. Choose a fresh, unique
-Compose project name and image tag, and keep that name for the entire experiment.
-Run on a disposable volume; `seed` intentionally refuses an existing fixture.
+The image includes `strace` for constructor diagnostics and libseccomp for the
+mandatory payload filter. Build from a committed archive, without build secrets:
 
 ```sh
 probe_root=$(mktemp -d)
-probe_project=bokkie-probe-$(date +%s)-$$
-git rev-parse HEAD > "$probe_root/source.txt"
-git archive HEAD | tar -xf - -C "$probe_root"
-docker build --target kernel -f "$probe_root/tools/container-probe/Dockerfile" \
+probe_project=bokkie-boundary-$(date +%s)-$$
+probe_source=$(git rev-parse HEAD)
+git archive "$probe_source" | tar -xf - -C "$probe_root"
+docker build --target runtime --build-arg BOKKIE_SOURCE="$probe_source" \
+  -f "$probe_root/tools/container-probe/Dockerfile" \
+  -t "$probe_project:runtime" "$probe_root"
+probe_image=$(docker image inspect "$probe_project:runtime" --format '{{.Id}}')
+```
+
+## Qualified boundary configuration
+
+`run_boundary.py` creates one uniquely labelled, disposable container and empty
+volume through the operator's local Docker Engine socket. The socket is never
+mounted into the container. The pinned qualification target is rootful Docker
+29.8.1 on Nostromo's Linux 6.12.73 Debian amd64 kernel. A non-root application
+UID does not make this a rootless daemon. Other targets require qualification;
+the runner rejects a different declared target rather than guessing equivalence.
+
+The canonical inputs are `policy/paths.json`, `policy/seccomp.json` and
+`policy/apparmor.profile`. Render `BOKKIE_PROFILE` to a unique
+`bokkie-boundary-...` name and install that named profile in enforcing mode using
+a separately authorised operator action. Keep its input/preprocessed hashes and
+loader receipt. The [corrected diagnostic loader](../../docs/container-evidence/bubblewrap-policy/admin.py.txt)
+and [its image](../../docs/container-evidence/bubblewrap-policy/Admin.Dockerfile.txt)
+show the bounded administrative procedure: substitute the same unique name in
+both fixed loader and profile, compile against **the host's explicit kernel
+features**, reject unenforced rules, load only that profile and preserve the
+other profile inventory. Profile administration requires host authority and is
+separate from the non-root, capability-free application runtime. The qualification
+runner never installs policy or changes the daemon.
+
+```sh
+python3 "$probe_root/tools/container-probe/run_boundary.py" \
+  --image "$probe_image" --profile "$probe_project" --source "$probe_source" \
+  --evidence /absolute/new-evidence-directory
+```
+
+The runner checks effective Engine configuration before any payload, then runs
+these dependent checks without credentials or model calls:
+
+1. The actual broker launcher must reject a malformed BPF filter, construct
+   private user/mount/PID namespaces, drop payload and PID1 capabilities, hide
+   account/temp canaries and preserve read-only state through proc/root/FD aliases.
+   Hostile namespace, mount, helper-memory and helper-descriptor probes must fail;
+   ordinary fork, exec and threads must still work.
+2. Detached descendants must be reaped on normal completion, cancellation and
+   abrupt broker death. A deterministic constructor barrier covers the interval
+   before Bubblewrap arms its own parent-death signal. The outer container stays
+   running until each observation is complete.
+3. Real Codex 0.155.1 App Server preflight must pass the existing version,
+   configuration and ephemeral environment-free thread guards without `turn/start`.
+
+Any failed check stops the sequence. Full receipts, immutable image/source
+identities and effective settings are retained in the evidence directory;
+container and synthetic volume are removed in `finally`. An `EPERM` alone is
+not attribution to a particular confinement layer: interpret syscall results
+alongside the effective policies and generated-filter tests. The read-only root
+is an integrity boundary, not confidentiality: mounted state remains readable.
+
+The selected path lists preserve all default `/sys` masks and the four proc
+masks compatible on this target. The six removed proc masks and all five removed
+read-only proc mounts have explicit AppArmor access restrictions. Constructor
+syscall allowances are revoked by a second filter before payload execution.
+See [policy rationale](policy/README.md) for the measured limits and provenance.
+
+Compose 5.5.1 exposes `systempaths=unconfined` only by clearing both lists; it
+cannot express these individually selected lists. This package therefore
+qualifies an **explicit Engine configuration**, not a production Compose stack.
+Do not replace it with broad unmasking or volume-based masks without separate
+qualification. Compose integration, service/UI packaging, authentication,
+provider networking, persistence operations and reverse-proxy deployment remain
+separate work. No service or hostname is installed by these tools.
+
+## Default-policy packaging and persistence control
+
+`compose.yml` remains the default-policy packaging control used by the earlier
+experiment. Its boundary fails under unmodified Docker policy; it does not
+select the qualified policies above. For persistence checks build the `kernel`
+stage instead of `runtime`, with the same committed archive and source label,
+and use a fresh Compose project and disposable volume:
+
+```sh
+docker build --target kernel --build-arg BOKKIE_SOURCE="$probe_source" \
+  -f "$probe_root/tools/container-probe/Dockerfile" \
   -t "$probe_project:kernel" "$probe_root"
 export BOKKIE_PROBE_IMAGE=$(docker image inspect "$probe_project:kernel" --format '{{.Id}}')
 probe_compose="$probe_root/tools/container-probe/compose.yml"
 docker compose -p "$probe_project" -f "$probe_compose" up -d --pull never
-docker compose -p "$probe_project" -f "$probe_compose" exec -T probe \
-  python3 /opt/probe.py boundary
 ```
-
-The boundary invokes the production broker's Bubblewrap arguments with a harmless
-payload. A successful result checks distinct mount/PID namespaces, read-only
-state, private temporary storage and a hidden synthetic account-directory canary.
-Exit 20 means the boundary could not start; retain its exact error and stop agent
-qualification. Do not add capabilities, privileged mode, unconfined profiles,
-host namespaces or host-policy changes to force success. An `Operation not
-permitted` error alone does not identify which host confinement layer denied it.
-
-Only after the boundary succeeds, `python3 /opt/probe.py preflight` runs the real
-broker handshake without `turn/start` or model calls. Passing those two probes
-still requires a separately observed namespace-descendant teardown test before
-claiming runtime support. The read-only filesystem is not a confidentiality
-boundary: the broker's root bind can still read the mounted database.
 
 Independently of the boundary result, test actual Bokkie state across removal
 and recreation of the container. Capture the original container ID and effective

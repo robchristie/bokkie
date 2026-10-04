@@ -3,7 +3,7 @@
 - Status: active
 - Reorientation budget: 150
 - Landed pull requests: none
-- Next Action: Minimise inherited path restrictions and implement payload-only syscall confinement.
+- Next Action: Repair the reproduced constructor lifetime gap, then qualify the complete boundary.
 
 ## Outcome and authority
 
@@ -18,7 +18,12 @@ AppArmor loading/removal are authorised within this qualification work.
 
 ## Current phase
 
-Calibration and implementation. Rootful Nostromo is the representative target;
+Payload confinement and lifetime repair. The finite path matrix retained all
+`/sys` masks and four proc masks; six proc masks and all five proc read-only
+mounts blocked fresh proc creation. Targeted constructor policy now reaches the
+payload. A deterministic pre-init barrier reproduced a Bubblewrap 0.8 startup
+orphan after broker death; a trusted subreaper supervisor owns that repair.
+Rootful Nostromo is the representative target;
 record actual daemon/identity and immutable inputs. Preserve non-root UID/GID,
 empty outer capabilities, no new privileges, read-only root, bounded resources,
 synthetic state and no runtime network/ports. Existing image and source receipts

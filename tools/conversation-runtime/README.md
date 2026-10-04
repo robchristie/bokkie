@@ -7,10 +7,10 @@ executes a proposed operation or starts an engineering task itself.
 
 Copy `instructions/profiles/conversation-local.json` to a private configuration
 location and replace its broker and installed Codex paths. The broker path must
-point to this directory's `broker.py`; keep `payload_filter.py` and
-`instructions.md` alongside it. Paths must be absolute, existing and outside
+point to this directory's `broker.py`; keep `supervisor.py`, `payload_filter.py`
+and `instructions.md` alongside it. Paths must be absolute, existing and outside
 `/tmp`. Python 3.11 or newer and Linux
-Bubblewrap and `libseccomp.so.2` are required. The payload filter supports only
+Bubblewrap, Linux pidfds/subreapers and `libseccomp.so.2` are required. The payload filter supports only
 the Linux x86-64 native ABI; unsupported architectures and missing filter
 generation features fail before the payload launches. The existing local Codex
 account must already be usable;
@@ -117,12 +117,33 @@ adapter code; model responses remain untrusted proposals.
 
 The Rust process supervisor bounds the broker's deadline, input, output and
 lifetime. The broker separately caps the app-server wire at 2 MiB and enforces
-its deadline and final-answer byte bound. The process tracked by `Popen` is
-Bubblewrap's outer monitor, not the private namespace PID 1. The
-`--die-with-parent` chain propagates monitor death to PID 1; PID 1's exit causes
-the kernel to terminate all remaining namespace members, including detached
-descendants. This lifecycle requires target qualification for normal completion,
-cancellation and abrupt launch-parent death. No token-count ceiling is claimed:
+its deadline and final-answer byte bound. Each invocation also has a trusted
+Python subreaper outside the private namespace. The broker opens a pidfd for
+itself before starting this supervisor, avoiding parent PID reuse and detecting
+death before the helper starts. The supervisor establishes subreaper status
+before constructing the namespace. It inherits only the parent pidfd and sealed
+filter; only the filter reaches Bubblewrap, which consumes it before payload
+execution. The supervisor lives in a separate session so Rust's broker process
+group cancellation cannot kill the cleanup owner.
+
+Normal completion, broker cancellation and abrupt broker death all cause the
+supervisor to kill its direct children, adopt orphaned descendants, and repeat
+killing and reaping until `waitpid` reports no children. Namespace PID 1 death
+also makes the kernel terminate its remaining namespace members. This closes
+Bubblewrap 0.8's startup gap: its namespace child does not arm `--die-with-parent`
+until after filesystem construction and UID remapping. Killing just the outer
+monitor during that interval can leave a live namespace leader.
+
+`Popen` tracks the supervisor. `terminate(child)` sends it SIGTERM and waits up
+to five seconds for full teardown. Failure to finish is an invocation failure;
+it never kills the reaper and assumes descendants disappeared. The reaper
+retains ownership until teardown completes. Its own uncatchable death, kernel
+failure or indefinitely uninterruptible processes are outside this userspace
+guarantee. The fixed helper and constructor remain trusted; the payload cannot
+see them through its private PID namespace. Target qualification must cover
+normal completion, cancellation, ready-state broker death and broker death at
+a held post-remap, pre-init constructor barrier, while the container stays alive.
+No token-count ceiling is claimed:
 the enforced budgets
 are elapsed time, supplied bytes, observed wire bytes, final bytes, one turn,
 one permitted proposal selection, zero executed tools and the caller's finite
@@ -156,6 +177,10 @@ Filter tests evaluate the actual exported BPF for mount and namespace denial,
 clone flag combinations and compatibility ABI rejection, check sealed-descriptor
 ownership and fail-closed generation, and install the BPF in a disposable
 subprocess to verify kernel denial with ordinary fork, thread and exec behaviour.
+Supervisor tests reproduce blocked constructor and detached-descendant lifetimes,
+including direct broker death, broker process-group death, cancellation, normal
+completion and a parent already dead before helper startup. They require every
+owned descendant to be reaped before releasing the constructor barrier.
 They do not establish the complete Docker/AppArmor/Bubblewrap boundary; the
 container probe owns that live qualification and descriptor/helper alias checks.
 Live qualification must separately record its finite aggregate call budget,

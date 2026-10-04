@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd --uid 10001 --create-home probe \
     && mkdir -p /home/probe/.codex /data \
     && chown -R probe:probe /home/probe /data
-COPY tools/conversation-runtime/broker.py tools/conversation-runtime/instructions.md tools/conversation-runtime/payload_filter.py /opt/conversation/
+COPY tools/conversation-runtime/broker.py tools/conversation-runtime/instructions.md tools/conversation-runtime/payload_filter.py tools/conversation-runtime/supervisor.py /opt/conversation/
 COPY tools/container-probe/probe.py /opt/probe.py
 COPY tools/container-probe/qualify.py /opt/qualify.py
 ARG BOKKIE_SOURCE=unrecorded

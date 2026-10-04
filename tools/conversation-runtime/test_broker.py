@@ -231,7 +231,10 @@ for line in sys.stdin:
             child = Mock()
 
             def launch(args, **kwargs):
-                descriptor, = kwargs['pass_fds']
+                parent_fd, descriptor = kwargs['pass_fds']
+                self.assertEqual(os.readlink(f'/proc/self/fd/{parent_fd}'), 'anon_inode:[pidfd]')
+                self.assertIn('supervisor.py', args[2])
+                self.assertTrue(kwargs['start_new_session'])
                 descriptors.append(descriptor)
                 self.assertGreater(os.fstat(descriptor).st_size, 0)
                 self.assertFalse(os.get_inheritable(descriptor))
