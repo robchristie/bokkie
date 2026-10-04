@@ -7,7 +7,7 @@ use axum::{
     extract::{Path as AxumPath, Query, State, rejection::JsonRejection},
     http::{HeaderName, HeaderValue, StatusCode},
     middleware,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
@@ -212,10 +212,12 @@ pub fn router_with_state(state: ApiState, ui_dir: Option<PathBuf>) -> Router {
     let security = state.runtime.clone();
     let mut router = router_state_core(state);
     if let Some(ui_dir) = ui_dir {
-        router = router.nest_service(
-            "/ui",
-            ServeDir::new(ui_dir).append_index_html_on_directories(true),
-        );
+        router = router
+            .route("/", get(|| async { Redirect::temporary("/ui/") }))
+            .nest_service(
+                "/ui",
+                ServeDir::new(ui_dir).append_index_html_on_directories(true),
+            );
     }
     router.layer(middleware::from_fn_with_state(security, enforce))
 }
@@ -349,13 +351,15 @@ pub fn router_with_ui_executor(
     ui_dir: PathBuf,
     runtime: ApiRuntime,
 ) -> Router {
-    let security = runtime.clone();
-    router_core(executor, runtime)
-        .nest_service(
-            "/ui",
-            ServeDir::new(ui_dir).append_index_html_on_directories(true),
-        )
-        .layer(middleware::from_fn_with_state(security, enforce))
+    router_with_state(
+        ApiState {
+            executor,
+            runtime,
+            engineering_intake: None,
+            conversation: None,
+        },
+        Some(ui_dir),
+    )
 }
 
 fn schema_version() -> i64 {
@@ -2035,6 +2039,76 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn root_redirect_requires_ui_configuration_and_valid_request_context() {
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("root-redirect.sqlite");
+        let ui = temporary.path().join("ui");
+        std::fs::create_dir(&ui).unwrap();
+        drop(Store::open(&database).unwrap());
+        let state = ApiState {
+            executor: DbExecutor::start(database).unwrap(),
+            runtime: test_runtime(),
+            engineering_intake: None,
+            conversation: None,
+        };
+        let without_ui = router_with_state(state.clone(), None);
+        let with_ui = router_with_state(state.clone(), Some(ui.clone()));
+        let helper = router_with_ui_executor(state.executor, ui, state.runtime);
+        for (application, expected) in [
+            (without_ui, StatusCode::NOT_FOUND),
+            (with_ui, StatusCode::TEMPORARY_REDIRECT),
+            (helper, StatusCode::TEMPORARY_REDIRECT),
+        ] {
+            let response = application
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/")
+                        .header("host", TEST_AUTHORITY)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("location")
+                    .map(|value| value.to_str().unwrap()),
+                (expected == StatusCode::TEMPORARY_REDIRECT).then_some("/ui/"),
+            );
+            for (host, origin, expected) in [
+                (
+                    "wrong.invalid",
+                    "http://127.0.0.1:7744",
+                    StatusCode::MISDIRECTED_REQUEST,
+                ),
+                (
+                    TEST_AUTHORITY,
+                    "https://wrong.invalid",
+                    StatusCode::FORBIDDEN,
+                ),
+            ] {
+                let response = application
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri("/")
+                            .header("host", host)
+                            .header("origin", origin)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), expected);
+                assert!(response.headers().get("location").is_none());
+            }
+        }
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-//! Per-process HTTP session and loopback request boundary.
+//! Per-process HTTP session and configured-origin request boundary.
 
 use std::{fmt, net::SocketAddr, sync::Arc};
 
@@ -22,6 +22,54 @@ use uuid::Uuid;
 
 pub const MUTATION_TOKEN_HEADER: &str = "x-bokkie-mutation-token";
 const TOKEN_BYTES: usize = 32;
+
+/// Canonical HTTPS origin of an authenticated proxy sharing the service's loopback.
+/// This configuration supplies no authentication and never permits a remote bind.
+#[derive(Clone, Debug)]
+pub struct PublicOrigin(String);
+
+impl std::str::FromStr for PublicOrigin {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let invalid = || {
+            "public-origin must be canonical https://dns-name[:port], with lowercase DNS labels, no path, credentials, query or fragment; omit default port 443".to_owned()
+        };
+        let authority = value.strip_prefix("https://").ok_or_else(invalid)?;
+        let (host, port) = authority
+            .split_once(':')
+            .map_or((authority, None), |(host, port)| (host, Some(port)));
+        let final_label = host.rsplit('.').next().unwrap_or_default();
+        if host.is_empty()
+            || host.len() > 253
+            || host == "localhost"
+            || host.ends_with(".localhost")
+            || !final_label.bytes().any(|b| b.is_ascii_lowercase())
+            // Browsers also interpret hexadecimal final labels as IPv4 numbers.
+            || final_label.strip_prefix("0x").is_some_and(|digits| {
+                digits.bytes().all(|b| b.is_ascii_hexdigit())
+            })
+            || !host.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && label
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                    && label.as_bytes()[0].is_ascii_alphanumeric()
+                    && label.as_bytes()[label.len() - 1].is_ascii_alphanumeric()
+            })
+        {
+            return Err(invalid());
+        }
+        if let Some(port) = port {
+            let number = port.parse::<u16>().map_err(|_| invalid())?;
+            if number == 0 || number == 443 || port != number.to_string() {
+                return Err(invalid());
+            }
+        }
+        Ok(Self(value.to_owned()))
+    }
+}
 
 #[derive(Clone)]
 pub struct ApiRuntime {
@@ -63,6 +111,21 @@ impl ApiRuntime {
         ))
     }
 
+    pub fn with_public_origin(
+        origin: PublicOrigin,
+        schema_version: i64,
+    ) -> Result<Self, getrandom::Error> {
+        let mut bytes = [0_u8; TOKEN_BYTES];
+        getrandom::fill(&mut bytes)?;
+        Ok(Self::from_origin(
+            origin.0.strip_prefix("https://").unwrap().to_owned(),
+            origin.0,
+            schema_version,
+            Uuid::new_v4().to_string(),
+            hex(&bytes),
+        ))
+    }
+
     fn from_parts(
         address: SocketAddr,
         schema_version: i64,
@@ -70,8 +133,24 @@ impl ApiRuntime {
         mutation_token: String,
     ) -> Self {
         let authority = address.to_string();
+        Self::from_origin(
+            authority.clone(),
+            format!("http://{authority}"),
+            schema_version,
+            session_id,
+            mutation_token,
+        )
+    }
+
+    fn from_origin(
+        authority: String,
+        origin: String,
+        schema_version: i64,
+        session_id: String,
+        mutation_token: String,
+    ) -> Self {
         Self {
-            origin: format!("http://{authority}").into(),
+            origin: origin.into(),
             authority: authority.into(),
             identity: ServiceIdentity {
                 build: BOKKIE_BUILD_ID.to_owned(),
@@ -122,7 +201,7 @@ pub async fn enforce(
         return rejection(
             StatusCode::MISDIRECTED_REQUEST,
             "invalid_host",
-            "request Host must match the configured literal loopback authority",
+            "request Host must match the configured authority",
         );
     }
 
@@ -138,7 +217,7 @@ pub async fn enforce(
             return rejection(
                 StatusCode::FORBIDDEN,
                 "invalid_origin",
-                "browser Origin must match the configured loopback origin",
+                "browser Origin must match the configured origin",
             );
         }
     }

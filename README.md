@@ -92,8 +92,18 @@ decisions and dispatch use the proposal instance, source observation, commit and
 generation.
 
 `serve` runs the scheduler and local HTTP API together and refuses non-loopback
-binding. Every request must name the exact configured literal loopback
-authority. Browser requests must also be same-origin, and every HTTP mutation
+binding. By default, every request must name the exact configured literal loopback
+authority. For an authenticated trusted reverse proxy sharing Bokkie's loopback
+network, `--public-origin https://bokkie.example.org` explicitly selects the
+expected HTTPS origin and Host authority. Use lowercase DNS labels and an optional
+non-default decimal port; paths, trailing slashes, user information, queries,
+fragments and IP literals are rejected. Forwarding headers never select the
+origin. The proxy must authenticate every API and static UI ingress path and
+prevent access to the backend that bypasses authentication. This option does not
+provide authentication or permit a non-loopback bind.
+The [Nostromo deployment recipe](docs/deployment.md) packages the service and
+Polyorama UI with an authenticated edge and the qualified conversation sandbox.
+Browser requests must also be same-origin, and every HTTP mutation
 requires a high-entropy per-process token obtained from the same-origin
 `/bootstrap` contract. This is CSRF and DNS-rebinding protection for a local
 single-user service, not user authentication or authorisation. The coding gardener remains disabled unless the operator supplies

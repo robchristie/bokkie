@@ -1,0 +1,22 @@
+[Unit]
+Description=Bokkie service and authenticated web ingress
+Requires=docker.service apparmor.service
+After=docker.service apparmor.service
+PartOf=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=rob
+Group=rob
+WorkingDirectory=/srv/stacks/bokkie
+ExecStart=/usr/bin/python3 /srv/stacks/bokkie/source/deploy/manage.py run --root /srv/stacks/bokkie
+ExecStopPost=/usr/bin/python3 /srv/stacks/bokkie/source/deploy/manage.py stop --root /srv/stacks/bokkie
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=120
+UMask=0077
+
+[Install]
+WantedBy=docker.service
