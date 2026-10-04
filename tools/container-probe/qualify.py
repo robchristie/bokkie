@@ -144,7 +144,8 @@ def inner():
     assert threaded == [True]
     nested = subprocess.run([PROFILE['bwrap'], '--unshare-user', '--ro-bind', '/', '/', '--', '/bin/true'],
                             capture_output=True, text=True, timeout=5)
-    assert nested.returncode != 0 and 'Operation not permitted' in nested.stderr, nested
+    assert nested.returncode != 0 and any(message in nested.stderr for message in (
+        'Operation not permitted', 'No permissions to create new namespace')), nested
     processes = {p.name: (p / 'comm').read_text().strip() for p in Path('/proc').iterdir() if p.name.isdigit()}
     # At observation time only bwrap's PID1 and this payload remain.
     assert set(processes) == {'1', str(os.getpid())}, processes
