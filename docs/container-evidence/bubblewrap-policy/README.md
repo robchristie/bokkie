@@ -31,9 +31,9 @@ The runtime image was built from source
 `34aa41d1b45ae66359c3bb3b3e661dc6d6ebd452`, adding `strace` to the disposable image
 with the existing broker and probe unchanged. Versions were Docker 29.8.1, Linux
 6.12.73+deb13-amd64, AppArmor parser 4.1.0, Bubblewrap 0.8.0 and Codex 0.155.1.
-The owning PR retains the committed-candidate replay and delivery gates. Earlier
-[kernel/persistence observations](../README.md) remain attributable to that
-earlier image and default configuration, not qualification of this new policy.
+[`replay.json`](replay.json) retains the committed-input replay; the owning PR
+retains delivery gates. Earlier [kernel/persistence observations](../README.md)
+remain attributable to that earlier image and default configuration, not qualification of this new policy.
 
 ## Measured policy delta
 
@@ -154,8 +154,11 @@ ordinary probe does not load these policies. The loader snapshot records the
 fixed inputs and explicit kernel-feature selection. Stop before adding further
 policy allowances.
 
-After replay, stop task processes before removing the named profile and confirm
-the other loaded profile inventory is unchanged. Remove only the unique
+[`cleanup.json`](cleanup.json) records completed removal of all task resources
+and the named profile, with the other loaded profile inventory unchanged.
+
+For a subsequent experiment, stop task processes before removing its profile,
+and confirm the other loaded profile inventory is unchanged. Remove only the unique
 project's containers, synthetic volume, image tags and scratch directory; retain
 the cleanup receipt with the owning PR. Shared base layers/build cache may remain.
 Cleaning up disposable processes does not establish agent-descendant teardown.
