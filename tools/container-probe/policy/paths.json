@@ -1,0 +1,23 @@
+{
+  "MaskedPaths": [
+    "/sys/devices/virtual/powercap",
+    "/sys/firmware",
+    "/sys/devices/system/cpu/cpu0/thermal_throttle",
+    "/sys/devices/system/cpu/cpu1/thermal_throttle",
+    "/sys/devices/system/cpu/cpu2/thermal_throttle",
+    "/sys/devices/system/cpu/cpu3/thermal_throttle",
+    "/sys/devices/system/cpu/cpu4/thermal_throttle",
+    "/sys/devices/system/cpu/cpu5/thermal_throttle",
+    "/sys/devices/system/cpu/cpu6/thermal_throttle",
+    "/sys/devices/system/cpu/cpu7/thermal_throttle",
+    "/sys/devices/system/cpu/cpu8/thermal_throttle",
+    "/sys/devices/system/cpu/cpu9/thermal_throttle",
+    "/sys/devices/system/cpu/cpu10/thermal_throttle",
+    "/sys/devices/system/cpu/cpu11/thermal_throttle",
+    "/proc/latency_stats",
+    "/proc/sched_debug",
+    "/proc/scsi",
+    "/proc/timer_stats"
+  ],
+  "ReadonlyPaths": []
+}

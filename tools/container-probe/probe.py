@@ -35,36 +35,9 @@ def inner():
 
 
 def boundary():
-    if os.getuid() == 0:
-        raise RuntimeError('probe requires a non-root user')
-    spec = importlib.util.spec_from_file_location('broker', '/opt/conversation/broker.py')
-    broker = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(broker)
-    Path('/home/probe/.codex/canary').write_text('synthetic account canary')
-    Path('/tmp/outer-canary').write_text('outer temporary directory')
-    # This mount is writable outside Bubblewrap, so EROFS proves the inner remount.
-    Path('/data/boundary-canary').write_text('outer writable state')
-    profile = {'bwrap': '/usr/bin/bwrap', 'codex': '/usr/local/bin/codex'}
-    command = broker.command(profile, {})
-    command = command[:command.index('--') + 1] + ['/usr/bin/python3', '/opt/probe.py', 'inner']
-    result = run(command)
-    report = {'uid': os.getuid(), 'outer_namespaces': namespaces(), 'command': command,
-              'exit_code': result.returncode, 'stderr': result.stderr,
-              'model_calls': 0, 'credentials_mounted': False}
-    if result.returncode:
-        report['result'] = 'blocked'
-        emit(report)
-        return 20
-    observed = json.loads(result.stdout)
-    report['inner'] = observed
-    report['result'] = 'passed' if (
-        all(observed[key] for key in ('root_read_only', 'account_hidden', 'outer_tmp_hidden'))
-        and all(observed['namespaces'][name] != report['outer_namespaces'][name]
-                for name in ('mnt', 'pid'))
-        and not Path('/tmp/private-write').exists()
-    ) else 'failed'
-    emit(report)
-    return 0 if report['result'] == 'passed' else 1
+    from qualify import boundary as qualify_boundary
+    qualify_boundary()
+    return 0
 
 
 def preflight():
@@ -148,6 +121,9 @@ if __name__ == '__main__':
         hold()
     elif command == 'boundary':
         sys.exit(boundary())
+    elif command == 'lifecycle':
+        from qualify import lifecycle
+        lifecycle()
     elif command == 'preflight':
         sys.exit(preflight())
     elif command == 'persistence':

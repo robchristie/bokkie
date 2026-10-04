@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """One bounded, ephemeral, environment-free Codex conversation turn."""
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,12 @@ import subprocess
 import sys
 import time
 import tomllib
+
+_filter_spec = importlib.util.spec_from_file_location(
+    'conversation_payload_filter', Path(__file__).with_name('payload_filter.py'))
+_filter_module = importlib.util.module_from_spec(_filter_spec)
+_filter_spec.loader.exec_module(_filter_module)
+payload_filter_fd = _filter_module.payload_filter_fd
 
 MAX_WIRE = 2 * 1024 * 1024
 QUALIFIED_VERSION = "0.155.1"
@@ -118,22 +125,40 @@ def verify_thread(started, profile):
         raise ValueError('effective thread containment differs')
 
 
-def command(profile, config):
+def _command(profile, config, filter_fd, payload=None):
     home = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))).resolve()
     # Keep existing account material at its original path, read-only. Hide host
     # session databases, skills and hooks behind an in-memory mount; no copying.
     args = [profile['bwrap'], '--die-with-parent', '--unshare-pid', '--new-session',
+            '--cap-drop', 'ALL', '--seccomp', str(filter_fd),
             '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc',
             '--tmpfs', '/tmp', '--dir', '/tmp/conversation', '--tmpfs', str(home)]
     for name in ('auth.json', 'config.toml'):
         path = home / name
         if path.is_file():
             args += ['--ro-bind', str(path), str(path)]
-    args += ['--chdir', '/tmp/conversation', '--', profile['codex'],
-             'app-server', '--listen', 'stdio://']
+    args += ['--chdir', '/tmp/conversation', '--']
+    if payload is not None:
+        return args + list(payload)
+    args += [profile['codex'], 'app-server', '--listen', 'stdio://']
     for key, value in config.items():
         args += ['-c', key + '=' + ('{}' if isinstance(value, dict) else json.dumps(value))]
     return args
+
+
+def spawn(profile, config, environment, *, payload=None):
+    """Launch the fixed boundary; payload is trusted qualification code only.
+
+    Bubblewrap consumes and closes the filter descriptor after filesystem setup,
+    applying it to namespace PID 1 and the payload before exec. Callers cannot
+    supply a filter or disable confinement. The parent closes its copy as soon as
+    Popen returns, including on failed launches.
+    """
+    with payload_filter_fd() as descriptor:
+        return subprocess.Popen(_command(profile, config, descriptor, payload),
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env=environment,
+                                pass_fds=(descriptor,))
 
 
 class ProposalSelected(Exception):
@@ -267,8 +292,7 @@ def run(request):
                    if name in ('HOME', 'PATH', 'CODEX_HOME', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
                                'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY')}
     environment.update(TMPDIR='/tmp', CODEX_SQLITE_HOME='/tmp/conversation/state')
-    child = subprocess.Popen(command(profile, config), stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
+    child = spawn(profile, config, environment)
     peer = Peer(child, profile['timeout_seconds'], names, profile['max_output_bytes'])
     try:
         initialized = peer.rpc('initialize', {'clientInfo': {'name': 'bokkie_conversation', 'version': '1'},
@@ -336,7 +360,11 @@ def run(request):
         return peer.proposal
     finally:
         if child.poll() is None:
-            child.kill()  # Killing the namespace leader also kills its descendants.
+            # Popen tracks Bubblewrap's outer monitor, not namespace PID 1.
+            # --die-with-parent propagates its death to PID 1; the kernel then
+            # kills all members of that private PID namespace, including setsid
+            # and double-fork descendants. Qualify this chain on the target host.
+            child.kill()
         child.wait(timeout=5)
         peer.selector.close()
         for stream in (child.stdin, child.stdout, child.stderr):

@@ -1,11 +1,12 @@
 """Offline peers exercise the production broker protocol and containment checks."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import subprocess
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location('conversation_broker', Path(__file__).with_name('broker.py'))
 broker = importlib.util.module_from_spec(spec)
@@ -87,12 +88,13 @@ for line in sys.stdin:
         children = []
         original_popen, original_send = subprocess.Popen, broker.Peer.send
 
-        def launch(*args, **kwargs):
-            child = original_popen(*args, **kwargs)
+        def launch(_profile, _config, environment):
+            child = original_popen([sys.executable, '-u', '-c', source], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
             children.append(child)
             return child
 
-        with patch.object(broker, 'configuration', return_value={}), patch.object(broker, 'command', return_value=[sys.executable, '-u', '-c', source]), patch.object(broker.subprocess, 'Popen', side_effect=launch), patch.object(broker.Peer, 'send', autospec=True, side_effect=original_send) as sent:
+        with patch.object(broker, 'configuration', return_value={}), patch.object(broker, 'spawn', side_effect=launch), patch.object(broker.Peer, 'send', autospec=True, side_effect=original_send) as sent:
             try:
                 return broker.run({'profile': profile, 'context': {'message': 'hello'}, 'tools': specs,
                                    'preflight': preflight})
@@ -175,7 +177,11 @@ for line in sys.stdin:
   send({'method':'item/completed','params':{'threadId':tid,'turnId':'turn-1','item':{'type':kind,'text':text,'phase':'final_answer'}}})
   send({'method':'turn/completed','params':{'threadId':tid,'turn':{'id':'turn-1','status':'completed'}}})
 '''.replace('CONFIG', repr(config())).replace('STARTED', repr(started())).replace('SCENARIO', repr(scenario))
-        with patch.object(broker, 'configuration', return_value={}), patch.object(broker, 'command', return_value=[sys.executable, '-u', '-c', source]):
+        def launch(_profile, _config, environment):
+            return subprocess.Popen([sys.executable, '-u', '-c', source], stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
+
+        with patch.object(broker, 'configuration', return_value={}), patch.object(broker, 'spawn', side_effect=launch):
             return broker.run({'profile': profile, 'context': {'message': 'hello'},
                                'output_schema': {'type': 'object'}, 'preflight': preflight})
 
@@ -209,12 +215,49 @@ for line in sys.stdin:
             with self.assertRaises(ValueError): broker.verify_thread(value, {'model':'fixture-model','effort':'medium'})
 
     def test_boundary_read_only_with_private_state(self):
-        args = broker.command({'bwrap':'/usr/bin/bwrap','codex':'/usr/bin/codex'}, {})
+        args = broker._command({'bwrap':'/usr/bin/bwrap','codex':'/usr/bin/codex'}, {}, 42)
         self.assertEqual(args[args.index('--ro-bind')+1:args.index('--ro-bind')+3], ['/', '/'])
         self.assertIn('--unshare-pid', args)
         self.assertIn('--tmpfs', args)
         self.assertIn('/tmp/conversation', args)
         self.assertNotIn('--dev-bind', args)
+        self.assertEqual(args[args.index('--cap-drop') + 1], 'ALL')
+        self.assertEqual(args[args.index('--seccomp') + 1], '42')
+
+    def test_spawn_owns_filter_and_closes_parent_descriptor(self):
+        profile = {'bwrap': '/usr/bin/bwrap', 'codex': '/usr/bin/codex'}
+        for failure in (False, True):
+            descriptors = []
+            child = Mock()
+
+            def launch(args, **kwargs):
+                descriptor, = kwargs['pass_fds']
+                descriptors.append(descriptor)
+                self.assertGreater(os.fstat(descriptor).st_size, 0)
+                self.assertFalse(os.get_inheritable(descriptor))
+                self.assertEqual(args[args.index('--seccomp') + 1], str(descriptor))
+                self.assertEqual(args[args.index('--cap-drop') + 1], 'ALL')
+                self.assertEqual(args[args.index('--') + 1:], ['/usr/bin/true'])
+                if failure:
+                    raise OSError('fixture launch failure')
+                return child
+
+            with self.subTest(failure=failure), patch.object(broker.subprocess, 'Popen', side_effect=launch):
+                if failure:
+                    with self.assertRaises(OSError):
+                        broker.spawn(profile, {}, {}, payload=['/usr/bin/true'])
+                else:
+                    self.assertIs(broker.spawn(profile, {}, {}, payload=['/usr/bin/true']), child)
+                self.assertEqual(len(descriptors), 1)
+                with self.assertRaises(OSError):
+                    os.fstat(descriptors[0])
+
+    def test_filter_failure_prevents_spawn(self):
+        with patch.object(broker, 'payload_filter_fd', side_effect=ValueError('fixture filter failure')), \
+                patch.object(broker.subprocess, 'Popen') as launch:
+            with self.assertRaisesRegex(ValueError, 'fixture filter failure'):
+                broker.spawn({}, {}, {})
+            launch.assert_not_called()
 
 
 if __name__ == '__main__':
