@@ -239,8 +239,19 @@ def wait_gone(identities):
 
 def lifecycle_payload(token):
     # Detach and close stdio: pipe EOF and process-group kills cannot pass alone.
-    daemon = subprocess.Popen([sys.executable, SELF, 'daemon', token], start_new_session=True,
-                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ready_read, ready_write = os.pipe()
+    try:
+        try:
+            daemon = subprocess.Popen([sys.executable, SELF, 'daemon', token, str(ready_write)],
+                                      start_new_session=True, pass_fds=(ready_write,),
+                                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL)
+        finally:
+            os.close(ready_write)
+        assert select.select([ready_read], [], [], 5)[0], 'daemon readiness timeout'
+        assert os.read(ready_read, 1) == b'1', 'daemon exited before installing signal handlers'
+    finally:
+        os.close(ready_read)
     emit({'ready': True, 'daemon_inner_pid': daemon.pid})
     sys.stdin.buffer.read(1)
 
@@ -335,6 +346,8 @@ def lifecycle():
             wait_gone(identities)
             assert tagged_processes(token) == []
             result = {'mode': mode, 'identities': identities, 'all_reaped': True}
+            if mode != 'startup-death':
+                result['daemon_signal_handlers_acknowledged'] = True
             if held is not None:
                 result['constructor_barrier'] = 'post-mount and UID remap, before do_init'
                 result['reaped_before_barrier_release'] = True
@@ -367,5 +380,8 @@ if __name__ == '__main__':
     elif mode == 'daemon':
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
+        ready_write = int(sys.argv[3])
+        os.write(ready_write, b'1')
+        os.close(ready_write)
         while True: time.sleep(1)
     else: raise ValueError('unknown probe')

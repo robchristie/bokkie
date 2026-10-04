@@ -44,14 +44,25 @@ def constructor(mode, gate):
             stream.read(1)
         Path(gate + '.executed').touch()
     else:
+        ready_read, ready_write = os.pipe()
         daemon = os.fork()
         if not daemon:
+            os.close(ready_read)
             os.setsid()
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
             for fd in (0, 1, 2):
                 os.close(fd)
+            os.write(ready_write, b'1')
+            os.close(ready_write)
             while True:
                 signal.pause()
+        os.close(ready_write)
+        try:
+            assert select.select([ready_read], [], [], 5)[0], 'daemon readiness timeout'
+            assert os.read(ready_read, 1) == b'1', 'daemon exited before installing signal handlers'
+        finally:
+            os.close(ready_read)
         print(json.dumps({'leader': os.getpid(), 'daemon': daemon}), flush=True)
         sys.stdin.buffer.read(1)
     os._exit(0)
