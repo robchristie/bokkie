@@ -201,6 +201,10 @@ http {{
   }}
 }}
 ''')
+    # This contains routing configuration, never credentials. The capability-free
+    # root nginx process must read a file owned by the non-root deployment owner,
+    # including when systemd starts the manager with UMask=0077.
+    (root / 'nginx.conf').chmod(0o644)
     (root / 'compose.json').write_text(json.dumps(edge(config, root), indent=2) + '\n')
     (root / 'apparmor.profile').write_text(policy_text(config).replace(
         'BOKKIE_PROFILE', profile_name(config)))
