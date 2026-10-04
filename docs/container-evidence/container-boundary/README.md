@@ -85,7 +85,8 @@ killing the reaper and abandoning its descendants.
 
 [`lifecycle.json`](lifecycle.json) records normal completion, cancellation,
 ready-state broker death and the same deterministic constructor barrier. The
-test descendants detach, close stdio and ignore catchable termination signals.
+test descendants detach, close inherited stdio and acknowledge installed
+catchable-signal ignore handlers before cleanup is triggered.
 PID/start-time identities all disappear, including zombies, while the outer
 container remains alive. The held namespace leader is reaped **before** the
 barrier is released. Offline regression tests also kill the broker's complete

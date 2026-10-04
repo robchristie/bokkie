@@ -1,6 +1,6 @@
 {
-  "source": "562b9f8ad4179879b4901cc5117067ae68eeac85",
-  "image": "sha256:3e6fc10f73f85734eef9cd2e22105435e340741cfe01b770dd8adebf8d840644",
+  "source": "5e866aaeaaabc74ac7771343a1176a9d0393375b",
+  "image": "sha256:b8a2b9c68728cb6e0337cfefeca22692292c98d6aacb9d3b84812a97cf416a32",
   "rendered_apparmor_sha256": "8d243e524ee2e173be47855dce9c0ea8f0f806a40611bc974b127a03477d403f",
   "policy_sha256": {
     "README.md": "e0687d6ebf64a7214b6bd359ca147ff2d1e4fd9ecde1709d918d1de9dc9b2978",
@@ -101,7 +101,7 @@
     "Mounts": [
       {
         "Type": "volume",
-        "Source": "bokkie-boundary-72f2f5a7aa4b4c2695f2accee0d24454",
+        "Source": "bokkie-boundary-9d4f1fda8a52458898c0ce4101f3501c",
         "Target": "/data"
       }
     ],
@@ -129,7 +129,7 @@
     "Init": true
   },
   "effective_config": {
-    "Hostname": "5c2bb413ba25",
+    "Hostname": "4d6bd55d19b4",
     "Domainname": "",
     "User": "10001:10001",
     "AttachStdin": false,
@@ -147,7 +147,7 @@
     "Cmd": [
       "hold"
     ],
-    "Image": "sha256:3e6fc10f73f85734eef9cd2e22105435e340741cfe01b770dd8adebf8d840644",
+    "Image": "sha256:b8a2b9c68728cb6e0337cfefeca22692292c98d6aacb9d3b84812a97cf416a32",
     "Volumes": null,
     "WorkingDir": "/home/probe",
     "Entrypoint": [
@@ -155,15 +155,15 @@
       "/opt/probe.py"
     ],
     "Labels": {
-      "bokkie.boundary": "bokkie-boundary-72f2f5a7aa4b4c2695f2accee0d24454",
-      "org.opencontainers.image.revision": "562b9f8ad4179879b4901cc5117067ae68eeac85"
+      "bokkie.boundary": "bokkie-boundary-9d4f1fda8a52458898c0ce4101f3501c",
+      "org.opencontainers.image.revision": "5e866aaeaaabc74ac7771343a1176a9d0393375b"
     }
   },
   "apparmor_profile": "bokkie-boundary-a73c9e42",
-  "container": "5c2bb413ba2552d3373e83687568048ea21e02f9c61a087bc8f0f7794b227c81",
+  "container": "4d6bd55d19b43d3bbec20197ee4d6aa889928bf7629cc5902fb4dbd8171080eb",
   "container_volume_cleanup": {
-    "container": "5c2bb413ba2552d3373e83687568048ea21e02f9c61a087bc8f0f7794b227c81",
-    "volume": "bokkie-boundary-72f2f5a7aa4b4c2695f2accee0d24454",
+    "container": "4d6bd55d19b43d3bbec20197ee4d6aa889928bf7629cc5902fb4dbd8171080eb",
+    "volume": "bokkie-boundary-9d4f1fda8a52458898c0ce4101f3501c",
     "removed": true
   },
   "command": "python3 tools/container-probe/run_boundary.py --image <recorded immutable image> --profile <recorded profile> --source <recorded revision> --evidence <new directory>"
