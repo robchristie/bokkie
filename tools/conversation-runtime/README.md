@@ -149,11 +149,12 @@ are elapsed time, supplied bytes, observed wire bytes, final bytes, one turn,
 one permitted proposal selection, zero executed tools and the caller's finite
 request count.
 
-The installed protocol was inspected using Codex CLI 0.155.1's
+The retained protocol inspection used Codex CLI 0.155.1's
 `app-server generate-json-schema --experimental`. The no-model probe observed
 `environments: []`, `ephemeral: true`, no instruction sources, the requested
 model/effort, `approvalPolicy: never`, `approvalsReviewer: user` and a read-only
-network-off thread sandbox. The protocol exposes effective environments in
+network-off thread sandbox. These historical observations do not by themselves
+qualify the current 0.160.0 runtime. The protocol exposes effective environments in
 `thread/start`; an incompatible runtime fails before a model turn.
 See the [official app-server contract](https://learn.chatgpt.com/docs/app-server)
 for thread and structured-output turn semantics.
@@ -215,9 +216,13 @@ Run `target/debug/bokkie-conversation-fixture --profile /absolute/profile.json
 supports omission of `--profile` for offline UI/restart checks; the conversation
 runtime then reports unavailable and performs no model requests.
 
-The adapter accepts only the qualified Codex version `0.155.1`. Requalify the
-capability catalogue, environment exclusion and effective settings before
-changing that guard. The backend's server-created `context.instruction` is
+The adapter accepts only Codex version `0.160.0`, matching both image pins and
+the offline protocol peers. Other versions fail immediately after initialisation,
+before configuration, thread or model requests. Qualify the capability catalogue,
+environment exclusion and effective settings for that exact runtime before
+deployment; offline peers do not establish live protocol compatibility. Repeat
+that qualification whenever the guard changes.
+The backend's server-created `context.instruction` is
 extracted into developer instructions (maximum 16 KiB); all remaining context
 stays in the untrusted user-data message. Never populate that reserved field
 from user-supplied JSON.

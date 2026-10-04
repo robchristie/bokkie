@@ -160,7 +160,7 @@ def inner():
 
 
 def boundary():
-    assert os.getuid() == 10001
+    assert (os.getuid(), os.getgid()) in ((10001, 10001), (3000, 3000))
     Path('/home/probe/.codex/canary').write_text('synthetic account canary')
     Path('/tmp/outer-canary').write_text('outer temporary directory')
     Path('/data/boundary-canary').write_text('outer writable state')
@@ -293,7 +293,7 @@ def blocked_constructor(supervisor):
                 mapping = (root / 'uid_map').read_text().split()
                 if (waiting in ('pipe_read', 'anon_pipe_read') and
                         (root / 'root/tmp/conversation').is_dir() and
-                        mapping == ['10001', '10001', '1']):
+                        mapping == [str(os.getuid()), str(os.getuid()), '1']):
                     return [process_id(monitor), process_id(leader)]
         assert time.monotonic() < deadline, 'constructor did not reach post-remap barrier'
         time.sleep(0.01)

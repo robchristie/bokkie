@@ -19,7 +19,7 @@ _filter_spec.loader.exec_module(_filter_module)
 payload_filter_fd = _filter_module.payload_filter_fd
 
 MAX_WIRE = 2 * 1024 * 1024
-QUALIFIED_VERSION = "0.155.1"
+QUALIFIED_VERSION = "0.160.0"
 TOOL_NAMES = frozenset(('bokkie_discuss', 'bokkie_lookup', 'bokkie_save_draft',
                         'bokkie_preview', 'bokkie_propose'))
 TOOL_NAMESPACE = 'bokkie'
