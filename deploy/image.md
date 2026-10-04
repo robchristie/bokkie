@@ -28,7 +28,8 @@ synthetic persistence fixture build in release mode using Rust 1.85.0; the
 Polyorama browser library builds in release mode using Rust 1.97.1 and
 `wasm-bindgen-cli 0.2.127`. Both use the repository's shared `Cargo.lock` with
 `--locked`. Browser output is generated within the build and copied with the
-checked-in HTML, JavaScript and stylesheet to `/opt/ui`.
+checked-in HTML, JavaScript and stylesheet to `/opt/ui`. The bundled Inter font
+notice is retained at `/opt/ui/licenses/Inter-LICENSE.txt`.
 
 The final image uses the same digest-pinned Node 22 Debian bookworm base as the
 qualified container probe. It installs Codex 0.155.1 and fails the build unless

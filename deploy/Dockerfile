@@ -46,6 +46,7 @@ COPY tools/container-probe/probe.py /opt/probe.py
 COPY tools/container-probe/qualify.py /opt/qualify.py
 COPY --from=backend /source/target/release/bokkie /source/target/release/bokkie-conversation-fixture /usr/local/bin/
 COPY --from=ui /source/apps/bokkie-attention-ui/web/ /opt/ui/
+COPY apps/bokkie-attention-ui/assets/fonts/Inter-LICENSE.txt /opt/ui/licenses/Inter-LICENSE.txt
 COPY LICENSE /usr/share/doc/bokkie/LICENSE
 LABEL org.opencontainers.image.title="Bokkie" \
       org.opencontainers.image.source="https://github.com/robchristie/bokkie" \

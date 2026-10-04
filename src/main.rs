@@ -18,7 +18,7 @@ use bokkie::{
     NewRepositoryRegistration, Recurrence, RetryPolicy, Store, StoreError, SystemClock, UnixClock,
     engineering_runtime::{EngineeringRuntime, EngineeringRuntimeProfile},
     http::{ApiState, EngineeringIntakeConfig, error_json, router_with_state, validate_loopback},
-    http_security::ApiRuntime,
+    http_security::{ApiRuntime, PublicOrigin},
     migration_manifest, run_doctor,
     runtime_trust::{ChildEnvironment, GitHubCredential},
     service::{
@@ -140,6 +140,10 @@ enum Command {
     Serve {
         #[arg(long, default_value = "127.0.0.1:7744")]
         bind: SocketAddr,
+        /// Canonical HTTPS origin behind an authenticated trusted proxy sharing loopback.
+        /// Does not provide authentication or permit a non-loopback bind.
+        #[arg(long)]
+        public_origin: Option<PublicOrigin>,
         #[arg(long, default_value_t = 100)]
         poll_ms: u64,
         #[arg(long, default_value_t = 30)]
@@ -386,6 +390,7 @@ enum FakeOutcomeArg {
 
 struct ServeOptions {
     bind: SocketAddr,
+    public_origin: Option<PublicOrigin>,
     poll_ms: u64,
     lease_seconds: i64,
     ordinary_concurrency: usize,
@@ -500,6 +505,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
     match cli.command {
         Command::Serve {
             bind,
+            public_origin,
             poll_ms,
             lease_seconds,
             ordinary_concurrency,
@@ -528,6 +534,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                 cli.database,
                 ServeOptions {
                     bind,
+                    public_origin,
                     poll_ms,
                     lease_seconds,
                     ordinary_concurrency,
@@ -982,12 +989,16 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
     // process that immediately fails service start-up or mutate its database.
     let listener = tokio::net::TcpListener::bind(options.bind).await?;
     let local_address = listener.local_addr()?;
-    let api_runtime = ApiRuntime::new(local_address, migration_manifest().last().unwrap().version)
-        .map_err(|error| {
-            AppError::Io(io::Error::other(format!(
-                "could not generate the per-process HTTP mutation secret: {error}"
-            )))
-        })?;
+    let schema_version = migration_manifest().last().unwrap().version;
+    let api_runtime = match options.public_origin {
+        Some(origin) => ApiRuntime::with_public_origin(origin, schema_version),
+        None => ApiRuntime::new(local_address, schema_version),
+    }
+    .map_err(|error| {
+        AppError::Io(io::Error::other(format!(
+            "could not generate the per-process HTTP mutation secret: {error}"
+        )))
+    })?;
 
     // This is the service's sole migration step. Long-lived consumers below
     // only accept an already current immutable manifest.
