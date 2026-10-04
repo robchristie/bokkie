@@ -207,7 +207,8 @@ def run():
         expected.pop('ExposedPorts')
         expected['HostConfig']['NetworkMode'] = 'none'
         expected['HostConfig']['Mounts'] = [
-            {'Type': 'volume', 'Source': name, 'Target': '/data'},
+            {'Type': 'volume', 'Source': name, 'Target': '/data',
+             'VolumeOptions': {'NoCopy': True}},
             {'Type': 'bind', 'Source': str(auth), 'Target': AUTH, 'ReadOnly': True}]
         record('requested', expected)
         require(manage.api('GET', '/volumes/' + name, missing=True) is None, 'volume already exists')
@@ -286,6 +287,21 @@ print(json.dumps({'result':'passed','is_file':True,'readable':False,'model_calls
             else:
                 require(observed['result'] == 'passed' and observed['model_calls'] == 0,
                         probe + ' did not qualify')
+        catalogue = execute('catalogue-preflight', ['-c', '''import json,subprocess,tempfile
+from pathlib import Path
+profile={'broker':'/opt/conversation/broker.py','codex':'/usr/local/bin/codex',
+ 'bwrap':'/usr/bin/bwrap','model':'gpt-5.6-terra','effort':'medium',
+ 'timezone':'Australia/Adelaide','timeout_seconds':30,
+ 'max_context_bytes':65536,'max_output_bytes':16384}
+with tempfile.TemporaryDirectory() as directory:
+ path=Path(directory)/'profile.json';path.write_text(json.dumps(profile))
+ result=subprocess.run(['/usr/local/bin/bokkie-conversation-fixture','--profile',str(path),'--preflight'],
+  check=True,capture_output=True,text=True,timeout=40)
+ print(result.stdout)
+'''])
+        require(catalogue['model_calls'] == 0 and catalogue['offered_tools'] ==
+                ['bokkie_discuss', 'bokkie_lookup', 'bokkie_save_draft'],
+                'actual conversation catalogue preflight differs')
         account = execute('account-integrity-after', ['-c', OUTER, profile, PAYLOAD])
         final = auth.stat()
         require((final.st_dev, final.st_ino) == (original.st_dev, original.st_ino)
