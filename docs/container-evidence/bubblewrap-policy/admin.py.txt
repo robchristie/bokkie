@@ -1,0 +1,54 @@
+"""Fixed operation loader for the explicitly authorised temporary test profile."""
+from pathlib import Path
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+
+NAME = 'bokkie-bwrap-hj3yyjlo'
+POLICY = '/policy/bokkie-bwrap-hj3yyjlo.apparmor'
+operation, expected = sys.argv[1:]
+switch = {'add': '-a', 'replace': '-r', 'remove': '-R'}[operation]
+actual = hashlib.sha256(Path(POLICY).read_bytes()).hexdigest()
+if actual != expected:
+    raise RuntimeError('policy digest differs')
+status = dict(line.split(':', 1) for line in Path('/proc/self/status').read_text().splitlines() if ':' in line)
+if os.getuid() != 0 or int(status['CapEff'].strip(), 16) != (1 << 33):
+    raise RuntimeError('loader requires only MAC_ADMIN')
+if status['NoNewPrivs'].strip() != '1' or status['Seccomp'].strip() != '2':
+    raise RuntimeError('loader restrictions differ')
+if Path('/proc/self/uid_map').read_text().split() != ['0', '0', '4294967295']:
+    raise RuntimeError('loader requires host initial user namespace')
+def parser(*args):
+    return subprocess.run(['/usr/sbin/apparmor_parser', '-f', '/apparmor', '-K', '--kernel-features', '/apparmor/features',
+                           '--warn=rule-not-enforced', '--Werror=rule-not-enforced', *args, POLICY],
+                          capture_output=True, text=True, check=True, timeout=15)
+names = parser('-N').stdout.splitlines()
+if names != [NAME]:
+    raise RuntimeError('input defines unexpected profiles: ' + repr(names))
+flat = parser('-p').stdout
+declarations = '\n'.join(line for line in flat.splitlines() if not line.lstrip().startswith('#'))
+if re.search(r'^\s*(namespace\b|:[^\s]+:)', declarations, re.MULTILINE):
+    raise RuntimeError('unexpected namespace declaration')
+parser('-Q')
+profiles = Path('/apparmor/profiles')
+def observed():
+    return sorted(profiles.read_text().splitlines())
+before = observed()
+own = [line for line in before if line.startswith(NAME + ' ')]
+if (operation == 'add' and own) or (operation != 'add' and own != [NAME + ' (enforce)']):
+    raise RuntimeError('unexpected installed task profile')
+result = parser(switch)
+after = observed()
+if [line for line in before if not line.startswith(NAME + ' ')] != [line for line in after if not line.startswith(NAME + ' ')]:
+    raise RuntimeError('unrelated profile inventory changed')
+expected_after = [] if operation == 'remove' else [NAME + ' (enforce)']
+if [line for line in after if line.startswith(NAME + ' ')] != expected_after:
+    raise RuntimeError('task profile state differs')
+print(json.dumps({'operation': operation, 'profile': NAME, 'input_sha256': actual,
+                  'preprocessed_sha256': hashlib.sha256(flat.encode()).hexdigest(),
+                  'enforced': operation != 'remove', 'other_profile_inventory_unchanged': True,
+                  'cap_eff': status['CapEff'].strip(), 'no_new_privs': 1, 'seccomp': 2,
+                  'parser_stdout': result.stdout, 'parser_stderr': result.stderr}, sort_keys=True))

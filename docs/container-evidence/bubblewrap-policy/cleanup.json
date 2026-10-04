@@ -1,0 +1,22 @@
+{
+  "project": "bokkie-bwrap-hj3yyjlo",
+  "containers": [],
+  "volumes": [],
+  "task_image_tags": [],
+  "admin_container_absent": true,
+  "profile_removal": {
+    "cap_eff": "0000000200000000",
+    "enforced": false,
+    "input_sha256": "35e4df4d7a734df0082008364466cd51748cade2f451ea06c245d45b30befea1",
+    "no_new_privs": 1,
+    "operation": "remove",
+    "other_profile_inventory_unchanged": true,
+    "parser_stderr": "",
+    "parser_stdout": "",
+    "preprocessed_sha256": "4728c288a93a684cd521b528990e9738f53b0aa96828613654a8376d594724fb",
+    "profile": "bokkie-bwrap-hj3yyjlo",
+    "seccomp": 2
+  },
+  "remote_scratch_removed": "/home/rob/bokkie-bwrap-policy-hj3yyjlo",
+  "base_layers_and_build_cache_may_remain": true
+}

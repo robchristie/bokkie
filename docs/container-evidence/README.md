@@ -6,6 +6,12 @@ existing conversation runtime could not start its Bubblewrap namespace under
 the tested Docker confinement. This is a completed feasibility investigation,
 not qualification of a deployable Bokkie service.
 
+The subsequent authorised [Bubblewrap policy experiment](bubblewrap-policy/README.md)
+got past namespace creation using targeted seccomp and named AppArmor changes,
+but stopped at the fresh private proc mount. It retains the exact policies,
+negative observations and corrected AppArmor loader behaviour. The original
+observations below remain evidence for the default-policy experiment only.
+
 ## Retained observations
 
 [`calibration.json`](calibration.json) retains the initial observations, including
@@ -59,9 +65,10 @@ same harmless broker-shaped probe under an unprivileged host process, followed
 by zero-model preflight only if its boundary succeeds. That would assess the
 lowest-change host-service alternative without deploying it. A container/host
 split would add a new transport and lifecycle contract to today's local stdio
-broker. Keeping the entire runtime containerised instead requires separately
-qualifying a narrow container policy or a container-native worker boundary;
-neither is established by this experiment.
+broker. Keeping the entire runtime containerised requires separately qualifying
+an execution boundary. The follow-on targeted policy experiment did not qualify
+the unchanged broker; a container-native worker remains a different
+implementation decision.
 
 See the [probe instructions](../../tools/container-probe/README.md) for the
 reproducible sequence and stopping rule. Runtime containers and synthetic volumes
