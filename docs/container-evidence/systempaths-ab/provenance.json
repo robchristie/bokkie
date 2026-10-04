@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-04",
+  "source": "f18320916ae38c733ca62f4d3da348d14625ddc7",
+  "prior_evidence": "../bubblewrap-policy/",
+  "profile_name_substitution": {
+    "from": "bokkie-bwrap-hj3yyjlo",
+    "to": "bokkie-systempaths-6f31a9b2"
+  },
+  "unchanged_files": [
+    "tools/container-probe/Dockerfile",
+    "tools/container-probe/probe.py",
+    "tools/conversation-runtime/broker.py",
+    "tools/conversation-runtime/instructions.md"
+  ],
+  "source_sha256": {
+    "tools/container-probe/Dockerfile": "46a23e4d9c5b295f27611143d4da26dc1db8c5de215e37b6a0b5dc2649fd0433",
+    "tools/container-probe/probe.py": "eeebc49d10545a9a9654b35b8d3da934fce1438b8cfbaf7fba44fd14c4fea080",
+    "tools/conversation-runtime/broker.py": "46229f092f9a889554d1d25272d86fa3cb60c37b71ca43ff7bcb6a0ff13b0b27",
+    "tools/conversation-runtime/instructions.md": "d29a986e89ed0b0ba03dcf68a5e05ae600a9b65e084f162f43f3edd4a41346f0"
+  },
+  "seccomp_source": "../bubblewrap-policy/seccomp.json",
+  "apparmor_source": "../bubblewrap-policy/apparmor.profile",
+  "loader_source": "../bubblewrap-policy/admin.py.txt",
+  "loader_dockerfile_source": "../bubblewrap-policy/Admin.Dockerfile.txt",
+  "loader_sha256": "67435a860aa73201bd878a45184c5f06047bde5fa0a3c5a1239c4578a2469183",
+  "artifacts": {
+    "a.json": "2dc6f494c51957f5bae3dbe9767b353b25b2c85a352d31179922eda96afd592e",
+    "b.json": "6e81f53d26ce6fcb0a54870e23a45a72e288eb681ad53b0d7a6713360309466e",
+    "a.trace": "ab1bc9979c71dbec02b7521f889999f6aa8a7878cb3a575ce4bc4e307d8c0549",
+    "b.trace": "1f661d5ce197186612b1c741c6e4dafd6f9809b1ea30443de07b5a3b3435fb35",
+    "a-stopped.json": "4cb6a6f1b73b14c50f0b671743442a5220bb0fc304b88f4e4cfe6dbe569b542f",
+    "b-stopped.json": "c5803f3e806444ba95093ca2459c437772c086616b95f3439d57e68e07ab14ee",
+    "comparison.json": "2fb906f67ef21eed83eb9e130da34140f5d8fa84ce2f753aa0e7cdec731835e0",
+    "host.json": "f11fd673c259821cef75ad635ebf1d340ba8d252e5f64207403d878056204d91",
+    "admin-add.json": "b3b7e13d3bd694e1719aff51dfa75bf03eec8297aceec38d23f956775fe3d5e6",
+    "admin-remove.json": "6b7517cb2f05c66f6a70cfdbd4063b74813045eee72c7843bb2a32e93ef14e02",
+    "cleanup.json": "a5cbda985fedb510b73c4a54799a0fdcea7df375451aae5fd3aa71e53b0b2f9e",
+    "operator.py.txt": "678b6f8ca9bcf43e23e4edde5ba403f82d54e894f51591d2c9cf95a1cc27a0bb"
+  }
+}

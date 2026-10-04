@@ -1,0 +1,15 @@
+{
+  "effective_host_config_differences": [
+    "MaskedPaths",
+    "ReadonlyPaths"
+  ],
+  "other_effective_config_identical": true,
+  "policy_sha256": {
+    "bokkie-systempaths-6f31a9b2.apparmor": "1c83ba6f015bb117bc8457f143d88690ab3fd1c34b48d09078543d90c9480d8c",
+    "seccomp.json": "adc524eb1914ef256e1e3cd2f3651dec3d16337f7df7e9fcc52352643074bd50"
+  },
+  "image": "sha256:a52d08f720332d9b686ca4ce42ffdaff765835b9d107342ffdb0643dce3f0d66",
+  "source": "f18320916ae38c733ca62f4d3da348d14625ddc7",
+  "fresh_empty_volume_per_arm": true,
+  "daemon_mode": "rootful; no user remapping; non-root process"
+}
