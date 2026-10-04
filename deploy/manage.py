@@ -75,8 +75,10 @@ def load(root):
             raise ValueError('existing absolute path required: ' + key)
     if not Path(config['data']).is_dir() or not Path(config['web_auth']).is_file():
         raise ValueError('data must be a directory and web_auth a file')
-    if config['codex_auth'] is not None and not Path(config['codex_auth']).is_file():
-        raise ValueError('codex_auth must be a single existing credential file')
+    if config['codex_auth'] is not None:
+        account = Path(config['codex_auth'])
+        if not account.is_file() or account.resolve() != account:
+            raise ValueError('codex_auth must be a canonical regular file without symlinks')
     if (config['codex_auth'] is None) != (config['conversation_profile'] is None):
         raise ValueError('account and conversation profile must be enabled together')
     if config['conversation_profile'] is not None:
@@ -90,8 +92,20 @@ def load(root):
     return config
 
 
+def policy_text(config):
+    policy = (POLICY / 'apparmor.profile').read_text()
+    if config['codex_auth'] is not None:
+        # Bubblewrap binds this one file before remounting it read-only. The
+        # payload filter still forbids mounting or constructing namespaces.
+        rule = ('  mount options=(rw,rbind,silent) /oldroot/home/probe/.codex/auth.json'
+                ' -> /newroot/home/probe/.codex/auth.json,\n')
+        closing = policy.rindex('}')
+        policy = policy[:closing] + rule + policy[closing:]
+    return policy
+
+
 def profile_name(config):
-    digest = hashlib.sha256((POLICY / 'apparmor.profile').read_bytes()).hexdigest()[:16]
+    digest = hashlib.sha256(policy_text(config).encode()).hexdigest()[:16]
     return config['name'] + '-' + digest
 
 
@@ -188,7 +202,7 @@ http {{
 }}
 ''')
     (root / 'compose.json').write_text(json.dumps(edge(config, root), indent=2) + '\n')
-    (root / 'apparmor.profile').write_text((POLICY / 'apparmor.profile').read_text().replace(
+    (root / 'apparmor.profile').write_text(policy_text(config).replace(
         'BOKKIE_PROFILE', profile_name(config)))
     if config['conversation_profile'] is not None:
         (root / 'conversation.json').write_text(json.dumps(config['conversation_profile']) + '\n')
@@ -251,9 +265,12 @@ def readiness(config, identifier):
                     '/bin/sh', '-c', 'test -r /run/bokkie-web-auth'],
                    check=True, capture_output=True, timeout=10)
     # The probe returns statuses only, never bootstrap/session/account secrets.
-    script = '''import http.client,json,sys
+    script = '''import http.client,json,os,sys
 from pathlib import Path
 assert Path('/proc/self/attr/current').read_text().strip() == sys.argv[2] + ' (enforce)'
+if sys.argv[3] == 'enabled':
+    account=Path('/home/probe/.codex/auth.json')
+    assert account.is_file() and os.access(account,os.R_OK), 'configured account is not readable'
 for port,path,status in [(7744,'/health',200),(8080,'/bootstrap',401),(8080,'/ui/',401),(8080,'/',401)]:
     conn=http.client.HTTPConnection('127.0.0.1',port,timeout=2)
     conn.request('GET',path,headers={'Host':sys.argv[1]})
@@ -266,7 +283,8 @@ print(json.dumps({'health':200,'unauthenticated_api':401,'unauthenticated_ui':40
         if STOP.is_set():
             raise RuntimeError('startup interrupted')
         result = subprocess.run([*DOCKER, 'exec', identifier, 'python3', '-c', script,
-                                 config['hostname'], profile_name(config)],
+                                 config['hostname'], profile_name(config),
+                                 'enabled' if config['codex_auth'] is not None else 'disabled'],
                                 capture_output=True, text=True, timeout=12)
         if result.returncode == 0:
             return

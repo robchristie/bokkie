@@ -168,6 +168,50 @@ class DeploymentTests(unittest.TestCase):
         self.assertTrue(auth[0]['ReadOnly'])
         self.assertFalse(any(mount['Target'] == '/var/run/docker.sock' for mount in mounts))
 
+    def test_account_policy_is_conditional_exact_file_and_changes_identity(self):
+        baseline = MODULE.policy_text(self.config)
+        identity = MODULE.profile_name(self.config)
+        self.assertEqual(baseline, (MODULE.POLICY / 'apparmor.profile').read_text())
+        self.config.update(codex_auth=str(self.root / 'codex-auth'),
+                           conversation_profile=self.profile)
+        policy = MODULE.policy_text(self.config)
+        added = [line for line in policy.splitlines() if line not in baseline.splitlines()]
+        self.assertEqual(added, [
+            '  mount options=(rw,rbind,silent) /oldroot/home/probe/.codex/auth.json'
+            ' -> /newroot/home/probe/.codex/auth.json,'])
+        self.assertNotEqual(identity, MODULE.profile_name(self.config))
+        MODULE.render(self.config, self.root)
+        self.assertEqual((self.root / 'apparmor.profile').read_text(),
+                         policy.replace('BOKKIE_PROFILE', MODULE.profile_name(self.config)))
+
+    def test_account_missing_non_regular_and_symlink_sources_fail_closed(self):
+        alias = self.root / 'alias'
+        alias.symlink_to(self.root / 'codex-auth')
+        for path in (self.root / 'missing', self.root / 'data', alias):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.load({**self.config, 'codex_auth': str(path),
+                           'conversation_profile': self.profile})
+
+    def test_unreadable_configured_account_fails_readiness(self):
+        self.config.update(codex_auth=str(self.root / 'codex-auth'),
+                           conversation_profile=self.profile)
+        def execute(arguments, **_kwargs):
+            if arguments[-1] == 'test -r /run/bokkie-web-auth':
+                return Mock(returncode=0)
+            # Exercise the actual generated account check locally with a denied
+            # access result, without depending on the test runner's Unix UID.
+            script = arguments[arguments.index('-c') + 1]
+            check = script[script.index("if sys.argv[3]"):script.index('for port,path,status')]
+            with patch('os.access', return_value=False), patch('pathlib.Path.is_file', return_value=True):
+                with self.assertRaisesRegex(AssertionError, 'configured account is not readable'):
+                    exec(check, {'sys': Mock(argv=['probe', 'host', 'profile', 'enabled']),
+                                 'Path': Path, 'os': __import__('os')})
+            return Mock(returncode=1, stderr='configured account is not readable')
+        with patch.object(MODULE.subprocess, 'run', side_effect=execute), \
+                patch.object(MODULE.STOP, 'wait'), \
+                self.assertRaisesRegex(RuntimeError, 'configured account is not readable'):
+            MODULE.readiness(self.config, 'synthetic-runtime')
+
     def test_effective_authority_relaxations_are_rejected(self):
         expected = MODULE.runtime(self.config, self.root)
         actual = {'HostConfig': copy.deepcopy(expected['HostConfig']),

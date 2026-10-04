@@ -14,7 +14,7 @@ import manage
 config = manage.load(root)
 if config['name'] != 'bokkie':
     raise ValueError('persistent installer only owns the bokkie deployment')
-expected = (manage.POLICY / 'apparmor.profile').read_text().replace(
+expected = manage.policy_text(config).replace(
     'BOKKIE_PROFILE', manage.profile_name(config))
 if (root / 'apparmor.profile').read_text() != expected:
     raise ValueError('rendered profile differs from the staged source')

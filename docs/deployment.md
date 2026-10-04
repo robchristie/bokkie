@@ -95,15 +95,20 @@ model access. To enable it, set both `codex_auth` to one authorised existing
 Retain the profile's model, effort, timezone and byte/time bounds as deliberate
 operator settings. Do not treat this path-only excerpt as a complete profile.
 The account file is bind-mounted read-only at `/home/probe/.codex/auth.json`;
+its source must be a canonical regular-file path without symlinks. Startup fails
+if the configured file is absent or unreadable by the runtime. Enabling it derives
+a separately identified AppArmor policy with one additional exact-file bind rule
+for Bubblewrap's constructor; the payload's mount/namespace filter is unchanged.
 no account directory, sessions, skills, hooks, host configuration or credentials
 are copied into the image or task evidence. Its host UID must match the chosen
-runtime UID for a mode-0600 file. Changing the UID from10001 requires a focused
+runtime UID for a mode-0600 file. Changing the UID from 10001 requires a focused
 identity, filesystem, lifetime and zero-model replay; it does not require
 repeating path-policy minimisation.
 
 Read-only authentication cannot refresh its file. A refresh failure remains
 visible and requires normal account maintenance by the credential owner followed
-by a service restart/recreation. The payload's read-only root protects integrity,
+by a service restart/recreation. Atomic replacement of the host file also requires
+recreation because an existing file bind retains the old inode. The payload's read-only root protects integrity,
 not confidentiality: mounted application state and its account remain accessible
 to the trusted runtime. The model receives only the broker's bounded context;
 built-in tools and execution environments remain disabled.

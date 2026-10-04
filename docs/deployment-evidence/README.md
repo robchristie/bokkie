@@ -30,7 +30,7 @@ silently relabelled as final candidate evidence.
 
 | Requirement | Result |
 | --- | --- |
-| Backend/governance | 203 Python tests and 343 Rust tests passed, including deployment controller/ownership and HTTPS-origin regressions; plan/toolchain checks, Clippy and formatting passed |
+| Backend/governance | 206 Python tests and 343 Rust tests passed, including deployment controller/ownership and HTTPS-origin regressions; plan/toolchain checks, Clippy and formatting passed |
 | UI | 79 UI tests, native and Wasm builds, Clippy and formatting passed |
 | Image | Release backend 1.85.0, release Wasm UI 1.97.1 and wasm-bindgen 0.2.127 built; immutable source label and image ID retained |
 | Runtime boundary | Existing hostile payload, private PID/mount/user view, proc/helper denial, capability/NNP/filter and malformed-filter tests passed with networked service mounts |
@@ -59,6 +59,12 @@ trusted-app WebGPU harness configuration.
   to resolve incorrectly. The protected backend now returns 307 to `/ui/` when
   assets are configured; a regression covers both UI constructors and security
   rejection. No-UI mode retains 404.
+- The account-enabled constructor initially failed binding `auth.json` under the
+  offline policy. A measured, conditional exact-file bind rule now derives a
+  separately identified deployment policy. The initial synthetic `{}` probe passed
+  construction and zero-model preflight with that rule; final credential-integrity,
+  boundary and lifetime evidence is retained with the exact candidate in PR #42.
+  The base offline policy and payload filter are unchanged.
 - Nginx attempted to chown/create default cache paths despite dropped capabilities
   and read-only root. A single process using the existing password-file owner and
   explicit bounded temporary paths starts without additional capabilities.
