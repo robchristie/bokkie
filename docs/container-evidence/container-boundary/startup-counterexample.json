@@ -1,0 +1,52 @@
+{
+  "image": "sha256:f320112c53a042ae71e3ab34e6f84405b13fe932b9b56c2f65f43f6852aedb1f",
+  "policy_sha256": {
+    "bokkie-boundary-a73c9e42.apparmor": "8d243e524ee2e173be47855dce9c0ea8f0f806a40611bc974b127a03477d403f",
+    "seccomp.json": "4a52c98d92d10208bedc9c892391be704e29323a694a0c85a858e95f8b314aa2"
+  },
+  "result": {
+    "constructor_gate": "block-fd after uid remap before do_init",
+    "identities": [
+      {
+        "pid": 15,
+        "start": "55626906",
+        "state": "S"
+      },
+      {
+        "pid": 16,
+        "start": "55626906",
+        "state": "S"
+      }
+    ],
+    "before_release": {
+      "15": null,
+      "16": {
+        "pid": 16,
+        "start": "55626906",
+        "state": "S"
+      }
+    },
+    "after_release": {
+      "15": null,
+      "16": {
+        "pid": 16,
+        "start": "55626906",
+        "state": "S"
+      }
+    },
+    "tagged": [
+      {
+        "pid": 16,
+        "start": "55626906",
+        "state": "S"
+      },
+      {
+        "pid": 17,
+        "start": "55626917",
+        "state": "S"
+      }
+    ]
+  },
+  "source": "5b284b7e294f56cc1096754be9af391b316683f0",
+  "probe": "startup-counterexample.py.txt"
+}

@@ -74,8 +74,8 @@ operator decision.
 
 The [disposable container probe](tools/container-probe/README.md) tests packaging
 and synthetic state persistence without deploying a service. Its
-[observed results](docs/container-evidence/README.md) describe the limits of the
-tested configuration; the probe is not a production Compose stack.
+[observed results](docs/container-evidence/README.md) include the qualified offline Docker/Bubblewrap boundary, constructor-lifetime
+repair and zero-model preflight. The probe is not a production Compose stack.
 
 ## Command and service adapters
 

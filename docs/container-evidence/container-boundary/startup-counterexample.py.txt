@@ -1,0 +1,47 @@
+import sys,os,json,subprocess,time,signal
+from pathlib import Path
+sys.path.insert(0,'/opt');sys.path.insert(0,'/opt/conversation')
+import broker,qualify
+TOKEN='bokkie-startup-gap-probe'
+if len(sys.argv)>1:
+    fd=int(sys.argv[1])
+    with broker.payload_filter_fd() as filter_fd:
+        command=broker._command(qualify.PROFILE,{},filter_fd,[sys.executable,'/opt/qualify.py','daemon',TOKEN])
+        command[1:1]=['--block-fd',str(fd)]
+        child=subprocess.Popen(command,pass_fds=(fd,filter_fd),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    print(json.dumps({'monitor':child.pid}),flush=True)
+    while True:time.sleep(1)
+else:
+    read,write=os.pipe()
+    parent=subprocess.Popen([sys.executable,__file__,str(read)],pass_fds=(read,),stdout=subprocess.PIPE)
+    os.close(read)
+    monitor=json.loads(parent.stdout.readline())['monitor']
+    leader=None
+    try:
+        deadline=time.monotonic()+10
+        while True:
+            children=Path(f'/proc/{monitor}/task/{monitor}/children').read_text().split()
+            if children:
+                candidate=int(children[0])
+                wchan=Path(f'/proc/{candidate}/wchan').read_text().strip()
+                # The first construction wait completes quickly; a second userns
+                # and pipe_read identifies --block-fd after the final mount setup.
+                mapping=Path(f'/proc/{candidate}/uid_map').read_text().split()
+                if wchan in ('pipe_read','anon_pipe_read') and Path(f'/proc/{candidate}/root/tmp/conversation').is_dir():
+                    leader=candidate;break
+            assert time.monotonic()<deadline,(children,wchan if children else None,mapping if children else None)
+            time.sleep(.01)
+        identities=[qualify.process_id(monitor),qualify.process_id(leader)]
+        parent.kill();parent.wait(timeout=5)
+        time.sleep(.1)
+        before_release={str(p):qualify.process_id(p) for p in (monitor,leader)}
+        os.close(write);write=None
+        time.sleep(.2)
+        after_release={str(p):qualify.process_id(p) for p in (monitor,leader)}
+        print(json.dumps({'constructor_gate':'block-fd after uid remap before do_init','identities':identities,'before_release':before_release,'after_release':after_release,'tagged':qualify.tagged_processes(TOKEN)}),flush=True)
+    finally:
+        if parent.poll() is None:parent.kill();parent.wait()
+        if write is not None:os.close(write)
+        for p in ([leader,monitor] if leader else [monitor]):
+            try:os.kill(p,signal.SIGKILL)
+            except ProcessLookupError:pass

@@ -7,9 +7,13 @@ executes a proposed operation or starts an engineering task itself.
 
 Copy `instructions/profiles/conversation-local.json` to a private configuration
 location and replace its broker and installed Codex paths. The broker path must
-point to this directory's `broker.py`; keep `instructions.md` alongside it. Paths
-must be absolute, existing and outside `/tmp`. Python 3.11 or newer and Linux
-Bubblewrap are required. The existing local Codex account must already be usable;
+point to this directory's `broker.py`; keep `supervisor.py`, `payload_filter.py`
+and `instructions.md` alongside it. Paths must be absolute, existing and outside
+`/tmp`. Python 3.11 or newer and Linux
+Bubblewrap, Linux pidfds/subreapers and `libseccomp.so.2` are required. The payload filter supports only
+the Linux x86-64 native ABI; unsupported architectures and missing filter
+generation features fail before the payload launches. The existing local Codex
+account must already be usable;
 this setup neither obtains credentials nor modifies account configuration.
 Model, effort, request deadline, context/output byte bounds and the default
 `Australia/Adelaide` timezone belong to the profile. The backend owns authorised
@@ -61,6 +65,15 @@ prose remains discussion data and cannot select an operation.
 
 ## Containment
 
+The qualified container arrangement combines the outer container's default-deny
+syscall policy and AppArmor restrictions with Bubblewrap construction and a
+second, fixed payload filter. The payload filter is a revocation layer with an
+allow default: it cannot grant anything denied by the outer filter and is not a
+complete standalone sandbox. In particular, helper memory and descriptor aliases
+through `/proc` require the container's AppArmor restrictions. See the
+[container boundary tooling](../container-probe/README.md) for the complete
+configuration and the scope of target qualification.
+
 The process launches in a private PID namespace, with a read-only host root and
 private in-memory `/tmp`. Host Codex sessions, skills, hooks and databases are
 hidden by an in-memory mount over the account directory. Existing `auth.json` and
@@ -69,6 +82,27 @@ are never copied into the workspace or model context. Runtime state and logs
 are temporary. Authentication that requires refreshing a read-only credential
 file fails closed and needs the operator's normal account maintenance outside
 this adapter.
+
+The broker generates native BPF through the system libseccomp library, resolving
+every required syscall by name and rejecting unknown or pseudo-syscalls. It
+passes a sealed memory descriptor through `pass_fds` to Bubblewrap's `--seccomp`
+option and closes its own descriptor immediately after spawning. Bubblewrap
+consumes and closes that descriptor after constructing the filesystem, before
+executing the payload; the payload does not inherit it. `--cap-drop ALL` removes
+payload capabilities. Bubblewrap 0.8 also installs this filter in its private
+namespace PID 1 helper. Compatibility x86 and x32 syscall ABIs are rejected.
+
+The filter denies `mount`, `umount2`, `pivot_root`, `chroot`, `unshare`, `setns`, `fsopen`,
+`fsconfig`, `fsmount`, `fspick`, `open_tree`, `move_mount` and `mount_setattr`.
+Legacy `clone` is denied when any namespace creation flag is set; ordinary
+processes and threads remain available. `clone3` returns `ENOSYS`, because its
+flags are behind a pointer that classic seccomp cannot inspect, allowing libc
+to use its ordinary `clone` fallback. `ptrace`, `process_vm_readv`,
+`process_vm_writev` and `pidfd_getfd` are denied as additional helper protections.
+The shared `spawn(profile, config, environment, *, payload=None)` entry point
+always creates this filter. Its optional payload argv is for trusted boundary
+qualification code; the broker request protocol cannot supply it, and no caller
+can supply a replacement filter or disable it.
 
 The app-server model transport retains network access to the configured provider;
 its model thread has a read-only, network-off sandbox and **no selected execution
@@ -83,8 +117,34 @@ adapter code; model responses remain untrusted proposals.
 
 The Rust process supervisor bounds the broker's deadline, input, output and
 lifetime. The broker separately caps the app-server wire at 2 MiB and enforces
-its deadline and final-answer byte bound. Namespace teardown terminates
-app-server descendants. No token-count ceiling is claimed: the enforced budgets
+its deadline and final-answer byte bound. Each invocation also has a trusted
+Python subreaper outside the private namespace. The broker opens a pidfd for
+itself before starting this supervisor, avoiding parent PID reuse and detecting
+death before the helper starts. The supervisor establishes subreaper status
+before constructing the namespace. It inherits only the parent pidfd and sealed
+filter; only the filter reaches Bubblewrap, which consumes it before payload
+execution. The supervisor lives in a separate session so Rust's broker process
+group cancellation cannot kill the cleanup owner.
+
+Normal completion, broker cancellation and abrupt broker death all cause the
+supervisor to kill its direct children, adopt orphaned descendants, and repeat
+killing and reaping until `waitpid` reports no children. Namespace PID 1 death
+also makes the kernel terminate its remaining namespace members. This closes
+Bubblewrap 0.8's startup gap: its namespace child does not arm `--die-with-parent`
+until after filesystem construction and UID remapping. Killing just the outer
+monitor during that interval can leave a live namespace leader.
+
+`Popen` tracks the supervisor. `terminate(child)` sends it SIGTERM and waits up
+to five seconds for full teardown. Failure to finish is an invocation failure;
+it never kills the reaper and assumes descendants disappeared. The reaper
+retains ownership until teardown completes. Its own uncatchable death, kernel
+failure or indefinitely uninterruptible processes are outside this userspace
+guarantee. The fixed helper and constructor remain trusted; the payload cannot
+see them through its private PID namespace. Target qualification must cover
+normal completion, cancellation, ready-state broker death and broker death at
+a held post-remap, pre-init constructor barrier, while the container stays alive.
+No token-count ceiling is claimed:
+the enforced budgets
 are elapsed time, supplied bytes, observed wire bytes, final bytes, one turn,
 one permitted proposal selection, zero executed tools and the caller's finite
 request count.
@@ -113,6 +173,16 @@ malformed/oversized arguments and answers, multiple selections, timeout and
 containment drift. They verify process teardown without a tool response or a
 second turn, including a selection received before the turn-start response.
 These tests make no model requests.
+Filter tests evaluate the actual exported BPF for mount and namespace denial,
+clone flag combinations and compatibility ABI rejection, check sealed-descriptor
+ownership and fail-closed generation, and install the BPF in a disposable
+subprocess to verify kernel denial with ordinary fork, thread and exec behaviour.
+Supervisor tests reproduce blocked constructor and detached-descendant lifetimes,
+including direct broker death, broker process-group death, cancellation, normal
+completion and a parent already dead before helper startup. They require every
+owned descendant to be reaped before releasing the constructor barrier.
+They do not establish the complete Docker/AppArmor/Bubblewrap boundary; the
+container probe owns that live qualification and descriptor/helper alias checks.
 Live qualification must separately record its finite aggregate call budget,
 profile, scenario, result and retained backend receipts.
 

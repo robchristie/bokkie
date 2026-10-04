@@ -1,0 +1,140 @@
+{
+  "exit": 0,
+  "result": {
+    "cases": [
+      {
+        "all_reaped": true,
+        "daemon_signal_handlers_acknowledged": true,
+        "identities": [
+          {
+            "pid": 45,
+            "start": "55732470",
+            "state": "S"
+          },
+          {
+            "pid": 46,
+            "start": "55732472",
+            "state": "S"
+          },
+          {
+            "pid": 47,
+            "start": "55732472",
+            "state": "S"
+          },
+          {
+            "pid": 48,
+            "start": "55732472",
+            "state": "S"
+          },
+          {
+            "pid": 49,
+            "start": "55732478",
+            "state": "S"
+          }
+        ],
+        "mode": "normal"
+      },
+      {
+        "all_reaped": true,
+        "daemon_signal_handlers_acknowledged": true,
+        "identities": [
+          {
+            "pid": 50,
+            "start": "55732487",
+            "state": "S"
+          },
+          {
+            "pid": 51,
+            "start": "55732489",
+            "state": "S"
+          },
+          {
+            "pid": 52,
+            "start": "55732489",
+            "state": "S"
+          },
+          {
+            "pid": 53,
+            "start": "55732489",
+            "state": "S"
+          },
+          {
+            "pid": 54,
+            "start": "55732495",
+            "state": "S"
+          }
+        ],
+        "mode": "cancel"
+      },
+      {
+        "all_reaped": true,
+        "daemon_signal_handlers_acknowledged": true,
+        "identities": [
+          {
+            "pid": 55,
+            "start": "55732508",
+            "state": "S"
+          },
+          {
+            "pid": 56,
+            "start": "55732515",
+            "state": "S"
+          },
+          {
+            "pid": 57,
+            "start": "55732517",
+            "state": "S"
+          },
+          {
+            "pid": 58,
+            "start": "55732517",
+            "state": "S"
+          },
+          {
+            "pid": 59,
+            "start": "55732517",
+            "state": "S"
+          },
+          {
+            "pid": 60,
+            "start": "55732523",
+            "state": "S"
+          }
+        ],
+        "mode": "parent-death"
+      },
+      {
+        "all_reaped": true,
+        "constructor_barrier": "post-mount and UID remap, before do_init",
+        "identities": [
+          {
+            "pid": 61,
+            "start": "55732531",
+            "state": "S"
+          },
+          {
+            "pid": 62,
+            "start": "55732536",
+            "state": "S"
+          },
+          {
+            "pid": 63,
+            "start": "55732538",
+            "state": "S"
+          },
+          {
+            "pid": 64,
+            "start": "55732544",
+            "state": "S"
+          }
+        ],
+        "mode": "startup-death",
+        "reaped_before_barrier_release": true
+      }
+    ],
+    "container_alive_during_checks": true,
+    "model_calls": 0,
+    "result": "passed"
+  },
+  "stderr": ""
+}

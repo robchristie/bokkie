@@ -19,6 +19,13 @@ This was a non-root container under rootful Docker, not a rootless daemon. It
 supports continuing container qualification, with production suitability still
 unresolved.
 
+The [completed boundary qualification](container-boundary/README.md) subsequently
+minimised the path changes, completed constructor policy, added payload syscall
+revocations and repaired a reproduced startup-lifetime gap. Its hostile payload,
+descendant teardown and zero-model preflight passed on the same rootful target.
+It qualifies an explicit disposable Engine configuration; production Compose
+integration and service deployment remain separate work.
+
 ## Retained observations
 
 [`calibration.json`](calibration.json) retains the initial observations, including
@@ -66,13 +73,12 @@ cleanup. The keeper's shutdown receipt is deliberately distinct from agent
 teardown. The broker's read-only root mount is not a confidentiality boundary:
 mounted state remains readable.
 
-Retain Compose as a packaging option; the tested arrangements are not ready for
-deployment. The system-path comparison supports continuing the existing
-containerised Bubblewrap approach. Next minimise the path-list change and
-qualify the complete constructor and payload boundary, including resistance to
-undoing filesystem restrictions, private process visibility and descendant
-cleanup, before zero-model preflight. The observation does not require a host
-service, a bridge or removal of private PID isolation.
+Retain Compose as a packaging option. The later boundary qualification supports
+keeping Docker and Bubblewrap, including private PID isolation, without a host
+service or bridge. Its selected Engine path lists cannot be expressed directly
+by Compose 5.5.1. The next deployment package must preserve that measured boundary
+while solving Compose integration, service/UI packaging, authentication and the
+reverse proxy. Earlier blocked observations above remain historical controls.
 
 See the [probe instructions](../../tools/container-probe/README.md) for the
 reproducible sequence and stopping rule. Runtime containers and synthetic volumes
