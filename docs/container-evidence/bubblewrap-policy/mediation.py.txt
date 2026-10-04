@@ -1,0 +1,30 @@
+"""Disposable user/mount namespace: observe profile across staging pivot only."""
+import ctypes, errno, json, os
+from pathlib import Path
+libc = ctypes.CDLL(None, use_errno=True)
+def mount(source, target, fstype, flags):
+    rc = libc.mount(source.encode() if source else None, target.encode(), fstype.encode() if fstype else None, ctypes.c_ulong(flags), None)
+    return {'rc': rc, 'errno': ctypes.get_errno() if rc else 0}
+def label(root=''):
+    return Path(root + '/proc/self/attr/current').read_text().strip()
+uid, gid = os.getuid(), os.getgid()
+pid = libc.syscall(56, 0x30020011, 0, 0, 0, 0)
+if pid < 0:
+    raise OSError(ctypes.get_errno(), 'clone')
+if pid:
+    os.waitpid(pid, 0)
+else:
+    Path('/proc/self/setgroups').write_text('deny')
+    Path('/proc/self/uid_map').write_text(f'{uid} {uid} 1')
+    Path('/proc/self/gid_map').write_text(f'{gid} {gid} 1')
+    print(json.dumps({'stage': 'before', 'label': label(), 'propagation': mount(None, '/', None, 0x8c000), 'tmp': mount('tmpfs', '/tmp', 'tmpfs', 6)}), flush=True)
+    Path('/tmp/forbidden').mkdir()
+    print(json.dumps({'stage': 'before-negative', 'result': mount('tmpfs', '/tmp/forbidden', 'tmpfs', 6)}), flush=True)
+    Path('/tmp/newroot').mkdir()
+    Path('/tmp/oldroot').mkdir()
+    print(json.dumps({'stage': 'selfbind', 'result': mount('/tmp/newroot', '/tmp/newroot', None, 0xc0edd000)}), flush=True)
+    os.chdir('/tmp')
+    result = libc.syscall(155, b'/tmp', b'oldroot')
+    print(json.dumps({'stage': 'pivot', 'rc': result, 'errno': ctypes.get_errno() if result else 0}), flush=True)
+    print(json.dumps({'stage': 'after', 'label': label('/oldroot'), 'result': mount('tmpfs', '/newroot', 'tmpfs', 6)}), flush=True)
+    os._exit(0)

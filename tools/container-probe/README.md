@@ -5,6 +5,10 @@ Compose stack. It installs its own Node, Python, Bubblewrap and the conversation
 broker's qualified Codex 0.155.1. Host installations and account files are not
 inputs. It has no published ports, external network or credentials at runtime.
 Image builds need public registry/package access. Never supply build secrets.
+The image includes `strace` for tracing a blocked harmless payload. The
+[policy calibration record](../../docs/container-evidence/bubblewrap-policy/README.md)
+describes the separately authorised host-policy experiment and its remaining
+private-proc failure; its policies are not installed by this probe.
 
 Use a committed source archive as the build context so unrelated files, local
 configuration and credentials cannot enter the image. Choose a fresh, unique

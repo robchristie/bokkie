@@ -3,7 +3,7 @@
 - Status: active
 - Reorientation budget: 100
 - Landed pull requests: none
-- Next Action: Trace the default-policy failure and qualify a targeted policy delta.
+- Next Action: Retain the bounded finding, replay the committed inputs and clean up.
 
 ## Outcome and scope
 
@@ -15,8 +15,9 @@ test profile, not changing Docker's defaults or deploying Bokkie.
 
 ## Current phase
 
-Calibration. Reuse PR #38's image/persistence evidence and production-shaped
-probe. Trace the namespace failure, start from the host Engine revision's default
+Evidence closeout. Targeted policy changes passed namespace creation and devpts
+setup, but private proc mounting remained blocked. Retain the bounded finding;
+no further policy broadening. Reuse the production-shaped probe. Trace the namespace failure, start from the host Engine revision's default
 seccomp policy, and add only observed required operations. Use a dedicated
 AppArmor profile if its denials require it. Keep non-root, dropped capabilities,
 no new privileges, read-only root, synthetic state, no external network or ports,

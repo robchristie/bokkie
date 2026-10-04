@@ -1,0 +1,19 @@
+import ctypes, errno, json, os, socket
+from pathlib import Path
+status = dict(line.split(':', 1) for line in Path('/proc/self/status').read_text().splitlines() if ':' in line)
+libc = ctypes.CDLL(None, use_errno=True)
+negative = {}
+for name, number, args in [('bpf', 321, [0, 0, 0]), ('keyctl', 250, [0, 0, 0, 0, 0]), ('unshare_mount', 272, [0x20000])]:
+    rc = libc.syscall(number, *args)
+    negative[name] = {'result': rc, 'errno': ctypes.get_errno() if rc == -1 else 0}
+    assert rc == -1 and negative[name]['errno'] == errno.EPERM
+for name, family in [('AF_ALG', 38), ('AF_VSOCK', 40)]:
+    try:
+        connection = socket.socket(family, socket.SOCK_SEQPACKET if family == 38 else socket.SOCK_STREAM)
+    except OSError as error:
+        negative[name] = {'errno': error.errno}
+        assert error.errno in (errno.EPERM, errno.EACCES)
+    else:
+        connection.close()
+        raise AssertionError(name + ' unexpectedly available')
+print(json.dumps({'uid': os.getuid(), 'gid': os.getgid(), 'status': {key: status[key].strip() for key in ('CapEff', 'CapPrm', 'CapBnd', 'NoNewPrivs', 'Seccomp')}, 'apparmor': Path('/proc/self/attr/current').read_text().strip(), 'uid_map': Path('/proc/self/uid_map').read_text().split(), 'gid_map': Path('/proc/self/gid_map').read_text().split(), 'negative': negative, 'proc_mounts': [line for line in Path('/proc/self/mountinfo').read_text().splitlines() if line.split()[4].startswith('/proc')]}, indent=2))
