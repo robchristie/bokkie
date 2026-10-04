@@ -47,16 +47,16 @@ credential copying or an unauthenticated backend exposure.
 
 ## Acceptance
 
-- [ ] Immutable image packages backend, browser UI and the qualified runtime.
-- [ ] Persistent launch preserves exact path policy, payload filter, lifetime
+- Pending: Immutable image packages backend, browser UI and the qualified runtime.
+- Pending: Persistent launch preserves exact path policy, payload filter, lifetime
   supervision, non-root/capability/NNP/read-only controls and bounded resources.
-- [ ] Explicit HTTPS origin support retains loopback defaults and rejects wrong
+- Pending: Explicit HTTPS origin support retains loopback defaults and rejects wrong
   Host/Origin, forged forwarding, cross-site mutation and missing/stale tokens.
-- [ ] Authentication covers static assets and API; direct backend and alternate
+- Pending: Authentication covers static assets and API; direct backend and alternate
   ingress cannot bypass it. Credentials stay with their authorised owner.
-- [ ] SQLite state survives controlled restart/recreation; service and policy
+- Pending: SQLite state survives controlled restart/recreation; service and policy
   startup ordering is durable, with documented backup/rollback operations.
-- [ ] Actual browser renders useful Polyorama content through trusted HTTPS;
+- Pending: Actual browser renders useful Polyorama content through trusted HTTPS;
   a bounded conversation/local-note journey proves the intended enabled flow.
-- [ ] Final installation consumes independently reviewed, merged source and
+- Pending: Final installation consumes independently reviewed, merged source and
   immutable artefacts; deployment identities and residual limits are recorded.
