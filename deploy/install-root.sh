@@ -4,7 +4,7 @@ set -euo pipefail
 test "$(id -u)" -eq 0
 stack=/srv/stacks/bokkie
 test -f "$stack/release.json"
-python3 "$stack/source/deploy/manage.py" render --root "$stack"
+test -f "$stack/apparmor.profile"
 profile=$(python3 - "$stack" <<'PY'
 import sys
 from pathlib import Path
@@ -14,6 +14,10 @@ import manage
 config = manage.load(root)
 if config['name'] != 'bokkie':
     raise ValueError('persistent installer only owns the bokkie deployment')
+expected = (manage.POLICY / 'apparmor.profile').read_text().replace(
+    'BOKKIE_PROFILE', manage.profile_name(config))
+if (root / 'apparmor.profile').read_text() != expected:
+    raise ValueError('rendered profile differs from the staged source')
 print(manage.profile_name(config))
 PY
 )

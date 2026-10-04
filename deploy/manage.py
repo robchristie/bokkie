@@ -248,6 +248,9 @@ def identity(observed):
 
 
 def readiness(config, identifier):
+    subprocess.run([*DOCKER, 'exec', config['name'] + '-edge',
+                    '/bin/sh', '-c', 'test -r /run/bokkie-web-auth'],
+                   check=True, capture_output=True, timeout=10)
     # The probe returns statuses only, never bootstrap/session/account secrets.
     script = '''import http.client,json,sys
 from pathlib import Path
@@ -295,6 +298,14 @@ def start(config, root):
     if (not edge_observed or not edge_observed['State']['Running']
             or edge_observed['HostConfig']['NetworkMode'] != 'container:' + identifier):
         raise RuntimeError('edge is not attached to the current runtime')
+    host = edge_observed['HostConfig']
+    if (edge_observed['Image'] != config['edge_image']
+            or edge_observed['Config']['User'] != '0:0'
+            or not host['ReadonlyRootfs'] or host['CapDrop'] != ['ALL']
+            or host['CapAdd'] or host['Privileged'] or host['PortBindings']
+            or host['SecurityOpt'] != ['no-new-privileges:true']
+            or host['RestartPolicy']['Name'] != 'no'):
+        raise RuntimeError('effective edge controls differ')
     readiness(config, identifier)
     print(json.dumps({'ready': config['name'], 'source': config['source'],
                       'runtime': identifier, 'edge': edge_observed['Id']}), flush=True)
