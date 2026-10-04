@@ -41,7 +41,7 @@ Browser qualification found and repaired omitted same-origin credentials and an
 incorrect root rewrite. Backend/UI canonical checks, the networked sandbox,
 transient-systemd failure recovery and desktop/narrow browser checks passed.
 
-Source component #42 landed at `9c9b9cd71f3b0ab0943d314a024d6e21a59f7303`,
+The source component landed at `9c9b9cd71f3b0ab0943d314a024d6e21a59f7303`,
 with matching reviewed/merged trees, passing candidate/post-merge CI and merged-image
 synthetic replay. Temporary resources were removed. The user has now selected the
 existing shared login and Rob's account, and private DNS resolves to

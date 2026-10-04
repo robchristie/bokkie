@@ -213,6 +213,20 @@ def run():
         require(manage.api('GET', '/volumes/' + name, missing=True) is None, 'volume already exists')
         manage.api('POST', '/volumes/create', {'Name': name, 'Labels': {'bokkie.account-qualification': name}})
         volume_created = True
+        # Docker initially copies the image's /data ownership (UID10001) into a
+        # new volume. Match the selected test identity before exercising writes.
+        volume_owner = {**helper_config,
+            'Cmd': ['-c', f"import os; os.chown('/data',{config['uid']},{config['gid']})"],
+            'HostConfig': {**helper_config['HostConfig'], 'Mounts': [
+                {'Type': 'volume', 'Source': name, 'Target': '/data'}]}}
+        record('volume-ownership-helper', volume_owner)
+        helper = manage.api('POST', '/containers/create?name=' + name + '-volume-owner', volume_owner)['Id']
+        manage.api('POST', '/containers/' + helper + '/start')
+        completion = manage.api('POST', '/containers/' + helper + '/wait?condition=not-running')
+        require(completion['StatusCode'] == 0, 'synthetic volume ownership helper failed')
+        remove_container(helper)
+        removed.append(helper)
+        helper = None
         container = manage.api('POST', '/containers/create?name=' + name, expected)['Id']
         manage.api('POST', '/containers/' + container + '/start')
         actual = manage.api('GET', '/containers/' + container + '/json')
