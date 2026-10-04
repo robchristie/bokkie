@@ -95,13 +95,14 @@ def fixture(resume, controls):
 def persistence(stage):
     database = '/data/fixture/fixture.sqlite'
     if stage == 'seed':
-        values = fixture(False, [{'seed_calibration': True}])
+        fixture(False, [{'seed_calibration': True}])
         created = run(['bokkie', '--database', database, 'create', '--id', 'container-probe-future',
                        '--description', 'Synthetic future container probe',
                        '--scheduled-at', '4102444800', '--recurrence-cron', '0 30 8 * * MON',
                        '--recurrence-timezone', 'Australia/Adelaide'])
         if created.returncode:
             raise RuntimeError(created.stderr)
+        values = fixture(True, [{}])
         expected = {'fixture': values[-1], 'obligation': json.loads(created.stdout)}
         Path('/data/expected.json').write_text(json.dumps(expected))
         emit({'result': 'seeded', **expected})
