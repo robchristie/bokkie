@@ -130,10 +130,11 @@ proc setup changes the boundary and requires a separate decision and
 qualification. None was attempted. App Server preflight, inference, payload
 write-restoration and descendant-cleanup checks were not reached or claimed.
 
-The next bounded choice is qualifying the existing Bubblewrap path as an
-unprivileged host service, or designing a container-native worker boundary.
-A host/container split needs an explicit transport and lifecycle contract; it
-is not a drop-in Compose setting. Neither alternative has been deployed.
+The subsequent authorised [system-path A/B test](../systempaths-ab/README.md)
+changed only Docker's combined path lists and made this private proc mount
+succeed, before a later setup denial. That result supports further Docker
+qualification without first moving the broker to a host service or adding a
+bridge. The current policies remain incomplete diagnostic inputs.
 
 ## Reproduction and cleanup
 

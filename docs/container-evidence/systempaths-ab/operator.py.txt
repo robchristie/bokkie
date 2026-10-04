@@ -1,0 +1,132 @@
+"""Historical operator-owned A/B; fixed task resources, no policy iteration."""
+from pathlib import Path
+import hashlib,json,os,shutil,subprocess,sys
+ROOT=Path('/home/rob/bokkie-systempaths-6f31a9b2')
+NAME='bokkie-systempaths-6f31a9b2'
+POLICY=ROOT/(NAME+'.apparmor')
+
+def run(argv,check=True,timeout=60,input=None):
+    r=subprocess.run(argv,cwd=ROOT,text=True,capture_output=True,timeout=timeout,input=input)
+    if check and r.returncode:
+        raise RuntimeError(json.dumps({'command':argv,'exit':r.returncode,'stdout':r.stdout[-2000:],'stderr':r.stderr[-2000:]}))
+    return r
+
+def emit_file(name,value):
+    (ROOT/'evidence'/name).write_text(json.dumps(value,indent=2)+'\n')
+
+def image(tag):
+    return run(['docker','image','inspect',NAME+':'+tag,'--format','{{.Id}}']).stdout.strip()
+
+def admin(operation):
+    # The caller must stop all task processes before removal.
+    if operation=='remove':
+        assert not run(['docker','ps','-q','--filter','label=bokkie.systempaths-ab='+NAME]).stdout.strip()
+    endpoint={'add':'.load','remove':'.remove'}[operation]
+    digest=hashlib.sha256(POLICY.read_bytes()).hexdigest()
+    argv=['docker','run','--rm','--pull','never','--name',NAME+'-admin','--network','none',
+          '--read-only','--cap-drop','ALL','--cap-add','MAC_ADMIN',
+          '--security-opt','no-new-privileges:true','--security-opt','apparmor=unconfined',
+          '--memory','128m','--pids-limit','64','--cpus','1','--tmpfs','/tmp:rw,nosuid,nodev,size=8m',
+          '--mount','type=bind,src='+str(POLICY)+',dst=/policy/'+POLICY.name+',readonly',
+          '--mount','type=bind,src=/sys/kernel/security/apparmor,dst=/apparmor,readonly',
+          '--mount','type=bind,src=/sys/kernel/security/apparmor/'+endpoint+',dst=/apparmor/'+endpoint,
+          image('admin'),operation,digest]
+    r=run(argv)
+    emit_file('admin-'+operation+'.json',{'command':argv,'exit':r.returncode,'stdout':r.stdout,'stderr':r.stderr})
+    print(json.dumps({'admin':operation,'receipt':json.loads(r.stdout)}),flush=True)
+
+def host():
+    queries={
+        'context':['docker','context','show'],
+        'endpoint':['docker','context','inspect','--format','{{json .Endpoints.docker}}'],
+        'security_options':['docker','info','--format','{{json .SecurityOptions}}'],
+        'server':['docker','version','--format','{{json .Server}}'],
+        'client':['docker','version','--format','{{json .Client}}'],
+        'daemon_process':['ps','-C','dockerd','-o','pid=,uid=,user=,args='],
+        'service_pid':['systemctl','show','docker.service','-p','MainPID','--value'],
+        'socket':['systemctl','show','docker.socket','-p','Listen'],
+    }
+    observations={key:run(argv).stdout.strip() for key,argv in queries.items()}
+    pid=int(observations['service_pid'])
+    observations['daemon_uid_map']=Path(f'/proc/{pid}/uid_map').read_text()
+    observations['daemon_gid_map']=Path(f'/proc/{pid}/gid_map').read_text()
+    observations['caller_user_namespace']=os.readlink('/proc/self/ns/user')
+    observations['docker_env']={k:os.environ[k] for k in ('DOCKER_HOST','DOCKER_CONTEXT') if k in os.environ}
+    # This experiment is bound to the existing rootful local daemon.
+    assert observations['docker_env']=={}
+    assert json.loads(observations['endpoint'])['Host']=='unix:///var/run/docker.sock'
+    assert observations['daemon_process'].split()[0:3]==[str(pid),'0','root']
+    assert observations['daemon_uid_map'].split()==['0','0','4294967295']
+    assert not any('rootless' in item or 'userns' in item for item in json.loads(observations['security_options']))
+    emit_file('host.json',observations)
+    print(json.dumps({'daemon_mode':'rootful, no user remapping','pid':pid,'runtime_image':image('runtime')}),flush=True)
+
+def arm(letter):
+    assert letter in ('a','b')
+    if letter=='b':
+        previous=json.loads((ROOT/'evidence/a.json').read_text())
+        assert previous['boundary']['exit']==20
+        assert "Can't mount proc on /newroot/proc: Operation not permitted" in json.loads(previous['boundary']['stdout'])['stderr']
+    name=NAME+'-'+letter
+    volume=name+'-state'
+    # A fresh empty volume per arm avoids carrying the other arm's canaries.
+    assert not run(['docker','volume','ls','-q','--filter','name=^'+volume+'$']).stdout.strip()
+    run(['docker','volume','create','--label','bokkie.systempaths-ab='+NAME,volume])
+    argv=['docker','run','-d','--pull','never','--name',name,'--label','bokkie.systempaths-ab='+NAME,
+          '--init','--user','10001:10001','--network','none','--read-only','--cap-drop','ALL',
+          '--security-opt','no-new-privileges:true','--security-opt','seccomp='+str(ROOT/'seccomp.json'),
+          '--security-opt','apparmor='+NAME,'--pids-limit','96','--memory','768m','--cpus','1',
+          '--tmpfs','/tmp:rw,nosuid,nodev,size=128m,mode=1777',
+          '--tmpfs','/home/probe/.codex:rw,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=700',
+          '--mount','type=volume,src='+volume+',dst=/data','--stop-timeout','15']
+    if letter=='b': argv+=['--security-opt','systempaths=unconfined']
+    argv += [image('runtime'),'hold']
+    cid=run(argv).stdout.strip()
+    try:
+        inspection=json.loads(run(['docker','inspect',cid]).stdout)[0]
+        context_code="""import json,os,subprocess
+from pathlib import Path
+status=dict(x.split(':',1) for x in Path('/proc/self/status').read_text().splitlines() if ':' in x)
+print(json.dumps({'uid':os.getuid(),'gid':os.getgid(),'uid_map':Path('/proc/self/uid_map').read_text(),'gid_map':Path('/proc/self/gid_map').read_text(),'namespaces':{k:os.readlink('/proc/self/ns/'+k) for k in ('user','mnt','pid')},'apparmor':Path('/proc/self/attr/current').read_text().strip(),'status':{k:status[k].strip() for k in ('CapEff','CapPrm','CapBnd','NoNewPrivs','Seccomp')},'initial_data':sorted(x.name for x in Path('/data').iterdir()),'proc_mounts':[x for x in Path('/proc/self/mountinfo').read_text().splitlines() if x.split()[4].startswith('/proc')],'versions':{k:subprocess.check_output(v,text=True).strip() for k,v in {'node':['node','--version'],'python':['python3','--version'],'bwrap':['bwrap','--version'],'codex':['codex','--version']}.items()}}))"""
+        context=json.loads(run(['docker','exec',cid,'python3','-c',context_code]).stdout)
+        assert context['initial_data']==[] and context['uid']==10001 and context['gid']==10001
+        assert context['apparmor']==NAME+' (enforce)'
+        assert context['status']=={'CapEff':'0000000000000000','CapPrm':'0000000000000000','CapBnd':'0000000000000000','NoNewPrivs':'1','Seccomp':'2'}
+        hc=inspection['HostConfig']
+        assert hc['CapDrop']==['ALL'] and not hc['CapAdd'] and not hc['Privileged']
+        assert hc['ReadonlyRootfs'] and hc['NetworkMode']=='none' and not hc['PortBindings']
+        assert hc['PidsLimit']==96 and hc['Memory']==768*1024**2 and hc['NanoCpus']==1000000000
+        if letter=='b': assert hc['MaskedPaths']==[] and hc['ReadonlyPaths']==[]
+        else: assert hc['MaskedPaths'] and hc['ReadonlyPaths']
+        trace=['strace','-f','-s','160','-e','trace=clone,clone3,unshare,setns,mount,umount2,pivot_root,execve',
+               '-o','/data/boundary.trace','python3','/opt/probe.py','boundary']
+        r=run(['docker','exec',cid,*trace],check=False)
+        run(['docker','cp',cid+':/data/boundary.trace',str(ROOT/'evidence'/(letter+'.trace'))])
+        # Retain all effective HostConfig and Config, excluding data chosen by Docker.
+        effective={'HostConfig':hc,'Config':{k:v for k,v in inspection['Config'].items() if k!='Hostname'},'AppArmorProfile':inspection['AppArmorProfile'],'Image':inspection['Image']}
+        effective['HostConfig']['Mounts'][0]['Source']='ARM_SYNTHETIC_VOLUME'
+        record={'source':(ROOT/'source.txt').read_text().strip(),'arm':letter,'create_command':argv,'container':cid,'volume':volume,'effective':effective,'context':context,'policy_sha256':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (POLICY,ROOT/'seccomp.json')},'boundary':{'command':['docker','exec',cid,*trace],'exit':r.returncode,'stdout':r.stdout,'stderr':r.stderr},'model_calls':0,'credentials':False}
+        emit_file(letter+'.json',record)
+        print(json.dumps({'arm':letter,'exit':r.returncode,'boundary':json.loads(r.stdout),'trace_tail':(ROOT/'evidence'/(letter+'.trace')).read_text()[-1500:]}),flush=True)
+    finally:
+        run(['docker','stop','--time','15',cid])
+        state=json.loads(run(['docker','inspect',cid,'--format','{{json .State}}']).stdout)
+        emit_file(letter+'-stopped.json',state)
+        assert not state['Running']
+
+def compare():
+    a=json.loads((ROOT/'evidence/a.json').read_text()); b=json.loads((ROOT/'evidence/b.json').read_text())
+    ea=a['effective']; eb=b['effective']
+    differences=[key for key in ea['HostConfig'] if ea['HostConfig'][key]!=eb['HostConfig'][key]]
+    assert sorted(differences)==['MaskedPaths','ReadonlyPaths'],differences
+    for key in ('Config','AppArmorProfile','Image'): assert ea[key]==eb[key],key
+    assert a['policy_sha256']==b['policy_sha256']
+    for key in ('uid','gid','uid_map','gid_map','apparmor','status','versions','initial_data'): assert a['context'][key]==b['context'][key],key
+    emit_file('comparison.json',{'effective_host_config_differences':differences,'other_effective_config_identical':True,'policy_sha256':a['policy_sha256'],'image':ea['Image'],'source':a['source'],'fresh_empty_volume_per_arm':True,'daemon_mode':'rootful; no user remapping; non-root process'})
+    print('Effective configuration differs only in MaskedPaths and ReadonlyPaths.',flush=True)
+
+if sys.argv[1]=='host': host()
+elif sys.argv[1]=='admin': admin(sys.argv[2])
+elif sys.argv[1]=='arm': arm(sys.argv[2])
+elif sys.argv[1]=='compare': compare()
+else: raise ValueError('unsupported operation')

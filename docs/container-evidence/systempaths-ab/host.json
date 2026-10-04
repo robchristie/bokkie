@@ -1,0 +1,14 @@
+{
+  "context": "default",
+  "endpoint": "{\"Host\":\"unix:///var/run/docker.sock\",\"SkipTLSVerify\":false}",
+  "security_options": "[\"name=apparmor,profile=default\",\"name=seccomp,profile=builtin\",\"name=cgroupns\"]",
+  "server": "{\"Platform\":{\"Name\":\"Docker Engine - Community\"},\"Version\":\"29.8.1\",\"ApiVersion\":\"1.56\",\"MinAPIVersion\":\"1.40\",\"Os\":\"linux\",\"Arch\":\"amd64\",\"Components\":[{\"Name\":\"Engine\",\"Version\":\"29.8.1\",\"Details\":{\"ApiVersion\":\"1.56\",\"Arch\":\"amd64\",\"BuildTime\":\"Tue Sep 15 16:26:13 2026\",\"Experimental\":\"false\",\"GitCommit\":\"464cd50\",\"GoVersion\":\"go1.26.8\",\"KernelVersion\":\"6.12.73+deb13-amd64\",\"MinAPIVersion\":\"1.40\",\"Module\":\"github.com/moby/moby/v2\",\"ModuleVersion\":\"v2.0.0+unknown\",\"Os\":\"linux\"}},{\"Name\":\"containerd\",\"Version\":\"v2.3.6\",\"Details\":{\"GitCommit\":\"ee2735368117d2eb259779949d5e75cdafec9761\"}},{\"Name\":\"runc\",\"Version\":\"1.5.1\",\"Details\":{\"GitCommit\":\"v1.5.1-0-g8f2685a4\"}},{\"Name\":\"docker-init\",\"Version\":\"0.19.0\",\"Details\":{\"GitCommit\":\"de40ad0\"}}],\"GitCommit\":\"464cd50\",\"GoVersion\":\"go1.26.8\",\"KernelVersion\":\"6.12.73+deb13-amd64\",\"BuildTime\":\"2026-09-15T16:26:13.000000000+00:00\"}",
+  "client": "{\"Platform\":{\"Name\":\"Docker Engine - Community\"},\"Version\":\"29.8.1\",\"ApiVersion\":\"1.56\",\"DefaultAPIVersion\":\"1.56\",\"GitCommit\":\"4a63305\",\"GoVersion\":\"go1.26.8\",\"Os\":\"linux\",\"Arch\":\"amd64\",\"BuildTime\":\"Tue Sep 15 16:26:13 2026\",\"Context\":\"default\"}",
+  "daemon_process": "1473     0 root     /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock",
+  "service_pid": "1473",
+  "socket": "Listen=/run/docker.sock (Stream)",
+  "daemon_uid_map": "         0          0 4294967295\n",
+  "daemon_gid_map": "         0          0 4294967295\n",
+  "caller_user_namespace": "user:[4026531837]",
+  "docker_env": {}
+}

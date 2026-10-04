@@ -1,0 +1,22 @@
+{
+  "task": "bokkie-systempaths-6f31a9b2",
+  "containers": [],
+  "volumes": [],
+  "image_tags": [],
+  "admin_container_absent": true,
+  "profile_removal": {
+    "cap_eff": "0000000200000000",
+    "enforced": false,
+    "input_sha256": "1c83ba6f015bb117bc8457f143d88690ab3fd1c34b48d09078543d90c9480d8c",
+    "no_new_privs": 1,
+    "operation": "remove",
+    "other_profile_inventory_unchanged": true,
+    "parser_stderr": "",
+    "parser_stdout": "",
+    "preprocessed_sha256": "85b6e44838a426f8c05ea5527ef5d11378dddb972513384088d91f622b1a3f7a",
+    "profile": "bokkie-systempaths-6f31a9b2",
+    "seccomp": 2
+  },
+  "scratch_removed": "/home/rob/bokkie-systempaths-6f31a9b2",
+  "shared_layers_and_build_cache_may_remain": true
+}

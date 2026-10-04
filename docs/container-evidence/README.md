@@ -12,6 +12,13 @@ but stopped at the fresh private proc mount. It retains the exact policies,
 negative observations and corrected AppArmor loader behaviour. The original
 observations below remain evidence for the default-policy experiment only.
 
+The later [system-path A/B comparison](systempaths-ab/README.md) confirmed that
+removing Docker's combined masking/read-only path lists lets the same private
+proc mount succeed. A later tmpfs mount then hit the incomplete AppArmor policy.
+This was a non-root container under rootful Docker, not a rootless daemon. It
+supports continuing container qualification, with production suitability still
+unresolved.
+
 ## Retained observations
 
 [`calibration.json`](calibration.json) retains the initial observations, including
@@ -59,16 +66,13 @@ cleanup. The keeper's shutdown receipt is deliberately distinct from agent
 teardown. The broker's read-only root mount is not a confidentiality boundary:
 mounted state remains readable.
 
-Retain Compose as a packaging option, but reject the tested single-container
-arrangement as ready for deployment. The smallest further observation is the
-same harmless broker-shaped probe under an unprivileged host process, followed
-by zero-model preflight only if its boundary succeeds. That would assess the
-lowest-change host-service alternative without deploying it. A container/host
-split would add a new transport and lifecycle contract to today's local stdio
-broker. Keeping the entire runtime containerised requires separately qualifying
-an execution boundary. The follow-on targeted policy experiment did not qualify
-the unchanged broker; a container-native worker remains a different
-implementation decision.
+Retain Compose as a packaging option; the tested arrangements are not ready for
+deployment. The system-path comparison supports continuing the existing
+containerised Bubblewrap approach. Next minimise the path-list change and
+qualify the complete constructor and payload boundary, including resistance to
+undoing filesystem restrictions, private process visibility and descendant
+cleanup, before zero-model preflight. The observation does not require a host
+service, a bridge or removal of private PID isolation.
 
 See the [probe instructions](../../tools/container-probe/README.md) for the
 reproducible sequence and stopping rule. Runtime containers and synthetic volumes
