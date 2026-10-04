@@ -33,6 +33,9 @@ mounts, old-root propagation/detach, final pivot and final user-namespace remap.
 The policy [rationale and upstream provenance](../../../tools/container-probe/policy/README.md)
 describe exact syscall arguments and path restrictions. AppArmor loading used
 the corrected explicit host kernel-feature path and rejected unenforced rules.
+The [host receipt](host.json) distinguishes the rootful daemon from the non-root
+application. The [profile replacement receipt](admin-replace.json) records the
+loaded input/preprocessed hashes and unchanged unrelated profile inventory.
 The administrative loader used host MAC_ADMIN solely for that temporary named
 profile; the application runtime received no capabilities or unconfined profile.
 
