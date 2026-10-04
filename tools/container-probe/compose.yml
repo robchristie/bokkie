@@ -1,0 +1,22 @@
+# Run with an explicit, unique --project-name; this owns only disposable data.
+services:
+  probe:
+    image: ${BOKKIE_PROBE_IMAGE:?Set the built probe image ID}
+    init: true
+    user: "10001:10001"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 96
+    mem_limit: 768m
+    cpus: 1
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m,mode=1777
+      - /home/probe/.codex:rw,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=700
+    volumes:
+      - state:/data
+    command: [hold]
+    stop_grace_period: 15s
+volumes:
+  state:

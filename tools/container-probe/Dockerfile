@@ -1,0 +1,28 @@
+# Disposable, credential-free feasibility image; not a deployment image.
+FROM node:22-bookworm-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732 AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bubblewrap python3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install --global @openai/codex@0.155.1 \
+    && npm cache clean --force \
+    && useradd --uid 10001 --create-home probe \
+    && mkdir -p /home/probe/.codex /data \
+    && chown -R probe:probe /home/probe /data
+COPY tools/conversation-runtime/broker.py tools/conversation-runtime/instructions.md /opt/conversation/
+COPY tools/container-probe/probe.py /opt/probe.py
+USER 10001:10001
+ENV HOME=/home/probe
+WORKDIR /home/probe
+ENTRYPOINT ["python3", "/opt/probe.py"]
+
+FROM rust:1.85.0-bookworm@sha256:16a7f242108de02f10fe4a392991679bafa7694e59f5b40a54d5af1be9b40d03 AS builder
+WORKDIR /source
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY src/ src/
+COPY migrations/ migrations/
+COPY crates/ crates/
+COPY apps/ apps/
+RUN cargo build --locked --release --bin bokkie --bin bokkie-conversation-fixture
+
+FROM runtime AS kernel
+COPY --from=builder /source/target/release/bokkie /source/target/release/bokkie-conversation-fixture /usr/local/bin/
