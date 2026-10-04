@@ -32,7 +32,7 @@ checked-in HTML, JavaScript and stylesheet to `/opt/ui`. The bundled Inter font
 notice is retained at `/opt/ui/licenses/Inter-LICENSE.txt`.
 
 The final image uses the same digest-pinned Node 22 Debian bookworm base as the
-qualified container probe. It installs Codex 0.155.1 and fails the build unless
+qualified container probe. It installs Codex 0.160.0 and fails the build unless
 Bubblewrap reports 0.8.0. Python 3 and libseccomp support the unchanged broker,
 supervisor and payload filter under `/opt/conversation`. It includes no Rust
 compiler, Cargo registry, npm package manager, diagnostic `strace`, source

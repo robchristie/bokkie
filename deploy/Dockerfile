@@ -27,8 +27,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends bubblewrap python3 ca-certificates libseccomp2 \
     && test "$(bwrap --version)" = 'bubblewrap 0.8.0' \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install --global @openai/codex@0.155.1 \
-    && test "$(codex --version)" = 'codex-cli 0.155.1' \
+    && npm install --global @openai/codex@0.160.0 \
+    && test "$(codex --version)" = 'codex-cli 0.160.0' \
     && npm cache clean --force \
     && rm -rf /root/.npm /opt/yarn-* /usr/local/include/node \
         /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \

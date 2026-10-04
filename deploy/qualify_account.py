@@ -35,8 +35,8 @@ import qualify
 auth = Path('/home/probe/.codex/auth.json')
 before = auth.stat()
 assert auth.read_bytes() == b'{}\n', 'synthetic content differs'
-assert before.st_uid == os.getuid() == 10001
-assert before.st_gid == os.getgid() == 10001
+assert before.st_uid == os.getuid()
+assert before.st_gid == os.getgid()
 assert before.st_mode & 0o777 == 0o600
 assert not auth.with_name('account-sibling-canary').exists(), 'outer account sibling leaked'
 assert not auth.with_name('config.toml').exists(), 'unexpected account config'
@@ -125,7 +125,8 @@ def run():
     require(config['name'] == 'bokkie-calibration', 'only the calibration release is allowed')
     require(config['codex_auth'] is None and config['conversation_profile'] is None,
             'base release must have no enabled account or profile')
-    require((config['uid'], config['gid']) == (10001, 10001), 'qualified account identity required')
+    require((config['uid'], config['gid']) in ((10001, 10001), (3000, 3000)),
+            'only the synthetic baseline or selected Nostromo account identity is allowed')
     info, version = manage.api('GET', '/info'), manage.api('GET', '/version')
     require(version['Version'] == '29.8.1' and version['Arch'] == 'amd64'
             and info['KernelVersion'] == '6.12.73+deb13-amd64'
@@ -178,7 +179,7 @@ def run():
         # synthetic file only. It has no account, network, host directory or
         # Docker socket mount, and no capability other than CHOWN.
         helper_config = {'Image': config['image'], 'User': '0:0',
-            'Entrypoint': ['python3'], 'Cmd': ['-c', "import os; os.chown('/fixture',10001,10001)"],
+            'Entrypoint': ['python3'], 'Cmd': ['-c', f"import os; os.chown('/fixture',{config['uid']},{config['gid']})"],
             'Labels': {'bokkie.account-qualification': name},
             'HostConfig': {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'CapDrop': ['ALL'],
                 'CapAdd': ['CHOWN'], 'SecurityOpt': ['no-new-privileges:true'],
@@ -196,7 +197,7 @@ def run():
         owned = auth.stat()
         require(stat.S_ISREG(owned.st_mode) and (owned.st_dev, owned.st_ino) ==
                 (original.st_dev, original.st_ino), 'synthetic source identity changed')
-        require((owned.st_uid, owned.st_gid, stat.S_IMODE(owned.st_mode)) == (10001, 10001, 0o600),
+        require((owned.st_uid, owned.st_gid, stat.S_IMODE(owned.st_mode)) == (config['uid'], config['gid'], 0o600),
                 'synthetic backing file must be writable by the payload UID')
 
         expected = manage.runtime(derived, ROOT)
@@ -230,7 +231,7 @@ def run():
         def set_mode(mode):
             nonlocal helper
             require(mode in (0, 0o600), 'only synthetic unreadable/readable modes are allowed')
-            permissions = {**helper_config, 'User': '10001:10001',
+            permissions = {**helper_config, 'User': f"{config['uid']}:{config['gid']}",
                 'Cmd': ['-c', "import os; os.chmod('/fixture', " + str(mode) + ')'],
                 'HostConfig': {**helper_config['HostConfig'], 'CapAdd': []}}
             helper = manage.api('POST', '/containers/create?name=' + name + '-mode', permissions)['Id']

@@ -2,8 +2,8 @@
 
 - Status: active
 - Reorientation budget: 160
-- Landed pull requests: [Qualified runtime #41](https://github.com/robchristie/bokkie/pull/41)
-- Next action: land the qualified source component, resolve the pending login/account and private DNS inputs, then install merged artefacts and verify the live journey.
+- Landed pull requests: [Qualified runtime #41](https://github.com/robchristie/bokkie/pull/41), [deployment package #42](https://github.com/robchristie/bokkie/pull/42)
+- Next action: qualify and land Codex 0.160.0, replay the UID3000/account boundary, then install merged artefacts and verify the live journey.
 
 ## Outcome and authority
 
@@ -13,8 +13,9 @@ Nostromo under `/srv`, available through authenticated HTTPS at
 runtime qualification. Preserve the qualified Bubblewrap process/filesystem
 boundary and existing scheduling semantics. This package does not redesign the
 conversation UI, enable engineering automation or implement new task adapters.
-Account selection and the choice of existing web login versus Authentik are
-pending user clarification. No credential values belong in source or evidence.
+The user selected the existing shared web login and Rob’s refreshed Codex account
+on 5 October 2026, and added private DNS. These choices authorise their use in
+this deployment. No credential values belong in source or evidence.
 
 ## Owners and delivery graph
 
@@ -24,7 +25,7 @@ pending user clarification. No credential values belong in source or evidence.
 | Nostromo host-local `/srv/stacks` (no remote) | Bokkie-only persistent configuration consuming merged Bokkie artefacts | Preserve unrelated dirty files; record exact installed configuration and image identities, rollback and restart proof |
 | Existing Nostromo Traefik and private DNS owners | Authenticated route, existing wildcard certificate and private hostname | Unauthenticated and bypass negatives, canonical origin checks, normal DNS/TLS and actual browser journey |
 
-The source branch is `feat/nostromo-deployment`. Host-local changes are reviewed
+The activation source branch is `feat/nostromo-activation`. Host-local changes are reviewed
 as rendered deployment artefacts before apply; unrelated stacks, shared secrets
 and global Docker policy remain outside the change. The initial source plan
 checkpoint is pushed and verified before the component PR is opened.
@@ -40,14 +41,27 @@ Browser qualification found and repaired omitted same-origin credentials and an
 incorrect root rewrite. Backend/UI canonical checks, the networked sandbox,
 transient-systemd failure recovery and desktop/narrow browser checks passed.
 
-The user has been asked to select the existing shared web login or Authentik,
-and the existing Rob Codex account or initially disabled model access. Those
-answers have not arrived. The current source supplies the existing shared-login
-recipe without connecting real credentials. The production hostname does not
-yet resolve through private DNS; the available authenticated infrastructure
-browser channel did not establish DNS administration access. No production
-service, account mount or DNS record has been installed. This plan remains active;
-source-component landing is not terminal deployment acceptance.
+Source component #42 landed at `9c9b9cd71f3b0ab0943d314a024d6e21a59f7303`,
+with matching reviewed/merged trees, passing candidate/post-merge CI and merged-image
+synthetic replay. Temporary resources were removed. The user has now selected the
+existing shared login and Rob's account, and private DNS resolves to
+`192.168.50.20`. Host account identity is UID/GID3000, mode0600. The selected
+account remains in its existing store and will be mounted read-only.
+
+The latest stable Codex package is 0.160.0 (official release notes and npm latest
+checked on 5 October). First qualify its effective features, environment exclusion,
+proposal catalogue and payload lifetime at UID3000 using synthetic account state.
+The source owner lands that qualified upgrade before production installation.
+Retain exact source/image/policy identities in the deployment evidence. Stop and
+repair if preflight, confinement or protocol differs; do not loosen the boundary
+merely to start the newer runtime. Keep the current model/effort profile.
+
+Production verification has an aggregate ceiling of twelve model invocations,
+including at most two per conversation request. Exercise discussion and one
+explicitly confirmed local-note task, inspect durable receipts and restart
+persistence, and stop live calls once acceptance is met. Synthetic state owns
+crash/failure probes. No whole-host reboot or shared Docker restart is included;
+verify system-unit dependencies and application restart directly.
 
 ## Acceptance
 
@@ -57,7 +71,7 @@ source-component landing is not terminal deployment acceptance.
 - Passed: Explicit HTTPS origin support retains loopback defaults and rejects wrong
   Host/Origin, forged forwarding, cross-site mutation and missing/stale tokens.
 - Passed with synthetic credentials: Authentication covers static assets and API; direct backend and alternate
-  ingress cannot bypass it. Real account/login selection is pending.
+  ingress cannot bypass it. Real account/login choices are now recorded; live acceptance is pending.
 - Passed: SQLite persistence and four transient-systemd recovery cases; backup,
   rollback and persistent startup contracts are documented. Installing the host
   unit/profile and observing boot recovery remain pending.

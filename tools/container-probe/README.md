@@ -2,7 +2,7 @@
 
 This is a manual packaging experiment, not a deployment image or a production
 Compose stack. It installs its own Node, Python, Bubblewrap and the conversation
-broker's qualified Codex 0.155.1. Host installations and account files are not
+broker's pinned Codex 0.160.0. Host installations and account files are not
 inputs. It has no published ports, external network or credentials at runtime.
 Image builds need public registry/package access. Never supply build secrets.
 The image includes `strace` for constructor diagnostics and libseccomp for the
@@ -59,8 +59,12 @@ these dependent checks without credentials or model calls:
    abrupt broker death. A deterministic constructor barrier covers the interval
    before Bubblewrap arms its own parent-death signal. The outer container stays
    running until each observation is complete.
-3. Real Codex 0.155.1 App Server preflight must pass the existing version,
+3. Real Codex 0.160.0 App Server preflight must pass the existing version,
    configuration and ephemeral environment-free thread guards without `turn/start`.
+
+The retained original boundary observations used Codex 0.155.1. Replaying these
+checks against the current image is required; the version pin and offline peers
+alone do not qualify Codex 0.160.0.
 
 Any failed check stops the sequence. Full receipts, immutable image/source
 identities and effective settings are retained in the evidence directory;

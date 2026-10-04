@@ -45,7 +45,7 @@ for line in sys.stdin:
  assert method, 'broker must never answer tool or approval requests'
  if method=='initialized': continue
  result={}
- if method=='initialize': result={'userAgent':'bokkie_conversation/0.155.1 (fixture)'}
+ if method=='initialize': result={'userAgent':'bokkie_conversation/0.160.0 (fixture)'}
  if method=='config/read': result={'config':config}
  if method=='thread/start':
   assert r['params']['dynamicTools']==[{'type':'namespace','name':'bokkie','description':'Select one Bokkie proposal for trusted backend validation.','tools':specs}]
@@ -144,19 +144,20 @@ for line in sys.stdin:
             with self.subTest(specs=str(specs)[:100]), self.assertRaises(ValueError):
                 broker.offered_tools(specs)
 
-    def run_peer(self, scenario='success', preflight=False):
+    def run_peer(self, scenario='success', preflight=False, version='0.160.0'):
         profile = {'model': 'fixture-model', 'effort': 'medium', 'timeout_seconds': 1,
                    'max_context_bytes': 4096, 'max_output_bytes': 1024}
         source = '''import sys,json,time
 config=CONFIG
 started=STARTED
 scenario=SCENARIO
+version=VERSION
 def send(v): print(json.dumps(v),flush=True)
 for line in sys.stdin:
  r=json.loads(line); method=r.get('method')
  if method=='initialized': continue
  result={}
- if method=='initialize': result={'userAgent':'bokkie_conversation/0.155.1 (fixture)'}
+ if method=='initialize': result={'userAgent':'bokkie_conversation/'+version+' (fixture)'}
  if method=='config/read': result={'config':config}
  if method=='thread/start':
   assert r['params']['environments']==[] and r['params']['dynamicTools']==[]
@@ -176,7 +177,7 @@ for line in sys.stdin:
   if scenario=='oversized': text='x'*1025
   send({'method':'item/completed','params':{'threadId':tid,'turnId':'turn-1','item':{'type':kind,'text':text,'phase':'final_answer'}}})
   send({'method':'turn/completed','params':{'threadId':tid,'turn':{'id':'turn-1','status':'completed'}}})
-'''.replace('CONFIG', repr(config())).replace('STARTED', repr(started())).replace('SCENARIO', repr(scenario))
+'''.replace('CONFIG', repr(config())).replace('STARTED', repr(started())).replace('SCENARIO', repr(scenario)).replace('VERSION', repr(version))
         def launch(_profile, _config, environment):
             return subprocess.Popen([sys.executable, '-u', '-c', source], stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
@@ -190,7 +191,18 @@ for line in sys.stdin:
         self.assertEqual(self.run_peer(), {'operation': 'reply', 'text': 'hello'})
 
     def test_no_model_preflight(self):
-        self.assertEqual(self.run_peer(preflight=True)['model_calls'], 0)
+        result = self.run_peer(preflight=True)
+        self.assertEqual(result['model_calls'], 0)
+        self.assertEqual(result['codex_version'], '0.160.0')
+
+    def test_unqualified_versions_fail_before_config_thread_or_model_requests(self):
+        for version in ('0.155.1', '0.160.1', '0.160.0-beta.1'):
+            with self.subTest(version=version), \
+                    patch.object(broker.Peer, 'send', autospec=True,
+                                 side_effect=broker.Peer.send) as sent:
+                with self.assertRaisesRegex(ValueError, 'requires conversation containment qualification'):
+                    self.run_peer(preflight=True, version=version)
+                self.assertEqual([call.args[1]['method'] for call in sent.call_args_list], ['initialize'])
 
     def test_forbidden_tools_identity_and_output_fail_closed(self):
         for scenario in ('request', 'tool', 'identity', 'malformed', 'oversized', 'timeout'):

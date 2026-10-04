@@ -1,8 +1,12 @@
 # Qualified constructor policy
 
 These inputs describe a disposable, offline Linux/amd64 conversation boundary.
-They are not global Docker defaults or a deployment prescription. The target is
+They are not global Docker defaults or a deployment prescription. The original
+qualification target was
 Docker 29.8.1, Linux 6.12.73+deb13-amd64, Bubblewrap 0.8.0 and Codex 0.155.1.
+The current image pins Codex 0.160.0; replay the boundary, lifetime and zero-model
+preflight checks before relying on that runtime. The policy inputs remain
+unchanged by the version update.
 The runner preserves UID/GID 10001, zero outer capabilities, no new privileges,
 read-only root, network `none`, no ports and bounded CPU/memory/process count.
 
