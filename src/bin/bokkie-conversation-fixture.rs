@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             profile
                 .preflight_tools(bokkie::conversation_tools::tools(
                     preflight_managed,
-                    preflight_managed,
+                    false,
                 ))
                 .map_err(io::Error::other)?
         );
