@@ -21,8 +21,8 @@ specialist identities belong in configuration and activity details.
 - **Tasks:** find configured work and drafts, see timing and the latest result,
   and open a task in conversation. Operational attention and legacy task details
   remain accessible with their existing authority checks.
-- **Settings:** appearance and, in the target design, agent roles and project
-  workspaces. Only settings supported by a persisted backend contract may be
+- **Settings (next extension):** appearance, agent roles and project workspaces
+  in the target design. Only settings supported by a persisted backend contract may be
   presented as effective editable configuration.
 
 On a wide screen, the conversation occupies the main reading column; selected
@@ -66,7 +66,11 @@ operator to maintain separate chats with every worker.
 The current conversation runtime has one deployment-owned profile. Editable
 role profiles, delegation and escalation require a separate versioned persistence,
 capability-validation and runtime-consumption contract. Visual controls alone
-must not claim that these capabilities exist.
+must not claim that these capabilities exist. The eventual settings editor
+should validate supported model/effort choices server-side and preview changes
+before saving. Pin a selected profile revision to each request, so retry retains
+its original model, effort, permissions and limits. Escalation needs a defined
+trigger and remaining budget; it does not acquire broader permissions.
 
 Development work should produce a concise hand-off to the selected project
 workspace: requested outcome, relevant context, constraints and a return link.
@@ -89,3 +93,6 @@ Use synthetic state for interaction development. Attribute browser evidence to
 the actual candidate and open captured images before judging the visual result.
 Keep model-backed capability changes and production deployment separate from
 presentation verification.
+
+The first conversation-home implementation and its observed limits are recorded
+in [qualification](conversation-home-evidence/README.md).
