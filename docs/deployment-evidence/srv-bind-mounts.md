@@ -47,4 +47,4 @@ The original Docker-volume mode remains available as a separate baseline.
 
 Final committed-image results and policy identities are recorded in the owning
 pull request. Production activation and the authenticated conversation journey
-remain separate acceptance steps in the active deployment plan.
+subsequently passed in the [live record](live-nostromo.md).
