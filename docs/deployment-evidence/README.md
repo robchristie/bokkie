@@ -2,7 +2,8 @@
 
 This record qualifies the **source package and synthetic deployment** at its
 original checkpoint. Production activation subsequently passed; see the
-[live activation record](live-nostromo.md) and
+[initial live activation record](live-nostromo.md), the
+[current redesign deployment](live-redesign.md), and
 [completed deployment plan](../plans/completed/nostromo-deployment.md).
 
 ## Representative target

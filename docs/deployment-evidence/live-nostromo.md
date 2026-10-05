@@ -5,7 +5,11 @@ Bokkie was activated and accepted on 5 October 2026 at
 Codex account selected by the operator. The Polyorama UI, contained conversation
 runtime and durable local-note scheduler passed the authenticated browser journey.
 
-## Installed identity
+The redesigned Home was subsequently deployed; see the
+[current deployment record](live-redesign.md). The identities and observations
+below describe the initial activation.
+
+## Initial installed identity
 
 | Input | Qualified deployment |
 | --- | --- |
