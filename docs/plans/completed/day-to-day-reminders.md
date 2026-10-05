@@ -23,7 +23,7 @@ No model runs on reminder execution, retries or polling. Production deployment,
 credential acquisition, service enrolment, editable roles and other integrations
 are excluded. Source delivery has standing reviewed squash-merge authority.
 
-## Current phase
+## Accepted result
 
 Source and maintained contracts inspected. Nostromo's running service, immutable
 image and release source match the deployment record; Bokkie has no configured
@@ -33,11 +33,13 @@ pending, so no live email is sent or configured. There is no project preview
 manifest, so qualification uses the established fixture-owned local browser route.
 The corrected recurring physical UI journey passed in six model dispatches; a
 one-off probe used one dispatch. Fifteen aggregate calls include the initial
-qualification and one rejected date probe; the sixteen-call cap was respected. Synthetic transport
+qualification and one rejected date probe; the sixteen-call cap was respected.
+Synthetic transport
 outcomes, restart/retry, explicit recovery and desktop/narrow screenshots passed.
 Local SMTP protocol tests cover actual 250/451/550 exchanges and lost acceptance.
 A ManualClock service test captures one real SMTP message without a browser and
-observes later ticks without another send. Canonical checks and browser regression qualification passed. The owning PR
+observes later ticks without another send. Canonical checks and browser regression
+qualification passed. The owning PR
 records independent review, CI and source landing. Production configuration
 and mailbox/device proof remain separate authorised deployment work.
 
