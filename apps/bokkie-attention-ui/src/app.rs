@@ -124,6 +124,8 @@ impl ActionKey for LifecycleAction {
             Self::Cancel => "cancel_obligation",
             Self::ApproveGardenerProposal => "approve_exact_gardener_proposal",
             Self::RejectGardenerProposal => "reject_exact_gardener_proposal",
+            Self::ReconcileNotification => "reconcile_notification",
+            Self::ResendNotification => "resend_notification",
         }
     }
 
@@ -137,6 +139,16 @@ impl ActionKey for LifecycleAction {
             ),
             Self::Retry => ("Retry", "Reopen eligible attention work for retry", None),
             Self::Cancel => ("Cancel", "Cancel eligible non-terminal work", None),
+            Self::ReconcileNotification => (
+                "Resolve without resending",
+                "Acknowledge the uncertain delivery without another send",
+                Some("Resolve delivery"),
+            ),
+            Self::ResendNotification => (
+                "Resend with duplicate risk",
+                "Explicitly retry an uncertain delivery which may already have arrived",
+                Some("Resend reminder"),
+            ),
             Self::ApproveGardenerProposal => (
                 "Approve exact proposal",
                 "Approve only the displayed immutable gardener proposal",
@@ -1399,17 +1411,8 @@ impl eframe::App for AttentionApp {
                         intents.push(OperatorIntent::OpenConversation(None));
                     }
                     ui.add_space(12.0);
-                    if !narrow_header && self.conversation.open {
+                    if !narrow_header {
                         self.show_home_navigation(ui, &mut intents, &mut semantic_nodes);
-                    }
-                    if !self.conversation.open && !narrow_header {
-                        show_collection_tabs(
-                            ui,
-                            self.collection,
-                            self.model.exceptions().count(),
-                            &mut intents,
-                            &mut semantic_nodes,
-                        );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let availability = if self.model.action_busy {
@@ -1462,17 +1465,7 @@ impl eframe::App for AttentionApp {
                 });
                 if narrow_header {
                     ui.horizontal(|ui| {
-                        if self.conversation.open {
-                            self.show_home_navigation(ui, &mut intents, &mut semantic_nodes);
-                        } else {
-                            show_collection_tabs(
-                                ui,
-                                self.collection,
-                                self.model.exceptions().count(),
-                                &mut intents,
-                                &mut semantic_nodes,
-                            );
-                        }
+                        self.show_home_navigation(ui, &mut intents, &mut semantic_nodes);
                     });
                 }
             });
@@ -1497,6 +1490,15 @@ impl eframe::App for AttentionApp {
                     return;
                 }
                 let advanced = egui::CollapsingHeader::new("Advanced tools").show(ui, |ui| {
+                    if engineering_button(
+                        ui,
+                        "bokkie.collection.all",
+                        "Execution records",
+                        true,
+                        &mut semantic_nodes,
+                    ) {
+                        intents.push(OperatorIntent::Navigate(OBLIGATIONS_PANE_ID));
+                    }
                     ui.label("Engineering supervision uses the separately configured runtime.");
                     if engineering_button(
                         ui,
@@ -1877,7 +1879,7 @@ fn show_collection_tabs(
         (
             OBLIGATIONS_PANE_ID,
             "bokkie.collection.all",
-            "Tasks".to_owned(),
+            "Execution records".to_owned(),
         ),
     ] {
         let response = ui.selectable_label(collection == pane, &label);
@@ -1983,11 +1985,7 @@ fn show_inbox(
             }
             for obligation in &read.obligations {
                 ui.add_space(presentation.tokens().spacing.unit.0);
-                let why = obligation
-                    .exception
-                    .as_ref()
-                    .map(exception_label)
-                    .unwrap_or_else(|| "No projected exception".to_owned());
+                let why = obligation_exception_label(obligation);
                 let consequence = available_consequences(obligation);
                 let semantic_label = format!(
                     "{}\n{}\n{} · occurrence {} · {}\n{} · {}",
@@ -2217,11 +2215,11 @@ fn show_timeline(
                     interaction: TextInteraction::Inert,
                 },
             );
-            if let Some(reason) = &obligation.exception {
+            if obligation.exception.is_some() {
                 presentation.content(
                     ui,
                     "exception",
-                    &exception_label(reason),
+                    &obligation_exception_label(obligation),
                     ContentTextSpec {
                         role: TextRole::Body,
                         overflow: TextOverflow::Wrap,
@@ -2420,6 +2418,8 @@ fn show_detail_actions(
             LifecycleAction::Reject,
             LifecycleAction::RejectGardenerProposal,
             LifecycleAction::Cancel,
+            LifecycleAction::ReconcileNotification,
+            LifecycleAction::ResendNotification,
         ]
         .into_iter()
         .filter(|action| action_is_relevant(*action, obligation))
@@ -2448,7 +2448,7 @@ fn show_detail_actions(
                         Availability::Enabled
                     } else {
                         Availability::Disabled {
-                            reason: crate::model::disabled_reason(capability).into(),
+                            reason: crate::model::disabled_reason(&capability).into(),
                         }
                     }
                 })
@@ -2657,10 +2657,19 @@ fn show_confirmation(
             if let Some(conflict) = &confirmation.conflict {
                 ui.colored_label(tokens.colours.status_warning, conflict);
             }
-            ui.label(format!(
-                "Obligation {} · occurrence {}",
-                confirmation.obligation_id, confirmation.occurrence
-            ));
+            if let Some(delivery) = &confirmation.notification {
+                ui.add(egui::Label::new(format!("Destination: {}", delivery.destination)).wrap());
+                ui.add(egui::Label::new(&delivery.subject).wrap().selectable(true));
+                ui.add(egui::Label::new(&delivery.body).wrap().selectable(true));
+                egui::CollapsingHeader::new("Delivery identity").show(ui, |ui| {
+                    ui.add(egui::Label::new(&confirmation.obligation_id).wrap());
+                });
+            } else {
+                ui.label(format!(
+                    "Obligation {} · occurrence {}",
+                    confirmation.obligation_id, confirmation.occurrence
+                ));
+            }
             ui.label(format!("Consequence: {}", confirmation.consequence));
             if let Some(gardener) = &confirmation.gardener {
                 ui.separator();
@@ -2877,6 +2886,8 @@ fn obligation_source(obligation: &OperatorObligation) -> &str {
         Some(OperatorTaskKind::EngineeringWorker) => "Engineering work package",
         Some(OperatorTaskKind::Simulated) => "Simulated execution",
         Some(bokkie_operator_api::OperatorTaskKind::LocalNote) => "Local note",
+        Some(OperatorTaskKind::Reminder) => "Reminder occurrence",
+        Some(OperatorTaskKind::NotificationDelivery) => "Reminder notification",
         None => "Bokkie obligation",
     }
 }
@@ -2925,6 +2936,17 @@ fn exception_text_role(reason: Option<&ExceptionReason>) -> TextRole {
 }
 
 fn next_step_label(obligation: &OperatorObligation, captured_at: Option<i64>) -> String {
+    if let Some(delivery) = obligation
+        .task
+        .as_ref()
+        .and_then(|task| task.notification.as_ref())
+    {
+        return match delivery.status.as_str() {
+            "uncertain" => "Check your inbox, then resolve without resending or review the risk of a duplicate email.".into(),
+            "needs_attention" => "Review the delivery history, address the cause and confirm Retry for this saved reminder.".into(),
+            _ => notification_label(delivery).into(),
+        };
+    }
     match obligation.liveness.as_ref() {
         Some(DurableLiveness::FutureWake { wake_at }) => {
             format!(
@@ -2949,7 +2971,7 @@ fn next_step_label(obligation: &OperatorObligation, captured_at: Option<i64>) ->
             let capability = action.capability(obligation);
             capability
                 .available
-                .then(|| consequence_label(capability).to_owned())
+                .then(|| consequence_label(&capability).to_owned())
         })
         .unwrap_or_else(|| "Review the activity and evidence before deciding".to_owned()),
         None => "No further work is scheduled".to_owned(),
@@ -3227,6 +3249,36 @@ fn exception_label(reason: &ExceptionReason) -> String {
     }
 }
 
+fn notification_label(delivery: &bokkie_operator_api::ManagedDelivery) -> &'static str {
+    match delivery.status.as_str() {
+        "pending" => "Waiting to send",
+        "sending" => "Sending the reminder",
+        "retry_scheduled" => "Delivery temporarily unavailable; a retry is scheduled",
+        "uncertain" => "Delivery uncertain: the email may already have arrived",
+        "needs_attention" => "Delivery needs your input; automatic attempts have stopped",
+        "reconciled" => "Resolved by you without another send; receipt was not verified",
+        "accepted_by_relay" => {
+            "Accepted by the mail relay; inbox delivery and device alerts are not confirmed"
+        }
+        _ => "Delivery status unavailable",
+    }
+}
+
+fn obligation_exception_label(obligation: &OperatorObligation) -> String {
+    if let Some(delivery) = obligation
+        .task
+        .as_ref()
+        .and_then(|task| task.notification.as_ref())
+    {
+        return notification_label(delivery).into();
+    }
+    obligation
+        .exception
+        .as_ref()
+        .map(exception_label)
+        .unwrap_or_else(|| "No projected exception".to_owned())
+}
+
 fn liveness_label(liveness: Option<&DurableLiveness>) -> String {
     match liveness {
         Some(DurableLiveness::FutureWake { wake_at }) => format!("Future wake at Unix {wake_at}"),
@@ -3286,7 +3338,7 @@ fn available_consequences(obligation: &OperatorObligation) -> String {
         .into_iter()
         .filter_map(|action| {
             let capability = action.capability(obligation);
-            capability.available.then(|| consequence_label(capability))
+            capability.available.then(|| consequence_label(&capability))
         })
         .collect::<Vec<_>>();
     consequences.dedup();
@@ -3577,6 +3629,7 @@ fn observe_engineering_control(
     let parent = if id == "bokkie.engineering.new"
         || id == "bokkie.engineering.dismiss-saved"
         || id == "bokkie.conversation.open"
+        || id == "bokkie.collection.all"
         || id.starts_with("bokkie.home.")
     {
         SemanticUiId::root()
@@ -4036,6 +4089,7 @@ mod tests {
         let mut obligation = fixture(1);
         obligation.task = Some(OperatorTask {
             engineering: None,
+            notification: None,
             kind: OperatorTaskKind::EngineeringSupervisor,
             title: "Engineering outcome".to_owned(),
             parent_task_id: None,
@@ -4811,6 +4865,7 @@ mod tests {
         task.state = OperatorObligationState::Pending;
         task.task = Some(bokkie_operator_api::OperatorTask {
             engineering: None,
+            notification: None,
             kind: bokkie_operator_api::OperatorTaskKind::GardenerInspection,
             title: "Garden Bokkie".to_owned(), parent_task_id: None, proposal_instance_id: None,
             configuration: Some(serde_json::from_value(serde_json::json!({

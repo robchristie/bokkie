@@ -31,6 +31,20 @@ struct Control {
     stop: bool,
     #[serde(default)]
     seed_calibration: bool,
+    #[serde(default)]
+    reminder_tick: bool,
+    delivery: Option<SyntheticDelivery>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SyntheticDelivery {
+    Accepted,
+    RetryableRejection,
+    PermanentRejection,
+    Uncertain,
+    CrashBeforeSend,
+    CrashAfterDispatch,
 }
 
 // Fixed inactive synthetic data, available only on this marked fixture's stdin.
@@ -62,12 +76,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut resume = false;
     let mut preflight = false;
     let mut preflight_managed = false;
+    let mut synthetic_reminders = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--profile" => profile_path = args.next().map(PathBuf::from),
             "--root" => root = args.next().map(PathBuf::from),
             "--ui-dir" => ui_dir = args.next().map(PathBuf::from),
             "--resume" => resume = true,
+            "--synthetic-reminders" => synthetic_reminders = true,
             "--preflight" => preflight = true,
             "--preflight-managed" => {
                 preflight = true;
@@ -154,6 +170,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         conversation: Some(ConversationConfig {
             profile,
             notes_enabled: true,
+            notifications: synthetic_reminders.then(|| {
+                Arc::new(bokkie::notifications::NotificationConfig {
+                    relay_host: "127.0.0.1".into(),
+                    relay_port: 9,
+                    from_address: "bokkie@example.invalid".into(),
+                    destination: "fixture-recipient@example.invalid".into(),
+                    timeout_ms: 100,
+                })
+            }),
             clock: Some(clock.clone()),
         }),
     };
@@ -187,7 +212,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     continue;
                 }
             };
-            if control.seed_calibration && (control.now.is_some() || control.tick || control.stop) {
+            if control.seed_calibration
+                && (control.now.is_some()
+                    || control.tick
+                    || control.stop
+                    || control.reminder_tick
+                    || control.delivery.is_some())
+            {
                 println!(
                     "{}",
                     json!({"error":"seed_calibration cannot be combined with other controls"})
@@ -214,6 +245,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let now = clock.now();
             let result = controls_executor
                 .execute(move |store| {
+                    if control.now.is_some() { store.recover_expired_leases(now)?; }
                     if control.seed_calibration {
                         seed_calibration(store, now)?;
                     }
@@ -222,6 +254,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     } else {
                         false
                     };
+                    let reminder_ran = if control.reminder_tick && synthetic_reminders {
+                        if let Some(claim) = store.claim_due_reminders(now, 30, 1)?.pop() {
+                            let definition = store.managed_note_definition(&claim.obligation_id)?;
+                            let result = bokkie::managed::render_local_note(&definition.definition);
+                            store.complete_managed_note(&claim, &result, now)?;
+                            true
+                        } else { false }
+                    } else { false };
+                    if let Some(outcome) = control.delivery {
+                        if !synthetic_reminders { return Err(bokkie::StoreError::Invalid("synthetic reminder controls are disabled".into())); }
+                        if let Some(claim) = store.claim_due_notifications(now, 30, 1)?.pop() {
+                            if !matches!(outcome, SyntheticDelivery::CrashBeforeSend) {
+                                store.begin_notification_send(&claim, now)?;
+                                use bokkie::notifications::NotificationOutcome;
+                                let result = match outcome {
+                                    SyntheticDelivery::Accepted => Some(NotificationOutcome::Accepted { detail: "Synthetic relay accepted; no external email was sent".into() }),
+                                    SyntheticDelivery::RetryableRejection => Some(NotificationOutcome::Rejected { retryable: true, detail: "Synthetic temporary pre-acceptance rejection".into() }),
+                                    SyntheticDelivery::PermanentRejection => Some(NotificationOutcome::Rejected { retryable: false, detail: "Synthetic permanent rejection".into() }),
+                                    SyntheticDelivery::Uncertain => Some(NotificationOutcome::Uncertain { detail: "Synthetic acceptance acknowledgement was lost".into() }),
+                                    SyntheticDelivery::CrashAfterDispatch | SyntheticDelivery::CrashBeforeSend => None,
+                                };
+                                if let Some(result) = result { store.complete_notification_send(&claim, result, now)?; }
+                            }
+                        }
+                    }
                     let catalogue = store.managed_catalogue("", None, 100)?;
                     let mut details = Vec::new();
                     for entry in &catalogue.items {
@@ -229,7 +286,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             details.push(store.managed_detail(&entry.id)?);
                         }
                     }
-                    Ok(json!({"now":now,"ran":ran,"catalogue":catalogue,"details":details,"model_calls":store.conversation_model_dispatch_count()?}))
+                    Ok(json!({"now":now,"ran":ran,"reminder_ran":reminder_ran,"catalogue":catalogue,"details":details,"model_calls":store.conversation_model_dispatch_count()?}))
                 })
                 .await;
             match result {

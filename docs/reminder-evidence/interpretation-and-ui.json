@@ -1,0 +1,310 @@
+{
+  "source": "3c8e0d49de184b410cc0f90e2f0a6d97372f316f",
+  "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "started_at": "2026-10-05T04:19:55.962Z",
+  "mode": "live-model; synthetic transport and recipients; no external mail",
+  "budget": {
+    "model_dispatches": 7,
+    "seconds": 900
+  },
+  "checks": [
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Visible composer at 1440",
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Visible composer at 390",
+    "Enabled action bokkie.conversation.text",
+    "Physical composer has its browser text input",
+    "Enabled action bokkie.conversation.send",
+    "Ambiguous time is clarified without saving a schedule",
+    "Enabled action bokkie.conversation.text",
+    "Physical composer has its browser text input",
+    "Enabled action bokkie.conversation.send",
+    "Inactive draft previews five concrete occurrences",
+    "Review contains the single configured synthetic destination",
+    "Review retains the default named zone",
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Visible composer at 1440",
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Visible composer at 390",
+    "Enabled action bokkie.conversation.text",
+    "Physical composer has its browser text input",
+    "Enabled action bokkie.conversation.send",
+    "Conversational assent does not activate the task",
+    "Enabled action bokkie.conversation.confirm",
+    "Exact explicit confirmation activates the reminder",
+    "Enabled action bokkie.schedule.today",
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Visible composer at 1440",
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Visible composer at 390",
+    "Enabled action bokkie.conversation.catalogue.task-5767ee18-ae3b-41fe-ba9a-cd7c0831f4e6",
+    "Reminder executes with browser closed and saves one result",
+    "Proved rejection schedules a separate notification retry",
+    "Execution and delivery make no model dispatches",
+    "Restart retry keeps the stable delivery identity",
+    "Relay acceptance is distinct from occurrence completion",
+    "Repeated ticks and acceptance do not duplicate occurrence or delivery",
+    "Enabled action bokkie.home.tasks",
+    "Enabled action bokkie.conversation.catalogue.task-5767ee18-ae3b-41fe-ba9a-cd7c0831f4e6",
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Visible composer at 1440",
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Visible composer at 390",
+    "Enabled action bokkie.conversation.text",
+    "Physical composer has its browser text input",
+    "Enabled action bokkie.conversation.send",
+    "Editing leaves the confirmed schedule unchanged until confirmation",
+    "Enabled action bokkie.conversation.confirm",
+    "Enabled action bokkie.conversation.text",
+    "Physical composer has its browser text input",
+    "Enabled action bokkie.conversation.send",
+    "Enabled action bokkie.conversation.confirm",
+    "Pause keeps the same task identity",
+    "Enabled action bokkie.conversation.text",
+    "Physical composer has its browser text input",
+    "Enabled action bokkie.conversation.send",
+    "Enabled action bokkie.conversation.confirm",
+    "Resume keeps the same task with a future occurrence",
+    "Restart after possible dispatch blocks automatic resend",
+    "The complete journey retains exactly one managed task",
+    "Enabled action bokkie.collection.attention",
+    "Enabled action bokkie.inbox-row.delivery-6f8c649a-1cf8-4470-9c31-d5721494cf24",
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Enabled action presentation.3d6225e07557ce12",
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Owned inspection target is unambiguous",
+    "Lantern layout collection completed",
+    "Enabled action action.confirm_lifecycle_action",
+    "Explicit recovery records acknowledgement without resending",
+    "Attention recovery and unchanged polling make no model dispatches",
+    "Enabled action bokkie.home.tasks",
+    "Enabled action bokkie.conversation.catalogue.task-5767ee18-ae3b-41fe-ba9a-cd7c0831f4e6",
+    "Global Tasks returns from attention to the same reminder catalogue and saved context"
+  ],
+  "captures": [
+    {
+      "name": "home-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 339,
+        "frame": "9",
+        "png_sha256": "59f3e00e7bd82ff1b382ee8b65490bffea7bef321b393fa3b746f89398a0a7a7",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    },
+    {
+      "name": "home-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 327,
+        "frame": "14",
+        "png_sha256": "07c75a08ce72ca7afbf02ec52747606241748f5151fa66773aad359fe5a96352",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    },
+    {
+      "name": "review-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 380,
+        "frame": "965",
+        "png_sha256": "8c70872413c2078961606433eb46d8476317ec9f9765a880ab334c99b50d7118",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    },
+    {
+      "name": "review-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 326,
+        "frame": "972",
+        "png_sha256": "d8868c0780ad7cc8d4d50a1d758518a3350bce06c0dbc33aa5dbacf3c565408f",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    },
+    {
+      "name": "today-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 362,
+        "frame": "1317",
+        "png_sha256": "8e310acd66f04d9aa44db5a11cfcd9e57b52f4437f088c784bdbb7d6b1fd8043",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    },
+    {
+      "name": "today-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 330,
+        "frame": "1322",
+        "png_sha256": "db125e772d3c2d36e3c61eeed7ef94e205a83ddf4843ed37643a0e7197bd1edb",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    },
+    {
+      "name": "result-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 359,
+        "frame": "21",
+        "png_sha256": "85c6c66e3568413d0814eb179ff8550966b3887718dedc10e31ebae47c98247c",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    },
+    {
+      "name": "result-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 322,
+        "frame": "33",
+        "png_sha256": "f94305b0f8581590acd1916c2efa4d6ba36c80f5bb8759a967fd6c3c37911a9b",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    },
+    {
+      "name": "delivery-attention-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 376,
+        "frame": "16",
+        "png_sha256": "5d950a2ba0a41c9cba670463ebaa09ee04362acf36f938ef5facd36cc92f963e",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    },
+    {
+      "name": "delivery-attention-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 332,
+        "frame": "26",
+        "png_sha256": "dcc5bfb2c6b8be6cb02357ed94627fbb0ce75d2bad1236af966993bcb108ded2",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    },
+    {
+      "name": "recovery-confirmation-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 388,
+        "frame": "62",
+        "png_sha256": "9ef9d9b697008caffe22cfc8ec22d33b33c1428f51cd32c4ab62a73ac18360fe",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    },
+    {
+      "name": "recovery-confirmation-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 330,
+        "frame": "77",
+        "png_sha256": "da589f12062fe4e8838f55f4637ad25a8d1822ef50d8f6da4659f352984028ff",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      }
+    }
+  ],
+  "errors": [],
+  "passed": true,
+  "browser": "151.0.7922.34",
+  "model_dispatches": 6,
+  "target/debug/bokkie-conversation-fixture": "0919f3fd158b3d2e75e70b38b43c3e741efb31f16e582d94a595a5c18a4e019f",
+  "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "4855030239dbff4a11099c8010f400cef9bc8af3ee9a929c30fbefdf20e481fd",
+  "clarification": [
+    "Do you mean 9 am or 9 pm on weekdays?"
+  ],
+  "definition": {
+    "name": "Review today’s priorities",
+    "purpose": "Prompt the operator to review their priorities each weekday.",
+    "instructions": "Review today’s priorities.",
+    "context_refs": [],
+    "trigger": {
+      "kind": "recurring",
+      "cron": "0 9 * * Mon-Fri",
+      "timezone": "Australia/Adelaide"
+    },
+    "capability": "reminder",
+    "profile_revision": "reminder-v1",
+    "effects": [
+      "store_local_result",
+      "send_notification"
+    ],
+    "max_attempts": 3,
+    "max_output_chars": 8192,
+    "destination": "fixture-recipient@example.invalid"
+  },
+  "preview_occurrences": [
+    1790033400,
+    1790119800,
+    1790206200,
+    1790292600,
+    1790551800
+  ],
+  "aggregate_dispatches_including_rejected_probe": 15,
+  "profile": {
+    "model": "gpt-5.6-terra",
+    "effort": "medium",
+    "timezone": "Australia/Adelaide",
+    "codex_version": "0.160.0"
+  },
+  "raw_report_sha256": "cc8fc59d8c5a028f89ef56ed72641c06022f70dae26c9dbbd1d9ce2807a9addb"
+}

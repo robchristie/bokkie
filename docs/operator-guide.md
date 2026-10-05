@@ -572,8 +572,8 @@ fails closed if its identity or version cannot be obtained. Do not remove the
 unit's user, mount or PID namespace allowance: it is required for the private
 Codex PID boundary as well as candidate checks.
 
-Current limitations include no user authentication, no remote exposure, no
-notification delivery or outbox worker, no automatic merge or deployment, and
+The local service requires an authenticated ingress for remote use, as supplied
+by the Nostromo deployment. Current limitations include no automatic merge or deployment, and
 a coding-gardener runtime restricted to the canonical repository and explicit
 service opt-in. There is no supported destructive migration or downgrade path.
 
@@ -609,13 +609,63 @@ unchanged scope needs no second permission prompt. **New conversation** begins
 an independent discussion; **Recent conversations** restores saved context.
 Normal tasks need no per-task profile file or service restart.
 
-Only local notes execute in this milestone. Their results appear within the
-selected task; no OS notification, email delivery, research retrieval or model
-call accompanies an occurrence. A research/email draft shows blockers instead
-of claiming activation. Without `--enable-local-notes`, activation is blocked and
-existing occurrences remain durable but are not claimed. Without a conversation
+Local notes store in-app results. To enable deterministic email reminders, pass
+`--notification-config /absolute/private/notifications.json` at service startup.
+That JSON selects one existing trusted SMTP relay and one exact recipient:
+
+```json
+{
+  "relay_host": "smtp-relay",
+  "relay_port": 25,
+  "from_address": "REPLACE_WITH_EXISTING_AUTHORISED_SENDER",
+  "destination": "REPLACE_WITH_SELECTED_RECIPIENT",
+  "timeout_ms": 2000
+}
+```
+
+Use bare ASCII mailbox addresses. Unknown fields, multiple recipients, header
+injection, invalid hosts/ports and unbounded timeouts are rejected. No credential
+belongs in this file: the adapter is for a trusted relay, without SMTP AUTH or
+TLS. Nostromo's internal relay owns its upstream credentials and TLS. Never point
+this adapter at a remote unauthenticated endpoint. Reminders stay blocked without
+configuration; this does not convert or send old local notes. Existing configured
+tasks/history remain readable. Changing the recipient requires a fresh reviewed
+task definition; admitted work retains its destination and transport binding.
+For a draft saved before notification setup, previewing it after setup creates
+a new inactive candidate with the configured recipient on the same task. Review
+and explicitly confirm that candidate; the earlier blocked review cannot activate
+it. Existing selected destinations are preserved. The complete reminder text and
+context must fit its finite delivery limit; oversized drafts show a blocker and
+cannot be activated with silently truncated content.
+
+Home's Today, Upcoming and Needs your input buttons open filtered views of Tasks.
+Describe a reminder, answer timing questions, inspect the text, destination,
+zone and concrete dates, then confirm the saved review. An occurrence saves its
+result and independently queues email; neither execution nor retry starts a
+model. Find delivery state and attempt history with the result. A research/email draft shows blockers instead
+of claiming activation. Without `--enable-local-notes`, local-note activation is
+blocked and existing local-note occurrences remain durable but are not claimed.
+Reminder execution is enabled separately by notification configuration. Without a conversation
 profile, saved tasks/history remain readable and the UI explains that the model
 runtime is unavailable. Runtime failure retains the draft and reports the error.
+
+Email delivery runs in the service with the browser closed. An offline receiving
+device does not stop SMTP submission; mailbox storage and later phone alerts are
+owned by the mail provider/app. Relay acceptance is not proof of inbox receipt
+or an alert. The existing Nostromo relay suppresses delivery-status notifications,
+so a later upstream rejection may not return to Bokkie. Use a working sender and
+recipient and qualify the selected mailbox before relying on alerts.
+
+An unavailable relay or proved temporary rejection gets bounded automatic retry.
+Exhausted attempts and permanent rejection remain in Needs attention, even after
+newer recurring runs. Review delivery diagnostics, fix the cause and explicitly
+confirm Retry. If a reply is lost after possible submission or a worker restarts
+at that boundary, Bokkie stops automatic sends and exposes uncertainty. Check
+the mailbox first, then confirm Resolve without resending or Resend with duplicate
+risk. SMTP Message-ID identifies the same delivery across attempts; it does not
+guarantee the recipient deduplicates. Resolution records acknowledgement, not
+confirmed receipt. Pausing or editing a task does not withdraw a notification
+already queued for an admitted occurrence.
 
 **Engineering intake** and existing gardener details retain their specialised
 contracts and legal actions. A legacy schedule cannot be changed by converting

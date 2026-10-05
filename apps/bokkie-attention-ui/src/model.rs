@@ -294,27 +294,54 @@ pub enum LifecycleAction {
     Cancel,
     ApproveGardenerProposal,
     RejectGardenerProposal,
+    ReconcileNotification,
+    ResendNotification,
 }
 
 impl LifecycleAction {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Approve,
         Self::Reject,
         Self::Retry,
         Self::Cancel,
         Self::ApproveGardenerProposal,
         Self::RejectGardenerProposal,
+        Self::ReconcileNotification,
+        Self::ResendNotification,
     ];
 
-    pub fn capability(self, obligation: &OperatorObligation) -> &ActionCapability {
-        match self {
+    pub fn capability(
+        self,
+        obligation: &OperatorObligation,
+    ) -> std::borrow::Cow<'_, ActionCapability> {
+        if matches!(self, Self::ReconcileNotification | Self::ResendNotification) {
+            let precondition = obligation
+                .task
+                .as_ref()
+                .and_then(|t| t.notification.as_ref())
+                .and_then(|d| d.recovery.clone());
+            return std::borrow::Cow::Owned(ActionCapability {
+                available: precondition.is_some(),
+                disabled_reason: precondition
+                    .is_none()
+                    .then_some(bokkie_operator_api::DisabledReason::StateDoesNotPermit),
+                consequence: if self == Self::ReconcileNotification {
+                    bokkie_operator_api::ActionConsequence::ReconcileNotification
+                } else {
+                    bokkie_operator_api::ActionConsequence::ResendNotification
+                },
+                precondition,
+            });
+        }
+        std::borrow::Cow::Borrowed(match self {
             Self::Approve => &obligation.capabilities.approve,
             Self::Reject => &obligation.capabilities.reject,
             Self::Retry => &obligation.capabilities.retry,
             Self::Cancel => &obligation.capabilities.cancel,
             Self::ApproveGardenerProposal => &obligation.capabilities.approve_gardener_proposal,
             Self::RejectGardenerProposal => &obligation.capabilities.reject_gardener_proposal,
-        }
+            Self::ReconcileNotification | Self::ResendNotification => unreachable!(),
+        })
     }
 
     pub const fn requires_decision_body(self) -> bool {
@@ -386,6 +413,7 @@ impl ConnectionState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Confirmation {
+    pub notification: Option<bokkie_operator_api::ManagedDelivery>,
     pub action: LifecycleAction,
     pub obligation_id: String,
     pub occurrence: u32,
@@ -732,7 +760,7 @@ impl AppModel {
             .ok_or_else(|| "Select an obligation first".to_owned())?;
         let capability = action.capability(obligation);
         if !capability.available {
-            return Err(disabled_reason(capability).to_owned());
+            return Err(disabled_reason(&capability).to_owned());
         }
         let precondition = capability
             .precondition
@@ -772,11 +800,15 @@ impl AppModel {
             None
         };
         self.confirmation = Some(Confirmation {
+            notification: obligation
+                .task
+                .as_ref()
+                .and_then(|task| task.notification.clone()),
             action,
             obligation_id: obligation.id.clone(),
             occurrence: obligation.occurrence,
             precondition,
-            consequence: consequence_label(capability).to_owned(),
+            consequence: consequence_label(&capability).to_owned(),
             gardener,
             actor: "operator".to_owned(),
             note: String::new(),
@@ -806,7 +838,7 @@ impl AppModel {
         capability
             .available
             .then_some(())
-            .ok_or_else(|| disabled_reason(capability).to_owned())
+            .ok_or_else(|| disabled_reason(&capability).to_owned())
     }
 
     pub fn confirmation_matches_current_state(&self, confirmation: &Confirmation) -> bool {
@@ -917,6 +949,12 @@ pub fn consequence_label(capability: &ActionCapability) -> &'static str {
         ActionConsequence::RejectExactGardenerProposal => {
             "Reject this exact immutable proposal into attention"
         }
+        ActionConsequence::ReconcileNotification => {
+            "Resolve this delivery without sending again. This records your acknowledgement; it does not prove the email arrived."
+        }
+        ActionConsequence::ResendNotification => {
+            "Try sending this same reminder again. The previous attempt may have been accepted, so this can deliver a duplicate email."
+        }
     }
 }
 
@@ -1006,6 +1044,69 @@ mod tests {
                 ),
             },
         }
+    }
+
+    #[test]
+    fn uncertain_delivery_requires_a_current_separate_recovery_confirmation() {
+        let mut item = obligation("delivery", OperatorObligationState::Attention);
+        let mut precondition = capability(true, ActionConsequence::ReopenForRetry)
+            .precondition
+            .unwrap();
+        precondition.obligation_id = item.id.clone();
+        item.capabilities.retry.available = false;
+        item.task = Some(bokkie_operator_api::OperatorTask {
+            engineering: None,
+            kind: bokkie_operator_api::OperatorTaskKind::NotificationDelivery,
+            title: "Priorities notification".into(),
+            parent_task_id: Some("reminder".into()),
+            configuration: None,
+            proposal_instance_id: None,
+            notification: Some(bokkie_operator_api::ManagedDelivery {
+                id: item.id.clone(),
+                status: "uncertain".into(),
+                detail: "Acceptance is unknown".into(),
+                destination: "fixture@example.invalid".into(),
+                subject: "Review priorities".into(),
+                body: "Review priorities".into(),
+                next_retry_at: None,
+                attempts: vec![],
+                recovery: Some(precondition),
+            }),
+        });
+        let mut model = AppModel::default();
+        model.apply_snapshot(snapshot_page(vec![item.clone()], None, 1));
+        model.selected_obligation = Some(item.id.clone());
+        model
+            .begin_confirmation(LifecycleAction::ResendNotification)
+            .unwrap();
+        let confirmation = model.confirmation.clone().unwrap();
+        assert!(confirmation.consequence.contains("duplicate"));
+        assert!(model.confirmation_matches_current_state(&confirmation));
+        assert!(
+            model
+                .action_availability(LifecycleAction::Retry, model.selected().unwrap())
+                .is_err()
+        );
+        item.task
+            .as_mut()
+            .unwrap()
+            .notification
+            .as_mut()
+            .unwrap()
+            .recovery
+            .as_mut()
+            .unwrap()
+            .state_revision += 1;
+        model.apply_snapshot(snapshot_page(vec![item], None, 2));
+        assert!(!model.confirmation_matches_current_state(&confirmation));
+        model.connection = ConnectionState::Stale {
+            reason: "fixture reconnect".into(),
+        };
+        assert!(
+            model
+                .begin_confirmation(LifecycleAction::ReconcileNotification)
+                .is_err()
+        );
     }
 
     fn service(session_id: &str) -> ServiceIdentity {
@@ -1259,6 +1360,7 @@ mod tests {
         let mut parent = obligation("ordinary-id", OperatorObligationState::Pending);
         parent.task = Some(OperatorTask {
             engineering: None,
+            notification: None,
             kind: OperatorTaskKind::GardenerInspection,
             title: "Garden Bokkie".to_owned(),
             parent_task_id: None,
@@ -1271,6 +1373,7 @@ mod tests {
         );
         child.task = Some(OperatorTask {
             engineering: None,
+            notification: None,
             kind: OperatorTaskKind::GardenerImplementation,
             title: "Review a proposal".to_owned(),
             parent_task_id: Some(parent.id.clone()),
@@ -1313,6 +1416,7 @@ mod tests {
         let mut task = obligation("inspection", OperatorObligationState::Pending);
         task.task = Some(OperatorTask {
             engineering: None,
+            notification: None,
             kind: OperatorTaskKind::GardenerInspection,
             title: "Garden Bokkie".to_owned(),
             parent_task_id: None,

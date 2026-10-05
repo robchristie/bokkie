@@ -1,10 +1,11 @@
 # Conversational task definitions
 
 The attention UI's **Conversation** workspace supports drafting and managing
-versioned tasks. The first executable capability is `local_note`: one occurrence
-stores the supplied reminder text as an immutable result visible in that task.
-It sends no notification, browses no pages, reads no referenced document, runs no
-shell command and invokes no model when due. Research finders and email monitors
+versioned tasks. `reminder` saves the supplied text as an immutable occurrence
+result and a separate email delivery intent for the configured destination.
+`local_note` keeps its established in-app result behaviour and sends no email.
+Neither browses pages, reads referenced documents, runs shell commands or invokes
+a model when due. Research finders and email monitors
 can be discussed and saved as drafts; their missing adapters block activation.
 
 ## Definition and execution boundaries
@@ -16,14 +17,34 @@ definition revisions identify behaviour. Neither replaces obligation state,
 attempt, lease or engineering-contract revisions.
 
 Each scheduled occurrence has its own one-off kernel obligation, with a binding
-to the exact definition and `local-note-v1` profile. There is at most one
+to the exact definition and its `local-note-v1` or `reminder-v1` profile. There is at most one
 outstanding occurrence per task. Store creates and retires these obligations
 through the existing transitions; the existing scheduler admits notes only
-through the explicitly enabled note adapter. Fake, gardener and engineering
+through the explicitly enabled capability adapter. Fake, gardener and engineering
 workers cannot claim those bindings. Rendering is deterministic outside SQLite;
 result insertion and kernel completion reconcile together in one transaction.
 A unique obligation result prevents duplicate local results after replay. This
 is a local atomic write, not a generic exactly-once external-effects promise.
+
+Reminder completion atomically saves one notification intent with that result
+and schedules the next occurrence. Delivery has its own kernel obligation and
+bounded worker; a delivery failure cannot block the recurring schedule. The
+worker commits a possible-send marker before contacting the relay, outside every
+SQLite transaction. Stable delivery identity, Message-ID, recipient and text are
+retained across retry. The selected transport is pinned at first admission and
+a configuration change cannot silently reroute an admitted delivery. SMTP has
+no supported idempotency key: Message-ID is traceable, not a deduplication promise.
+
+Only proved nonacceptance permits automatic retry. A temporary rejection or
+unavailable relay schedules a bounded retry; permanent rejection or exhausted
+attempts enters Needs attention. Loss of the final acceptance reply, or restart
+after possible dispatch, enters uncertain attention without automatic resend.
+Known nonacceptance supports fenced **Retry** of the saved intent. Uncertainty
+requires separate explicit confirmation: **Resolve without resending** records
+acknowledgement without claiming receipt; **Resend with duplicate risk** retries
+the same payload and identity. A stale or repeated recovery request cannot
+perform another mutation. All delivery attempts and operator decisions remain
+in history, independently of the completed reminder result.
 
 Drafts need no obligation. Preview reads the candidate (or active definition
 when no candidate exists), computes named-zone dates and records no execution.
@@ -53,6 +74,8 @@ operator confirmation and occurrence revision fence to retry that same admitted
 work. Its original definition/profile remain pinned, including while paused or
 a newer definition is active. Unfenced retry and generic cancellation stay blocked.
 
+Pause and schedule edits do not withdraw a delivery already saved for an admitted
+occurrence. Such a notification may still arrive. Review explains that boundary.
 The missed-tick policy retains one persisted due occurrence and coalesces
 intervening recurring ticks; completion schedules strictly after the current
 clock. No backlog is enumerated. Resume computes a future recurring date, with
@@ -87,6 +110,12 @@ engineering roots. Multiple matches require explicit selection. A lookup error
 is displayed as failure, not evidence that no task exists. Legacy tasks link to
 their existing details and specialised legal actions; conversational drafting
 cannot convert them or evade their immutable schedule/supervision contract.
+
+Home and Tasks use the same bounded catalogue for Today, Upcoming and Needs your
+input. Filtering occurs before pagination. Task rows show purpose, next local
+date, status and latest result; selecting a task restores its saved conversation
+when available. Historical occurrences retain the zone of their pinned definition,
+even after a schedule is revised to another zone.
 
 Dispatch is persisted before the model runs. Identical request retries return
 the saved state without another model call; changed payload reuse conflicts.

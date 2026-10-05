@@ -87,7 +87,14 @@ pub(super) fn show_task_detail(
             obligation
                 .task
                 .as_ref()
-                .filter(|task| task.kind == OperatorTaskKind::LocalNote)
+                .filter(|task| {
+                    matches!(
+                        task.kind,
+                        OperatorTaskKind::LocalNote
+                            | OperatorTaskKind::Reminder
+                            | OperatorTaskKind::NotificationDelivery
+                    )
+                })
                 .and_then(|task| task.parent_task_id.clone())
                 .unwrap_or_else(|| obligation.id.clone()),
         )));
@@ -96,7 +103,12 @@ pub(super) fn show_task_detail(
         return;
     };
     if let Some(parent_id) = &task.parent_task_id {
-        if task.kind == OperatorTaskKind::LocalNote {
+        if matches!(
+            task.kind,
+            OperatorTaskKind::LocalNote
+                | OperatorTaskKind::Reminder
+                | OperatorTaskKind::NotificationDelivery
+        ) {
             if button(
                 ui,
                 &format!("bokkie.task.parent.{parent_id}"),
@@ -120,6 +132,39 @@ pub(super) fn show_task_detail(
                 presentation,
             );
         }
+    }
+    if let Some(delivery) = &task.notification {
+        presentation.heading(ui, "notification-heading", "Reminder notification");
+        full_text(
+            ui,
+            "notification-state",
+            notification_label(delivery),
+            presentation,
+        );
+        full_text(
+            ui,
+            "notification-destination",
+            &format!("Destination: {}", delivery.destination),
+            presentation,
+        );
+        full_text(ui, "notification-subject", &delivery.subject, presentation);
+        full_text(ui, "notification-message", &delivery.body, presentation);
+        full_text(
+            ui,
+            "notification-execution",
+            "The reminder occurrence completed and its result is saved. These actions affect only this notification delivery.",
+            presentation,
+        );
+        egui::CollapsingHeader::new("Delivery diagnostics")
+            .id_salt((&delivery.id, "diagnostics"))
+            .show(ui, |ui| {
+                full_text(
+                    ui,
+                    "notification-diagnostics",
+                    &delivery.detail,
+                    presentation,
+                )
+            });
     }
     if let Some(engineering) = &task.engineering {
         presentation.heading(ui, "engineering-heading", "Engineering outcome");

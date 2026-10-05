@@ -253,6 +253,10 @@ fn router_state_core(state: ApiState) -> Router {
         .route("/operator/obligations/{id}/retry", post(operator_retry))
         .route("/operator/obligations/{id}/cancel", post(operator_cancel))
         .route(
+            "/operator/notifications/{id}/recover",
+            post(operator_notification_recovery),
+        )
+        .route(
             "/operator/gardener/proposals/{fingerprint}/approve",
             post(operator_approve_gardener_proposal),
         )
@@ -701,6 +705,19 @@ async fn operator_cancel(
     with_store(&state, move |store, now| {
         store.cancel_if_current(&id, &request.precondition, now)?;
         require_obligation(store, &id)
+    })
+    .await
+    .map(|body| (StatusCode::OK, Json(body)).into_response())
+}
+
+async fn operator_notification_recovery(
+    State(state): State<ApiState>,
+    AxumPath(id): AxumPath<String>,
+    request: Result<Json<bokkie_operator_api::NotificationRecoveryRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = request.map_err(invalid_json)?;
+    with_store(&state, move |store, now| {
+        store.recover_notification_if_current(&id, &request, now)
     })
     .await
     .map(|body| (StatusCode::OK, Json(body)).into_response())
@@ -1787,6 +1804,111 @@ mod tests {
         router_with_executor(DbExecutor::start(database).unwrap(), test_runtime())
     }
 
+    #[tokio::test]
+    async fn uncertain_notification_recovery_requires_exact_confirmation_and_never_claims_delivery()
+    {
+        use crate::notifications::NotificationOutcome;
+        use bokkie_operator_api::{
+            ManagedCapabilityProfile, ManagedTaskDefinition, NotificationRecovery,
+            NotificationRecoveryRequest,
+        };
+        let temporary = TempDir::new().unwrap();
+        let database = temporary.path().join("notification-recovery.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        let now = SystemClock.now();
+        let task = store
+            .managed_create(
+                "create-reminder",
+                &ManagedTaskDefinition::reminder("Due reminder", "Due text", "reader@example.org"),
+                now,
+            )
+            .unwrap()
+            .task_id;
+        let profiles = [ManagedCapabilityProfile::reminder("reader@example.org")];
+        let preview = store
+            .managed_preview(&task, "session", &profiles, now)
+            .unwrap();
+        store
+            .managed_activate("activate-reminder", &preview, "session", &profiles, now)
+            .unwrap();
+        let claim = store
+            .claim_due_reminders(now, 30, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        store
+            .complete_managed_note(&claim, "Due text", now)
+            .unwrap();
+        let delivery = store.managed_detail(&task).unwrap().runs[0]
+            .delivery
+            .clone()
+            .unwrap();
+        let claim = store
+            .claim_due_notifications(now, 30, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        store.begin_notification_send(&claim, now).unwrap();
+        store
+            .complete_notification_send(
+                &claim,
+                NotificationOutcome::Uncertain {
+                    detail: "connection lost after DATA".into(),
+                },
+                now,
+            )
+            .unwrap();
+        let request = NotificationRecoveryRequest {
+            precondition: store
+                .notification_delivery(&delivery.id)
+                .unwrap()
+                .recovery
+                .unwrap(),
+            action: NotificationRecovery::MarkReconciled,
+            note: Some("Operator checked the mailbox".into()),
+        };
+        let application = test_router(database);
+        let uri = format!("/operator/notifications/{}/recover", delivery.id);
+        let body = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            engineering_post(application.clone(), &uri, body.clone(), false)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        let mut stale = request.clone();
+        stale.precondition.state_revision -= 1;
+        assert_eq!(
+            engineering_post(
+                application.clone(),
+                &uri,
+                serde_json::to_value(stale).unwrap(),
+                true
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        let (status, reconciled) =
+            engineering_post(application.clone(), &uri, body.clone(), true).await;
+        assert_eq!(status, StatusCode::OK, "{reconciled}");
+        assert_eq!(reconciled["status"], "reconciled");
+        assert!(
+            reconciled["detail"]
+                .as_str()
+                .unwrap()
+                .contains("acceptance is not proved")
+        );
+        assert_eq!(
+            engineering_post(application, &uri, body, true).await.0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            store.notification_delivery(&delivery.id).unwrap().status,
+            "reconciled"
+        );
+    }
+
     async fn response_json(response: Response) -> (StatusCode, Value) {
         let status = response.status();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -1867,6 +1989,7 @@ mod tests {
             "/operator/obligations/id/reject",
             "/operator/obligations/id/retry",
             "/operator/obligations/id/cancel",
+            "/operator/notifications/id/recover",
             "/gardener/repository",
             "/gardener/proposals/fingerprint/approve",
             "/gardener/proposals/fingerprint/reject",

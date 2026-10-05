@@ -53,7 +53,7 @@ def load(root):
     config = json.loads((root / 'release.json').read_text())
     required = {'name', 'source', 'image', 'edge_image', 'hostname', 'uid', 'gid',
                 'data', 'web_auth', 'codex_auth', 'conversation_profile'}
-    if set(config) != required:
+    if not required.issubset(config) or set(config) - required - {'notification_config'}:
         raise ValueError('release.json fields differ from the deployment contract')
     if not re.fullmatch(r'bokkie(?:-[a-z0-9]{1,24})?', config['name']):
         raise ValueError('invalid deployment name')
@@ -89,6 +89,19 @@ def load(root):
                 'broker': '/opt/conversation/broker.py', 'codex': '/usr/local/bin/codex',
                 'bwrap': '/usr/bin/bwrap'}.items()):
             raise ValueError('conversation executable paths must use the packaged runtime')
+    if config.get('notification_config') is not None:
+        if not isinstance(config['notification_config'], str):
+            raise ValueError('notification_config must be an absolute file path or null')
+        path = Path(config['notification_config'])
+        if not path.is_absolute() or not path.is_file() or path.resolve() != path:
+            raise ValueError('notification_config must be a canonical regular file without symlinks')
+        if path.stat().st_size > 8192:
+            raise ValueError('notification_config exceeds 8192 bytes')
+        notification = json.loads(path.read_text())
+        if set(notification) != {'relay_host', 'relay_port', 'from_address', 'destination', 'timeout_ms'}:
+            raise ValueError('notification configuration fields differ from the SMTP contract')
+        if notification['relay_host'] != 'smtp-relay' or type(notification['relay_port']) is not int or notification['relay_port'] != 25:
+            raise ValueError('Nostromo reminders must use the existing internal smtp-relay:25')
     return config
 
 
@@ -123,6 +136,12 @@ def runtime(config, root):
             {'Type': 'bind', 'Source': str(root / 'conversation.json'),
              'Target': '/opt/conversation-profile.json', 'ReadOnly': True}]
         command += ['--conversation-profile', '/opt/conversation-profile.json']
+    networks = {'proxy': {'Aliases': [name]}}
+    if config.get('notification_config') is not None:
+        mounts.append({'Type': 'bind', 'Source': config['notification_config'],
+                       'Target': '/opt/notification-config.json', 'ReadOnly': True})
+        command += ['--notification-config', '/opt/notification-config.json']
+        networks['backend'] = {'Aliases': [name]}
     labels = {'bokkie.deployment': config['name'],
               'traefik.enable': 'true', 'traefik.docker.network': 'proxy',
               f'traefik.http.routers.{config["name"]}.rule': f'Host(`{config["hostname"]}`)',
@@ -145,7 +164,7 @@ def runtime(config, root):
                 'Tmpfs': {'/tmp': 'rw,nosuid,nodev,size=128m,mode=1777',
                           '/home/probe/.codex': f'rw,nosuid,nodev,size=16m,uid={uid},gid={gid},mode=700'},
                 'Mounts': mounts, **json.loads((POLICY / 'paths.json').read_text())},
-            'NetworkingConfig': {'EndpointsConfig': {'proxy': {'Aliases': [name]}}}}
+            'NetworkingConfig': {'EndpointsConfig': networks}}
 
 
 def edge(config, root):
@@ -258,6 +277,8 @@ def validate_runtime(expected, observed):
         raise RuntimeError('unexpected outer runtime authority')
     if observed['Image'] != expected['Image'] or not observed['State']['Running']:
         raise RuntimeError('runtime identity/state differs')
+    if 'NetworkingConfig' in expected and set(observed['NetworkSettings']['Networks']) != set(expected['NetworkingConfig']['EndpointsConfig']):
+        raise RuntimeError('effective runtime networks differ')
 
 
 def identity(observed):

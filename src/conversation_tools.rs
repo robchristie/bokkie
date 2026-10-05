@@ -38,8 +38,8 @@ pub fn tools(managed_selected: bool, legacy_selected: bool) -> Value {
         result.push(tool("bokkie_save_draft", "Save a NEW inactive task or a candidate revision of the selected managed task. Use for requests such as 'set up a weekday reminder, don’t activate it yet', text refinements, or 'make it Monday mornings'. This never activates or changes active behaviour. Supply the complete intended user-facing definition, preserving unchanged selected fields. The backend supplies profile identity, permitted effects, result destination and finite execution defaults. Research/email ideas may be saved but their unavailable capability blocks activation.", object(json!({
             "name":text("Concise task name used for later discovery."),
             "purpose":text("What the task is intended to achieve."),
-            "instructions":text("For local_note, the exact reminder text to display. For unavailable capabilities, describe intended behaviour without claiming it can execute."),
-            "capability":{"type":"string","enum":["local_note","research_finder","email_monitor","unavailable"],"description":"local_note only stores supplied text in Bokkie. Research retrieval and email monitoring must use their own unavailable capabilities."},
+            "instructions":text("For reminder or local_note, the exact text to bring back to the operator. For unavailable capabilities, describe intended behaviour without claiming it can execute."),
+            "capability":{"type":"string","enum":["reminder","local_note","research_finder","email_monitor","unavailable"],"description":"Use reminder for a notification when due; its reviewed destination is supplied by the backend. Use local_note only when a local in-app note is requested. Preserve the selected capability on ordinary revisions. Research retrieval and email monitoring must use their own unavailable capabilities."},
             "trigger":trigger,
             "context_refs":{"type":"array","items":text("A relevant context reference; references are retained as data, never fetched or executed."),"maxItems":20}
         }), &["name","purpose","instructions","capability","trigger","context_refs"])));
@@ -71,6 +71,7 @@ struct Draft {
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Capability {
+    Reminder,
     LocalNote,
     ResearchFinder,
     EmailMonitor,
@@ -115,6 +116,15 @@ pub fn operation(
     offered: &Value,
     base: Option<&ManagedTaskDefinition>,
 ) -> Result<ConversationOperation, StoreError> {
+    operation_with_profiles(output, offered, base, &[])
+}
+
+pub fn operation_with_profiles(
+    output: Value,
+    offered: &Value,
+    base: Option<&ManagedTaskDefinition>,
+    profiles: &[bokkie_operator_api::ManagedCapabilityProfile],
+) -> Result<ConversationOperation, StoreError> {
     let proposal: ToolProposal = decode(output)?;
     if !offered
         .as_array()
@@ -139,6 +149,7 @@ pub fn operation(
         "bokkie_save_draft" => {
             let draft: Draft = decode(proposal.arguments)?;
             let capability = match draft.capability {
+                Capability::Reminder => "reminder",
                 Capability::LocalNote => "local_note",
                 Capability::ResearchFinder => "research_finder",
                 Capability::EmailMonitor => "email_monitor",
@@ -148,14 +159,34 @@ pub fn operation(
                 .filter(|current| current.capability == capability)
                 .cloned()
                 .unwrap_or_else(|| {
-                    ManagedTaskDefinition::local_note(&draft.name, &draft.instructions)
+                    if capability == "reminder" {
+                        let destination = profiles
+                            .iter()
+                            .find(|p| p.capability == "reminder")
+                            .map_or("Not configured", |p| p.destination.as_str());
+                        ManagedTaskDefinition::reminder(
+                            &draft.name,
+                            &draft.instructions,
+                            destination,
+                        )
+                    } else {
+                        ManagedTaskDefinition::local_note(&draft.name, &draft.instructions)
+                    }
                 });
             definition.name = draft.name;
             definition.purpose = draft.purpose;
             definition.instructions = draft.instructions;
             definition.trigger = draft.trigger;
             definition.context_refs = draft.context_refs;
-            if capability != "local_note" {
+            if capability == "reminder" && definition.destination == "Not configured" {
+                if let Some(profile) = profiles
+                    .iter()
+                    .find(|p| p.capability == "reminder" && p.available)
+                {
+                    definition.destination = profile.destination.clone();
+                }
+            }
+            if !matches!(capability, "local_note" | "reminder") {
                 definition.capability = capability.into();
                 if base.is_none_or(|current| current.capability != capability) {
                     definition.profile_revision = "unavailable".into();
@@ -185,6 +216,44 @@ mod tests {
 
     fn draft() -> Value {
         json!({"tool":"bokkie_save_draft","arguments":{"name":"Queue review","purpose":"Choose a paper","instructions":"Read the queue.","capability":"local_note","trigger":{"kind":"recurring","cron":"0 9 * * Mon-Fri","timezone":"Australia/Adelaide"},"context_refs":[]}})
+    }
+    #[test]
+    fn reminder_destination_is_backend_owned_and_preserved_on_revision() {
+        let mut proposal = draft();
+        proposal["arguments"]["capability"] = json!("reminder");
+        let profiles = [bokkie_operator_api::ManagedCapabilityProfile::reminder(
+            "fixture@example.invalid",
+        )];
+        let ConversationOperation::SaveDefinition { definition, .. } =
+            operation_with_profiles(proposal.clone(), &tools(false, false), None, &profiles)
+                .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(definition.destination, "fixture@example.invalid");
+        assert_eq!(definition.capability, "reminder");
+        assert_eq!(
+            definition.effects,
+            ["store_local_result", "send_notification"]
+        );
+        let other = [bokkie_operator_api::ManagedCapabilityProfile::reminder(
+            "other@example.invalid",
+        )];
+        let ConversationOperation::SaveDefinition {
+            definition: edited, ..
+        } = operation_with_profiles(
+            proposal.clone(),
+            &tools(true, false),
+            Some(&definition),
+            &other,
+        )
+        .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(edited.destination, "fixture@example.invalid");
+        proposal["arguments"]["destination"] = json!("unrequested@example.invalid");
+        assert!(operation_with_profiles(proposal, &tools(false, false), None, &profiles).is_err());
     }
     #[test]
     fn defaults_and_authority_are_owned_by_backend() {

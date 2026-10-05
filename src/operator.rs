@@ -1017,6 +1017,7 @@ impl Store {
         let mut task = match self.gardener_obligation_kind(&obligation.id)? {
             Some(crate::GardenerObligationKind::Inspection) => OperatorTask {
                 engineering: None,
+                notification: None,
                 kind: OperatorTaskKind::GardenerInspection,
                 title: "Garden Bokkie".to_owned(),
                 parent_task_id: None,
@@ -1029,6 +1030,7 @@ impl Store {
                     [&obligation.id], |row| row.get(0)).optional()?;
                 OperatorTask {
                     engineering: None,
+                    notification: None,
                     kind: OperatorTaskKind::GardenerImplementation,
                     title: implementation_task_title(proposal.map(|value| value.prompt.as_str())),
                     parent_task_id,
@@ -1038,6 +1040,7 @@ impl Store {
             }
             None => OperatorTask {
                 engineering: None,
+                notification: None,
                 kind: OperatorTaskKind::Simulated,
                 title: obligation.description.clone(),
                 parent_task_id: None,
@@ -1076,9 +1079,42 @@ impl Store {
             }
         }
         if self.is_managed_obligation(&obligation.id)? {
-            task.kind = OperatorTaskKind::LocalNote;
+            task.kind = if self
+                .managed_note_definition(&obligation.id)?
+                .definition
+                .capability
+                == "reminder"
+            {
+                OperatorTaskKind::Reminder
+            } else {
+                OperatorTaskKind::LocalNote
+            };
             task.parent_task_id = self.managed_task_for_obligation(&obligation.id)?;
             task.title = obligation.description.clone();
+            for action in [
+                &mut projected_capabilities.approve,
+                &mut projected_capabilities.reject,
+                &mut projected_capabilities.cancel,
+                &mut projected_capabilities.approve_gardener_proposal,
+                &mut projected_capabilities.reject_gardener_proposal,
+            ] {
+                action.available = false;
+                action.disabled_reason = Some(DisabledReason::ManagedRequiresDefinition);
+                action.precondition = None;
+            }
+        }
+        if let Some(parent) = self.notification_task(&obligation.id)? {
+            let delivery = self.notification_delivery(&obligation.id)?;
+            task.kind = OperatorTaskKind::NotificationDelivery;
+            task.parent_task_id = Some(parent);
+            task.title = obligation.description.clone();
+            if delivery.recovery.is_some() {
+                projected_capabilities.retry.available = false;
+                projected_capabilities.retry.disabled_reason =
+                    Some(DisabledReason::ManagedRequiresDefinition);
+                projected_capabilities.retry.precondition = None;
+            }
+            task.notification = Some(delivery);
             for action in [
                 &mut projected_capabilities.approve,
                 &mut projected_capabilities.reject,

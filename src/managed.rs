@@ -23,3 +23,13 @@ pub fn run_one_note(store: &mut Store, now: i64) -> Result<bool, StoreError> {
     store.complete_managed_note(&claim, &result, now)?;
     Ok(true)
 }
+
+pub fn run_one_reminder(store: &mut Store, now: i64) -> Result<bool, StoreError> {
+    let Some(claim) = store.claim_due_reminders(now, 30, 1)?.pop() else {
+        return Ok(false);
+    };
+    let definition = store.managed_note_definition(&claim.obligation_id)?;
+    let result = render_local_note(&definition.definition);
+    store.complete_managed_note(&claim, &result, now)?;
+    Ok(true)
+}

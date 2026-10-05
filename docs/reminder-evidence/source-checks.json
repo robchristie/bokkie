@@ -1,0 +1,98 @@
+{
+  "baseline": "574b84ba01c9852f04892b35fa790f9d4554872e",
+  "attribution": "Working implementation inputs at canonical checks; individual content hashes permit reuse on the committed candidate. Independent exact-head review and CI remain mandatory.",
+  "inputs_sha256": {
+    "apps/bokkie-attention-ui/src/app.rs": "dad7ef4753e059b3349d43ce33f807900f24ec710c81d5ef71e986f46153d589",
+    "apps/bokkie-attention-ui/src/conversation_ui.rs": "0864e06c0399510bbb2ac0fa82094bccfb3a77878cc460902bd19123bf4277d2",
+    "apps/bokkie-attention-ui/src/model.rs": "9ca26f3a0aee1f3a9ffd1f8511412b23bdffb359cdb4bd4ef37f68fa38ccb49a",
+    "apps/bokkie-attention-ui/src/task_ui.rs": "bec7913c33e59348974068e91636b1fb4bd91106603e786be148ac062ab481d6",
+    "apps/bokkie-attention-ui/src/transport.rs": "3f09c3e9f4d1b273fa71ee6512ef933ef25a6c560491b56a8cf2a649e8e91a24",
+    "crates/bokkie-operator-api/src/conversation.rs": "d75beeebd116d87d961b5fffd3d711522e58eb17ca2677c34b325693c793d652",
+    "crates/bokkie-operator-api/src/lib.rs": "1353c598d54c4924aaaf0cfc3a47d265f7e23c6b228d4726aa19cbdd7d8f74a9",
+    "crates/bokkie-operator-api/src/managed.rs": "0b3bc8df4e68c1b19dbb6eb84026ed73bde721c5ea033477a80ceae8f91f3e52",
+    "deploy/manage.py": "fb4ff7548d074b0e480ade3aa11730eb9fab7e518ed5d2f68fd2cc863e6dc2a0",
+    "deploy/release.example.json": "8550044139911070acff82c0329e983cd14fa5e6eec7b0d60afabc13a10664d3",
+    "migrations/0014_notification_delivery.sql": "59a4025acec4268a2caad3448250c9e192992af0937788d80d3be36223949b9b",
+    "src/bin/bokkie-conversation-fixture.rs": "1813c68f531c52422e00c454e01ee5802c97ed5dbbcddb572482a473f163a650",
+    "src/conversation.rs": "075d225afd3445c3129587a4d15c93600915e189dec926f92ce0f0f7b1c5e970",
+    "src/conversation_http.rs": "3b68a80bb4ef21895a7d6ab49c6d555b99e2d2b89363177caa4900cac4126e63",
+    "src/conversation_tools.rs": "690c1b5ff537c0229a1c0e5c96e054c111e17c69a7acdb37ea8d025a159bba93",
+    "src/http.rs": "2cc13e9123c7c38d99b131d91cd5455acadce2a322f8b928e9cfca3fc8a85303",
+    "src/lib.rs": "bda74a4264f08f826f2b570b789d0b0c7693d70114db956606ca2bca77e6f91f",
+    "src/main.rs": "20c8d565a8e4c7287951b467106e3771a5c180fc4fc1911c796555df791b11db",
+    "src/managed.rs": "20f67d8ba2be55b50f4fab88d343033debb29678e65d4327705662a299de1311",
+    "src/migrations.rs": "fda1dc97a342a2ac7b54f47f2353174fbd5b0551c224655f0869095687bbfeb4",
+    "src/notifications.rs": "225565de6959bc6a104de67c06f7f21d0ffabcab41735d9459191ae7885603da",
+    "src/notifications/smtp.rs": "6e463cbc33af4b7af11ddbe78f9a5c63045c5eee7d12c36341b12fe3d2d0a4ea",
+    "src/operator.rs": "c45317be6b7a3ec620fd532e816b52eea9b78c1b41fe7e3f6f1dfaa0cb1c8ce7",
+    "src/service.rs": "977c8c5e13cdd013602aabf29f6a9935c29f807b200168ff0349d891f54e2131",
+    "src/store.rs": "38fc2b07961973299f2b675a118757a560c41b14b44939e0bdf3056d5dcca972",
+    "src/store/managed.rs": "bebee94436b48de3de864d34aa56cded07c37c306ef072d6b0aa82095a846c11",
+    "src/store/notifications.rs": "50484a6c7332e2a58e11190ed6e40a864a4b0c419743bea3b4c7afd0d7fba775",
+    "tests/conversation_adapters.rs": "c9f5ddb23972d6f2fe48cbb91e266faf2f521557cb815afe13e3205b7e535906",
+    "tests/fixtures/reminder_broker.py": "605cb25869a77fa5db40c1ddbec333fc1fc52fafd6ba1167d42d14c1b1b9fe1b",
+    "tests/notification_config.rs": "5d81136eb2d08f31324e20452054e37691724c85e2de02b0330d0be743c0b657",
+    "tests/reminder_agenda.rs": "1025c307cf8f805f3bc32e47b4190bc6336f866c1c4366383eb2ebccb2a5b51f",
+    "tools/qualify-reminder-once.py": "c4bc2b8303271c665a73953a2f370776034b8a44bb53637f80fae837cf9f1d5e",
+    "tools/tests/test_deployment.py": "797bcf3a0fb506c75ecffc9cc97fea7af92fd8fbac6cc97ce048fb0c5ccf8320",
+    "tools/ui-browser-smoke.mjs": "d670a46568ba4bbd9822644a9e8d2a0cea8f188f96050923bb90de33bf055632",
+    "tools/ui-reminder-journey.mjs": "4a540f458072e37aa7990334eb4d2698a377d57b32cbc066f65b444fa229605a"
+  },
+  "checks": [
+    {
+      "check": "backend",
+      "outcome": {
+        "command": [
+          "tools/check.sh"
+        ],
+        "cwd": "/nvme/development/bokkie",
+        "log": "/tmp/bokkie-reminder-checks/command-log-kfj5v3vk/output.log",
+        "state": "success",
+        "command_returncode": 0,
+        "capture_complete": true,
+        "wrapper_exit": 0,
+        "started_at": "2026-10-05T04:28:51.502180+00:00",
+        "finished_at": "2026-10-05T04:29:20.790912+00:00",
+        "excerpt": true,
+        "log_bytes": 39003,
+        "excerpt_offset": 37979,
+        "excerpt_bytes": 1024,
+        "omitted_bytes": 37979,
+        "output": "ext_to_fit_without_truncation ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n     Running tests/public_origin.rs (target/debug/deps/public_origin-84181a9b0023b4b7)\n\nrunning 3 tests\ntest public_origin_accepts_only_canonical_https_dns_origins ... ok\ntest invalid_public_origin_or_bind_cannot_create_the_database ... ok\ntest public_origin_fences_bootstrap_ui_and_mutations ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n     Running tests/reminder_agenda.rs (target/debug/deps/reminder_agenda-265da99a780d5d6e)\n\nrunning 2 tests\ntest today_uses_the_operators_calendar_and_preserves_task_specific_zone ... ok\ntest agenda_filters_before_pagination_and_retains_named_zone_and_latest_result ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\n\n    Checking bokkie v0.1.0 (/nvme/development/bokkie)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.68s\n"
+      },
+      "log": "check-backend.log",
+      "log_sha256": "fdce5401827863150dbedc5197ec3bd33ec419614884e642720a012762f27127"
+    },
+    {
+      "check": "ui",
+      "outcome": {
+        "command": [
+          "tools/check-ui.sh"
+        ],
+        "cwd": "/nvme/development/bokkie",
+        "log": "/tmp/bokkie-reminder-checks/command-log-6thnwzah/output.log",
+        "state": "success",
+        "command_returncode": 0,
+        "capture_complete": true,
+        "wrapper_exit": 0,
+        "started_at": "2026-10-05T04:15:54.758857+00:00",
+        "finished_at": "2026-10-05T04:15:59.072129+00:00",
+        "excerpt": true,
+        "log_bytes": 8887,
+        "excerpt_offset": 7863,
+        "excerpt_bytes": 1024,
+        "omitted_bytes": 7863,
+        "output": "ed_text_at_normal_and_enlarged_scales ... ok\ntest app::tests::task_settings_editor_and_review_have_complete_semantics_at_both_widths ... ok\ntest app::tests::physical_search_input_filters_collections_through_repeated_layout ... ok\n\ntest result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s\n\n     Running unittests src/main.rs (target/debug/deps/bokkie_attention_ui-e496a1a6551116df)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Checking bokkie-attention-ui v0.1.0 (/nvme/development/bokkie/apps/bokkie-attention-ui)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.51s\n   Compiling bokkie-attention-ui v0.1.0 (/nvme/development/bokkie/apps/bokkie-attention-ui)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.68s\n   Compiling bokkie-attention-ui v0.1.0 (/nvme/development/bokkie/apps/bokkie-attention-ui)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.90s\n"
+      },
+      "log": "check-ui.log",
+      "log_sha256": "6cc58ecc7b004f9bfb42cd7f915323bd76e046c376cf108272614e5165b4ba5d"
+    }
+  ],
+  "legacy_ui_smoke": {
+    "command": "BOKKIE_UI_EVIDENCE_DIR=.ui-qualification-runtime/reminder-legacy BOKKIE_UI_SYSROOT=/nvme/development/polyorama/.tools/sysroot node tools/ui-browser-smoke.mjs",
+    "result": "passed",
+    "evidence_owner": ".ui-qualification-runtime/reminder-legacy"
+  },
+  "verification_checkpoint_parent": "11333d297cb82a793c8fd50627981411113edef1",
+  "source_state": "Working implementation after independent review repairs; input hashes match the subsequent candidate. Unchanged UI evidence is reused."
+}

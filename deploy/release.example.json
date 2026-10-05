@@ -9,5 +9,6 @@
   "data": "/srv/data/bokkie",
   "web_auth": "/srv/secrets/core/traefik_dashboard_htpasswd.txt",
   "codex_auth": null,
-  "conversation_profile": null
+  "conversation_profile": null,
+  "notification_config": null
 }

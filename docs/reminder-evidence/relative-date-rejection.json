@@ -1,0 +1,21 @@
+{
+  "mode": "live-model with synthetic notification outcomes; no external mail",
+  "source": "35fc02bc581b6ad57279b7fc53ea3d081b468aaf",
+  "fixture_sha256": "d7f0c6eaa7ff39c0bf418357ab63234102e4d904fddeaf8c8396c9e20b0573d9",
+  "prefix_sha256": "b4c4664f3985a650dd043a455aedb31982b4759ddc2742fa7ff79c86b66d7108",
+  "checks": [
+    "One-off interpretation completed within its finite bound"
+  ],
+  "passed": false,
+  "error": "Tomorrow resolves to one concrete 8 am Adelaide date",
+  "stderr": "",
+  "actual_trigger": {
+    "kind": "once",
+    "local_datetime": "2026-10-06T08:00",
+    "timezone": "Australia/Adelaide"
+  },
+  "expected_date": "2026-09-24",
+  "aggregate_model_dispatches": 8,
+  "model_dispatches": 1,
+  "repair": "Supply explicit trusted local calendar context; retain exact inactive review contract."
+}
