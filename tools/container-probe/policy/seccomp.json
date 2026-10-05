@@ -1123,6 +1123,25 @@
           "amd64"
         ]
       }
+    },
+    {
+      "names": [
+        "mount"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 3,
+          "value": 37927,
+          "op": "SCMP_CMP_EQ"
+        }
+      ],
+      "includes": {
+        "arches": [
+          "amd64"
+        ]
+      },
+      "comment": "Observed read-only bind remount preserving nosuid/nodev/noatime on Nostromo /srv."
     }
   ]
 }
