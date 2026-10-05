@@ -72,6 +72,7 @@ def syscalls():
     text = lambda value: ctypes.c_char_p(value.encode())
     cases = {
         'mount': (text('none'), text('/data'), null, ctypes.c_ulong(0x1021), null),
+        'mount:noatime': (text('none'), text('/data'), null, ctypes.c_ulong(37927), null),
         'umount2': (text('/data'), 2), 'pivot_root': (text('/tmp'), text('/tmp')),
         'unshare': (0x10000000,), 'setns': (-1, 0), 'chroot': (text('/tmp'),),
         'fsopen': (text('tmpfs'), 0), 'fsconfig': (-1, 0, null, null, 0),
@@ -85,7 +86,7 @@ def syscalls():
     }
     results = {}
     for name, args in cases.items():
-        number = library.seccomp_syscall_resolve_name(name.encode())
+        number = library.seccomp_syscall_resolve_name(name.split(':', 1)[0].encode())
         assert number >= 0, name
         ctypes.set_errno(0)
         result = libc.syscall(ctypes.c_long(number), *args)

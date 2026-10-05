@@ -61,6 +61,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut ui_dir = None;
     let mut resume = false;
     let mut preflight = false;
+    let mut preflight_managed = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--profile" => profile_path = args.next().map(PathBuf::from),
@@ -68,6 +69,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "--ui-dir" => ui_dir = args.next().map(PathBuf::from),
             "--resume" => resume = true,
             "--preflight" => preflight = true,
+            "--preflight-managed" => {
+                preflight = true;
+                preflight_managed = true;
+            }
             _ => return Err(format!("unknown fixture option {arg}").into()),
         }
     }
@@ -81,7 +86,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!(
             "{}",
             profile
-                .preflight_tools(bokkie::conversation_tools::tools(false, false))
+                .preflight_tools(bokkie::conversation_tools::tools(preflight_managed, false,))
                 .map_err(io::Error::other)?
         );
         return Ok(());

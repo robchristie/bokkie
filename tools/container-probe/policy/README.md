@@ -60,3 +60,23 @@ The [qualification record](../../../docs/container-evidence/container-boundary/R
 owns the matrix, exact source/image/policy identities, counterexamples and final
 payload/lifetime/preflight receipts. Treat a changed kernel, runtime, policy,
 profile path layout or daemon mode as a new qualification input.
+
+## Nostromo `/srv` bind mounts
+
+The deployment's data and conversation-profile binds inherit `noatime` from
+Nostromo's XFS `/srv` filesystem. The earlier Docker-volume qualification used
+`relatime`; it did not cover this topology. The outer seccomp policy additionally
+admits the measured amd64 mount flag equality `37927`
+(`RDONLY|NOSUID|NODEV|REMOUNT|NOATIME|BIND|SILENT`). AppArmor admits that read-only
+remount only at `/newroot/data/` and `/newroot/opt/conversation-profile.json`.
+The payload filter still rejects every mount call, including this tuple.
+
+Run `deploy/qualify_account.py --srv-bind-mounts` with the marked synthetic
+calibration roots to qualify this deployment combination. It retains the real
+runtime mount generator, uses synthetic data/profile binds under `/srv` and a
+synthetic account under `/home`, and verifies mount flags and failed payload
+writes as well as successful construction. This distinction is essential:
+Bubblewrap 0.8 ignores `EACCES` on recursive child-mount remounts, so an AppArmor
+denial can otherwise leave a writable child mount despite successful startup.
+The [bind-mount evidence](../../../docs/deployment-evidence/srv-bind-mounts.md)
+records the causal comparison and final qualification.

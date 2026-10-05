@@ -59,6 +59,9 @@ profile "BOKKIE_PROFILE" flags=(attach_disconnected,mediate_deleted) {
   mount options=(ro,nosuid,nodev,remount,bind,silent) -> /newroot{,/**},
   mount options=(ro,nosuid,nodev,remount,bind,silent,relatime) -> /newroot{,/**},
   mount options=(ro,nosuid,nodev,noexec,remount,bind,silent,relatime) -> /newroot{,/**},
+  # Nostromo's /srv bind mounts retain noatime when made read-only.
+  mount options=(ro,nosuid,nodev,remount,bind,silent,noatime) -> /newroot/data/,
+  mount options=(ro,nosuid,nodev,remount,bind,silent,noatime) -> /newroot/opt/conversation-profile.json,
   mount options=(rw,rbind,silent) /oldroot/ -> /newroot/,
   pivot_root oldroot=/tmp/oldroot/ /tmp/,
   pivot_root oldroot=/newroot/ /newroot/,
