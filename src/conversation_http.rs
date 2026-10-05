@@ -386,7 +386,11 @@ async fn make_review(
     let profiles = config(state).profiles();
     let now = config(state).now();
     state.executor.execute(move|s|{
-        let task=s.managed_detail(&task_id).map_err(|e|match e{StoreError::NotFound(_)=>StoreError::Invalid("Legacy task behaviour and schedules remain owned by their specialised APIs. Open its task details for legal actions.".into()),e=>e})?;
+        let mut task=s.managed_detail(&task_id).map_err(|e|match e{StoreError::NotFound(_)=>StoreError::Invalid("Legacy task behaviour and schedules remain owned by their specialised APIs. Open its task details for legal actions.".into()),e=>e})?;
+        if action == ConversationAction::Activate && task.candidate.as_ref().is_some_and(|candidate| candidate.definition.capability == "reminder" && candidate.definition.destination == "Not configured") {
+            s.managed_prepare_reminder_destination(&task_id, &profiles, now)?;
+            task=s.managed_detail(&task_id)?;
+        }
         let preview=match action { ConversationAction::Activate=>Some(s.managed_preview(&task_id,&session,&profiles,now)?),ConversationAction::Resume=>Some(s.managed_resume_preview(&task_id,&session,&profiles,now)?),ConversationAction::Pause=>None };
         let mut blockers=preview.as_ref().map(|p|p.blockers.clone()).unwrap_or_default();
         if action==ConversationAction::Pause && task.status!=ManagedTaskStatus::Active{blockers.push("Only an active managed task can be paused".into());}
@@ -441,6 +445,180 @@ const EMPTY_LOOKUP_CONTINUATION_INSTRUCTIONS: &str = "This bounded catalogue sea
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unconfigured_reminder_draft_acquires_destination_only_in_a_fresh_exact_review() {
+        let temporary = tempfile::TempDir::new().unwrap();
+        let database = temporary.path().join("late-notifications.sqlite");
+        let mut store = crate::Store::open(&database).unwrap();
+        let runtime = crate::http_security::ApiRuntime::new(
+            "127.0.0.1:7744".parse().unwrap(),
+            crate::SUPPORTED_SCHEMA_VERSION,
+        )
+        .unwrap();
+        let session = runtime.identity().session_id;
+        let turn = ConversationTurnRequest {
+            command_id: "draft-turn".into(),
+            conversation_id: "reminder-chat".into(),
+            expected_revision: 0,
+            text: "Remind me now to review my priorities".into(),
+        };
+        store.conversation_begin(&turn, &session, 100).unwrap();
+        let proposal = json!({"tool":"bokkie_save_draft","arguments":{
+            "name":"Review priorities","purpose":"Choose today's work",
+            "instructions":"Review my priorities.","capability":"reminder",
+            "trigger":{"kind":"immediate"},"context_refs":[]}});
+        let ConversationOperation::SaveDefinition { definition, .. } =
+            conversation_tools::operation_with_profiles(
+                proposal.clone(),
+                &conversation_tools::tools(false, false),
+                None,
+                &[],
+            )
+            .unwrap()
+        else {
+            panic!("expected inactive reminder draft")
+        };
+        assert_eq!(definition.destination, "Not configured");
+        let saved = store
+            .managed_create("draft-turn:draft", &definition, 100)
+            .unwrap();
+        store
+            .conversation_bind_saved(&turn.conversation_id, &saved, 100)
+            .unwrap();
+        store
+            .conversation_finish(&turn, "Draft saved", None, 100)
+            .unwrap();
+        let executor = crate::DbExecutor::start(database).unwrap();
+        let mut state = ApiState {
+            executor: executor.clone(),
+            runtime,
+            engineering_intake: None,
+            conversation: Some(ConversationConfig {
+                profile: None,
+                notes_enabled: false,
+                notifications: None,
+                clock: Some(Arc::new(crate::ManualClock::new(100))),
+            }),
+        };
+        make_review(
+            &state,
+            &turn.conversation_id,
+            &saved.task_id,
+            ConversationAction::Activate,
+        )
+        .await
+        .unwrap();
+        let blocked = get_view(&state, turn.conversation_id.clone())
+            .await
+            .unwrap()
+            .review
+            .unwrap();
+        assert!(!blocked.blockers.is_empty());
+        state.conversation.as_mut().unwrap().notifications =
+            Some(Arc::new(crate::notifications::NotificationConfig {
+                relay_host: "smtp-relay".into(),
+                relay_port: 25,
+                from_address: "bokkie@example.org".into(),
+                destination: "reader@example.org".into(),
+                timeout_ms: 1000,
+            }));
+        let profiles = config(&state).profiles();
+        let ConversationOperation::SaveDefinition {
+            definition: edited, ..
+        } = conversation_tools::operation_with_profiles(
+            proposal,
+            &conversation_tools::tools(true, false),
+            Some(&definition),
+            &profiles,
+        )
+        .unwrap()
+        else {
+            panic!("expected candidate revision")
+        };
+        assert_eq!(edited.destination, "reader@example.org");
+        make_review(
+            &state,
+            &turn.conversation_id,
+            &saved.task_id,
+            ConversationAction::Activate,
+        )
+        .await
+        .unwrap();
+        let reviewed = get_view(&state, turn.conversation_id.clone())
+            .await
+            .unwrap();
+        let review = reviewed.review.unwrap();
+        assert!(review.blockers.is_empty());
+        assert_eq!(
+            review.preview.as_ref().unwrap().definition.destination,
+            "reader@example.org"
+        );
+        let draft = reviewed.task.unwrap();
+        assert_eq!(draft.id, saved.task_id);
+        assert_eq!(draft.status, ManagedTaskStatus::Draft);
+        assert!(draft.runs.is_empty());
+        assert_eq!(draft.candidate.as_ref().unwrap().revision, 2);
+        let stale = ConversationConfirmRequest {
+            command_id: "stale-confirm".into(),
+            conversation_id: turn.conversation_id.clone(),
+            proposal_id: blocked.id,
+            session_id: session.clone(),
+        };
+        assert!(confirm(State(state.clone()), Json(stale)).await.is_err());
+        let confirmation = ConversationConfirmRequest {
+            command_id: "exact-confirm".into(),
+            conversation_id: turn.conversation_id.clone(),
+            proposal_id: review.id,
+            session_id: session,
+        };
+        let Json(active) = confirm(State(state.clone()), Json(confirmation.clone()))
+            .await
+            .unwrap();
+        let Json(replayed) = confirm(State(state.clone()), Json(confirmation))
+            .await
+            .unwrap();
+        assert_eq!(active.receipt, replayed.receipt);
+        assert_eq!(active.task.as_ref().unwrap().id, saved.task_id);
+        assert_eq!(
+            active.task.as_ref().unwrap().status,
+            ManagedTaskStatus::Active
+        );
+        assert_eq!(active.task.as_ref().unwrap().runs.len(), 1);
+        *state
+            .conversation
+            .as_mut()
+            .unwrap()
+            .notifications
+            .as_mut()
+            .unwrap() = Arc::new(crate::notifications::NotificationConfig {
+            relay_host: "smtp-relay".into(),
+            relay_port: 25,
+            from_address: "bokkie@example.org".into(),
+            destination: "other@example.org".into(),
+            timeout_ms: 1000,
+        });
+        make_review(
+            &state,
+            &turn.conversation_id,
+            &saved.task_id,
+            ConversationAction::Activate,
+        )
+        .await
+        .unwrap();
+        let unchanged = store.managed_detail(&saved.task_id).unwrap();
+        assert_eq!(
+            unchanged.active.unwrap().definition.destination,
+            "reader@example.org"
+        );
+        assert_eq!(unchanged.runs.len(), 1);
+        assert_eq!(
+            store.managed_catalogue("", None, 100).unwrap().items.len(),
+            1
+        );
+        assert_eq!(store.conversation_model_dispatch_count().unwrap(), 0);
+        executor.shutdown().unwrap();
+    }
 
     #[test]
     fn conversation_calendar_uses_the_supplied_clock_and_named_zone() {

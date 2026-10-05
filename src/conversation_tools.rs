@@ -178,6 +178,14 @@ pub fn operation_with_profiles(
             definition.instructions = draft.instructions;
             definition.trigger = draft.trigger;
             definition.context_refs = draft.context_refs;
+            if capability == "reminder" && definition.destination == "Not configured" {
+                if let Some(profile) = profiles
+                    .iter()
+                    .find(|p| p.capability == "reminder" && p.available)
+                {
+                    definition.destination = profile.destination.clone();
+                }
+            }
             if !matches!(capability, "local_note" | "reminder") {
                 definition.capability = capability.into();
                 if base.is_none_or(|current| current.capability != capability) {

@@ -148,6 +148,23 @@ fn capability_blockers(
     {
         reasons.push("Reminders require the reviewed notification destination and effects".into());
     }
+    if def.capability == "reminder" {
+        let context_chars = if def.context_refs.is_empty() {
+            0
+        } else {
+            "\n\nContext references:\n".chars().count()
+                + def
+                    .context_refs
+                    .iter()
+                    .map(|r| r.chars().count())
+                    .sum::<usize>()
+                + def.context_refs.len()
+                - 1
+        };
+        if def.instructions.chars().count() + context_chars > def.max_output_chars as usize {
+            reasons.push("The complete reminder text and context exceed the delivery limit; shorten the draft before confirming".into());
+        }
+    }
     reasons
 }
 fn blockers(
@@ -472,6 +489,39 @@ impl Store {
         let result = detail(&tx, id)?;
         tx.commit()?;
         Ok(result)
+    }
+    /// Preparing a review may bind a never-activated, unconfigured reminder
+    /// draft to the now available destination. It remains an inactive candidate.
+    pub(crate) fn managed_prepare_reminder_destination(
+        &mut self,
+        id: &str,
+        profiles: &[ManagedCapabilityProfile],
+        now: i64,
+    ) -> Result<(), StoreError> {
+        let task = self.managed_detail(id)?;
+        if task.status != ManagedTaskStatus::Draft || task.active.is_some() {
+            return Ok(());
+        }
+        let Some(candidate) = task.candidate.as_ref().filter(|candidate| {
+            candidate.definition.capability == "reminder"
+                && candidate.definition.destination == "Not configured"
+        }) else {
+            return Ok(());
+        };
+        let Some(profile) = profile_for(&candidate.definition, profiles).filter(|p| p.available)
+        else {
+            return Ok(());
+        };
+        let mut definition = candidate.definition.clone();
+        definition.destination = profile.destination.clone();
+        self.managed_revise(
+            &format!("reminder-destination:{id}:{}", task.configuration_revision),
+            id,
+            task.configuration_revision,
+            &definition,
+            now,
+        )?;
+        Ok(())
     }
     pub fn managed_preview(
         &self,

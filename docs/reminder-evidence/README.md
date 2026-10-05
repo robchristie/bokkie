@@ -58,7 +58,7 @@ diagnostics are disclosed rather than placed in the reading path.
 
 The interpretation report identifies the committed implementation and compiled
 artefacts. [Canonical checks](source-checks.json) retain commands, complete logs
-and relevant input hashes: 218 governance/deployment tests, 335 backend unit
+and relevant input hashes: 218 governance/deployment tests, 336 backend unit
 tests (plus adapter/integration checks) and 84 UI tests passed, with Clippy,
 formatting and native/Wasm builds. The legacy physical browser smoke also passed.
 The owning [PR #49](https://github.com/robchristie/bokkie/pull/49) records the final
@@ -74,6 +74,11 @@ across edits/pause, and older attention after more than twenty newer runs.
 Catalogue tests filter before pagination and retain the operator's calendar day
 while showing explicit task zones. HTTP and UI tests retain mutation-token and
 exact-current-recovery confirmation requirements.
+Review repairs add a handler-level regression from actual unconfigured draft
+construction through notification setup, fresh review, stale-review rejection
+and exact confirmation/replay on the same task. Already selected recipients stay
+bound. Payload boundary tests include Unicode and appended context: fitting text
+is saved and queued intact, while oversized content cannot activate.
 
 Local TCP SMTP peers exercise real protocol exchange without external mail:
 250 acceptance, 451 temporary rejection, 550 permanent rejection, pre-DATA close,

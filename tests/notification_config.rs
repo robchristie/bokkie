@@ -95,3 +95,82 @@ fn absent_notification_config_blocks_reminder_activation_and_valid_config_pins_t
     // This validates source/profile wiring only; no scheduler or network is started.
     assert!(store.managed_detail(&task).unwrap().next_wake_at.is_some());
 }
+
+#[test]
+fn reminder_confirmation_requires_the_complete_text_and_context_to_fit_without_truncation() {
+    use bokkie::{ManagedCapabilityProfile, ManagedTaskStatus};
+    let mut store = Store::open_in_memory().unwrap();
+    let profiles = [ManagedCapabilityProfile::reminder("reader@example.org")];
+    let reference = "r".repeat(2048);
+    let context_overhead = "\n\nContext references:\n".chars().count() + reference.chars().count();
+    for (number, instructions, references, fits) in [
+        (1, "🦘".repeat(8192), vec![], true),
+        (2, "x".repeat(8193), vec![], false),
+        (
+            3,
+            "x".repeat(8192 - context_overhead),
+            vec![reference.clone()],
+            true,
+        ),
+        (
+            4,
+            "x".repeat(8193 - context_overhead),
+            vec![reference],
+            false,
+        ),
+    ] {
+        let mut definition = ManagedTaskDefinition::reminder(
+            "Bounded reminder",
+            &instructions,
+            "reader@example.org",
+        );
+        definition.context_refs = references.clone();
+        let task = store
+            .managed_create(&format!("draft-{number}"), &definition, 0)
+            .unwrap()
+            .task_id;
+        let preview = store
+            .managed_preview(&task, "session", &profiles, 0)
+            .unwrap();
+        let activated = store.managed_activate(
+            &format!("activate-{number}"),
+            &preview,
+            "session",
+            &profiles,
+            0,
+        );
+        if fits {
+            assert!(preview.blockers.is_empty());
+            activated.unwrap();
+            assert!(bokkie::managed::run_one_reminder(&mut store, 0).unwrap());
+            let run = &store.managed_detail(&task).unwrap().runs[0];
+            let expected = if references.is_empty() {
+                instructions
+            } else {
+                format!(
+                    "{instructions}\n\nContext references:\n{}",
+                    references.join("\n")
+                )
+            };
+            assert_eq!(expected.chars().count(), 8192);
+            assert_eq!(run.result.as_deref(), Some(expected.as_str()));
+            assert_eq!(run.delivery.as_ref().unwrap().body, expected);
+        } else {
+            assert!(
+                preview
+                    .blockers
+                    .iter()
+                    .any(|b| b.contains("complete reminder text"))
+            );
+            assert!(activated.is_err());
+            let retained = store.managed_detail(&task).unwrap();
+            assert_eq!(retained.status, ManagedTaskStatus::Draft);
+            assert!(retained.runs.is_empty());
+            assert!(retained.next_wake_at.is_none());
+            assert_eq!(
+                retained.candidate.unwrap().definition.instructions,
+                instructions
+            );
+        }
+    }
+}

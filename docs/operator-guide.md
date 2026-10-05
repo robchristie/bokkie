@@ -631,6 +631,12 @@ this adapter at a remote unauthenticated endpoint. Reminders stay blocked withou
 configuration; this does not convert or send old local notes. Existing configured
 tasks/history remain readable. Changing the recipient requires a fresh reviewed
 task definition; admitted work retains its destination and transport binding.
+For a draft saved before notification setup, previewing it after setup creates
+a new inactive candidate with the configured recipient on the same task. Review
+and explicitly confirm that candidate; the earlier blocked review cannot activate
+it. Existing selected destinations are preserved. The complete reminder text and
+context must fit its finite delivery limit; oversized drafts show a blocker and
+cannot be activated with silently truncated content.
 
 Home's Today, Upcoming and Needs your input buttons open filtered views of Tasks.
 Describe a reminder, answer timing questions, inspect the text, destination,

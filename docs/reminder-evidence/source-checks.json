@@ -15,8 +15,8 @@
     "migrations/0014_notification_delivery.sql": "59a4025acec4268a2caad3448250c9e192992af0937788d80d3be36223949b9b",
     "src/bin/bokkie-conversation-fixture.rs": "1813c68f531c52422e00c454e01ee5802c97ed5dbbcddb572482a473f163a650",
     "src/conversation.rs": "075d225afd3445c3129587a4d15c93600915e189dec926f92ce0f0f7b1c5e970",
-    "src/conversation_http.rs": "2608bb922e3b483464139f896711d738049c5a64fb8e53b19688b7f193c5c659",
-    "src/conversation_tools.rs": "c755aa8226e945263cc6559f923ea888b350884ffacb2a2a720a10187c41d955",
+    "src/conversation_http.rs": "3b68a80bb4ef21895a7d6ab49c6d555b99e2d2b89363177caa4900cac4126e63",
+    "src/conversation_tools.rs": "690c1b5ff537c0229a1c0e5c96e054c111e17c69a7acdb37ea8d025a159bba93",
     "src/http.rs": "2cc13e9123c7c38d99b131d91cd5455acadce2a322f8b928e9cfca3fc8a85303",
     "src/lib.rs": "bda74a4264f08f826f2b570b789d0b0c7693d70114db956606ca2bca77e6f91f",
     "src/main.rs": "20c8d565a8e4c7287951b467106e3771a5c180fc4fc1911c796555df791b11db",
@@ -27,11 +27,11 @@
     "src/operator.rs": "c45317be6b7a3ec620fd532e816b52eea9b78c1b41fe7e3f6f1dfaa0cb1c8ce7",
     "src/service.rs": "977c8c5e13cdd013602aabf29f6a9935c29f807b200168ff0349d891f54e2131",
     "src/store.rs": "38fc2b07961973299f2b675a118757a560c41b14b44939e0bdf3056d5dcca972",
-    "src/store/managed.rs": "9e747c235b0200780d46a0164835647c221495a284d0fe85dcf127ee0a5309c5",
+    "src/store/managed.rs": "bebee94436b48de3de864d34aa56cded07c37c306ef072d6b0aa82095a846c11",
     "src/store/notifications.rs": "50484a6c7332e2a58e11190ed6e40a864a4b0c419743bea3b4c7afd0d7fba775",
     "tests/conversation_adapters.rs": "c9f5ddb23972d6f2fe48cbb91e266faf2f521557cb815afe13e3205b7e535906",
     "tests/fixtures/reminder_broker.py": "605cb25869a77fa5db40c1ddbec333fc1fc52fafd6ba1167d42d14c1b1b9fe1b",
-    "tests/notification_config.rs": "904ed096a0fc28b242794e5f18f8a491b82908ac8994925588a9b8a08ac6feb4",
+    "tests/notification_config.rs": "5d81136eb2d08f31324e20452054e37691724c85e2de02b0330d0be743c0b657",
     "tests/reminder_agenda.rs": "1025c307cf8f805f3bc32e47b4190bc6336f866c1c4366383eb2ebccb2a5b51f",
     "tools/qualify-reminder-once.py": "c4bc2b8303271c665a73953a2f370776034b8a44bb53637f80fae837cf9f1d5e",
     "tools/tests/test_deployment.py": "797bcf3a0fb506c75ecffc9cc97fea7af92fd8fbac6cc97ce048fb0c5ccf8320",
@@ -46,22 +46,22 @@
           "tools/check.sh"
         ],
         "cwd": "/nvme/development/bokkie",
-        "log": "/tmp/bokkie-reminder-checks/command-log-0hy21bqq/output.log",
+        "log": "/tmp/bokkie-reminder-checks/command-log-kfj5v3vk/output.log",
         "state": "success",
         "command_returncode": 0,
         "capture_complete": true,
         "wrapper_exit": 0,
-        "started_at": "2026-10-05T04:19:24.752227+00:00",
-        "finished_at": "2026-10-05T04:19:54.253177+00:00",
+        "started_at": "2026-10-05T04:28:51.502180+00:00",
+        "finished_at": "2026-10-05T04:29:20.790912+00:00",
         "excerpt": true,
-        "log_bytes": 38788,
-        "excerpt_offset": 37764,
+        "log_bytes": 39003,
+        "excerpt_offset": 37979,
         "excerpt_bytes": 1024,
-        "omitted_bytes": 37764,
-        "output": "_pins_the_profile_destination ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n     Running tests/public_origin.rs (target/debug/deps/public_origin-84181a9b0023b4b7)\n\nrunning 3 tests\ntest public_origin_accepts_only_canonical_https_dns_origins ... ok\ntest invalid_public_origin_or_bind_cannot_create_the_database ... ok\ntest public_origin_fences_bootstrap_ui_and_mutations ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n     Running tests/reminder_agenda.rs (target/debug/deps/reminder_agenda-265da99a780d5d6e)\n\nrunning 2 tests\ntest today_uses_the_operators_calendar_and_preserves_task_specific_zone ... ok\ntest agenda_filters_before_pagination_and_retains_named_zone_and_latest_result ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n    Checking bokkie v0.1.0 (/nvme/development/bokkie)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.18s\n"
+        "omitted_bytes": 37979,
+        "output": "ext_to_fit_without_truncation ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n     Running tests/public_origin.rs (target/debug/deps/public_origin-84181a9b0023b4b7)\n\nrunning 3 tests\ntest public_origin_accepts_only_canonical_https_dns_origins ... ok\ntest invalid_public_origin_or_bind_cannot_create_the_database ... ok\ntest public_origin_fences_bootstrap_ui_and_mutations ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n     Running tests/reminder_agenda.rs (target/debug/deps/reminder_agenda-265da99a780d5d6e)\n\nrunning 2 tests\ntest today_uses_the_operators_calendar_and_preserves_task_specific_zone ... ok\ntest agenda_filters_before_pagination_and_retains_named_zone_and_latest_result ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s\n\n    Checking bokkie v0.1.0 (/nvme/development/bokkie)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.68s\n"
       },
       "log": "check-backend.log",
-      "log_sha256": "49376f15c22228bfdc251f3a2d02b0366c583ef0b02f42dc02e9e93c808378e5"
+      "log_sha256": "fdce5401827863150dbedc5197ec3bd33ec419614884e642720a012762f27127"
     },
     {
       "check": "ui",
@@ -93,5 +93,6 @@
     "result": "passed",
     "evidence_owner": ".ui-qualification-runtime/reminder-legacy"
   },
-  "candidate_source": "3c8e0d49de184b410cc0f90e2f0a6d97372f316f"
+  "verification_checkpoint_parent": "11333d297cb82a793c8fd50627981411113edef1",
+  "source_state": "Working implementation after independent review repairs; input hashes match the subsequent candidate. Unchanged UI evidence is reused."
 }
