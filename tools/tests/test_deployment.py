@@ -2,6 +2,7 @@
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import tempfile
@@ -248,6 +249,28 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('proxy_set_header Authorization "";', nginx)
         self.assertIn('proxy_set_header Forwarded "";', nginx)
         self.assertIn('if ($http_host != "bokkie-test.yutani.tech") { return 421; }', nginx)
+
+    def test_ingress_config_is_readable_under_service_umask_without_exposing_credentials(self):
+        account = self.root / 'codex-auth'
+        web_auth = self.root / 'web-auth'
+        for path in (account, web_auth):
+            path.chmod(0o600)
+        self.config.update(codex_auth=str(account), conversation_profile=self.profile)
+        previous = os.umask(0o077)
+        try:
+            # Cover both first creation and repair of a previously private file.
+            for existing in (False, True):
+                with self.subTest(existing=existing):
+                    if existing:
+                        (self.root / 'nginx.conf').chmod(0o600)
+                    MODULE.render(self.config, self.root)
+                    self.assertEqual((self.root / 'nginx.conf').stat().st_mode & 0o777, 0o644)
+                    for private in (account, web_auth, self.root / 'conversation.json'):
+                        self.assertEqual(private.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(account.read_text(), '{}\n')
+            self.assertEqual(web_auth.read_text(), 'synthetic authentication fixture\n')
+        finally:
+            os.umask(previous)
 
     def test_edge_has_no_separate_network_or_published_port(self):
         edge = MODULE.edge(self.config, self.root)['services']['edge']
