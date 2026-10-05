@@ -6,6 +6,9 @@ and recovery. Conversation proposals use the pinned Codex App Server through
 the existing bounded broker. Engineering execution and coding-gardener runners
 are not enabled by this deployment.
 
+The [live activation record](deployment-evidence/live-nostromo.md) records the
+installed revision, account/runtime qualification and restart evidence.
+
 ## Composition
 
 Compose 5.5.1 cannot express the individually qualified Docker system-path

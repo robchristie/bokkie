@@ -43,11 +43,11 @@ Each records the exact image, source, harness/policy hashes and effective contro
 Final exact-candidate and merged receipts belong to the upgrade pull request;
 calibration inputs are not silently relabelled as final evidence.
 
-## Remaining activation
+## Scope of this upgrade checkpoint
 
 This record qualifies the runtime upgrade and synthetic UID3000 configuration.
 It does not establish real account authentication, live model responses or the
 production browser login journey. Persistent installation consumes reviewed,
-merged source and an immutable image. The active deployment plan owns those
-remaining observations and the finite model-call budget. The real account remains
+merged source and an immutable image. The subsequent [live activation record](live-nostromo.md) establishes those
+observations and accounts for the finite model-call budget. The real account remains
 in its existing store and is exposed only through the reviewed read-only bind.

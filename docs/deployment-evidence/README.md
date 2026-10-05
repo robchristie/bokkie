@@ -1,10 +1,9 @@
 # Authenticated deployment package qualification
 
-This record qualifies the **source package and synthetic deployment**, not a
-live Bokkie installation. The accepted outcome still includes installation at
-`bokkie.yutani.tech`. Web-login/account selection, normal private DNS, the actual
-account mount and live conversation acceptance remain outstanding in the
-[active deployment plan](../plans/active/nostromo-deployment.md).
+This record qualifies the **source package and synthetic deployment** at its
+original checkpoint. Production activation subsequently passed; see the
+[live activation record](live-nostromo.md) and
+[completed deployment plan](../plans/completed/nostromo-deployment.md).
 
 ## Representative target
 
@@ -69,7 +68,7 @@ trusted-app WebGPU harness configuration.
   and read-only root. A single process using the existing password-file owner and
   explicit bounded temporary paths starts without additional capabilities.
 
-## Boundaries still requiring final installation proof
+## Historical limits of this synthetic checkpoint
 
 The synthetic service used a transient **user** systemd unit with the same
 controller, recovery and `ExecStopPost` behaviour. The persistent system unit and
