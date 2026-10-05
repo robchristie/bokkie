@@ -17,12 +17,18 @@ dates, explicit confirmation, revision to 10 am, pause and resume. Conversationa
 “Yes, go ahead” left the draft inactive. One task identity survived the whole
 journey; no model ran on due execution, notification retry, recovery or polling.
 
-[A one-off continuation](one-off.json) used one further dispatch in the same
-finite 16-dispatch / 15-minute campaign. “Tomorrow at 8 am” became one concrete
-Adelaide date. Exact confirmation replay returned the same receipt, execution
+[A one-off continuation](one-off.json) used one dispatch against the corrected candidate.
+The source qualification has an aggregate cap of sixteen live dispatches; each
+recurring runner is bounded at fifteen minutes and a one-off probe at 210 seconds.
+“Tomorrow at 8 am” became one concrete Adelaide date. Exact confirmation replay returned the same receipt, execution
 saved one result and intent, and repeated ticks could not rearm or redeliver it.
-The two tasks were explicitly requested. Seven live model dispatches were used
-in total; no production account settings, database or credentials were changed.
+The fixture tasks were explicitly requested. A rejected relative-date probe
+remained an inactive draft. Bokkie now supplies trusted local calendar context
+from its persisted clock, including the selected task’s zone.
+[The rejection and repair](relative-date-rejection.json) preserve that finding.
+Fifteen live calls were used across initial qualification, the rejected probe,
+the corrected one-off and corrected recurring journey. No production account
+settings, database or credentials were changed.
 
 The physical browser journey closed its page before a due occurrence, injected
 a proved temporary rejection, restarted the fixture, then accepted retry under
@@ -50,10 +56,13 @@ diagnostics are disclosed rather than placed in the reading path.
 | Uncertain delivery | [image](delivery-attention-1440.png) | [image](delivery-attention-390.png) |
 | Recovery confirmation | [image](recovery-confirmation-1440.png) | [image](recovery-confirmation-390.png) |
 
-The interpretation report identifies the implementation checkpoint and compiled
-artefacts used before final integration. The committed-candidate synthetic
-journey and canonical source checks are recorded separately; model interpretation
-is reused only where its instructions, tools, profile and inputs are unchanged.
+The interpretation report identifies the committed implementation and compiled
+artefacts. [Canonical checks](source-checks.json) retain commands, complete logs
+and relevant input hashes: 218 governance/deployment tests, 335 backend unit
+tests (plus adapter/integration checks) and 84 UI tests passed, with Clippy,
+formatting and native/Wasm builds. The legacy physical browser smoke also passed.
+The owning [PR #49](https://github.com/robchristie/bokkie/pull/49) records the final
+committed synthetic journey, independent review, CI and landing evidence.
 
 ## Deterministic persistence and actual SMTP
 

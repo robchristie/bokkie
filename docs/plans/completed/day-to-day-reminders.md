@@ -1,11 +1,13 @@
 # Day-to-day reminders
 
-- Status: active
+- Status: complete
+- Delivery state: acceptance-complete
+- Acceptance state: passed
+- Acceptance evidence: [Qualification](../../reminder-evidence/README.md)
+- Landing evidence: https://github.com/robchristie/bokkie/pull/49
 - Owner: Bokkie integration conductor
 - Reorientation budget: 150
 - Baseline: `574b84b` (source); deployed runtime independently observed at `c6998879ccce01d3a0399a4f925fc39c7a210729`
-- Landed pull requests: none
-- Next action: finish browser regression qualification, then independently review and land the source package.
 
 ## Outcome and scope
 
@@ -29,13 +31,15 @@ notification integration. Existing SMTP relay and Mattermost are available. An
 SMTP relay integration is implemented; the production recipient selection is
 pending, so no live email is sent or configured. There is no project preview
 manifest, so qualification uses the established fixture-owned local browser route.
-The recurring physical UI journey passed with the configured real model in six
-dispatches; a one-off continuation used one further dispatch. Synthetic transport
+The corrected recurring physical UI journey passed in six model dispatches; a
+one-off probe used one dispatch. Fifteen aggregate calls include the initial
+qualification and one rejected date probe; the sixteen-call cap was respected. Synthetic transport
 outcomes, restart/retry, explicit recovery and desktop/narrow screenshots passed.
 Local SMTP protocol tests cover actual 250/451/550 exchanges and lost acceptance.
 A ManualClock service test captures one real SMTP message without a browser and
-observes later ticks without another send. Canonical checks passed; final browser
-regression qualification and independent review remain outstanding.
+observes later ticks without another send. Canonical checks and browser regression qualification passed. The owning PR
+records independent review, CI and source landing. Production configuration
+and mailbox/device proof remain separate authorised deployment work.
 
 ## Dependency and implementation sequence
 
@@ -57,7 +61,7 @@ regression qualification and independent review remain outstanding.
 - [x] Preserve old tasks, admitted work, explicit zones, DST and missed ticks.
 - [x] Judge actual Polyorama screenshots at desktop and narrow widths, with a
   visible composer, readable state/history and reachable actions.
-Remaining: finish committed browser qualification and independently reviewed source landing.
+Source acceptance is complete; the owning PR retains source delivery evidence.
 
 Detailed qualification belongs in `docs/reminder-evidence/`; delivery state and
 exact-head review belong to the owning PR. Live tests, if selected, target only
@@ -80,5 +84,5 @@ Visual iteration uses one representative conversation/review/history fixture at
 | --- | --- | --- |
 | Existing runtime/source | verified read-only | no production changes authorised |
 | Notification adapter | supervised SMTP sender qualified; recipient pending | authorised deployment/mailbox proof |
-| Conversation and schedule view | real-model and physical UI passed | final source review |
-| Integrated qualification | in progress | canonical checks and committed representative journey |
+| Conversation and schedule view | real-model and physical UI passed | source delivery in owning PR |
+| Integrated qualification | source acceptance passed | independent review and CI in owning PR |
