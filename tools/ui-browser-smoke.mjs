@@ -101,6 +101,13 @@ async function waitCurrent(page) {
     });
     if (last.value?.interaction?.connection === 'current'
         && !last.value.ui_snapshot.semantic_audit.length) {
+      // This suite qualifies the operational desk. The default home has its
+      // own conversation journey; enter attention through ordinary navigation.
+      if (last.value.ui_snapshot.nodes.some(node => node.id === 'bokkie.conversation')) {
+        await clickId(page, 'bokkie.collection.attention');
+        await page.waitForFunction(() => !window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
+          .ui_snapshot.nodes.some(node => node.id === 'bokkie.conversation'));
+      }
       expectingDisconnect = false;
       return;
     }

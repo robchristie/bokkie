@@ -1,0 +1,72 @@
+{
+  "source_revision": "da8d5ad84da0d87edbaff5ee96f85a5ae57743c5",
+  "mode": "fake-model-ui-regression",
+  "real_model_calls": 0,
+  "scripted_peer_dispatches": 10,
+  "passed": true,
+  "browser": "151.0.7922.34",
+  "wasm_sha256": "16fe7a80049d07ca4751a135652331f497bb3cbacba42df4d8fbc95238f79c1f",
+  "fixture_sha256": "13c73323eafce9f53833e7d99e756bd70b11bc130885898256de10973834fedd",
+  "checks": [
+    "Conversation composer is the default home",
+    "Opening home starts no model invocation",
+    "Draft created without execution",
+    "Refinement preserves a single inactive task",
+    "Preview contains exact reminder text",
+    "Preview shows named timezone and future occurrences",
+    "Operator confirmation activates exact draft",
+    "Kernel note runner completed due occurrence",
+    "Repeated tick does not duplicate local result",
+    "Fresh conversation discovers persisted task",
+    "Schedule proposal leaves active timing unchanged",
+    "Pause prevents new admission past a due time",
+    "Resume chooses future timing without backlog",
+    "One-off note completes through kernel",
+    "Refresh does not repeat one-off completion",
+    "Unavailable research capability remains draft with activation blocked",
+    "Exactly three intended tasks exist after full journey"
+  ],
+  "screenshots": {
+    "home-desktop.png": "d97d27a82ae60d3ca582deaf103ef530772bd1576078a624c81d7fa77b79f30c",
+    "home-narrow.png": "279dbb0fb8e0e728a6b766b908a1d29eba650d4e704481545454399d3a2a880c",
+    "review-desktop.png": "a3a263dbc237e8d0764848f721ea0238d0ca2985e9fe726132ae533373581ff5",
+    "review-narrow.png": "df383499c890e3f9a3d5dac418d4bb129cae2d9fc8c116296040e42ffb212a1a",
+    "completed-local-result.png": "89a6b4c900e478c735ea7c03359714d8d3e400f6832465f65b06b644623b3433"
+  },
+  "operational_journeys": [
+    "attention search and failure detail",
+    "long evidence reader paints its tail after scrolling",
+    "one list and detail with direct narrow navigation",
+    "exact gardener confirmation",
+    "process restart invalidates mutation session",
+    "safe cancel lifecycle",
+    "stale confirmation conflict",
+    "keyboard focus traversal",
+    "selection and scroll across refresh",
+    "scrolled ledger survives resize and detail Back",
+    "engineering plain-intent intake, follow-up and cancellation",
+    "configured task, settings, proposal approval and verified follow-on work"
+  ],
+  "operational_errors": [],
+  "operational_browser": {
+    "version": "151.0.7922.34",
+    "backend": "browser WebGPU requested through eframe/wgpu",
+    "source_revision": "da8d5ad",
+    "fontconfig_file": "system default",
+    "webgpu": {
+      "navigator_gpu": true,
+      "adapter_available": true,
+      "adapter": {
+        "vendor": "nvidia",
+        "architecture": "ampere",
+        "device": "",
+        "description": ""
+      }
+    }
+  },
+  "native_result": {
+    "state": "cancelled",
+    "last_audit_event": "cancelled",
+    "classification": "direct conditional HTTP/store write after native pointer confirmation inspection and keyboard focus; browser evidence separately proves UI submission"
+  }
+}

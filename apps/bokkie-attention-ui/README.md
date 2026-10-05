@@ -1,8 +1,11 @@
-# Bokkie attention desk
+# Bokkie conversation home
 
 This application presents Bokkie's backend-projected attention queue, ordered
 obligation ledger and selected evidence through one Rust application model on
-native desktop and WebAssembly/WebGPU. Needs attention and Tasks
+native desktop and WebAssembly/WebGPU. Home opens the conversation with a
+persistent composer, independently scrolling transcript and contextual task
+panel. Tasks opens the authoritative managed/legacy task catalogue. Needs
+attention opens the operational desk; its attention and legacy task collections
 share one list surface beside the selected detail. Narrow screens open detail
 directly from either list; Back preserves the collection and selection. Lifecycle
 controls use the backend's typed capabilities and always require a separate confirmation.
@@ -43,13 +46,21 @@ non-loopback listener or second database path.
 
 ## Conversation workspace
 
-The persistent **Conversation** entry supports server-side task discovery,
-model-backed drafting, readable previews and one exact operator confirmation.
+The default **Home** supports server-side task discovery, model-backed drafting,
+readable previews and one exact operator confirmation. **Recent chats** and
+**Tasks** open supporting panels without discarding the current conversation or
+unsent message. At wide widths, selected task details appear alongside the
+conversation; at narrow widths they open with an explicit return control.
+Transcript scrolling does not move the composer out of reach.
 Active definitions, proposed changes and completed local results remain distinct.
 Recent conversations and task selection survive service restart. Configure the
 [conversation runtime and local-note capability](../../docs/operator-guide.md#conversational-task-management)
-once; ordinary task changes stay in the UI. **Engineering intake** remains
-separate. Missing research/email adapters are visible activation blockers.
+once; ordinary task changes stay in the UI. **Engineering intake** remains under
+**Needs attention → Advanced tools**, retaining its separate supervision contract.
+Missing research/email adapters are visible activation blockers. Agent role
+configuration and project-workspace hand-off are described in the
+[design direction](../../docs/conversation-home.md); this UI does not invent
+editable runtime settings or enabled integrations.
 
 ## Operate the workspace
 

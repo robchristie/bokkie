@@ -1,8 +1,9 @@
 # Calm local attention desk
 
 Bokkie makes unattended work feel under control and human decisions easy to
-understand. The default workspace gives one collection list and one selected
-detail the available space. Task identity and relationships project the existing
+understand. The operational desk, reached through Needs attention from the
+[conversation home](conversation-home.md), gives one collection list and one
+selected detail the available space. Task identity and relationships project the existing
 obligation lifecycle; inspection guidance has its own revision-checked settings.
 
 ## Application compositions

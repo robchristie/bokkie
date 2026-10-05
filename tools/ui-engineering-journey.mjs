@@ -44,6 +44,7 @@ export async function qualifyEngineeringJourney({
     }
   }
 
+  await clickId(page, 'bokkie.advanced.open');
   await clickId(page, 'bokkie.engineering.new');
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().ui_snapshot.nodes
     .some(item => item.id === 'bokkie.engineering.text'));
