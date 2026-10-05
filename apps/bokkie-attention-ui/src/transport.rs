@@ -37,6 +37,7 @@ pub enum ApiRequest {
     Catalogue {
         query: String,
         after: Option<String>,
+        view: String,
     },
     EngineeringIntake(bokkie_operator_api::EngineeringIntakeRequest),
     EngineeringFollowUp(bokkie_operator_api::EngineeringFollowUpRequest),
@@ -301,8 +302,12 @@ impl Transport {
             ApiRequest::ConversationTurn(_) => "/conversations/turn".into(),
             ApiRequest::ConversationSelect(_) => "/conversations/select".into(),
             ApiRequest::ConversationConfirm(_) => "/conversations/confirm".into(),
-            ApiRequest::Catalogue { query, after } => {
-                let mut path = format!("/tasks/catalogue?limit=50&q={}", encode_query_value(query));
+            ApiRequest::Catalogue { query, after, view } => {
+                let mut path = format!(
+                    "/tasks/catalogue?limit=50&q={}&view={}",
+                    encode_query_value(query),
+                    encode_query_value(view)
+                );
                 if let Some(after) = after {
                     path.push_str(&format!("&after={}", encode_query_value(after)));
                 }
@@ -374,6 +379,22 @@ fn page_endpoint(path: &str, cursor: Option<&str>, watermark: Option<i64>) -> St
 }
 
 fn action_body(action: &ActionRequest) -> Vec<u8> {
+    if let Some(recovery) = match action.action {
+        LifecycleAction::ReconcileNotification => {
+            Some(bokkie_operator_api::NotificationRecovery::MarkReconciled)
+        }
+        LifecycleAction::ResendNotification => {
+            Some(bokkie_operator_api::NotificationRecovery::RetryAcknowledgingDuplicateRisk)
+        }
+        _ => None,
+    } {
+        return serde_json::to_vec(&bokkie_operator_api::NotificationRecoveryRequest {
+            precondition: action.precondition.clone(),
+            action: recovery,
+            note: (!action.note.trim().is_empty()).then(|| action.note.trim().to_owned()),
+        })
+        .expect("serialisable notification recovery");
+    }
     serde_json::to_vec(&ActionBody {
         precondition: &action.precondition,
         actor: &action.actor,
@@ -414,6 +435,10 @@ fn action_endpoint(request: &ActionRequest) -> String {
         LifecycleAction::RejectGardenerProposal => format!(
             "/operator/gardener/proposal-instances/{}/reject",
             encode_path_segment(request.proposal_instance_id.as_deref().unwrap_or_default())
+        ),
+        LifecycleAction::ReconcileNotification | LifecycleAction::ResendNotification => format!(
+            "/operator/notifications/{}/recover",
+            encode_path_segment(&request.obligation_id)
         ),
     }
 }
@@ -712,6 +737,8 @@ mod tests {
             "/operator/obligations/obligation%2F1/cancel",
             "/operator/gardener/proposal-instances/instance%2F2/approve",
             "/operator/gardener/proposal-instances/instance%2F2/reject",
+            "/operator/notifications/obligation%2F1/recover",
+            "/operator/notifications/obligation%2F1/recover",
         ];
         for (lifecycle_action, expected_path) in
             LifecycleAction::ALL.into_iter().zip(expected_paths)
@@ -964,9 +991,10 @@ mod tests {
         assert_eq!(
             transport.endpoint(&ApiRequest::Catalogue {
                 query: "garden & notes".into(),
-                after: Some("cursor/+".into())
+                after: Some("cursor/+".into()),
+                view: "today".into(),
             }),
-            "http://127.0.0.1:7744/tasks/catalogue?limit=50&q=garden%20%26%20notes&after=cursor%2F%2B"
+            "http://127.0.0.1:7744/tasks/catalogue?limit=50&q=garden%20%26%20notes&view=today&after=cursor%2F%2B"
         );
     }
     #[cfg(not(target_arch = "wasm32"))]

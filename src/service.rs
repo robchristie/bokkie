@@ -18,6 +18,7 @@ use thiserror::Error;
 use tokio::sync::oneshot;
 
 use crate::gardener_runner::{GardenerRunner, GardenerRunnerError, GardenerRuntimeConfig};
+use crate::notifications::NotificationSender;
 use crate::process::CancellationToken;
 use crate::{
     Claim, Completion, ExecutionLane, FailureDisposition, RunResult, Runner, Store, StoreError,
@@ -302,6 +303,14 @@ pub struct Scheduler {
     exit: Option<oneshot::Receiver<()>>,
 }
 
+#[derive(Clone)]
+struct SchedulerClock(Arc<dyn UnixClock + Send + Sync>);
+impl UnixClock for SchedulerClock {
+    fn now(&self) -> i64 {
+        self.0.now()
+    }
+}
+
 impl Drop for Scheduler {
     fn drop(&mut self) {
         // Dropping the owner must never detach workers with admission still
@@ -331,6 +340,34 @@ impl Scheduler {
         gardener: Option<GardenerRuntimeConfig>,
         notes: bool,
     ) -> Result<Self, SchedulerError> {
+        Self::start_with_notification_sender(config, gardener, notes, None)
+    }
+
+    /// A delivery sender has one supervised worker, independent of note execution.
+    /// Sender implementations must bound their total invocation below the shared
+    /// five-second shutdown deadline; possible dispatch remains durable on panic.
+    pub fn start_with_notification_sender(
+        config: SchedulerConfig,
+        gardener: Option<GardenerRuntimeConfig>,
+        notes: bool,
+        notifications: Option<Arc<dyn NotificationSender + Send + Sync>>,
+    ) -> Result<Self, SchedulerError> {
+        Self::start_with_notification_clock(
+            config,
+            gardener,
+            notes,
+            notifications,
+            Arc::new(SystemClock),
+        )
+    }
+
+    pub(crate) fn start_with_notification_clock(
+        config: SchedulerConfig,
+        gardener: Option<GardenerRuntimeConfig>,
+        notes: bool,
+        notifications: Option<Arc<dyn NotificationSender + Send + Sync>>,
+        clock: Arc<dyn UnixClock + Send + Sync>,
+    ) -> Result<Self, SchedulerError> {
         config.validate()?;
         // Startup owns migration. The scheduler and every worker are only
         // compatible-schema consumers.
@@ -351,7 +388,15 @@ impl Scheduler {
         let thread = thread::Builder::new()
             .name("bokkie-scheduler-supervisor".to_owned())
             .spawn(move || {
-                scheduler_loop(config, gardener, notes, supervisor_admission, exit_sender)
+                scheduler_loop(
+                    config,
+                    gardener,
+                    notes,
+                    notifications,
+                    SchedulerClock(clock),
+                    supervisor_admission,
+                    exit_sender,
+                )
             })
             .map_err(SchedulerError::Thread)?;
         Ok(Self {
@@ -393,29 +438,69 @@ fn scheduler_loop(
     config: SchedulerConfig,
     gardener: Option<GardenerRuntimeConfig>,
     notes: bool,
+    notifications: Option<Arc<dyn NotificationSender + Send + Sync>>,
+    clock: SchedulerClock,
     admission: ClaimAdmission,
     exit_sender: oneshot::Sender<()>,
 ) -> Result<(), SchedulerError> {
     let (sender, receiver) = mpsc::channel();
-    let capacity = config.ordinary_concurrency + usize::from(gardener.is_some());
+    let capacity = config.ordinary_concurrency
+        + usize::from(gardener.is_some())
+        + usize::from(notifications.is_some());
     let mut workers = Vec::with_capacity(capacity);
     let mut first_failure = None;
 
     for slot in 0..config.ordinary_concurrency {
         let worker_config = config.clone();
         let worker_admission = admission.clone();
+        let reminders = notifications.is_some();
+        let worker_clock = clock.clone();
         let id = ExecutionWorkerId {
             lane: ExecutionLane::Ordinary,
             slot: slot + 1,
         };
         match spawn_worker(id, sender.clone(), admission.clone(), move || {
-            ordinary_lane_loop_with_notes(&worker_config, &worker_admission, notes && slot == 0)
+            ordinary_lane_loop_with_notes(
+                &worker_config,
+                &worker_admission,
+                notes && slot == 0,
+                reminders && slot == 0,
+                worker_clock,
+            )
         }) {
             Ok(worker) => workers.push(worker),
             Err(cause) => {
                 first_failure = Some((id.lane, cause));
                 admission.close();
                 break;
+            }
+        }
+    }
+
+    if first_failure.is_none() {
+        if let Some(notifications) = notifications {
+            let worker_config = config.clone();
+            let worker_admission = admission.clone();
+            let worker_clock = clock.clone();
+            // Delivery uses Ordinary's brief claim turn. Outbox remains a closed
+            // extension point; sending never holds the admission gate.
+            let id = ExecutionWorkerId {
+                lane: ExecutionLane::Ordinary,
+                slot: config.ordinary_concurrency + 1,
+            };
+            match spawn_worker(id, sender.clone(), admission.clone(), move || {
+                notification_lane_loop(
+                    &worker_config,
+                    &worker_admission,
+                    notifications.as_ref(),
+                    worker_clock,
+                )
+            }) {
+                Ok(worker) => workers.push(worker),
+                Err(cause) => {
+                    first_failure = Some((id.lane, cause));
+                    admission.close();
+                }
             }
         }
     }
@@ -582,14 +667,15 @@ fn ordinary_lane_loop_with_notes(
     config: &SchedulerConfig,
     admission: &ClaimAdmission,
     notes: bool,
+    reminders: bool,
+    clock: SchedulerClock,
 ) -> Result<(), LaneFailureCause> {
     let mut store = close_on_error(admission, Store::open_compatible(&config.database))?;
-    let clock = SystemClock;
 
     while !admission.is_closed() {
-        if notes {
+        if notes || reminders {
             let claims = admission.claim(ExecutionLane::Ordinary, || {
-                store.claim_due_notes(clock.now(), config.lease_seconds, 1)
+                store.claim_due_managed(clock.now(), config.lease_seconds, 1, notes, reminders)
             })?;
             let Some(mut claims) = claims else {
                 break;
@@ -637,6 +723,43 @@ fn ordinary_lane_loop_with_notes(
                 reconcile_completion(&mut store, &claim, result, &clock),
             )?;
             continue;
+        }
+        sleep_until_poll_or_stop(config.poll_interval, admission);
+    }
+    Ok(())
+}
+
+fn notification_lane_loop(
+    config: &SchedulerConfig,
+    admission: &ClaimAdmission,
+    sender: &(dyn NotificationSender + Send + Sync),
+    clock: SchedulerClock,
+) -> Result<(), LaneFailureCause> {
+    let mut store = close_on_error(admission, Store::open_compatible(&config.database))?;
+    while !admission.is_closed() {
+        let Some(mut claims) = admission.claim(ExecutionLane::Ordinary, || {
+            // The concrete sender bounds total duration at three seconds. Leave
+            // enough lease time despite one-second timestamp resolution.
+            store.claim_due_notifications(clock.now(), config.lease_seconds.max(5), 1)
+        })?
+        else {
+            break;
+        };
+        if let Some(claim) = claims.pop() {
+            let transport = sender.transport();
+            let intent = close_on_error(
+                admission,
+                store.begin_notification_send_with_transport(
+                    &claim,
+                    transport.as_ref(),
+                    clock.now(),
+                ),
+            )?;
+            let outcome = sender.send(&intent);
+            close_on_error(
+                admission,
+                store.complete_notification_send(&claim, outcome, clock.now()),
+            )?;
         }
         sleep_until_poll_or_stop(config.poll_interval, admission);
     }
@@ -815,6 +938,115 @@ mod tests {
             assert!(Instant::now() < deadline, "condition did not become true");
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn blocked_delivery_does_not_block_local_reminder_results_and_sends_once() {
+        use crate::notifications::{NotificationIntent, NotificationOutcome};
+        use bokkie_operator_api::{ManagedCapabilityProfile, ManagedTaskDefinition};
+        struct BoundedSender {
+            started: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+            calls: std::sync::atomic::AtomicUsize,
+        }
+        impl NotificationSender for BoundedSender {
+            fn send(&self, _intent: &NotificationIntent) -> NotificationOutcome {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    self.started.send(()).unwrap();
+                    self.release
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(2))
+                        .unwrap();
+                }
+                NotificationOutcome::Accepted {
+                    detail: "Synthetic relay acceptance".into(),
+                }
+            }
+        }
+        fn reminder(store: &mut Store, now: i64) -> String {
+            let profiles = [ManagedCapabilityProfile::reminder("reader@example.org")];
+            let task = store
+                .managed_create(
+                    &uuid::Uuid::new_v4().to_string(),
+                    &ManagedTaskDefinition::reminder(
+                        "Reminder",
+                        "Saved deterministic result",
+                        "reader@example.org",
+                    ),
+                    now,
+                )
+                .unwrap()
+                .task_id;
+            let preview = store
+                .managed_preview(&task, "session", &profiles, now)
+                .unwrap();
+            store
+                .managed_activate(
+                    &uuid::Uuid::new_v4().to_string(),
+                    &preview,
+                    "session",
+                    &profiles,
+                    now,
+                )
+                .unwrap();
+            task
+        }
+        let temp = tempfile::TempDir::new().unwrap();
+        let database = temp.path().join("notifications.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        let now = SystemClock.now();
+        let first = reminder(&mut store, now);
+        let (started_sender, started_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let sender = Arc::new(BoundedSender {
+            started: started_sender,
+            release: Mutex::new(release_receiver),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let scheduler = Scheduler::start_with_notification_sender(
+            config(database.clone(), 1, Duration::ZERO),
+            None,
+            false,
+            Some(sender.clone()),
+        )
+        .unwrap();
+        started_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        let second = reminder(&mut store, SystemClock.now());
+        wait_until(Duration::from_secs(1), || {
+            store.managed_detail(&second).unwrap().runs[0]
+                .result
+                .is_some()
+        });
+        assert_eq!(
+            store.managed_detail(&first).unwrap().runs[0]
+                .delivery
+                .as_ref()
+                .unwrap()
+                .status,
+            "sending"
+        );
+        release_sender.send(()).unwrap();
+        wait_until(Duration::from_secs(2), || {
+            store.managed_detail(&second).unwrap().runs[0]
+                .delivery
+                .as_ref()
+                .unwrap()
+                .status
+                == "accepted_by_relay"
+        });
+        scheduler.shutdown().unwrap();
+        assert_eq!(sender.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            store.managed_detail(&first).unwrap().runs[0]
+                .delivery
+                .as_ref()
+                .unwrap()
+                .status,
+            "accepted_by_relay"
+        );
     }
 
     fn seed_lane_backlogs(database: &std::path::Path, per_lane: usize) {

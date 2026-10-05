@@ -1,0 +1,101 @@
+{
+  "mode": "live-model with synthetic notification outcomes; no external mail",
+  "prefix_sha256": "b4c4664f3985a650dd043a455aedb31982b4759ddc2742fa7ff79c86b66d7108",
+  "checks": [
+    "One-off interpretation completed within its finite bound",
+    "Tomorrow resolves to one concrete 8 am Adelaide date",
+    "One-off retains the reviewed reminder effect and single synthetic destination",
+    "One-off draft is inactive and previews exactly one occurrence",
+    "Lost confirmation response replay returns the same task and receipt",
+    "Due one-off saves one result and completes its schedule",
+    "One-off delivery is distinct from its completed occurrence",
+    "Repeated ticks cannot rearm or redeliver the completed one-off",
+    "Due execution and repeated polling make no additional model dispatches"
+  ],
+  "passed": true,
+  "model_dispatches": 1,
+  "aggregate_model_dispatches": 7,
+  "definition": {
+    "name": "Drink water",
+    "purpose": "Remind the operator to drink a glass of water.",
+    "instructions": "Drink a glass of water.",
+    "context_refs": [],
+    "trigger": {
+      "kind": "once",
+      "local_datetime": "2026-09-23T08:00",
+      "timezone": "Australia/Adelaide"
+    },
+    "capability": "reminder",
+    "profile_revision": "reminder-v1",
+    "effects": [
+      "store_local_result",
+      "send_notification"
+    ],
+    "max_attempts": 3,
+    "max_output_chars": 8192,
+    "destination": "fixture-recipient@example.invalid"
+  },
+  "completed": {
+    "active": {
+      "created_at": 1790037031,
+      "definition": {
+        "capability": "reminder",
+        "context_refs": [],
+        "destination": "fixture-recipient@example.invalid",
+        "effects": [
+          "store_local_result",
+          "send_notification"
+        ],
+        "instructions": "Drink a glass of water.",
+        "max_attempts": 3,
+        "max_output_chars": 8192,
+        "name": "Drink water",
+        "profile_revision": "reminder-v1",
+        "purpose": "Remind the operator to drink a glass of water.",
+        "trigger": {
+          "kind": "once",
+          "local_datetime": "2026-09-23T08:00",
+          "timezone": "Australia/Adelaide"
+        }
+      },
+      "revision": 1
+    },
+    "candidate": null,
+    "configuration_revision": 3,
+    "id": "task-a95c8b18-9931-4645-9d35-dd95a8fd2de2",
+    "next_wake_at": null,
+    "runs": [
+      {
+        "admitted_at": 1790116200,
+        "definition_revision": 1,
+        "delivery": {
+          "attempts": [
+            {
+              "attempt_number": 1,
+              "completed_at": 1790116200,
+              "detail": "Synthetic relay accepted; no external email was sent",
+              "outcome": "succeeded",
+              "started_at": 1790116200
+            }
+          ],
+          "body": "Drink a glass of water.",
+          "destination": "fixture-recipient@example.invalid",
+          "detail": "Synthetic relay accepted; no external email was sent",
+          "id": "delivery-60962f94-8de9-49f3-841d-83b80cd65b7a",
+          "next_retry_at": null,
+          "recovery": null,
+          "status": "accepted_by_relay",
+          "subject": "Drink water"
+        },
+        "obligation_id": "note-5cbf93e0-eb55-4aa3-a232-88d0a8426b18",
+        "profile_revision": "reminder-v1",
+        "result": "Drink a glass of water.",
+        "scheduled_at": 1790116200,
+        "state": "completed",
+        "timezone": "Australia/Adelaide"
+      }
+    ],
+    "status": "completed"
+  },
+  "stderr": ""
+}

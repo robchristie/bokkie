@@ -1,5 +1,6 @@
 mod engineering;
 pub(crate) mod managed;
+pub(crate) mod notifications;
 
 use std::{
     path::Path,
@@ -423,6 +424,7 @@ impl Store {
                AND {binding_predicate}
                AND NOT EXISTS (SELECT 1 FROM engineering_bindings e WHERE e.obligation_id = o.id)
                AND NOT EXISTS (SELECT 1 FROM managed_bindings m WHERE m.obligation_id = o.id)
+               AND NOT EXISTS (SELECT 1 FROM notification_deliveries n WHERE n.id = o.id)
                AND NOT EXISTS (
                    SELECT 1
                    FROM gardener_proposal_instances pi
@@ -2796,6 +2798,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         engineering::reject_generic(&transaction, &claim.obligation_id)?;
         managed::reject_generic(&transaction, &claim.obligation_id)?;
+        notifications::reject_generic(&transaction, &claim.obligation_id)?;
         apply_transition(
             &transaction,
             Transition::Complete {
@@ -2833,8 +2836,10 @@ impl Store {
         engineering::reject_generic(&transaction, id)?;
         if precondition.is_some() {
             managed::validate_fenced_retry(&transaction, id)?;
+            notifications::validate_fenced_retry(&transaction, id)?;
         } else {
             managed::reject_generic(&transaction, id)?;
+            notifications::reject_generic(&transaction, id)?;
         }
         if proposal_instance_for_obligation(&transaction, id)?
             .is_some_and(|instance| instance.superseded_by.is_some())
@@ -2875,6 +2880,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         engineering::reject_generic(&transaction, id)?;
         managed::reject_generic(&transaction, id)?;
+        notifications::reject_generic(&transaction, id)?;
         if let Some(precondition) = precondition {
             validate_action_precondition(&transaction, id, precondition, None, None)?;
         }
@@ -5007,7 +5013,9 @@ fn recover_expired_in_transaction(
             .collect::<Result<Vec<_>, _>>()?
     };
     for id in &ids {
-        if !engineering::recover_expired(transaction, id, now)? {
+        if !engineering::recover_expired(transaction, id, now)?
+            && !notifications::recover_expired(transaction, id, now)?
+        {
             apply_transition(transaction, Transition::LeaseExpired { id, now })?;
         }
     }
@@ -5353,7 +5361,7 @@ fn validate_bounded_text(
     Ok(())
 }
 
-fn require_obligation(transaction: &Transaction<'_>, id: &str) -> Result<Obligation, StoreError> {
+fn require_obligation(transaction: &Connection, id: &str) -> Result<Obligation, StoreError> {
     transaction
         .query_row(
             "SELECT * FROM obligations WHERE id = ?1",
@@ -5987,7 +5995,8 @@ mod tests {
                 (10, "0010_gardener_task_configuration.sql".to_owned()),
                 (11, "0011_engineering_supervision.sql".to_owned()),
                 (12, "0012_managed_tasks.sql".to_owned()),
-                (13, "0013_conversations.sql".to_owned())
+                (13, "0013_conversations.sql".to_owned()),
+                (14, "0014_notification_delivery.sql".to_owned())
             ]
         );
         drop(store);

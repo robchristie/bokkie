@@ -202,6 +202,9 @@ enum Command {
         /// Enable the deterministic in-app local note capability.
         #[arg(long)]
         enable_local_notes: bool,
+        /// Explicit single-recipient private SMTP relay settings; enables reminders.
+        #[arg(long)]
+        notification_config: Option<PathBuf>,
         /// Explicit static UI asset directory served at /ui on this loopback origin.
         #[arg(long)]
         ui_dir: Option<PathBuf>,
@@ -414,6 +417,7 @@ struct ServeOptions {
     engineering_profile: Option<PathBuf>,
     conversation_profile: Option<PathBuf>,
     enable_local_notes: bool,
+    notification_config: Option<PathBuf>,
 }
 
 impl From<FakeOutcomeArg> for ServiceFakeOutcome {
@@ -528,6 +532,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             engineering_profile,
             conversation_profile,
             enable_local_notes,
+            notification_config,
             ui_dir,
         } => {
             serve(
@@ -557,6 +562,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                     engineering_profile,
                     conversation_profile,
                     enable_local_notes,
+                    notification_config,
                     ui_dir,
                 },
             )
@@ -953,9 +959,17 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         .map(bokkie::conversation_runtime::ConversationProfile::load)
         .transpose()
         .map_err(AppError::Configuration)?;
+    let notifications = options
+        .notification_config
+        .as_deref()
+        .map(bokkie::notifications::NotificationConfig::load)
+        .transpose()
+        .map_err(AppError::Configuration)?
+        .map(Arc::new);
     let conversation = Some(bokkie::conversation_http::ConversationConfig {
         profile: conversation_profile.map(Arc::new),
         notes_enabled: options.enable_local_notes,
+        notifications: notifications.clone(),
         clock: None,
     });
 
@@ -1083,9 +1097,21 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         if let Some(credential) = credential {
             gardener = gardener.with_github_credential(credential);
         }
-        Scheduler::start_with_notes(scheduler_config, Some(gardener), options.enable_local_notes)?
+        Scheduler::start_with_notification_sender(
+            scheduler_config,
+            Some(gardener),
+            options.enable_local_notes,
+            notifications
+                .map(|n| n as Arc<dyn bokkie::notifications::NotificationSender + Send + Sync>),
+        )?
     } else {
-        Scheduler::start_with_notes(scheduler_config, None, options.enable_local_notes)?
+        Scheduler::start_with_notification_sender(
+            scheduler_config,
+            None,
+            options.enable_local_notes,
+            notifications
+                .map(|n| n as Arc<dyn bokkie::notifications::NotificationSender + Send + Sync>),
+        )?
     };
     let admission = scheduler.admission();
     let scheduler_exit = scheduler.take_exit_signal();

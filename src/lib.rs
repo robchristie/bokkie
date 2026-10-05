@@ -24,6 +24,7 @@ pub mod http;
 pub mod http_security;
 pub mod managed;
 pub mod migrations;
+pub mod notifications;
 pub mod operator;
 pub mod pagination;
 pub mod process;

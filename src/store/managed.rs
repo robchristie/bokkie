@@ -105,11 +105,16 @@ fn capability_blockers(
     profiles: &[ManagedCapabilityProfile],
 ) -> Vec<String> {
     let mut reasons = Vec::new();
-    if def.capability == "local_note" && def.instructions.trim().is_empty() {
-        reasons.push("Local note instructions are required".into());
+    if matches!(def.capability.as_str(), "local_note" | "reminder")
+        && def.instructions.trim().is_empty()
+    {
+        reasons.push("Note or reminder instructions are required".into());
     }
     // The available runner set is deliberately closed, even if a caller advertises another profile.
-    if def.capability != "local_note" || def.profile_revision != "local-note-v1" {
+    if !matches!(
+        (def.capability.as_str(), def.profile_revision.as_str()),
+        ("local_note", "local-note-v1") | ("reminder", "reminder-v1")
+    ) {
         reasons.push(format!(
             "Capability {} has no installed execution adapter",
             def.capability
@@ -136,6 +141,12 @@ fn capability_blockers(
         && (def.effects != ["store_local_result"] || def.destination != "task_results")
     {
         reasons.push("Local notes can only store a result in this task".into());
+    }
+    if def.capability == "reminder"
+        && (def.effects != ["store_local_result", "send_notification"]
+            || crate::notifications::validate_address(&def.destination).is_err())
+    {
+        reasons.push("Reminders require the reviewed notification destination and effects".into());
     }
     reasons
 }
@@ -212,11 +223,22 @@ fn detail(conn: &Connection, id: &str) -> Result<ManagedTaskDetail, StoreError> 
         "completed" => ManagedTaskStatus::Completed,
         _ => return Err(invalid("unknown managed task status")),
     };
-    let runs = conn.prepare("SELECT b.obligation_id,b.definition_revision,b.profile_revision,o.scheduled_at,b.admitted_at,o.state,r.result
+    let mut runs = conn.prepare("SELECT b.obligation_id,b.definition_revision,b.profile_revision,o.scheduled_at,b.admitted_at,o.state,r.result
         FROM managed_bindings b JOIN obligations o ON o.id=b.obligation_id LEFT JOIN managed_results r ON r.obligation_id=o.id
         WHERE b.task_id=?1 ORDER BY o.created_at DESC,o.rowid DESC LIMIT 20")?
         .query_map([id], |r| Ok(ManagedRun { obligation_id:r.get(0)?, definition_revision:r.get(1)?,profile_revision:r.get(2)?,
-            scheduled_at:r.get(3)?,admitted_at:r.get(4)?,state:r.get(5)?,result:r.get(6)? }))?.collect::<Result<Vec<_>,_>>()?;
+            scheduled_at:r.get(3)?,admitted_at:r.get(4)?,state:r.get(5)?,result:r.get(6)?,timezone:String::new(),delivery:None }))?.collect::<Result<Vec<_>,_>>()?;
+    for run in &mut runs {
+        run.delivery = super::notifications::delivery_for_source(conn, &run.obligation_id)?;
+        let bound = revision(conn, id, Some(run.definition_revision))?
+            .ok_or_else(|| invalid("bound definition missing"))?;
+        run.timezone = match bound.definition.trigger {
+            ManagedTrigger::Immediate => "Australia/Adelaide".into(),
+            ManagedTrigger::Once { timezone, .. } | ManagedTrigger::Recurring { timezone, .. } => {
+                timezone
+            }
+        };
+    }
     let next_wake_at = conn.query_row("SELECT min(o.next_wake_at) FROM managed_bindings b JOIN obligations o ON o.id=b.obligation_id
         WHERE b.task_id=?1 AND o.state NOT IN ('completed','cancelled')", [id], |r| r.get(0))?;
     Ok(ManagedTaskDetail {
@@ -607,6 +629,24 @@ impl Store {
         lease_seconds: i64,
         limit: usize,
     ) -> Result<Vec<Claim>, StoreError> {
+        self.claim_due_managed(now, lease_seconds, limit, true, false)
+    }
+    pub fn claim_due_reminders(
+        &mut self,
+        now: i64,
+        lease_seconds: i64,
+        limit: usize,
+    ) -> Result<Vec<Claim>, StoreError> {
+        self.claim_due_managed(now, lease_seconds, limit, false, true)
+    }
+    pub(crate) fn claim_due_managed(
+        &mut self,
+        now: i64,
+        lease_seconds: i64,
+        limit: usize,
+        notes: bool,
+        reminders: bool,
+    ) -> Result<Vec<Claim>, StoreError> {
         if lease_seconds <= 0 || limit > 100 {
             return Err(invalid(
                 "note claim lease must be positive and batch at most 100",
@@ -619,9 +659,10 @@ impl Store {
         let ids=tx.prepare("SELECT o.id FROM obligations o JOIN managed_bindings b ON b.obligation_id=o.id
             JOIN managed_tasks t ON t.id=b.task_id JOIN managed_definitions d ON d.task_id=b.task_id AND d.revision=b.definition_revision
             WHERE o.state IN ('pending','retry_scheduled') AND o.next_wake_at<=?1
-              AND b.profile_revision='local-note-v1' AND json_extract(d.definition_json,'$.capability')='local_note'
+              AND ((?3 AND b.profile_revision='local-note-v1' AND json_extract(d.definition_json,'$.capability')='local_note')
+                   OR (?4 AND b.profile_revision='reminder-v1' AND json_extract(d.definition_json,'$.capability')='reminder'))
               AND (b.admitted_at IS NOT NULL OR (t.status='active' AND t.active_revision=b.definition_revision))
-            ORDER BY o.next_wake_at,o.id LIMIT ?2")?.query_map(params![now,limit as i64],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+            ORDER BY o.next_wake_at,o.id LIMIT ?2")?.query_map(params![now,limit as i64,notes,reminders],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
         let mut claims = Vec::new();
         for id in ids {
             let claim = apply_transition(
@@ -692,6 +733,9 @@ impl Store {
             "INSERT INTO managed_results(obligation_id,result,created_at) VALUES (?1,?2,?3)",
             params![claim.obligation_id, result, now],
         )?;
+        if def.definition.capability == "reminder" {
+            super::notifications::create_intent(&tx, &task, claim, &def.definition, result, now)?;
+        }
         apply_transition(
             &tx,
             Transition::Complete {
@@ -726,6 +770,45 @@ impl Store {
         after: Option<&str>,
         limit: usize,
     ) -> Result<ManagedCataloguePage, StoreError> {
+        self.managed_catalogue_view(query, after, limit, "all", 0, "Australia/Adelaide")
+    }
+    /// Filter before pagination so today's work and older delivery failures remain
+    /// discoverable even when the full catalogue spans several pages.
+    pub fn managed_catalogue_view(
+        &self,
+        query: &str,
+        after: Option<&str>,
+        limit: usize,
+        view: &str,
+        now: i64,
+        timezone: &str,
+    ) -> Result<ManagedCataloguePage, StoreError> {
+        if !matches!(view, "all" | "today" | "upcoming" | "input") {
+            return Err(invalid("unknown task view"));
+        }
+        let zone: Tz = timezone
+            .parse()
+            .map_err(|_| invalid("unknown agenda timezone"))?;
+        let today = chrono::DateTime::from_timestamp(now, 0)
+            .ok_or_else(|| invalid("invalid agenda clock"))?
+            .with_timezone(&zone)
+            .date_naive();
+        let start = zone
+            .from_local_datetime(&today.and_hms_opt(0, 0, 0).unwrap())
+            .earliest()
+            .ok_or_else(|| invalid("unavailable day boundary"))?
+            .timestamp();
+        let end = zone
+            .from_local_datetime(
+                &today
+                    .succ_opt()
+                    .ok_or_else(|| invalid("invalid next day"))?
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+            )
+            .earliest()
+            .ok_or_else(|| invalid("unavailable next day boundary"))?
+            .timestamp();
         if !bounded(query, 200)
             || after.is_some_and(|value| !bounded(value, 300))
             || !(1..=100).contains(&limit)
@@ -737,16 +820,24 @@ impl Store {
         let tx = self.connection.unchecked_transaction()?;
         let items=tx.prepare("WITH catalogue AS (
             SELECT t.id AS id,'managed' AS kind,json_extract(d.definition_json,'$.name') AS name,
-                   json_extract(d.definition_json,'$.purpose') AS description,t.status AS status,t.id AS search_identity,json_extract(d.definition_json,'$.instructions') || ' ' || CASE json_extract(d.definition_json,'$.capability') WHEN 'local_note' THEN 'local note reminder' ELSE replace(json_extract(d.definition_json,'$.capability'),'_',' ') END AS search_text
+                   json_extract(d.definition_json,'$.purpose') AS description,t.status AS status,t.id AS search_identity,json_extract(d.definition_json,'$.instructions') || ' ' || CASE json_extract(d.definition_json,'$.capability') WHEN 'local_note' THEN 'local note reminder' ELSE replace(json_extract(d.definition_json,'$.capability'),'_',' ') END AS search_text,
+                   (SELECT min(o.scheduled_at) FROM managed_bindings b JOIN obligations o ON o.id=b.obligation_id WHERE b.task_id=t.id AND o.state NOT IN ('completed','cancelled')) AS next_at,
+                   coalesce(json_extract(d.definition_json,'$.trigger.timezone'),?8) AS timezone,
+                   (SELECT r.result FROM managed_bindings b JOIN managed_results r ON r.obligation_id=b.obligation_id WHERE b.task_id=t.id ORDER BY r.created_at DESC,r.rowid DESC LIMIT 1) AS latest_result,
+                   (SELECT max(r.created_at) FROM managed_bindings b JOIN managed_results r ON r.obligation_id=b.obligation_id WHERE b.task_id=t.id) AS result_at,
+                   (t.candidate_revision IS NOT NULL OR t.status='draft' OR EXISTS(SELECT 1 FROM managed_bindings b JOIN obligations o ON o.id=b.obligation_id WHERE b.task_id=t.id AND (o.state IN ('attention','awaiting_approval') OR (o.state='running' AND o.lease_expires_at<=?9))) OR EXISTS(SELECT 1 FROM notification_deliveries nd JOIN obligations no ON no.id=nd.id WHERE nd.task_id=t.id AND (no.state='attention' OR (no.state='running' AND no.lease_expires_at<=?9)))) AS needs_input,
+                   (SELECT c.id FROM conversations c WHERE c.selected_task_id=t.id ORDER BY c.updated_at DESC,c.id LIMIT 1) AS conversation_id
             FROM managed_tasks t JOIN managed_definitions d ON d.task_id=t.id AND d.revision=coalesce(t.active_revision,t.candidate_revision)
             UNION ALL
-            SELECT o.id,'gardener','Garden Bokkie',o.description,o.state,g.repository,g.repository FROM gardener_repositories g JOIN obligations o ON o.id=g.inspection_obligation_id
+            SELECT o.id,'gardener','Garden Bokkie',o.description,o.state,g.repository,g.repository,o.next_wake_at,coalesce(o.recurrence_timezone,?8),NULL,NULL,o.state IN ('attention','awaiting_approval'),NULL FROM gardener_repositories g JOIN obligations o ON o.id=g.inspection_obligation_id
             UNION ALL
-            SELECT o.id,'engineering',o.description,o.description,o.state,e.id,'' FROM engineering_outcomes e JOIN obligations o ON o.id=e.root_obligation_id
-        ) SELECT id,kind,name,description,status FROM catalogue
+            SELECT o.id,'engineering',o.description,o.description,o.state,e.id,'',o.next_wake_at,?8,NULL,NULL,o.state IN ('attention','awaiting_approval'),NULL FROM engineering_outcomes e JOIN obligations o ON o.id=e.root_obligation_id
+        ) SELECT id,kind,name,description,status,next_at,timezone,latest_result,result_at,needs_input,conversation_id FROM catalogue
         WHERE kind||':'||id>?1 AND (instr(lower(id),lower(?4))>0 OR instr(lower(search_identity),lower(?4))>0 OR NOT EXISTS (SELECT 1 FROM json_each(?2) term WHERE instr(lower(catalogue.kind || ' task ' || catalogue.name || ' ' || catalogue.description || ' ' || catalogue.search_text),lower(term.value))=0))
-        ORDER BY kind,id LIMIT ?3")?.query_map(params![after.unwrap_or(""),terms_json,limit as i64+1,query],|r|Ok(ManagedCatalogueEntry {
-            id:r.get(0)?,kind:r.get(1)?,name:r.get(2)?,description:r.get(3)?,status:r.get(4)? }))?.collect::<Result<Vec<_>,_>>()?;
+          AND (?5='all' OR (?5='input' AND needs_input) OR (?5='today' AND ((next_at<?7 AND status NOT IN ('draft','completed','cancelled')) OR (result_at>=?6 AND result_at<?7))) OR (?5='upcoming' AND next_at>=?7))
+        ORDER BY kind,id LIMIT ?3")?.query_map(params![after.unwrap_or(""),terms_json,limit as i64+1,query,view,start,end,timezone,now],|r|Ok(ManagedCatalogueEntry {
+            id:r.get(0)?,kind:r.get(1)?,name:r.get(2)?,description:r.get(3)?,status:r.get(4)?,
+            summary:Some(bokkie_operator_api::ManagedCatalogueSummary { next_at:r.get(5)?,timezone:r.get(6)?,latest_result:r.get::<_,Option<String>>(7)?.map(|s|s.chars().take(240).collect()),latest_result_at:r.get(8)?,needs_input:r.get(9)?,conversation_id:r.get(10)? }) }))?.collect::<Result<Vec<_>,_>>()?;
         let mut items = items;
         let next_after = if items.len() > limit {
             items.truncate(limit);
@@ -768,7 +859,12 @@ pub(super) fn validate_fenced_retry(tx: &Transaction<'_>, id: &str) -> Result<()
         [id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
     ).optional()?;
     if let Some((admitted, profile, capability)) = binding {
-        if admitted.is_none() || profile != "local-note-v1" || capability != "local_note" {
+        if admitted.is_none()
+            || !matches!(
+                (profile.as_str(), capability.as_str()),
+                ("local-note-v1", "local_note") | ("reminder-v1", "reminder")
+            )
+        {
             return Err(conflict(
                 "this managed occurrence requires its designated recovery adapter",
             ));

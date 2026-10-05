@@ -74,7 +74,7 @@ impl Store {
             let busy=store.connection.query_row("SELECT EXISTS(SELECT 1 FROM conversation_requests WHERE conversation_id=?1 AND status='running')",[id],|r|r.get(0))?;
             let request_error=store.connection.query_row("SELECT error FROM conversation_requests WHERE conversation_id=?1 ORDER BY rowid DESC LIMIT 1",[id],|r|r.get::<_,Option<String>>(0)).optional()?.flatten();
             let task=if let Some(selected)=&selected_task_id { match store.managed_detail_in_read(selected){Ok(t)=>Some(t),Err(StoreError::NotFound(_))=>None,Err(e)=>return Err(e)} } else {None};
-            Ok(ConversationView{service,id:id.into(),revision,selected_task_id,messages,candidates:decode(&candidates)?,review,task,busy,request_error,runtime_available,notes_available,receipt:receipt.map(|r|decode(&r)).transpose()?})
+            Ok(ConversationView{service,id:id.into(),revision,selected_task_id,messages,candidates:decode(&candidates)?,review,task,busy,request_error,runtime_available,notes_available,reminders_available:false,receipt:receipt.map(|r|decode(&r)).transpose()?})
         })
     }
     /// Durable dispatch precedes model execution. Identical retries do not launch again.

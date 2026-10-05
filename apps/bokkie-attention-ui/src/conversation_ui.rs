@@ -21,6 +21,7 @@ pub(super) struct ConversationState {
     in_flight: bool,
     reading: Option<(String, u64)>,
     catalogue_busy: bool,
+    task_view: TaskView,
     error: Option<String>,
     select_after_load: Option<String>,
     poll_at: Option<Instant>,
@@ -31,6 +32,33 @@ enum ConversationPanel {
     Tasks,
     History,
     Details,
+}
+
+#[derive(Clone, Copy, Default, PartialEq)]
+enum TaskView {
+    Today,
+    Upcoming,
+    Input,
+    #[default]
+    All,
+}
+impl TaskView {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Today => "today",
+            Self::Upcoming => "upcoming",
+            Self::Input => "input",
+            Self::All => "all",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Today => "Today",
+            Self::Upcoming => "Upcoming",
+            Self::Input => "Needs your input",
+            Self::All => "All tasks",
+        }
+    }
 }
 
 impl ConversationState {
@@ -172,6 +200,7 @@ impl AttentionApp {
                 ApiRequest::Catalogue {
                     query: self.conversation.query.clone(),
                     after: None,
+                    view: self.conversation.task_view.key().into(),
                 },
                 context,
             );
@@ -245,8 +274,9 @@ impl AttentionApp {
                 }
             }
             Ok(ApiPayload::Catalogue(page)) => {
-                if let ApiRequest::Catalogue { query, after } = request
+                if let ApiRequest::Catalogue { query, after, view } = request
                     && query == self.conversation.applied_query
+                    && view == self.conversation.task_view.key()
                 {
                     if after.is_none() {
                         self.conversation.catalogue.clear();
@@ -393,6 +423,20 @@ impl AttentionApp {
             }
         });
         ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            for view in [TaskView::Today, TaskView::Upcoming, TaskView::Input] {
+                if button(
+                    ui,
+                    &format!("bokkie.schedule.{}", view.key()),
+                    view.label(),
+                    !state.catalogue_busy,
+                    nodes,
+                ) {
+                    action = Some(ConversationUiAction::TaskView(view));
+                }
+            }
+        });
+        ui.add_space(6.0);
         let bounds = ui.available_rect_before_wrap();
         let wide = bounds.width() >= 1000.0;
         let panel = state.panel.or_else(|| {
@@ -491,7 +535,15 @@ impl AttentionApp {
             Some(ConversationUiAction::Open(id)) => {
                 self.open_saved_conversation(id, &context);
             }
-            Some(ConversationUiAction::Search | ConversationUiAction::More) => {
+            Some(
+                ConversationUiAction::Search
+                | ConversationUiAction::More
+                | ConversationUiAction::TaskView(_),
+            ) => {
+                if let Some(ConversationUiAction::TaskView(view)) = action {
+                    self.conversation.task_view = view;
+                    self.conversation.panel = Some(ConversationPanel::Tasks);
+                }
                 let after = if matches!(action, Some(ConversationUiAction::More)) {
                     self.conversation.next_after.clone()
                 } else {
@@ -503,6 +555,7 @@ impl AttentionApp {
                     ApiRequest::Catalogue {
                         query: self.conversation.query.clone(),
                         after,
+                        view: self.conversation.task_view.key().into(),
                     },
                     &context,
                 );
@@ -564,6 +617,7 @@ enum ConversationUiAction {
     Open(String),
     Search,
     More,
+    TaskView(TaskView),
     Select(String),
     Legacy(String),
     Send,
@@ -703,6 +757,16 @@ fn conversation_panel(
                 }
             }
             ConversationPanel::Tasks => {
+                ui.horizontal_wrapped(|ui| {
+                    for view in [TaskView::Today, TaskView::Upcoming, TaskView::Input, TaskView::All] {
+                        let response = ui.selectable_label(state.task_view == view, view.label());
+                        observe(response.rect, &format!("bokkie.tasks.view.{}", view.key()), view.label(), UiRole::Button, !state.catalogue_busy, nodes);
+                        if response.clicked() && !state.catalogue_busy {
+                            *action = Some(ConversationUiAction::TaskView(view));
+                        }
+                    }
+                });
+                ui.label(format!("{} · your task catalogue", state.task_view.label()));
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut state.query)
                         .desired_width(f32::INFINITY)
@@ -734,7 +798,12 @@ fn conversation_panel(
                     ui.separator();
                 }
                 if state.catalogue.is_empty() && !state.catalogue_busy {
-                    ui.label("No matching tasks. Start a conversation to draft one.");
+                    ui.label(match state.task_view {
+                        TaskView::Today => "Nothing due today. Completed occurrences from today appear here too.",
+                        TaskView::Upcoming => "No later occurrences scheduled. Draft or resume a task in conversation.",
+                        TaskView::Input => "No matching tasks need your input. Delivery problems also appear in Needs attention.",
+                        TaskView::All => "No matching tasks. Start a conversation to draft one.",
+                    });
                 }
                 if state.next_after.is_some()
                     && button(
@@ -803,8 +872,23 @@ fn conversation_transcript(
     if view.messages.is_empty() {
         ui.add_space(32.0);
         ui.heading("What would you like to organise?");
-        ui.label("Draft a local note, find a task, or refine its instructions and timing.");
+        ui.label("Draft a reminder, find a task, or refine its instructions and timing.");
         ui.add_space(16.0);
+        if view.reminders_available {
+            if button(
+                ui,
+                "bokkie.conversation.example.reminder",
+                "Remind me every weekday",
+                state.pending.is_none() && !state.in_flight,
+                nodes,
+            ) {
+                *action = Some(ConversationUiAction::Example(
+                    "Every weekday at 9 am, remind me to review today’s priorities.",
+                ));
+            }
+        } else {
+            ui.small("Notifications are not configured. Reminder drafts cannot be activated yet.");
+        }
         if view.notes_available {
             for (id, label, text) in [
                 (
@@ -942,6 +1026,16 @@ fn conversation_transcript(
             });
     }
     if let Some(task) = &view.task
+        && !view.reminders_available
+        && task
+            .active
+            .as_ref()
+            .or(task.candidate.as_ref())
+            .is_some_and(|revision| revision.definition.capability == "reminder")
+    {
+        ui.add(egui::Label::new("Email delivery is unavailable in this runtime. The saved reminder and history are retained; configure notifications before relying on its schedule.").wrap());
+    }
+    if let Some(task) = &view.task
         && let Some(run) = task.runs.iter().find(|run| run.result.is_some())
     {
         ui.add_space(16.0);
@@ -949,7 +1043,16 @@ fn conversation_transcript(
             .inner_margin(12.0)
             .show(ui, |ui| {
                 ui.strong("Latest task result");
-                ui.small(format!("{} · {}", run.state, local_time(run.scheduled_at)));
+                ui.small(format!(
+                    "Occurrence completed · {}",
+                    local_time_in_zone(run.scheduled_at, &run.timezone)
+                ));
+                if let Some(delivery) = &run.delivery {
+                    ui.add(
+                        egui::Label::new(format!("Notification: {}", notification_label(delivery)))
+                            .wrap(),
+                    );
+                }
                 if let Some(result) = &run.result {
                     let response = ui.add(egui::Label::new(result).wrap().selectable(true));
                     observe(
@@ -1086,16 +1189,61 @@ fn catalogue_row(
     if button(
         ui,
         &format!("bokkie.conversation.{scope}.{}", entry.id),
-        &format!("{} · {} · {}", entry.name, entry.kind, entry.status),
+        &format!("{} · {}", entry.name, task_status(&entry.status)),
         enabled,
         nodes,
     ) {
-        *action = Some(ConversationUiAction::Select(entry.id.clone()));
+        *action = Some(
+            match entry
+                .summary
+                .as_ref()
+                .and_then(|summary| summary.conversation_id.as_ref())
+            {
+                Some(id) => ConversationUiAction::Open(id.clone()),
+                None => ConversationUiAction::Select(entry.id.clone()),
+            },
+        );
     }
     ui.add(egui::Label::new(&entry.description).wrap());
+    if let Some(summary) = &entry.summary {
+        if let Some(at) = summary.next_at {
+            ui.add(
+                egui::Label::new(format!(
+                    "Next: {}",
+                    local_time_in_zone(at, &summary.timezone)
+                ))
+                .wrap(),
+            );
+        }
+        if summary.needs_input {
+            ui.label("Needs your input · review the draft or open Needs attention for recovery");
+        }
+        if let Some(result) = &summary.latest_result {
+            ui.add(
+                egui::Label::new(format!("Latest result: {result}"))
+                    .wrap()
+                    .selectable(true),
+            );
+        }
+    }
+}
+fn task_status(status: &str) -> &str {
+    match status {
+        "draft" => "Draft · not scheduled",
+        "active" => "Schedule confirmed",
+        "paused" => "Paused",
+        "completed" => "Completed",
+        "pending" => "Scheduled",
+        "running" => "Running",
+        "attention" => "Needs your input",
+        "awaiting_approval" => "Awaiting review",
+        "retry_scheduled" => "Retry scheduled",
+        "cancelled" => "Cancelled",
+        _ => status,
+    }
 }
 fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
-    ui.label(egui::RichText::new(&value.name).strong());
+    ui.add(egui::Label::new(egui::RichText::new(&value.name).strong()).wrap());
     ui.add(egui::Label::new(&value.purpose).wrap().selectable(true));
     ui.add(
         egui::Label::new(&value.instructions)
@@ -1111,16 +1259,29 @@ fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
         ManagedTrigger::Recurring { cron, timezone } => recurring_description(cron, timezone),
     });
     ui.label(match value.capability.as_str() {
+        "reminder" => "Reminder: save this text and send a notification when due",
         "local_note" => "Capability: Local note",
         _ => "This task requires a capability that is unavailable.",
     });
-    ui.label(match value.destination.as_str() {
-        "task_results" => "Results: In-app task results",
-        _ => "This task requires a result destination that is unavailable.",
-    });
+    if value.capability == "reminder" {
+        ui.add(
+            egui::Label::new(format!("Notification destination: {}", value.destination))
+                .wrap()
+                .selectable(true),
+        );
+        ui.small(
+            "An occurrence saves its result first. Notification delivery is tracked separately.",
+        );
+    } else {
+        ui.label(match value.destination.as_str() {
+            "task_results" => "Results: In-app task results",
+            _ => "This task requires a result destination that is unavailable.",
+        });
+    }
     for effect in &value.effects {
         ui.label(match effect.as_str() {
             "store_local_result" => "Save the supplied text as a local result",
+            "send_notification" => "Send the reminder to the reviewed destination",
             _ => "This task requests an effect that is unavailable.",
         });
     }
@@ -1226,7 +1387,15 @@ fn review_is_current(view: &ConversationView, session: Option<&ApiSession>) -> b
 
 fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNode>) {
     ui.separator();
-    ui.label(format!("Task status: {:?}", task.status));
+    ui.label(format!(
+        "Task status: {}",
+        task_status(match task.status {
+            bokkie_operator_api::ManagedTaskStatus::Draft => "draft",
+            bokkie_operator_api::ManagedTaskStatus::Active => "active",
+            bokkie_operator_api::ManagedTaskStatus::Paused => "paused",
+            bokkie_operator_api::ManagedTaskStatus::Completed => "completed",
+        })
+    ));
     if let Some(at) = task.next_wake_at {
         let timezone = task
             .active
@@ -1250,18 +1419,13 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
     for run in &task.runs {
         egui::CollapsingHeader::new(format!(
             "{} · {}",
-            run.state,
-            chrono::DateTime::from_timestamp(run.scheduled_at, 0)
-                .map(|date| date
-                    .with_timezone(&chrono_tz::Australia::Adelaide)
-                    .format("%d %b, %H:%M")
-                    .to_string())
-                .unwrap_or_else(|| "Unknown time".into())
+            if run.result.is_some() { "Completed" } else { task_status(&run.state) },
+            short_local_time(run.scheduled_at, &run.timezone)
         ))
         .id_salt(("task-run", &run.obligation_id))
         .default_open(run.result.is_some())
         .show(ui, |ui| {
-            ui.add(egui::Label::new(local_time(run.scheduled_at)).wrap());
+            ui.add(egui::Label::new(local_time_in_zone(run.scheduled_at, &run.timezone)).wrap());
             ui.small(format!("Definition revision {}", run.definition_revision));
             if let Some(result) = &run.result {
                 let response = ui.add(egui::Label::new(result).wrap().selectable(true));
@@ -1276,6 +1440,21 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
             } else {
                 ui.label("No local result yet.");
             }
+            if let Some(delivery) = &run.delivery {
+                ui.add(egui::Label::new(format!("Notification: {}", notification_label(delivery))).wrap().selectable(true));
+                ui.add(egui::Label::new(format!("Destination: {}", delivery.destination)).wrap());
+                if let Some(at) = delivery.next_retry_at {
+                    ui.label(format!("Next delivery attempt: {}", local_time_in_zone(at, &run.timezone)));
+                }
+                if matches!(delivery.status.as_str(), "needs_attention" | "uncertain") {
+                    ui.label("Open Needs attention to review recovery. The reminder result is already saved.");
+                }
+                egui::CollapsingHeader::new("Delivery history and provenance").id_salt((&delivery.id,"history")).show(ui, |ui| {
+                    ui.label(format!("Delivery identity: {}", delivery.id));
+                    ui.add(egui::Label::new(&delivery.detail).wrap().selectable(true));
+                    for attempt in &delivery.attempts { ui.add(egui::Label::new(format!("{attempt:?}")).wrap()); }
+                });
+            }
         });
     }
 }
@@ -1286,9 +1465,6 @@ fn trigger_timezone(trigger: &ManagedTrigger) -> &str {
             timezone
         }
     }
-}
-fn local_time(seconds: i64) -> String {
-    local_time_in_zone(seconds, "Australia/Adelaide")
 }
 fn local_time_in_zone(seconds: i64, timezone: &str) -> String {
     let Ok(zone) = timezone.parse::<chrono_tz::Tz>() else {
@@ -1302,6 +1478,18 @@ fn local_time_in_zone(seconds: i64, timezone: &str) -> String {
             )
         })
         .unwrap_or_else(|| "Invalid scheduled time".into())
+}
+fn short_local_time(seconds: i64, timezone: &str) -> String {
+    let Ok(zone) = timezone.parse::<chrono_tz::Tz>() else {
+        return "Invalid time".into();
+    };
+    chrono::DateTime::from_timestamp(seconds, 0)
+        .map(|date| {
+            date.with_timezone(&zone)
+                .format("%a %d %b, %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| "Invalid time".into())
 }
 
 #[cfg(test)]
@@ -1346,9 +1534,80 @@ mod tests {
             request_error: None,
             runtime_available: true,
             notes_available: true,
+            reminders_available: true,
             receipt: None,
         }
     }
+    #[test]
+    fn reminder_history_stays_within_a_narrow_details_column() {
+        use bokkie_operator_api::{ManagedDelivery, ManagedRun, ManagedTaskStatus};
+        for width in [324.0, 390.0] {
+            let context = egui::Context::default();
+            let task = ManagedTaskDetail {
+                id: "task".into(),
+                configuration_revision: 1,
+                status: ManagedTaskStatus::Active,
+                active: None,
+                candidate: None,
+                next_wake_at: None,
+                runs: vec![ManagedRun {
+                    obligation_id: "occurrence".into(),
+                    definition_revision: 1,
+                    profile_revision: "reminder-v1".into(),
+                    scheduled_at: 1790033400,
+                    admitted_at: Some(1790033400),
+                    state: "completed".into(),
+                    result: Some(
+                        "Review today's priorities and choose the work that matters most.".into(),
+                    ),
+                    timezone: "Australia/Adelaide".into(),
+                    delivery: Some(ManagedDelivery {
+                        id: "delivery".into(),
+                        status: "accepted_by_relay".into(),
+                        detail: "Synthetic acceptance".into(),
+                        destination: "fixture-recipient@example.invalid".into(),
+                        subject: "Review priorities".into(),
+                        body: "Review priorities".into(),
+                        next_retry_at: None,
+                        attempts: vec![],
+                        recovery: None,
+                    }),
+                }],
+            };
+            for _ in 0..3 {
+                let mut nodes = vec![];
+                let mut content_width = 0.0;
+                context
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 800.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            task_detail(ui, &task, &mut nodes);
+                            content_width = ui.min_rect().width();
+                        },
+                    )
+                    .textures_delta
+                    .clear();
+                assert!(
+                    content_width <= width,
+                    "History expanded its {width}-pixel column to {content_width}"
+                );
+                let result = nodes
+                    .iter()
+                    .find(|n| {
+                        n.id == SemanticUiId::new("bokkie.conversation.history-result.occurrence")
+                    })
+                    .unwrap();
+                assert!(result.rect.max_x <= width && result.rect.max_y > result.rect.min_y);
+            }
+        }
+    }
+
     #[test]
     fn composer_retains_send_control_with_a_long_multiline_draft() {
         for width in [340.0, 440.0, 760.0] {
@@ -1482,8 +1741,8 @@ mod tests {
         let winter = chrono::DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
             .unwrap()
             .timestamp();
-        assert!(local_time(summer).contains("10:30 ACDT"));
-        assert!(local_time(winter).contains("09:30 ACST"));
+        assert!(local_time_in_zone(summer, "Australia/Adelaide").contains("10:30 ACDT"));
+        assert!(local_time_in_zone(winter, "Australia/Adelaide").contains("09:30 ACST"));
     }
     #[test]
     fn recurring_schedules_have_readable_common_patterns_and_honest_fallback() {
@@ -1640,6 +1899,7 @@ mod tests {
                         id: "task".into(), kind: "managed_task".into(), status: "draft".into(),
                         name: "A long task name with ordinary words and enough detail to wrap across several lines".into(),
                         description: "Long task description ".repeat(12),
+                        summary: None,
                     };
                     catalogue_row(ui, &entry, "candidate", true, &mut nodes, &mut action);
                     assert!(nodes[0].rect.max_x <= width, "candidate overflow at {width}");

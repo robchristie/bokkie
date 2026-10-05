@@ -11,7 +11,7 @@ use serde_json::Value;
 /// Version of the HTTP contract consumed by the bundled operator UI.
 pub const API_CONTRACT_VERSION: u32 = 1;
 /// Exact SQLite migration version understood by this build of the UI.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 13;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 14;
 /// Stable package identity; the per-process session ID distinguishes restarts.
 pub const BOKKIE_BUILD_ID: &str = concat!("bokkie/", env!("CARGO_PKG_VERSION"));
 
@@ -153,6 +153,8 @@ pub enum ActionConsequence {
     CancelObligation,
     ScheduleExactGardenerProposal,
     RejectExactGardenerProposal,
+    ReconcileNotification,
+    ResendNotification,
 }
 
 /// Immutable backend-issued condition for applying one projected lifecycle action.
@@ -202,6 +204,8 @@ pub struct OperatorCapabilities {
 #[serde(rename_all = "snake_case")]
 pub enum OperatorTaskKind {
     LocalNote,
+    Reminder,
+    NotificationDelivery,
     GardenerInspection,
     GardenerImplementation,
     Simulated,
@@ -236,6 +240,8 @@ pub struct GardenerTaskConfiguration {
 pub struct OperatorTask {
     #[serde(default)]
     pub engineering: Option<EngineeringView>,
+    #[serde(default)]
+    pub notification: Option<ManagedDelivery>,
     pub kind: OperatorTaskKind,
     pub title: String,
     pub parent_task_id: Option<String>,

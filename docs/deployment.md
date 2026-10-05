@@ -118,6 +118,39 @@ built-in tools and execution environments remain disabled.
 
 ## Restart, persistence and rollback
 
+### Preparing reminders (separate deployment authority)
+
+Source delivery does not enable production notifications. After selecting the
+recipient and an existing authorised sender, place the strict configuration from
+the [operator guide](operator-guide.md#conversational-task-management) in a private
+canonical regular file outside the checkout, readable by Bokkie's UID. Add the
+optional `notification_config` absolute path to `release.json`; omitted or `null`
+preserves the existing deployment. The launcher bind-mounts that one file read-only
+at `/opt/notification-config.json`, passes `--notification-config`, and attaches
+the runtime to the existing internal `backend` network as well as `proxy`.
+It accepts only `smtp-relay:25` for Nostromo. The relay retains all Brevo
+credentials; neither Bokkie nor its image receives them. No host port is published,
+and login, ingress, non-root identity and Docker/Bubblewrap policies remain in force.
+The controller checks the exact effective network set at startup.
+
+Qualify an authorised deployment using the reviewed merged image, real network
+attachment and selected mailbox. A live test must have an agreed finite count
+and a subject explicitly identifying it as a Bokkie test. Confirm SMTP submission
+with the browser closed and receipt in that mailbox; phone alert behaviour also
+needs the receiving device's mail app configuration. Use synthetic state and a
+local SMTP peer for outage/restart/uncertainty probes, not production delivery
+failures or arbitrary recipients. Existing relay acceptance and suppressed DSNs
+do not supply an end-to-end delivery receipt.
+
+Migration14 appends durable notification intents; applied migrations are unchanged.
+An older schema13 binary must not be started against the upgraded database.
+Retain the stopped-service state backup, old manifest and immutable image before
+an authorised update. Disabling notification configuration stops new reminder
+admission and sending while preserving queued intents, history and attention.
+It does not revoke work already sent or withdraw mail queued in the relay. Restoring
+an old database backup is a separately authorised data operation and can remove
+later history or replay reminders; reconcile possible sends before restarting.
+
 Both containers use Docker restart policy `no`. The foreground systemd-owned
 controller is the single recovery owner. It watches container IDs and start
 timestamps. A crash or unexpected restart causes ordered cleanup and a visible

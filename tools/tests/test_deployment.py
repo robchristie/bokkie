@@ -218,7 +218,8 @@ class DeploymentTests(unittest.TestCase):
         actual = {'HostConfig': copy.deepcopy(expected['HostConfig']),
                   'Config': {key: copy.deepcopy(expected[key])
                              for key in ('User', 'Entrypoint', 'Cmd', 'Env', 'Labels')},
-                  'Image': expected['Image'], 'State': {'Running': True}}
+                  'Image': expected['Image'], 'State': {'Running': True},
+                  'NetworkSettings': {'Networks': {'proxy': {}}}}
         actual['HostConfig'].update(Privileged=False, CapAdd=None, PortBindings={},
                                     PidMode='', IpcMode='private', UsernsMode='')
         MODULE.validate_runtime(expected, actual)
@@ -231,6 +232,47 @@ class DeploymentTests(unittest.TestCase):
             changed['HostConfig'][key] = value
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 MODULE.validate_runtime(expected, changed)
+
+    def test_reminders_opt_in_to_one_read_only_config_and_internal_network(self):
+        path = self.root / 'notifications.json'
+        path.write_text(json.dumps({'relay_host': 'smtp-relay', 'relay_port': 25,
+                                   'from_address': 'bokkie@example.invalid',
+                                   'destination': 'fixture@example.invalid', 'timeout_ms': 2000}))
+        config = self.load({**self.config, 'notification_config': str(path)})
+        expected = MODULE.runtime(config, self.root)
+        self.assertEqual(set(expected['NetworkingConfig']['EndpointsConfig']), {'proxy', 'backend'})
+        self.assertIn('--notification-config', expected['Cmd'])
+        mount = next(m for m in expected['HostConfig']['Mounts'] if m['Target'] == '/opt/notification-config.json')
+        self.assertEqual(mount, {'Type': 'bind', 'Source': str(path),
+                                'Target': '/opt/notification-config.json', 'ReadOnly': True})
+        self.assertEqual(expected['HostConfig']['SecurityOpt'], MODULE.runtime(self.config, self.root)['HostConfig']['SecurityOpt'])
+        self.assertEqual(MODULE.policy_text(config), MODULE.policy_text(self.config))
+        self.assertEqual(MODULE.edge(config, self.root), MODULE.edge(self.config, self.root))
+        self.assertFalse(expected['HostConfig'].get('PortBindings'))
+
+    def test_notification_configuration_rejects_other_relays_and_symlinks(self):
+        path = self.root / 'notifications.json'
+        base = {'relay_host': 'smtp-relay', 'relay_port': 25,
+                'from_address': 'bokkie@example.invalid', 'destination': 'fixture@example.invalid', 'timeout_ms': 2000}
+        for change in ({'relay_host': 'smtp.brevo.com'}, {'relay_port': 587}, {'password': 'synthetic'}):
+            path.write_text(json.dumps({**base, **change}))
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.load({**self.config, 'notification_config': str(path)})
+        path.write_text(json.dumps(base))
+        alias = self.root / 'notification-alias'
+        alias.symlink_to(path)
+        with self.assertRaises(ValueError):
+            self.load({**self.config, 'notification_config': str(alias)})
+
+    def test_unexpected_effective_network_is_rejected(self):
+        expected = MODULE.runtime(self.config, self.root)
+        actual = {'HostConfig': copy.deepcopy(expected['HostConfig']),
+                  'Config': {key: copy.deepcopy(expected[key]) for key in ('User', 'Entrypoint', 'Cmd', 'Env', 'Labels')},
+                  'Image': expected['Image'], 'State': {'Running': True},
+                  'NetworkSettings': {'Networks': {'proxy': {}, 'backend': {}}}}
+        actual['HostConfig'].update(Privileged=False, CapAdd=None, PortBindings={}, PidMode='', IpcMode='private', UsernsMode='')
+        with self.assertRaisesRegex(RuntimeError, 'networks differ'):
+            MODULE.validate_runtime(expected, actual)
 
     def test_ingress_authentication_applies_to_every_proxied_path(self):
         MODULE.render(self.config, self.root)

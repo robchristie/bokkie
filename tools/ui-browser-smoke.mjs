@@ -182,6 +182,15 @@ async function clickAction(page, action, pane = null) {
 }
 
 async function selectCollection(page, collection) {
+  if (collection === 'all') {
+    let state = await snapshot(page);
+    if (!state.ui_snapshot.nodes.some(node => node.id === 'bokkie.collection.all')) {
+      if (!state.ui_snapshot.nodes.some(node => node.id === 'bokkie.advanced.open')) {
+        await clickId(page, 'bokkie.collection.attention');
+      }
+      await clickId(page, 'bokkie.advanced.open');
+    }
+  }
   await page.waitForFunction(id => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot()
     .ui_snapshot.nodes.some(candidate => candidate.id === id), `bokkie.collection.${collection}`);
   await clickId(page, `bokkie.collection.${collection}`);

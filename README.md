@@ -12,13 +12,14 @@ The initial implementation is intentionally narrow:
 - cron recurrence with named time zones;
 - persistent model-backed task drafting and exact reviewed definition changes;
 - an explicitly enabled deterministic local-note runner with in-app results;
+- explicitly configured email reminders with durable delivery intent and recovery;
 - a deterministic fake runner for qualification;
 - an explicitly enabled coding gardener restricted to `robchristie/bokkie`;
 - persisted inspection, proposal, implementation, and verification evidence;
   and
 - a loopback HTTP API with a delivered local Polyorama attention interface.
 
-General infrastructure actions, deployment, notifications and memory remain
+General infrastructure actions, deployment and memory remain
 outside the delivered capability. Automatic merge is available only through the
 explicit [bounded Pagefold profile](docs/pagefold-github-delivery.md). The graphical interface was
 outside the original obligation-kernel slice and subsequently landed as the

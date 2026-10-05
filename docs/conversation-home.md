@@ -21,6 +21,16 @@ specialist identities belong in configuration and activity details.
 - **Tasks:** find configured work and drafts, see timing and the latest result,
   and open a task in conversation. Operational attention and legacy task details
   remain accessible with their existing authority checks.
+- **Today, Upcoming, Needs your input:** filtered views of that same catalogue,
+  reachable from Home and Tasks. Today includes outstanding due work and today's
+  completed results. Upcoming starts after the operator's current calendar day;
+  task-specific zones remain visible. Needs your input includes drafts, candidate
+  revisions and unresolved execution or notification attention, including older
+  delivery failures. It does not enumerate every generated occurrence as a new task.
+
+The global Tasks control opens that catalogue from both Home and Needs attention.
+Advanced tools retains the legacy execution-record ledger for operational work;
+it is not presented as another Tasks destination.
 - **Settings (next extension):** appearance, agent roles and project workspaces
   in the target design. Only settings supported by a persisted backend contract may be
   presented as effective editable configuration.
@@ -46,12 +56,26 @@ One clear action reviews the exact change; confirmation remains an explicit
 operator action. Natural-language assent never bypasses the existing review
 contract. An ambiguous task match requires selection.
 
+A new reminder uses the one configured email destination. “Every weekday at 9”
+needs am/pm clarification; an omitted zone uses Australia/Adelaide, while an
+explicit zone is preserved. Review shows the concrete next dates and exact
+reminder text. Without notification configuration, reminder activation is blocked
+and the missing destination is explained. Existing local notes retain their
+in-app behaviour.
+
 After confirmation, the interface shows a compact saved-change receipt. The
 completed review leaves the main reading path. A task can be scheduled, running,
 waiting, paused or completed independently of that receipt. A completed result
 is prominent and selectable; old runs and provenance remain available in detail.
 An unrelated change must not erase a draft or invalidate an unaffected review.
 Restart, session change and revision conflicts retain existing fail-closed rules.
+
+Occurrence completion and notification delivery are distinct. Results show relay
+acceptance, a scheduled retry or actionable delivery attention. Relay acceptance
+does not prove inbox receipt or a phone alert. An uncertain send offers explicit
+review to resolve without resending or resend with a stated duplicate risk; the
+confirmation identifies the saved text and destination. Transport diagnostics
+and stable delivery identities belong in disclosures.
 
 ## Agent roles and development hand-off
 

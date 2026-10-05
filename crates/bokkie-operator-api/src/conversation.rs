@@ -67,6 +67,8 @@ pub struct ConversationView {
     pub request_error: Option<String>,
     pub runtime_available: bool,
     pub notes_available: bool,
+    #[serde(default)]
+    pub reminders_available: bool,
     pub receipt: Option<ManagedTaskReceipt>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
