@@ -34,12 +34,29 @@ async function start(resume=false){
 async function control(input={}){fixture.stdin.write(JSON.stringify(input)+'\n');const result=await line();if(result.error)throw Error(result.error);return result;}
 async function stop(){if(fixture&&fixture.exitCode==null){fixture.stdin.end('{"stop":true}\n');await once(fixture,'exit');}fixture=undefined;}
 const snapshot=()=>page.evaluate(()=>window.__BOKKIE_ATTENTION_HANDLE.test_snapshot());
+async function resize(size){
+ await page.setViewportSize(size);
+ await page.waitForFunction(({width,height})=>{
+  const root=window.__BOKKIE_ATTENTION_HANDLE.test_snapshot().ui_snapshot.nodes.find(n=>n.id==='application')?.rect;
+  return root && Math.abs(root.max_x-root.min_x-width)<1 && Math.abs(root.max_y-root.min_y-height)<1;
+ },size);
+}
+
 async function ready(){await page.waitForFunction(()=>window.__BOKKIE_ATTENTION_HANDLE?.test_snapshot().interaction.connection==='current',null,{timeout:30000});}
 async function reveal(id){
+ // Supporting surfaces open through ordinary controls; never mutate UI state
+ // through the observation hook to make a target appear.
+ const initial=await snapshot();
+ if(!initial.ui_snapshot.nodes.some(n=>n.id===id)){
+  if(id==='bokkie.conversation.search'||id==='bokkie.conversation.search-submit'||id.startsWith('bokkie.conversation.catalogue.'))await click('bokkie.home.tasks');
+  else if(id.startsWith('bokkie.conversation.history.'))await click('bokkie.conversation.history');
+  else if(id==='bokkie.conversation.preview'||id==='bokkie.conversation.legacy-open')await click('bokkie.conversation.details');
+ }
  for(let i=0;i<35;i++){
   const s=await snapshot(),n=s.ui_snapshot.nodes.find(n=>n.id===id),v=page.viewportSize();
-  if(n && n.rect.min_y>=(["bokkie.conversation.open","bokkie.conversation.new"].includes(id)?0:60) && n.rect.max_y<v.height-12)return n;
-  await page.mouse.move(v.width-30,v.height/2);await page.mouse.wheel(0,n&&n.rect.min_y<60?-400:400);await page.waitForTimeout(70);
+  if(n && n.rect.min_y>=((id.startsWith('bokkie.home.')||id.startsWith('bokkie.collection.')||["bokkie.conversation.open","bokkie.conversation.new"].includes(id))?0:60) && n.rect.max_y<v.height-12)return n;
+  const x=n?(n.rect.min_x+n.rect.max_x)/2:v.width/2;
+  await page.mouse.move(x,Math.min(v.height-190,Math.max(150,v.height/2)));await page.mouse.wheel(0,n&&n.rect.min_y<60?-400:400);await page.waitForTimeout(70);
  }
  throw Error(`Control not visible: ${id}`);
 }
@@ -73,17 +90,25 @@ try{
  initialDispatches=(await control()).model_calls;
  browser=await chromium.launch({headless:true,env:{...process.env,LD_LIBRARY_PATH:process.env.BOKKIE_UI_SYSROOT?`${resolve(process.env.BOKKIE_UI_SYSROOT,'usr/lib')}:${process.env.LD_LIBRARY_PATH??''}`:(process.env.LD_LIBRARY_PATH??'')},args:['--no-sandbox','--enable-unsafe-webgpu','--enable-features=Vulkan','--use-angle=vulkan','--disable-vulkan-surface',`--remote-debugging-port=${new URL(endpoint).port}`]});
  report.browser=browser.version();page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>report.errors.push(String(e)));
- await page.goto(origin+'/ui/');await ready();await click('bokkie.conversation.open');await page.waitForTimeout(500);
+ await page.goto(origin+'/ui/');await ready();await page.waitForTimeout(500);
+ const home=await snapshot();
+ check(home.ui_snapshot.nodes.some(n=>n.id==='bokkie.conversation.text'),'Conversation composer is the default home');
+ check((await control()).model_calls===initialDispatches,'Opening home starts no model invocation');
+ await capture('home-desktop','bokkie.conversation.text');
+ await resize({width:390,height:844});await capture('home-narrow','bokkie.conversation.text');
+ await resize({width:1440,height:900});
  if(preflight){
-  await capture('preflight-desktop','bokkie.conversation.text');await page.setViewportSize({width:480,height:720});await capture('preflight-narrow','bokkie.conversation.text');const stats=await control({tick:true});check(!stats.ran&&stats.catalogue.items.length===0,'No-model UI preflight creates no work');
+  await capture('preflight-desktop','bokkie.conversation.text');await resize({width:480,height:720});await capture('preflight-narrow','bokkie.conversation.text');const stats=await control({tick:true});check(!stats.ran&&stats.catalogue.items.length===0,'No-model UI preflight creates no work');
  }else{
   let v,taskId,due,stats;
   if(!prefix){
   v=await send("Help me set up a weekday reminder to review my research queue at 9 am Adelaide time. Don't activate it yet.");
   check(v.task?.status==='draft'&&v.task.runs.length===0,'Draft created without execution');taskId=v.task.id;
+  await click('bokkie.home.tasks');await click('bokkie.conversation.panel-back');
+  await click('bokkie.collection.attention');await click('bokkie.conversation.open');
   v=await send('Change the reminder text to: Review the research queue and choose one paper to read. Keep it inactive.');check(v.task.id===taskId&&!v.task.active,'Refinement preserves a single inactive task');
   v=await send('What exactly will happen? Preview it.');check(v.review.preview.definition.instructions==='Review the research queue and choose one paper to read.','Preview contains exact reminder text');check(v.review.preview.definition.trigger.timezone==='Australia/Adelaide'&&v.review.preview.occurrences.length>=3,'Preview shows named timezone and future occurrences');
-  await capture('review-desktop','bokkie.conversation.confirm');await page.setViewportSize({width:480,height:720});await capture('review-narrow','bokkie.conversation.confirm');await page.setViewportSize({width:1440,height:900});
+  await capture('review-desktop','bokkie.conversation.confirm');await resize({width:480,height:720});await capture('review-narrow','bokkie.conversation.confirm');await resize({width:1440,height:900});
   v=await confirm();check(v.task.status==='active','Operator confirmation activates exact draft');due=v.task.next_wake_at;
   stats=await control({now:due,tick:true});check(stats.ran,'Kernel note runner completed due occurrence');stats=await control({tick:true});check(!stats.ran&&stats.details.find(t=>t.id===taskId).runs.filter(r=>r.result).length===1,'Repeated tick does not duplicate local result');
   const refresh=(await snapshot()).ui_snapshot.nodes.find(n=>n.actions.includes('refresh_operator_state'));if(!refresh)throw Error('Refresh control absent');await page.mouse.click((refresh.rect.min_x+refresh.rect.max_x)/2,(refresh.rect.min_y+refresh.rect.max_y)/2);await page.waitForTimeout(1200);

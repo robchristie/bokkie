@@ -92,6 +92,15 @@ action_id() {
   jq -er --arg action "$1" '.ui_snapshot.nodes[] | select(.enabled and (.actions | index($action))) | .id' "$SNAPSHOT" | head -n 1
 }
 
+# The native application opens at Home. Reach the operational queue through
+# the same visible navigation used by an operator.
+move_id 'bokkie.collection.attention'
+xdo click 1
+for _ in $(seq 1 100); do
+  jq -e '.ui_snapshot.nodes | any(.id == "bokkie.inbox-row.approval-safe-cancel")' "$SNAPSHOT" >/dev/null 2>&1 && break
+  sleep 0.05
+done
+
 move_id 'bokkie.inbox-row.approval-safe-cancel'
 xdo click 1
 for _ in $(seq 1 100); do

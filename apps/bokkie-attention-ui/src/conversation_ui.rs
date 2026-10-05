@@ -12,6 +12,7 @@ pub(super) struct ConversationState {
     view: Option<ConversationView>,
     history: Vec<ConversationSummary>,
     catalogue: Vec<ManagedCatalogueEntry>,
+    panel: Option<ConversationPanel>,
     query: String,
     applied_query: String,
     next_after: Option<String>,
@@ -25,7 +26,22 @@ pub(super) struct ConversationState {
     poll_at: Option<Instant>,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum ConversationPanel {
+    Tasks,
+    History,
+    Details,
+}
+
 impl ConversationState {
+    pub(super) fn home() -> Self {
+        Self {
+            open: true,
+            id: Some(uuid::Uuid::new_v4().to_string()),
+            ..Default::default()
+        }
+    }
+
     fn switch(&mut self, id: String, task: Option<String>) {
         self.id = Some(id);
         self.view = None;
@@ -35,6 +51,7 @@ impl ConversationState {
         self.error = None;
         self.select_after_load = task;
         self.poll_at = None;
+        self.panel = None;
     }
 
     fn begin_read(&mut self, generation: u64) -> Option<ApiRequest> {
@@ -131,6 +148,11 @@ impl AttentionApp {
                 .switch(uuid::Uuid::new_v4().to_string(), task);
         }
         self.refresh_conversation(context);
+    }
+
+    pub(super) fn open_conversation_tasks(&mut self, context: &egui::Context) {
+        self.open_conversation(None, context);
+        self.conversation.panel = Some(ConversationPanel::Tasks);
     }
 
     fn open_saved_conversation(&mut self, id: String, context: &egui::Context) {
@@ -330,15 +352,6 @@ impl AttentionApp {
             ui.heading("Conversation");
             if button(
                 ui,
-                "bokkie.conversation.back",
-                "Attention desk",
-                true,
-                nodes,
-            ) {
-                state.open = false;
-            }
-            if button(
-                ui,
                 "bokkie.conversation.new",
                 "New conversation",
                 !state.in_flight && state.pending.is_none(),
@@ -348,117 +361,125 @@ impl AttentionApp {
             }
             if button(
                 ui,
-                "bokkie.conversation.engineering",
-                "Engineering intake",
+                "bokkie.conversation.history",
+                "Recent chats",
                 true,
                 nodes,
             ) {
-                intents.push(OperatorIntent::ComposeEngineering);
+                state.panel = if state.panel == Some(ConversationPanel::History) {
+                    None
+                } else {
+                    Some(ConversationPanel::History)
+                };
+            }
+            if ui.max_rect().width() < 1000.0
+                && state
+                    .view
+                    .as_ref()
+                    .is_some_and(|view| view.selected_task_id.is_some())
+                && button(
+                    ui,
+                    "bokkie.conversation.details",
+                    "Task details",
+                    true,
+                    nodes,
+                )
+            {
+                state.panel = if state.panel == Some(ConversationPanel::Details) {
+                    None
+                } else {
+                    Some(ConversationPanel::Details)
+                };
             }
         });
-        ui.label("Describe a task, find existing work, or refine its instructions and timing.");
-        egui::ScrollArea::vertical().id_salt("conversation-workspace").show(ui, |ui| {
-            egui::CollapsingHeader::new("Recent conversations").show(ui, |ui| {
-                for summary in &state.history {
-                    let label = if summary.last_text.is_empty() { "Untitled conversation" } else { &summary.last_text };
-                    if button(ui, &format!("bokkie.conversation.history.{}", summary.id), &label.chars().take(90).collect::<String>(), !state.in_flight && state.pending.is_none(), nodes) { action = Some(ConversationUiAction::Open(summary.id.clone())); }
-                }
-                if state.history.is_empty() { ui.label("Your saved conversations will appear here."); }
-            });
-            egui::CollapsingHeader::new("Find tasks and drafts").default_open(state.view.as_ref().is_none_or(|v| v.messages.is_empty())).show(ui, |ui| {
-                let response = ui.add(egui::TextEdit::singleline(&mut state.query).desired_width(f32::INFINITY).hint_text("Search all tasks by name or description"));
-                observe(response.rect, "bokkie.conversation.search", "Search all tasks", UiRole::Section, true, nodes);
-                if button(ui, "bokkie.conversation.search-submit", "Search tasks", !state.catalogue_busy, nodes) { action = Some(ConversationUiAction::Search); }
-                if state.catalogue_busy { ui.label("Searching…"); }
-                egui::ScrollArea::vertical().id_salt("conversation-catalogue").max_height(240.0).show(ui, |ui| {
-                    for entry in &state.catalogue {
-                        catalogue_row(ui, entry, "catalogue", mutable, nodes, &mut action);
-                    }
-                });
-                if state.next_after.is_some() && button(ui, "bokkie.conversation.more", "More tasks", !state.catalogue_busy, nodes) { action = Some(ConversationUiAction::More); }
-            });
-            ui.separator();
-            if let Some(view) = &state.view {
-                if !view.runtime_available { ui.label("Conversation runtime unavailable. Existing tasks and saved conversations remain readable."); }
-                if !view.notes_available { ui.label("Local note execution is unavailable in this runtime."); }
-                if let Some(task_id) = &view.selected_task_id {
-                    let name = view.task.as_ref().and_then(|t| t.candidate.as_ref().or(t.active.as_ref())).map(|r| r.definition.name.as_str()).unwrap_or(task_id);
-                    let response = ui.label(egui::RichText::new(format!("Selected task: {name}")).strong());
-                    observe(response.rect, "bokkie.conversation.selected", &format!("Selected task: {name}"), UiRole::Section, true, nodes);
-                    if view.task.is_none() && button(ui, "bokkie.conversation.legacy-open", "Open existing task details and actions", true, nodes) { action = Some(ConversationUiAction::Legacy(task_id.clone())); }
-                } else { ui.label("No task selected. Choose a result explicitly when several tasks match."); }
-                for (index, message) in view.messages.iter().enumerate() {
-                    egui::Frame::group(ui.style()).inner_margin(12.0).show(ui, |ui| {
-                        ui.label(egui::RichText::new(if message.role == "user" { "You" } else { "Bokkie" }).strong());
-                        let response = ui.add(egui::Label::new(&message.text).wrap().selectable(true));
-                        observe(response.rect, &format!("bokkie.conversation.message.{index}"), &message.text, UiRole::Section, true, nodes);
-                    });
-                    ui.add_space(6.0);
-                }
-                if !view.candidates.is_empty() { ui.label("Choose the task you mean:"); }
-                for candidate in &view.candidates { catalogue_row(ui, candidate, "candidate", mutable, nodes, &mut action); }
-                if let Some(task) = &view.task {
-                    task_detail(ui, task, nodes);
-                    if button(ui, "bokkie.conversation.preview", "Preview this task", mutable && view.runtime_available, nodes) { action = Some(ConversationUiAction::Preview); }
-                }
-                if let Some(review) = &view.review {
-                    egui::Frame::group(ui.style()).inner_margin(12.0).show(ui, |ui| {
-                        ui.heading(match review.action {
-                            ConversationAction::Activate => "Activate task",
-                            ConversationAction::Pause => "Pause future runs",
-                            ConversationAction::Resume => "Resume future runs",
-                        });
-                        ui.label(&review.explanation);
-
-                        for blocker in &review.blockers { ui.label(format!("Unavailable: {blocker}")); }
-                        if let Some(preview) = &review.preview {
-                            definition(ui, &preview.definition);
-                            for change in &preview.changes { ui.label(format!("Change: {change}")); }
-                            for blocker in &preview.blockers { ui.label(format!("Unavailable: {blocker}")); }
-                            for occurrence in &preview.occurrences { ui.label(format!("Scheduled: {}", local_time_in_zone(*occurrence, trigger_timezone(&preview.definition.trigger)))); }
-                        }
-                        egui::CollapsingHeader::new("Review provenance")
-                            .id_salt(("review-provenance", &review.id))
-                            .show(ui, |ui| {
-                                ui.label(format!("Task ID: {}", review.task_id));
-                                ui.label(format!("Configuration revision: {}", review.configuration_revision));
-                                ui.label(format!("Review ID: {}", review.id));
-                                ui.label(format!("Process session: {}", review.session_id));
-                                if let Some(preview) = &review.preview {
-                                    ui.label(format!("Definition revision: {}", preview.candidate_revision));
-                                    ui.label(format!("Capability profile revision: {}", preview.profile_revision));
-                                }
-                            });
-                        let session_current = self.session.as_ref().is_some_and(|s| s.session_id() == review.session_id);
-                        let revision_current = view.task.as_ref().is_some_and(|task| task.configuration_revision == review.configuration_revision);
-                        let enabled = mutable && review_is_current(view, self.session.as_ref());
-                        if !session_current { ui.label("This review belongs to an earlier session. Ask Bokkie for a fresh review."); }
-                        if !revision_current { ui.label("This task has changed since this review. Ask Bokkie for a fresh preview before another action."); }
-                        if button(ui, "bokkie.conversation.confirm", "Confirm reviewed action", enabled, nodes) { action = Some(ConversationUiAction::Confirm); }
-                        ui.label("Confirmation saves this change. Run completion and local results appear separately in the task history.");
-                    });
-                }
-                if let Some(receipt) = &view.receipt {
-                    ui.label("Change saved. Run completion and local results appear separately in the task history.");
-                    egui::CollapsingHeader::new("Saved receipt details").id_salt(("receipt-provenance", &receipt.command_id)).show(ui, |ui| {
-                        ui.label(format!("Task ID: {}", receipt.task_id));
-                        ui.label(format!("Configuration revision: {}", receipt.configuration_revision));
-                        ui.label(format!("Command ID: {}", receipt.command_id));
-                    });
-                }
-                if let Some(error) = &view.request_error { ui.label(format!("Bokkie could not complete this turn: {error}")); }
-                if busy { ui.spinner(); ui.label("Bokkie is preparing a response. This conversation is saved."); }
-            } else { ui.label("Loading conversation…"); }
-            if let Some(error) = &state.error { ui.label(format!("Request needs attention: {error}")); }
-            ui.add_space(12.0);
-            let response = ui.add_enabled(state.pending.is_none() && !state.in_flight, egui::TextEdit::multiline(&mut state.text).id_salt("conversation-text").desired_rows(4).desired_width(f32::INFINITY).hint_text("What would you like Bokkie to do?"));
-            observe(response.rect, "bokkie.conversation.text", "Message to Bokkie", UiRole::Section, response.enabled(), nodes);
-            let available = state.view.as_ref().is_some_and(|v| v.runtime_available);
-            if state.pending.is_some() {
-                ui.label("The request may already be saved. Retry retains its original identity.");
-                if button(ui, "bokkie.conversation.retry", "Retry saved request", safe && !busy, nodes) { action = Some(ConversationUiAction::Retry); }
-            } else if button(ui, "bokkie.conversation.send", "Send message", mutable && available && !state.text.trim().is_empty() && state.text.chars().count() <= 8_192, nodes) { action = Some(ConversationUiAction::Send); }
+        ui.add_space(8.0);
+        let bounds = ui.available_rect_before_wrap();
+        let wide = bounds.width() >= 1000.0;
+        let panel = state.panel.or_else(|| {
+            (wide
+                && state
+                    .view
+                    .as_ref()
+                    .is_some_and(|view| view.selected_task_id.is_some()))
+            .then_some(ConversationPanel::Details)
         });
+        let sidebar = wide && panel.is_some();
+        let main_width = if sidebar {
+            bounds.width() - 344.0
+        } else {
+            bounds.width()
+        };
+        let main = egui::Rect::from_min_size(bounds.min, egui::vec2(main_width, bounds.height()));
+        // The composer and transcript have independent, bounded rectangles. Long
+        // messages, reviews and task history cannot move the input below the screen.
+        let footer_height = if state.pending.is_some() || state.error.is_some() {
+            174.0
+        } else {
+            138.0
+        };
+        let composer = egui::Rect::from_min_max(
+            egui::pos2(main.left(), (main.bottom() - footer_height).max(main.top())),
+            main.max,
+        );
+        let transcript = egui::Rect::from_min_max(
+            main.min,
+            egui::pos2(main.right(), (composer.top() - 8.0).max(main.top())),
+        );
+        let reading_width = main.width().min(760.0);
+        let reading_inset = (main.width() - reading_width) / 2.0;
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(composer.shrink2(egui::vec2(reading_inset, 0.0))),
+            |ui| {
+                ui.set_clip_rect(composer.intersect(ui.clip_rect()));
+                conversation_composer(ui, state, safe, busy, mutable, nodes, &mut action);
+            },
+        );
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(if wide || panel.is_none() {
+                transcript.shrink2(egui::vec2(reading_inset, 0.0))
+            } else {
+                transcript
+            }),
+            |ui| {
+                ui.set_clip_rect(transcript.intersect(ui.clip_rect()));
+                if !wide && let Some(panel) = panel {
+                    conversation_panel(ui, state, panel, true, mutable, nodes, &mut action);
+                } else {
+                    egui::ScrollArea::vertical()
+                        .id_salt(("conversation-transcript", &state.id))
+                        .stick_to_bottom(true)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.set_max_width(reading_width);
+                            ui.add_space(8.0);
+                            conversation_transcript(
+                                ui,
+                                state,
+                                self.session.as_ref(),
+                                mutable,
+                                nodes,
+                                &mut action,
+                            );
+                        });
+                }
+            },
+        );
+        if sidebar && let Some(panel) = panel {
+            let rect =
+                egui::Rect::from_min_max(egui::pos2(main.right() + 20.0, bounds.top()), bounds.max);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+                conversation_panel(
+                    ui,
+                    state,
+                    panel,
+                    panel != ConversationPanel::Details,
+                    mutable,
+                    nodes,
+                    &mut action,
+                );
+            });
+        }
         match action {
             Some(ConversationUiAction::New) => {
                 self.conversation = ConversationState {
@@ -486,7 +507,10 @@ impl AttentionApp {
                     &context,
                 );
             }
-            Some(ConversationUiAction::Select(id)) => self.select_conversation_task(id, &context),
+            Some(ConversationUiAction::Select(id)) => {
+                self.conversation.panel = None;
+                self.select_conversation_task(id, &context);
+            }
             Some(ConversationUiAction::Legacy(id)) => {
                 self.conversation.open = false;
                 intents.push(OperatorIntent::Select {
@@ -500,6 +524,7 @@ impl AttentionApp {
                 }
             }
             Some(ConversationUiAction::Send | ConversationUiAction::Preview) => {
+                self.conversation.panel = None;
                 if let Some(view) = &self.conversation.view {
                     let request = ApiRequest::ConversationTurn(ConversationTurnRequest {
                         command_id: engineering_command_id(),
@@ -528,6 +553,7 @@ impl AttentionApp {
                     self.send_conversation_mutation(request, &context);
                 }
             }
+            Some(ConversationUiAction::Example(text)) => self.conversation.text = text.into(),
             None => {}
         }
     }
@@ -544,7 +570,447 @@ enum ConversationUiAction {
     Preview,
     Retry,
     Confirm,
+    Example(&'static str),
 }
+fn conversation_composer(
+    ui: &mut egui::Ui,
+    state: &mut ConversationState,
+    safe: bool,
+    busy: bool,
+    mutable: bool,
+    nodes: &mut Vec<UiNode>,
+    action: &mut Option<ConversationUiAction>,
+) {
+    ui.separator();
+    if let Some(error) = &state.error {
+        ui.add(egui::Label::new(format!("Request needs attention: {error}")).truncate())
+            .on_hover_text(error);
+    }
+    egui::Frame::group(ui.style())
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("conversation-composer-scroll")
+                .max_height(52.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let response = ui.add_enabled(
+                        state.pending.is_none() && !state.in_flight,
+                        egui::TextEdit::multiline(&mut state.text)
+                            .id_salt("conversation-text")
+                            .desired_rows(2)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("What would you like to organise?"),
+                    );
+                    observe(
+                        response.rect.intersect(ui.clip_rect()),
+                        "bokkie.conversation.text",
+                        "Message to Bokkie",
+                        UiRole::Section,
+                        response.enabled(),
+                        nodes,
+                    );
+                });
+            let available = state
+                .view
+                .as_ref()
+                .is_some_and(|view| view.runtime_available);
+            ui.horizontal_wrapped(|ui| {
+                if state.pending.is_some() {
+                    if button(
+                        ui,
+                        "bokkie.conversation.retry",
+                        "Retry saved request",
+                        safe && !busy,
+                        nodes,
+                    ) {
+                        *action = Some(ConversationUiAction::Retry);
+                    }
+                    ui.small("Retry the saved request.");
+                } else {
+                    if button(
+                        ui,
+                        "bokkie.conversation.send",
+                        "Send message",
+                        mutable
+                            && available
+                            && !state.text.trim().is_empty()
+                            && state.text.chars().count() <= 8_192,
+                        nodes,
+                    ) {
+                        *action = Some(ConversationUiAction::Send);
+                    }
+                    if busy {
+                        ui.small("Bokkie is preparing a response…");
+                    }
+                }
+            });
+        });
+}
+
+fn conversation_panel(
+    ui: &mut egui::Ui,
+    state: &mut ConversationState,
+    panel: ConversationPanel,
+    show_back: bool,
+    mutable: bool,
+    nodes: &mut Vec<UiNode>,
+    action: &mut Option<ConversationUiAction>,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(match panel {
+            ConversationPanel::Tasks => "Tasks and drafts",
+            ConversationPanel::History => "Recent conversations",
+            ConversationPanel::Details => "Task details",
+        });
+        if show_back
+            && button(
+                ui,
+                "bokkie.conversation.panel-back",
+                "Back to chat",
+                true,
+                nodes,
+            )
+        {
+            state.panel = None;
+        }
+    });
+    ui.separator();
+    egui::ScrollArea::vertical()
+        .id_salt("conversation-context")
+        .auto_shrink([false, false])
+        .show(ui, |ui| match panel {
+            ConversationPanel::History => {
+                for summary in &state.history {
+                    let label = if summary.last_text.is_empty() {
+                        "Untitled conversation"
+                    } else {
+                        &summary.last_text
+                    };
+                    if button(
+                        ui,
+                        &format!("bokkie.conversation.history.{}", summary.id),
+                        &label.chars().take(90).collect::<String>(),
+                        !state.in_flight && state.pending.is_none(),
+                        nodes,
+                    ) {
+                        *action = Some(ConversationUiAction::Open(summary.id.clone()));
+                    }
+                    ui.add_space(8.0);
+                }
+                if state.history.is_empty() {
+                    ui.label("Your saved conversations will appear here.");
+                }
+            }
+            ConversationPanel::Tasks => {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut state.query)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("Search task names and descriptions"),
+                );
+                observe(
+                    response.rect,
+                    "bokkie.conversation.search",
+                    "Search all tasks",
+                    UiRole::Section,
+                    true,
+                    nodes,
+                );
+                if button(
+                    ui,
+                    "bokkie.conversation.search-submit",
+                    "Search tasks",
+                    !state.catalogue_busy,
+                    nodes,
+                ) {
+                    *action = Some(ConversationUiAction::Search);
+                }
+                if state.catalogue_busy {
+                    ui.label("Searching…");
+                }
+                for entry in &state.catalogue {
+                    ui.add_space(8.0);
+                    catalogue_row(ui, entry, "catalogue", mutable, nodes, action);
+                    ui.separator();
+                }
+                if state.catalogue.is_empty() && !state.catalogue_busy {
+                    ui.label("No matching tasks. Start a conversation to draft one.");
+                }
+                if state.next_after.is_some()
+                    && button(
+                        ui,
+                        "bokkie.conversation.more",
+                        "More tasks",
+                        !state.catalogue_busy,
+                        nodes,
+                    )
+                {
+                    *action = Some(ConversationUiAction::More);
+                }
+            }
+            ConversationPanel::Details => {
+                if let Some(view) = &state.view {
+                    if let Some(task) = &view.task {
+                        task_detail(ui, task, nodes);
+                        if button(
+                            ui,
+                            "bokkie.conversation.preview",
+                            "Preview this task",
+                            mutable && view.runtime_available,
+                            nodes,
+                        ) {
+                            *action = Some(ConversationUiAction::Preview);
+                        }
+                    } else if let Some(task_id) = &view.selected_task_id
+                        && button(
+                            ui,
+                            "bokkie.conversation.legacy-open",
+                            "Open existing task details and actions",
+                            true,
+                            nodes,
+                        )
+                    {
+                        *action = Some(ConversationUiAction::Legacy(task_id.clone()));
+                    }
+                }
+            }
+        });
+}
+
+fn conversation_transcript(
+    ui: &mut egui::Ui,
+    state: &ConversationState,
+    session: Option<&ApiSession>,
+    mutable: bool,
+    nodes: &mut Vec<UiNode>,
+    action: &mut Option<ConversationUiAction>,
+) {
+    let Some(view) = &state.view else {
+        ui.heading("What would you like to organise?");
+        ui.label(if session.is_some() {
+            "Loading your conversation…"
+        } else {
+            "Connecting to Bokkie. Your draft stays here while the service reconnects."
+        });
+        return;
+    };
+    if !view.runtime_available {
+        ui.label("Conversation runtime unavailable. Existing tasks and saved conversations remain readable.");
+    }
+    if !view.notes_available {
+        ui.label("Local note execution is unavailable in this runtime.");
+    }
+    if view.messages.is_empty() {
+        ui.add_space(32.0);
+        ui.heading("What would you like to organise?");
+        ui.label("Draft a local note, find a task, or refine its instructions and timing.");
+        ui.add_space(16.0);
+        if view.notes_available {
+            for (id, label, text) in [
+                (
+                    "note",
+                    "Keep a local note",
+                    "Create a local note called Weekly priorities with the text: Review my priorities for the week.",
+                ),
+                (
+                    "schedule",
+                    "Plan a recurring note",
+                    "Draft a local note for every Monday at 9 am Australia/Adelaide with the text: Review my priorities for the week.",
+                ),
+            ] {
+                if button(
+                    ui,
+                    &format!("bokkie.conversation.example.{id}"),
+                    label,
+                    state.pending.is_none() && !state.in_flight,
+                    nodes,
+                ) {
+                    *action = Some(ConversationUiAction::Example(text));
+                }
+            }
+            ui.small("Examples fill the message box for you to edit and send.");
+        }
+        ui.add_space(24.0);
+    }
+    if let Some(task_id) = &view.selected_task_id {
+        let name = view
+            .task
+            .as_ref()
+            .and_then(|task| task.candidate.as_ref().or(task.active.as_ref()))
+            .map(|revision| revision.definition.name.as_str())
+            .unwrap_or(task_id);
+        let label = format!("Selected task: {name}");
+        let response = ui.add(egui::Label::new(egui::RichText::new(&label).strong()).wrap());
+        observe(
+            response.rect,
+            "bokkie.conversation.selected",
+            &label,
+            UiRole::Section,
+            true,
+            nodes,
+        );
+        ui.add_space(12.0);
+    }
+    for (index, message) in view.messages.iter().enumerate() {
+        if message.role == "system" {
+            egui::CollapsingHeader::new("Task activity details")
+                .id_salt(("conversation-activity", &view.id, index))
+                .show(ui, |ui| {
+                    let response = ui.add(egui::Label::new(&message.text).wrap().selectable(true));
+                    observe(
+                        response.rect,
+                        &format!("bokkie.conversation.message.{index}"),
+                        &message.text,
+                        UiRole::Section,
+                        true,
+                        nodes,
+                    );
+                });
+            continue;
+        }
+        egui::Frame::new()
+            .fill(if message.role == "user" {
+                ui.visuals().faint_bg_color
+            } else {
+                egui::Color32::TRANSPARENT
+            })
+            .corner_radius(10.0)
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.strong(match message.role.as_str() {
+                    "user" => "You",
+                    "system" => "Task activity",
+                    _ => "Bokkie",
+                });
+                let response = ui.add(egui::Label::new(&message.text).wrap().selectable(true));
+                observe(
+                    response.rect,
+                    &format!("bokkie.conversation.message.{index}"),
+                    &message.text,
+                    UiRole::Section,
+                    true,
+                    nodes,
+                );
+            });
+        ui.add_space(12.0);
+    }
+    if !view.candidates.is_empty() {
+        ui.strong("Choose the task you mean");
+    }
+    for candidate in &view.candidates {
+        catalogue_row(ui, candidate, "candidate", mutable, nodes, action);
+    }
+    if view.review.is_some() {
+        // Staleness is not proof of confirmation: a different operator or a
+        // session change can invalidate a review without accepting its action.
+        if review_context_is_current(view, session) {
+            review_card(ui, view, session, mutable, nodes, action);
+        } else {
+            egui::CollapsingHeader::new("Previous review — no longer actionable")
+                .id_salt("previous-conversation-review")
+                .show(ui, |ui| {
+                    review_card(ui, view, session, mutable, nodes, action)
+                });
+        }
+    }
+    if let Some(receipt) = &view.receipt {
+        ui.add_space(10.0);
+        let draft = view.task.as_ref().is_some_and(|task| {
+            task.id == receipt.task_id
+                && task.configuration_revision == receipt.configuration_revision
+                && task.status == bokkie_operator_api::ManagedTaskStatus::Draft
+        });
+        ui.strong(if draft {
+            "Draft saved"
+        } else {
+            "Configuration saved"
+        });
+        ui.small(if draft {
+            "This task is not active yet."
+        } else {
+            "Run status and results appear separately."
+        });
+        egui::CollapsingHeader::new("Saved receipt details")
+            .id_salt(("receipt-provenance", &receipt.command_id))
+            .show(ui, |ui| {
+                ui.label(format!("Task ID: {}", receipt.task_id));
+                ui.label(format!(
+                    "Configuration revision: {}",
+                    receipt.configuration_revision
+                ));
+                ui.label(format!("Command ID: {}", receipt.command_id));
+            });
+    }
+    if let Some(task) = &view.task
+        && let Some(run) = task.runs.iter().find(|run| run.result.is_some())
+    {
+        ui.add_space(16.0);
+        egui::Frame::group(ui.style())
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.strong("Latest task result");
+                ui.small(format!("{} · {}", run.state, local_time(run.scheduled_at)));
+                if let Some(result) = &run.result {
+                    let response = ui.add(egui::Label::new(result).wrap().selectable(true));
+                    observe(
+                        response.rect,
+                        &format!("bokkie.conversation.result.{}", run.obligation_id),
+                        result,
+                        UiRole::Section,
+                        true,
+                        nodes,
+                    );
+                }
+            });
+    }
+    if let Some(error) = &view.request_error {
+        ui.label(format!("Bokkie could not complete this turn: {error}"));
+    }
+    if view.busy {
+        ui.spinner();
+        ui.label("Bokkie is preparing a response. This conversation is saved.");
+    }
+    ui.add_space(12.0);
+}
+
+fn review_card(
+    ui: &mut egui::Ui,
+    view: &ConversationView,
+    session: Option<&ApiSession>,
+    mutable: bool,
+    nodes: &mut Vec<UiNode>,
+    action: &mut Option<ConversationUiAction>,
+) {
+    let Some(review) = &view.review else {
+        return;
+    };
+    egui::Frame::group(ui.style()).inner_margin(12.0).show(ui, |ui| {
+        ui.heading(match review.action { ConversationAction::Activate => "Review activation", ConversationAction::Pause => "Review pause", ConversationAction::Resume => "Review resume" });
+        ui.label(&review.explanation);
+        for blocker in &review.blockers { ui.label(format!("Unavailable: {blocker}")); }
+        if let Some(preview) = &review.preview {
+            definition(ui, &preview.definition);
+            for change in &preview.changes { ui.label(format!("Change: {change}")); }
+            for blocker in &preview.blockers { ui.label(format!("Unavailable: {blocker}")); }
+            for occurrence in &preview.occurrences { ui.label(format!("Scheduled: {}", local_time_in_zone(*occurrence, trigger_timezone(&preview.definition.trigger)))); }
+        }
+        egui::CollapsingHeader::new("Review provenance").id_salt(("review-provenance", &review.id)).show(ui, |ui| {
+            ui.label(format!("Task ID: {}", review.task_id));
+            ui.label(format!("Configuration revision: {}", review.configuration_revision));
+            ui.label(format!("Review ID: {}", review.id));
+            ui.label(format!("Process session: {}", review.session_id));
+            if let Some(preview) = &review.preview {
+                ui.label(format!("Definition revision: {}", preview.candidate_revision));
+                ui.label(format!("Capability profile revision: {}", preview.profile_revision));
+            }
+        });
+        if !session.is_some_and(|session| session.session_id() == review.session_id) { ui.label("This review belongs to an earlier session. Ask Bokkie for a fresh review."); }
+        if !view.task.as_ref().is_some_and(|task| task.configuration_revision == review.configuration_revision) { ui.label("This task has changed since this review. Ask Bokkie for a fresh preview before another action."); }
+        if button(ui, "bokkie.conversation.confirm", "Confirm reviewed action", mutable && review_is_current(view, session), nodes) { *action = Some(ConversationUiAction::Confirm); }
+        ui.small("Confirmation saves this change. It does not mean a run has completed.");
+    });
+}
+
 fn observe(
     rect: egui::Rect,
     id: &str,
@@ -576,7 +1042,10 @@ fn button(
 ) -> bool {
     let navigation = matches!(
         id,
-        "bokkie.conversation.back" | "bokkie.conversation.new" | "bokkie.conversation.engineering"
+        "bokkie.conversation.new"
+            | "bokkie.conversation.history"
+            | "bokkie.conversation.details"
+            | "bokkie.conversation.panel-back"
     );
     let wrap = if navigation {
         let text_width = ui
@@ -727,18 +1196,25 @@ fn recurring_description(expression: &str, timezone: &str) -> String {
     simple().unwrap_or_else(|| format!("Custom recurring schedule ({timezone}). Use the upcoming run dates to check the timing."))
 }
 
-fn review_is_current(view: &ConversationView, session: Option<&ApiSession>) -> bool {
+fn review_context_is_current(view: &ConversationView, session: Option<&ApiSession>) -> bool {
     let Some(review) = &view.review else {
         return false;
     };
     session.is_some_and(|session| {
         session.matches(&view.service) && session.session_id() == review.session_id
-    }) && !view.busy
-        && view.selected_task_id.as_deref() == Some(&review.task_id)
+    }) && view.selected_task_id.as_deref() == Some(&review.task_id)
         && view.task.as_ref().is_some_and(|task| {
             task.id == review.task_id
                 && task.configuration_revision == review.configuration_revision
         })
+}
+
+fn review_is_current(view: &ConversationView, session: Option<&ApiSession>) -> bool {
+    let Some(review) = &view.review else {
+        return false;
+    };
+    review_context_is_current(view, session)
+        && !view.busy
         && review.blockers.is_empty()
         && review.preview.as_ref().is_none_or(|preview| {
             preview.blockers.is_empty()
@@ -773,18 +1249,25 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
     }
     for run in &task.runs {
         egui::CollapsingHeader::new(format!(
-            "{} · {} · revision {}",
+            "{} · {}",
             run.state,
-            local_time(run.scheduled_at),
-            run.definition_revision
+            chrono::DateTime::from_timestamp(run.scheduled_at, 0)
+                .map(|date| date
+                    .with_timezone(&chrono_tz::Australia::Adelaide)
+                    .format("%d %b, %H:%M")
+                    .to_string())
+                .unwrap_or_else(|| "Unknown time".into())
         ))
+        .id_salt(("task-run", &run.obligation_id))
         .default_open(run.result.is_some())
         .show(ui, |ui| {
+            ui.add(egui::Label::new(local_time(run.scheduled_at)).wrap());
+            ui.small(format!("Definition revision {}", run.definition_revision));
             if let Some(result) = &run.result {
                 let response = ui.add(egui::Label::new(result).wrap().selectable(true));
                 observe(
                     response.rect,
-                    &format!("bokkie.conversation.result.{}", run.obligation_id),
+                    &format!("bokkie.conversation.history-result.{}", run.obligation_id),
                     result,
                     UiRole::Section,
                     true,
@@ -866,6 +1349,51 @@ mod tests {
             receipt: None,
         }
     }
+    #[test]
+    fn composer_retains_send_control_with_a_long_multiline_draft() {
+        for width in [340.0, 440.0, 760.0] {
+            let context = egui::Context::default();
+            let mut state = ConversationState {
+                text: "A long line in an unsent local note.\n".repeat(150),
+                ..Default::default()
+            };
+            for _ in 0..3 {
+                let mut nodes = Vec::new();
+                context
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 138.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            conversation_composer(
+                                ui, &mut state, true, false, true, &mut nodes, &mut None,
+                            )
+                        },
+                    )
+                    .textures_delta
+                    .clear();
+                for id in ["bokkie.conversation.text", "bokkie.conversation.send"] {
+                    let node = nodes
+                        .iter()
+                        .find(|node| node.id == SemanticUiId::new(id))
+                        .unwrap();
+                    assert!(
+                        node.rect.max_y <= 138.0,
+                        "{id} below composer at {width}: {:?}",
+                        node.rect
+                    );
+                    assert!(node.rect.max_x <= width, "{id} overflows at {width}");
+                }
+            }
+            assert!(state.text.contains("A long line"));
+            assert!(state.pending.is_none());
+        }
+    }
+
     #[test]
     fn retained_turn_reconciles_only_its_durable_message() {
         let request = ApiRequest::ConversationTurn(ConversationTurnRequest {
@@ -1019,6 +1547,10 @@ mod tests {
         assert!(!review_is_current(&changed, Some(&session("current"))));
         changed = current.clone();
         changed.busy = true;
+        assert!(review_context_is_current(
+            &changed,
+            Some(&session("current"))
+        ));
         assert!(!review_is_current(&changed, Some(&session("current"))));
         changed = current;
         changed
@@ -1027,8 +1559,72 @@ mod tests {
             .unwrap()
             .blockers
             .push("Unavailable".into());
+        assert!(review_context_is_current(
+            &changed,
+            Some(&session("current"))
+        ));
         assert!(!review_is_current(&changed, Some(&session("current"))));
     }
+    #[test]
+    fn long_transcript_and_error_keep_composer_inside_the_viewport() {
+        for (width, height) in [(1440.0, 800.0), (480.0, 700.0), (390.0, 650.0)] {
+            let context = egui::Context::default();
+            let mut app = super::super::tests::test_app();
+            let mut current = view("chat", "current", 1);
+            current.messages = (0..30)
+                .map(|index| ConversationMessage {
+                    request_id: format!("request-{index}"),
+                    role: if index % 2 == 0 {
+                        "user".into()
+                    } else {
+                        "assistant".into()
+                    },
+                    text: "Long conversation text that should remain in the transcript. "
+                        .repeat(20),
+                })
+                .collect();
+            app.session = Some(session("current"));
+            app.conversation.view = Some(current);
+            app.conversation.error = Some(
+                "A recoverable connection failure with detailed diagnostic context. ".repeat(20),
+            );
+            app.conversation.text = "Keep this unsent draft.\n".repeat(150);
+            for _ in 0..3 {
+                let mut nodes = Vec::new();
+                context
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, height),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.show_conversation(ui, &mut nodes, &mut Vec::new()),
+                    )
+                    .textures_delta
+                    .clear();
+                for id in ["bokkie.conversation.text", "bokkie.conversation.send"] {
+                    let node = nodes
+                        .iter()
+                        .find(|node| node.id == SemanticUiId::new(id))
+                        .unwrap();
+                    assert!(
+                        node.rect.max_y <= height,
+                        "{id} below viewport at {width}: {:?}",
+                        node.rect
+                    );
+                    assert!(
+                        node.rect.min_y >= height - 190.0,
+                        "{id} is not anchored at {width}: {:?}",
+                        node.rect
+                    );
+                    assert!(node.rect.max_x <= width, "{id} overflows at {width}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn long_candidates_messages_and_definition_fit_narrow_viewport() {
         for width in [390.0, 480.0] {

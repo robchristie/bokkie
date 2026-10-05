@@ -307,7 +307,7 @@ impl AttentionApp {
             model.mark_stale(error);
         }
         let mut app = Self {
-            conversation: conversation_ui::ConversationState::default(),
+            conversation: conversation_ui::ConversationState::home(),
             engineering_draft: None,
             engineering_saved_notice: false,
             workspace: operator_workspace(),
@@ -1189,6 +1189,7 @@ impl AttentionApp {
                     }
                 }
                 OperatorIntent::Navigate(pane) => {
+                    self.conversation.open = false;
                     self.collection = pane;
                     self.workspace.activate(pane);
                 }
@@ -1303,6 +1304,29 @@ impl AttentionApp {
         );
     }
 
+    fn show_home_navigation(
+        &mut self,
+        ui: &mut egui::Ui,
+        intents: &mut Vec<OperatorIntent>,
+        nodes: &mut Vec<UiNode>,
+    ) {
+        if engineering_button(ui, "bokkie.home.tasks", "Tasks", true, nodes) {
+            self.open_conversation_tasks(ui.ctx());
+        }
+        let label = format!("Needs attention · {}", self.model.exceptions().count());
+        let response = ui.selectable_label(false, &label);
+        record_navigation(
+            &response,
+            "bokkie.collection.attention",
+            &label,
+            false,
+            nodes,
+        );
+        if response.clicked() {
+            intents.push(OperatorIntent::Navigate(INBOX_PANE_ID));
+        }
+    }
+
     fn confirmation_submit_unavailable_reason(
         &self,
         confirmation: &Confirmation,
@@ -1352,25 +1376,33 @@ impl eframe::App for AttentionApp {
         let mut text_observations = Vec::new();
         let mut raw_presentations = Vec::new();
         let mut virtualisation = VirtualisationObservation::default();
+        let narrow_header = root_ui.max_rect().width() < 760.0;
         let bar = egui::Panel::top("bokkie-application-bar")
             .frame(application_bar_frame(&tokens))
-            .exact_size(application_bar_height(&tokens, self.preferences.font_scale))
+            .exact_size(
+                application_bar_height(&tokens, self.preferences.font_scale)
+                    * if narrow_header { 2.0 } else { 1.0 },
+            )
             .show(root_ui, |ui| {
-                ui.horizontal_centered(|ui| {
+                ui.horizontal(|ui| {
+                    ui.set_min_height(
+                        application_bar_height(&tokens, self.preferences.font_scale) - 4.0,
+                    );
                     ui.heading("Bokkie");
                     if engineering_button(
                         ui,
                         "bokkie.conversation.open",
-                        "Conversation",
+                        "Home",
                         !self.model.action_busy,
                         &mut semantic_nodes,
                     ) {
                         intents.push(OperatorIntent::OpenConversation(None));
                     }
                     ui.add_space(12.0);
-                    if !self.conversation.open
-                        && ui.max_rect().width() - 32.0 >= NARROW_WORKSPACE_WIDTH
-                    {
+                    if !narrow_header && self.conversation.open {
+                        self.show_home_navigation(ui, &mut intents, &mut semantic_nodes);
+                    }
+                    if !self.conversation.open && !narrow_header {
                         show_collection_tabs(
                             ui,
                             self.collection,
@@ -1428,6 +1460,21 @@ impl eframe::App for AttentionApp {
                         .on_hover_text(connection_label(&self.model));
                     });
                 });
+                if narrow_header {
+                    ui.horizontal(|ui| {
+                        if self.conversation.open {
+                            self.show_home_navigation(ui, &mut intents, &mut semantic_nodes);
+                        } else {
+                            show_collection_tabs(
+                                ui,
+                                self.collection,
+                                self.model.exceptions().count(),
+                                &mut intents,
+                                &mut semantic_nodes,
+                            );
+                        }
+                    });
+                }
             });
         let mut bar_node = UiNode::container(
             SemanticUiId::new("bokkie.application-bar"),
@@ -1449,15 +1496,25 @@ impl eframe::App for AttentionApp {
                     self.show_conversation(ui, &mut semantic_nodes, &mut intents);
                     return;
                 }
-                if engineering_button(
-                    ui,
-                    "bokkie.engineering.new",
-                    "Engineering intake",
-                    !self.model.action_busy,
+                let advanced = egui::CollapsingHeader::new("Advanced tools").show(ui, |ui| {
+                    ui.label("Engineering supervision uses the separately configured runtime.");
+                    if engineering_button(
+                        ui,
+                        "bokkie.engineering.new",
+                        "Engineering intake",
+                        !self.model.action_busy,
+                        &mut semantic_nodes,
+                    ) {
+                        intents.push(OperatorIntent::ComposeEngineering);
+                    }
+                });
+                record_navigation(
+                    &advanced.header_response,
+                    "bokkie.advanced.open",
+                    "Advanced tools",
+                    advanced.body_returned.is_some(),
                     &mut semantic_nodes,
-                ) {
-                    intents.push(OperatorIntent::ComposeEngineering);
-                }
+                );
                 if self.engineering_saved_notice {
                     ui.vertical(|ui| {
                         ui.label(
@@ -1476,7 +1533,7 @@ impl eframe::App for AttentionApp {
                     ui.separator();
                 }
                 let narrow = ui.available_width() < NARROW_WORKSPACE_WIDTH;
-                if narrow {
+                if narrow && self.workspace.active_pane == TIMELINE_PANE_ID {
                     show_collection_navigation(
                         ui,
                         self.collection,
@@ -3520,6 +3577,7 @@ fn observe_engineering_control(
     let parent = if id == "bokkie.engineering.new"
         || id == "bokkie.engineering.dismiss-saved"
         || id == "bokkie.conversation.open"
+        || id.starts_with("bokkie.home.")
     {
         SemanticUiId::root()
     } else {
@@ -4645,6 +4703,20 @@ mod tests {
     }
 
     #[test]
+    fn attention_navigation_leaves_home_and_home_returns_without_a_model_turn() {
+        let mut app = test_app();
+        app.conversation = conversation_ui::ConversationState::home();
+        let context = egui::Context::default();
+        app.apply_intents(vec![OperatorIntent::Navigate(INBOX_PANE_ID)], &context);
+        assert!(!app.conversation.open);
+        assert_eq!(app.collection, INBOX_PANE_ID);
+        app.apply_intents(vec![OperatorIntent::OpenConversation(None)], &context);
+        assert!(app.conversation.open);
+        assert!(!app.model.action_busy);
+        assert!(app.receiver.try_recv().is_err());
+    }
+
+    #[test]
     fn engineering_cancellation_opens_a_separate_confirmation_without_dispatch() {
         let mut app = test_app();
         let expected = bokkie_operator_api::EngineeringOutcomePrecondition {
@@ -5213,24 +5285,23 @@ mod tests {
                     .textures_delta
                     .clear();
             }
-            let engineering = nodes
+            let history = nodes
                 .iter()
-                .find(|node| node.id == SemanticUiId::new("bokkie.conversation.engineering"))
+                .find(|node| node.id == SemanticUiId::new("bokkie.conversation.history"))
                 .unwrap();
-            let back = nodes
+            let new = nodes
                 .iter()
-                .find(|node| node.id == SemanticUiId::new("bokkie.conversation.back"))
+                .find(|node| node.id == SemanticUiId::new("bokkie.conversation.new"))
                 .unwrap();
             assert_eq!(
-                engineering.rect.max_y - engineering.rect.min_y,
-                back.rect.max_y - back.rect.min_y,
+                history.rect.max_y - history.rect.min_y,
+                new.rect.max_y - new.rect.min_y,
                 "navigation label wrapped inside its button at {width}"
             );
             for id in [
                 "bokkie.conversation",
                 "bokkie.conversation.new",
-                "bokkie.conversation.engineering",
-                "bokkie.conversation.search",
+                "bokkie.conversation.history",
                 "bokkie.conversation.text",
                 "bokkie.conversation.send",
             ] {

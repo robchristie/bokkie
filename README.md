@@ -133,7 +133,7 @@ separate, non-installed example and does not replace the kernel service.
 
 ## Conversational task management
 
-Choose **Conversation** in the attention UI to describe, find, refine, preview,
+Open Bokkie’s **Home** to describe, find, refine, preview,
 activate, revise or pause/resume a managed task. The first executable capability
 creates durable local notes; research/email capabilities remain drafts with
 explicit blockers. One private conversation profile and `--enable-local-notes`
@@ -160,7 +160,7 @@ cargo run --locked --bin bokkie -- \
   --ui-dir /absolute/bokkie/apps/bokkie-attention-ui/web
 ```
 
-Open the same origin at `/ui/`, choose **Engineering intake**, and describe the outcome in
+Open the same origin at `/ui/`, open **Needs attention → Advanced tools → Engineering intake**, and describe the outcome in
 ordinary language. The saved acknowledgement identifies the durable task. Its
 detail shows responsibility, the next action and acceptance, and supports linked
 follow-up messages and cancellation. The operator configures execution scope and
@@ -190,8 +190,10 @@ application campaign closure, see the [delivery hardening guide](docs/engineerin
 
 The first operator workspace is a separate Rust application that reads Bokkie's
 HTTP projections; it never opens SQLite directly and cannot create a second
-state path. Its default attention desk pairs one collection list with one detail
-surface.
+state path. Its default [conversation home](docs/conversation-home.md) keeps the message
+composer reachable while transcript and task context scroll independently.
+Tasks opens the authoritative task catalogue; Needs attention opens the
+operational desk, pairing one collection list with one detail surface.
 Needs attention shows exceptions; Tasks shows configured work, including
 Garden Bokkie, with generated work accessible through its parent task.
 The task model is a projection of existing obligations and gardener bindings.
