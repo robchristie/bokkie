@@ -8,6 +8,10 @@ import { chromium } from 'playwright';
 import { captureSettled } from './ui-capture-settling.mjs';
 
 const liveModel = process.argv.includes('--live-model');
+const modelBudget = liveModel ? Number(process.env.BOKKIE_REMINDER_MODEL_BUDGET ?? 16) : 0;
+if (liveModel && (!Number.isInteger(modelBudget) || modelBudget < 1 || modelBudget > 16)) {
+  throw Error('The live model budget must be an integer within 1..16');
+}
 const evidence = resolve(process.env.BOKKIE_REMINDER_EVIDENCE ?? `.ui-qualification-runtime/reminders${liveModel ? '-live' : ''}`);
 await mkdir(evidence, { recursive: true });
 const fixtureRoot = join(evidence, `state-${randomUUID()}`);
@@ -22,7 +26,7 @@ const report = { source: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 
   tracked_diff_sha256: createHash('sha256').update(execFileSync('git', ['diff', '--binary'])).digest('hex'),
   started_at: new Date().toISOString(),
   mode: liveModel ? 'live-model; synthetic transport and recipients; no external mail' : 'synthetic-peer-and-transport; no live model or external mail',
-  budget: { model_dispatches: liveModel ? 16 : 0, seconds: liveModel ? 900 : 300 }, checks: [], captures: [], errors: [], passed: false };
+  budget: { model_dispatches: modelBudget, seconds: liveModel ? 900 : 300 }, checks: [], captures: [], errors: [], passed: false };
 for (const file of ['target/debug/bokkie-conversation-fixture', 'apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm']) {
   report[file] = createHash('sha256').update(await readFile(file)).digest('hex');
 }
