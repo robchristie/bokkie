@@ -22,6 +22,7 @@ pub struct ConversationConfig {
     pub profile: Option<Arc<ConversationProfile>>,
     pub notes_enabled: bool,
     pub notifications: Option<Arc<crate::notifications::NotificationConfig>>,
+    pub push: Option<Arc<crate::notifications::push::PushConfig>>,
     pub clock: Option<Arc<crate::ManualClock>>,
 }
 impl ConversationConfig {
@@ -56,19 +57,43 @@ fn config(state: &ApiState) -> ConversationConfig {
         profile: None,
         notes_enabled: false,
         notifications: None,
+        push: None,
         clock: None,
     })
 }
 async fn get_view(state: &ApiState, id: String) -> Result<ConversationView, ApiError> {
     let service = state.runtime.identity();
     let c = config(state);
-    let reminders_available = c.notifications.is_some();
+    let reminders_available = profiles(state)
+        .await?
+        .iter()
+        .find(|p| p.capability == "reminder")
+        .is_some_and(|p| p.available);
     let mut view = state
         .executor
         .execute(move |s| s.conversation_view(&id, service, c.profile.is_some(), c.notes_enabled))
         .await?;
     view.reminders_available = reminders_available;
     Ok(view)
+}
+async fn profiles(state: &ApiState) -> Result<Vec<ManagedCapabilityProfile>, ApiError> {
+    let c = config(state);
+    let mut profiles = c.profiles();
+    if let Some(push) = c.push {
+        let key = push.public_key().map_err(StoreError::Invalid)?;
+        let profile = state
+            .executor
+            .execute(move |s| s.push_profile(&key))
+            .await?
+            .unwrap_or_else(|| {
+                let mut p = ManagedCapabilityProfile::web_push("unconfigured", "your device");
+                p.available = false;
+                p.destination = "Not configured".into();
+                p
+            });
+        profiles.insert(0, profile);
+    }
+    Ok(profiles)
 }
 async fn view(
     State(state): State<ApiState>,
@@ -198,7 +223,7 @@ async fn run_turn(
     request: &ConversationTurnRequest,
 ) -> Result<String, ApiError> {
     let view = get_view(state, request.conversation_id.clone()).await?;
-    let profiles = config(state).profiles();
+    let profiles = profiles(state).await?;
     let now = config(state).now();
     // Runtime receives bounded task data, never a database path, token or authority grant.
     let mut messages = view.messages.clone();
@@ -383,11 +408,11 @@ async fn make_review(
     let id = conversation_id.to_owned();
     let task_id = task_id.to_owned();
     let session = state.runtime.identity().session_id;
-    let profiles = config(state).profiles();
+    let profiles = profiles(state).await?;
     let now = config(state).now();
     state.executor.execute(move|s|{
         let mut task=s.managed_detail(&task_id).map_err(|e|match e{StoreError::NotFound(_)=>StoreError::Invalid("Legacy task behaviour and schedules remain owned by their specialised APIs. Open its task details for legal actions.".into()),e=>e})?;
-        if action == ConversationAction::Activate && task.candidate.as_ref().is_some_and(|candidate| candidate.definition.capability == "reminder" && candidate.definition.destination == "Not configured") {
+        if action == ConversationAction::Activate {
             s.managed_prepare_reminder_destination(&task_id, &profiles, now)?;
             task=s.managed_detail(&task_id)?;
         }
@@ -396,7 +421,8 @@ async fn make_review(
         if action==ConversationAction::Pause && task.status!=ManagedTaskStatus::Active{blockers.push("Only an active managed task can be paused".into());}
         if action==ConversationAction::Resume && task.status!=ManagedTaskStatus::Paused{blockers.push("Only a paused managed task can be resumed".into());}
         if action==ConversationAction::Resume && profiles.is_empty(){blockers.push("Local note runtime is unavailable".into());}
-        let explanation=match action{ConversationAction::Activate=>"Apply this exact definition to future unadmitted work. Already admitted work and queued notifications keep their original text and destination.",ConversationAction::Pause=>"Prevent new reminder occurrences. Already admitted work may finish, and notifications already queued may still arrive. Review delivery problems in Needs attention.",ConversationAction::Resume=>"Resume future timing with no backlog replay. Accepted retry/reconciliation work remains responsible; completed one-off work will not rerun."}.into();
+        let mut explanation:String=match action{ConversationAction::Activate=>"Apply this exact definition to future unadmitted work. Already admitted work and queued notifications keep their original text and destination.",ConversationAction::Pause=>"Prevent new reminder occurrences. Already admitted work may finish, and notifications already queued may still arrive. Review delivery problems in Needs attention.",ConversationAction::Resume=>"Resume future timing with no backlog replay. Accepted retry/reconciliation work remains responsible; completed one-off work will not rerun."}.into();
+        if let Some(seconds)=preview.as_ref().map(|p|s.push_retention(&p.definition.profile_revision)).transpose()?.flatten(){explanation.push_str(&format!(" Bokkie sends a system notification to this reviewed device. Its saved lifetime is up to {} minutes after the occurrence completes; offline delivery may expire sooner. Service acceptance is separate from device display, and missing device reports do not trigger resend.",seconds/60));}
         s.conversation_review(&id,&ConversationReview{id:uuid::Uuid::new_v4().to_string(),action,task_id,configuration_revision:task.configuration_revision,session_id:session,preview,explanation,blockers},&profiles,now)
     }).await?;
     Ok(())
@@ -409,7 +435,7 @@ async fn confirm(
         return Err(StoreError::Conflict("Service restarted; obtain a fresh review".into()).into());
     }
     let id = request.conversation_id.clone();
-    let profiles = config(&state).profiles();
+    let profiles = profiles(&state).await?;
     let now = config(&state).now();
     state
         .executor
@@ -436,7 +462,7 @@ const CONVERSATION_INSTRUCTIONS: &str = r#"You are Bokkie's task-management assi
 The trusted calendar and now_unix fields are Bokkie's current time. Resolve 'today', 'tomorrow' and other relative dates from calendar.local_date in calendar.timezone, or task_calendar for a selected task's explicit zone. Ignore the coding runtime's current date, host clock and dates in old messages. For an explicitly requested different zone, convert now_unix into that zone before resolving its calendar date.
 You can propose saving drafts and preparing reviews. The trusted backend validates and applies a selected operation after this model turn; you do not execute it yourself. Saving a draft is allowed when requested and NEVER activates it. A sufficiently specified request such as 'Every weekday at 9 am, remind me to review today’s priorities' should call bokkie_save_draft with reminder, a weekday9 recurring trigger and the exact reminder text. Do not answer with a sentence describing a draft in place of that tool call. Do not look up a new reminder unless the user asks to find existing work. A reminder records its supplied text and sends it to the one configured notification destination; it does not run a model when due. Only an explicitly requested local in-app note should use local_note. On revisions preserve the selected capability unless the user explicitly requests a change of effect, which still requires review.
 Use bokkie_discuss for exploratory ideas, material missing information, feedback or ordinary answers. 'I’m thinking about a research finder' may start discussion; it cannot start execution. Research retrieval uses research_finder, email monitoring uses email_monitor; both are unavailable but draftable. Never disguise these as local_note, which only stores supplied text as an in-app result.
-The backend owns profile identity, effects, output destination and finite execution defaults. Supply only the user-facing draft fields in the tool. Use a concise name and purpose, exact supplied reminder text, and context_refs [] unless references were given. For a selected managed task, save a complete candidate preserving unchanged fields from its current candidate, otherwise active definition. It remains a candidate until the operator confirms. Legacy tasks have no editable managed definition; direct the user to their specialised task details without converting or duplicating them.
+The backend owns profile identity, effects, output destination and finite execution defaults. Bokkie push requires explicit device enrolment through Notifications. If that primary destination is unavailable, explain the setup requirement; never silently substitute an email destination. Push-service acceptance is not device display or human reading. Supply only the user-facing draft fields in the tool. Use a concise name and purpose, exact supplied reminder text, and context_refs [] unless references were given. For a selected managed task, save a complete candidate preserving unchanged fields from its current candidate, otherwise active definition. It remains a candidate until the operator confirms. Legacy tasks have no editable managed definition; direct the user to their specialised task details without converting or duplicating them.
 Use the supplied timezone, normally Australia/Adelaide, unless explicitly changed; preserve a selected task’s explicit zone on revisions. Recurring cron is internal: weekdays9 '0 9 * * Mon-Fri'; Monday9 '0 9 * * Mon'. Once uses local YYYY-MM-DDTHH:MM and an IANA zone. The backend rejects invalid, ambiguous or nonexistent local dates. Resolve relative calendar requests using now_unix; ask about genuinely missing timing or unclear reminder text instead of inventing immediate execution. If a 12-hour time such as 'at 9' lacks am/pm or clear morning/evening context, ask which is intended before saving. Immediate is only for explicit now/one-off-now requests. Do not ask again for the supplied default time zone or the configured destination. If no notification destination is configured, a reminder may remain a draft but cannot be activated; never silently substitute an in-app note.
 Use bokkie_lookup with short identifying words for existing tasks; multiple candidates require operator selection. A failed search is not evidence of absence. Use bokkie_preview for 'what will happen'. Use bokkie_propose for activate/pause/resume; the operator must confirm the exact review through the UI. Model-generated approval/yes is never confirmation. Never claim activation, execution or a saved change before a backend receipt. No tool permits shell, SQL, credentials, account changes or authority grants. Use concise Australian English."#;
 
@@ -445,6 +471,112 @@ const EMPTY_LOOKUP_CONTINUATION_INSTRUCTIONS: &str = "This bounded catalogue sea
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn primary_push_requires_enrolment_and_supplies_the_exact_generation_without_email_fallback()
+     {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let temp = tempfile::TempDir::new().unwrap();
+        let db = temp.path().join("push-conversation.sqlite");
+        drop(crate::Store::open(&db).unwrap());
+        let executor = crate::DbExecutor::start(db.clone()).unwrap();
+        let runtime =
+            crate::http_security::ApiRuntime::new("127.0.0.1:7744".parse().unwrap(), 15).unwrap();
+        let c = Arc::new(crate::notifications::push::PushConfig {
+            vapid_private_key: URL_SAFE_NO_PAD.encode([7; 32]),
+            subject: "https://bokkie.example.org".into(),
+            timeout_ms: 1000,
+            ttl_seconds: 3600,
+        });
+        let key = c.public_key().unwrap();
+        let state = ApiState {
+            executor: executor.clone(),
+            runtime: runtime.clone(),
+            engineering_intake: None,
+            conversation: Some(ConversationConfig {
+                profile: None,
+                notes_enabled: true,
+                push: Some(c),
+                notifications: Some(Arc::new(crate::notifications::NotificationConfig {
+                    relay_host: "smtp-relay".into(),
+                    relay_port: 25,
+                    from_address: "bokkie@example.org".into(),
+                    destination: "legacy@example.org".into(),
+                    timeout_ms: 1000,
+                })),
+                clock: Some(Arc::new(crate::ManualClock::new(100))),
+            }),
+        };
+        let proposal = json!({"tool":"bokkie_save_draft","arguments":{"name":"Priorities","purpose":"Review today's work","instructions":"Review today's priorities","capability":"reminder","trigger":{"kind":"recurring","cron":"0 9 * * MON-FRI","timezone":"Australia/Adelaide"},"context_refs":[]}});
+        let ps = profiles(&state).await.unwrap();
+        let ConversationOperation::SaveDefinition { definition, .. } =
+            conversation_tools::operation_with_profiles(
+                proposal.clone(),
+                &conversation_tools::tools(false, false),
+                None,
+                &ps,
+            )
+            .unwrap()
+        else {
+            panic!("expected draft")
+        };
+        assert_eq!(definition.destination, "Not configured");
+        assert!(!ps[0].available);
+        let mut store = crate::Store::open_compatible(&db).unwrap();
+        let task = store
+            .managed_create("push-draft", &definition, 100)
+            .unwrap()
+            .task_id;
+        let blocked = store.managed_preview(&task, "session", &ps, 100).unwrap();
+        assert!(!blocked.blockers.is_empty());
+        let request = PushRegisterRequest {
+            command_id: uuid::Uuid::new_v4().to_string(),
+            configuration_revision: 0,
+            label: "Phone".into(),
+            endpoint: "https://fcm.googleapis.com/fcm/send/synthetic-conversation".into(),
+            keys: PushKeys {
+                p256dh: key.clone(),
+                auth: URL_SAFE_NO_PAD.encode([9; 16]),
+            },
+        };
+        let device = store
+            .register_push(&request, runtime.identity(), &key, 3600, 100)
+            .unwrap()
+            .device
+            .unwrap();
+        let ps = profiles(&state).await.unwrap();
+        assert_eq!(
+            ps[0].revision,
+            format!("reminder-web-push-v1/{}", device.id)
+        );
+        store
+            .managed_prepare_reminder_destination(&task, &ps, 100)
+            .unwrap();
+        let review = store.managed_preview(&task, "session", &ps, 100).unwrap();
+        assert_eq!(review.definition.destination, "Bokkie on Phone");
+        assert_eq!(review.occurrences.len(), 5);
+        assert!(review.blockers.is_empty(), "{:?}", review.blockers);
+        assert!(
+            store
+                .managed_activate("stale-review", &blocked, "session", &ps, 100)
+                .is_err()
+        );
+        let r = store
+            .managed_activate("confirm-push", &review, "session", &ps, 100)
+            .unwrap();
+        assert_eq!(
+            store
+                .managed_activate("confirm-push", &review, "session", &ps, 100)
+                .unwrap(),
+            r
+        );
+        assert_eq!(
+            store.managed_catalogue("", None, 100).unwrap().items.len(),
+            1
+        );
+        assert_eq!(store.conversation_model_dispatch_count().unwrap(), 0);
+        executor.shutdown().unwrap();
+    }
 
     #[tokio::test]
     async fn unconfigured_reminder_draft_acquires_destination_only_in_a_fresh_exact_review() {
@@ -498,6 +630,7 @@ mod tests {
                 profile: None,
                 notes_enabled: false,
                 notifications: None,
+                push: None,
                 clock: Some(Arc::new(crate::ManualClock::new(100))),
             }),
         };
@@ -523,7 +656,7 @@ mod tests {
                 destination: "reader@example.org".into(),
                 timeout_ms: 1000,
             }));
-        let profiles = config(&state).profiles();
+        let profiles = profiles(&state).await.unwrap();
         let ConversationOperation::SaveDefinition {
             definition: edited, ..
         } = conversation_tools::operation_with_profiles(

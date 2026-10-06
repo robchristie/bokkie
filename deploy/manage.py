@@ -6,6 +6,7 @@ container receives the Docker socket. A single foreground owner supervises the
 pair; Docker restart policies are deliberately disabled.
 """
 import argparse
+import base64
 import fcntl
 import hashlib
 import http.client
@@ -53,7 +54,7 @@ def load(root):
     config = json.loads((root / 'release.json').read_text())
     required = {'name', 'source', 'image', 'edge_image', 'hostname', 'uid', 'gid',
                 'data', 'web_auth', 'codex_auth', 'conversation_profile'}
-    if not required.issubset(config) or set(config) - required - {'notification_config'}:
+    if not required.issubset(config) or set(config) - required - {'notification_config', 'push_config'}:
         raise ValueError('release.json fields differ from the deployment contract')
     if not re.fullmatch(r'bokkie(?:-[a-z0-9]{1,24})?', config['name']):
         raise ValueError('invalid deployment name')
@@ -102,6 +103,29 @@ def load(root):
             raise ValueError('notification configuration fields differ from the SMTP contract')
         if notification['relay_host'] != 'smtp-relay' or type(notification['relay_port']) is not int or notification['relay_port'] != 25:
             raise ValueError('Nostromo reminders must use the existing internal smtp-relay:25')
+    if config.get('push_config') is not None:
+        if not isinstance(config['push_config'], str):
+            raise ValueError('push_config must be an absolute file path or null')
+        path = Path(config['push_config'])
+        if not path.is_absolute() or path.resolve() != path or not path.is_file():
+            raise ValueError('push_config must be a canonical regular file without symlinks')
+        if path.stat().st_size > 8192:
+            raise ValueError('push_config exceeds 8192 bytes')
+        push = json.loads(path.read_text())
+        if set(push) != {'vapid_private_key', 'subject', 'timeout_ms', 'ttl_seconds'}:
+            raise ValueError('push configuration fields differ from the VAPID contract')
+        key = push['vapid_private_key']
+        if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', key):
+            raise ValueError('push configuration requires a raw base64url P-256 private key')
+        decoded = base64.urlsafe_b64decode(key + '=')
+        if len(decoded) != 32 or base64.urlsafe_b64encode(decoded).decode().rstrip('=') != key:
+            raise ValueError('push private key has invalid encoding')
+        if push['subject'] != 'https://' + config['hostname']:
+            raise ValueError('Nostromo push contact must identify the configured Bokkie origin')
+        if type(push['timeout_ms']) is not int or not 100 <= push['timeout_ms'] <= 3000:
+            raise ValueError('push request deadline must be within 100..3000 ms')
+        if type(push['ttl_seconds']) is not int or not 60 <= push['ttl_seconds'] <= 86400:
+            raise ValueError('push retention must be within 60..86400 seconds')
     return config
 
 
@@ -137,6 +161,10 @@ def runtime(config, root):
              'Target': '/opt/conversation-profile.json', 'ReadOnly': True}]
         command += ['--conversation-profile', '/opt/conversation-profile.json']
     networks = {'proxy': {'Aliases': [name]}}
+    if config.get('push_config') is not None:
+        mounts.append({'Type': 'bind', 'Source': config['push_config'],
+                       'Target': '/opt/push-config.json', 'ReadOnly': True})
+        command += ['--push-config', '/opt/push-config.json']
     if config.get('notification_config') is not None:
         mounts.append({'Type': 'bind', 'Source': config['notification_config'],
                        'Target': '/opt/notification-config.json', 'ReadOnly': True})

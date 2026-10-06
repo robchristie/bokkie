@@ -2,7 +2,9 @@
 
 The attention UI's **Conversation** workspace supports drafting and managing
 versioned tasks. `reminder` saves the supplied text as an immutable occurrence
-result and a separate email delivery intent for the configured destination.
+result and a separate delivery intent for the explicitly reviewed destination.
+New reminders prefer the enrolled Bokkie Web Push device. Existing email
+definitions retain their recipient, profile and history.
 `local_note` keeps its established in-app result behaviour and sends no email.
 Neither browses pages, reads referenced documents, runs shell commands or invokes
 a model when due. Research finders and email monitors
@@ -17,7 +19,8 @@ definition revisions identify behaviour. Neither replaces obligation state,
 attempt, lease or engineering-contract revisions.
 
 Each scheduled occurrence has its own one-off kernel obligation, with a binding
-to the exact definition and its `local-note-v1` or `reminder-v1` profile. There is at most one
+to the exact definition and its `local-note-v1`, `reminder-v1` or device-specific
+`reminder-web-push-v1/<generation>` profile. There is at most one
 outstanding occurrence per task. Store creates and retires these obligations
 through the existing transitions; the existing scheduler admits notes only
 through the explicitly enabled capability adapter. Fake, gardener and engineering
@@ -55,6 +58,38 @@ one operator confirmation. Model-generated approval text grants no authority.
 Task change, receipts and projection events commit atomically.
 
 ## Timing, edits and responsibility
+
+Web Push uses one immutable subscription generation selected through Home's
+Notifications control. Registration and disabling require exact configuration
+revision fences and idempotent command identities. Endpoints, authentication
+secrets and VAPID private keys never enter model context or public task projections.
+The VAPID key persists across restart; incompatible rotation is rejected while
+a device is active. Disabling stops new admissions for that generation; admitted
+work retains its original responsibility. A new device requires explicit
+enrolment, then a fresh inactive task revision and exact confirmation before
+future occurrences use it. Existing email tasks are not implicitly converted.
+
+Each push intent pins that generation and an absolute expiry from occurrence
+completion (one hour in the supplied configuration). Retry sends only the
+remaining TTL, never extends it, and never changes the endpoint. 201 means
+accepted by the push service, not displayed. 429/5xx and pre-POST connection
+failures permit bounded retry; 404/410 invalidates the active generation and
+requires enrolment again. Lost or malformed replies after POST remain uncertain.
+Stable per-delivery Topic replaces an outstanding message where the provider
+supports the standard; the same notification tag and local receipt store reduce
+duplicate display. These are not exactly-once guarantees. Separate recurring
+occurrences have separate identities and cannot replace one another.
+
+The encrypted payload carries complete bounded text and exact task context, so
+the worker can display with Bokkie's page closed or its server unavailable.
+Device reports are monotonic, scoped to one saved intent and authenticated through
+the existing edge, origin and fresh mutation-token contract. Reports are queued
+locally if authentication or connectivity fails and retried on later app/worker
+activity; no polling or model invocation is introduced. Device display/opening
+evidence does not prove human reading, and absent evidence does not trigger resend.
+An expired or failed push offers Resolve without resending. Resending cannot
+extend an expired intent; a still-needed reminder requires a new explicit review.
+See [push qualification](push-evidence/README.md) for observed source limits.
 
 One-off triggers are immediate or an explicit local date/time in an IANA zone.
 Ambiguous or nonexistent one-off local times are rejected; choose another

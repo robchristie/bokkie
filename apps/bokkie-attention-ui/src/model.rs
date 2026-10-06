@@ -752,12 +752,19 @@ impl AppModel {
     }
 
     pub fn begin_confirmation(&mut self, action: LifecycleAction) -> Result<(), String> {
+        self.begin_confirmation_at(action, crate::app::current_unix_seconds())
+    }
+
+    fn begin_confirmation_at(&mut self, action: LifecycleAction, now: i64) -> Result<(), String> {
         if !self.connection.decisions_safe() || self.snapshot_busy || self.topic_busy {
             return Err("Refresh to current state before making a decision".to_owned());
         }
         let obligation = self
             .selected()
             .ok_or_else(|| "Select an obligation first".to_owned())?;
+        if let Some(reason) = notification_resend_unavailable(action, obligation, now) {
+            return Err(reason.to_owned());
+        }
         let capability = action.capability(obligation);
         if !capability.available {
             return Err(disabled_reason(&capability).to_owned());
@@ -808,7 +815,20 @@ impl AppModel {
             obligation_id: obligation.id.clone(),
             occurrence: obligation.occurrence,
             precondition,
-            consequence: consequence_label(&capability).to_owned(),
+            consequence: if obligation
+                .task
+                .as_ref()
+                .and_then(|task| task.notification.as_ref())
+                .is_some_and(|delivery| delivery.push.is_some())
+            {
+                match action {
+                    LifecycleAction::ReconcileNotification => "Resolve this delivery without sending again. Device reports remain separate evidence; this records your acknowledgement.".to_owned(),
+                    LifecycleAction::ResendNotification => "Try sending this same reminder again. The previous attempt may have been accepted, so this can deliver a duplicate alert.".to_owned(),
+                    _ => consequence_label(&capability).to_owned(),
+                }
+            } else {
+                consequence_label(&capability).to_owned()
+            },
             gardener,
             actor: "operator".to_owned(),
             note: String::new(),
@@ -834,6 +854,11 @@ impl AppModel {
         if !self.connection.decisions_safe() {
             return Err("Retained data may be stale; refresh before deciding".to_owned());
         }
+        if let Some(reason) =
+            notification_resend_unavailable(action, obligation, crate::app::current_unix_seconds())
+        {
+            return Err(reason.to_owned());
+        }
         let capability = action.capability(obligation);
         capability
             .available
@@ -853,6 +878,19 @@ impl AppModel {
                     == Some(&confirmation.precondition)
         })
     }
+}
+
+/// Conservative device-clock hint. The server remains authoritative for the saved deadline.
+pub fn notification_resend_unavailable(
+    action: LifecycleAction,
+    obligation: &OperatorObligation,
+    now: i64,
+) -> Option<&'static str> {
+    (action == LifecycleAction::ResendNotification
+        && obligation.task.as_ref().and_then(|task| task.notification.as_ref())
+            .and_then(|delivery| delivery.push.as_ref())
+            .is_some_and(|push| push.expires_at <= now))
+        .then_some("This device's clock is past the saved reminder deadline. Resolve without resending, then create an explicit new reminder or review the device for future occurrences. The server enforces the saved deadline.")
 }
 
 fn operator_semantic_order(left: &OperatorObligation, right: &OperatorObligation) -> Ordering {
@@ -1071,6 +1109,7 @@ mod tests {
                 next_retry_at: None,
                 attempts: vec![],
                 recovery: Some(precondition),
+                push: None,
             }),
         });
         let mut model = AppModel::default();
@@ -1107,6 +1146,82 @@ mod tests {
                 .begin_confirmation(LifecycleAction::ReconcileNotification)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn expired_push_attention_keeps_fenced_resolution_and_blocks_resending() {
+        for status in ["needs_attention", "uncertain"] {
+            let mut item = obligation("expired-delivery", OperatorObligationState::Attention);
+            let mut precondition = capability(true, ActionConsequence::ReopenForRetry)
+                .precondition
+                .unwrap();
+            precondition.obligation_id = item.id.clone();
+            item.task = Some(bokkie_operator_api::OperatorTask {
+                engineering: None,
+                kind: bokkie_operator_api::OperatorTaskKind::NotificationDelivery,
+                title: "Expired reminder".into(),
+                parent_task_id: Some("reminder".into()),
+                configuration: None,
+                proposal_instance_id: None,
+                notification: Some(bokkie_operator_api::ManagedDelivery {
+                    id: item.id.clone(),
+                    status: status.into(),
+                    detail: "Saved intent expired".into(),
+                    destination: "Bokkie".into(),
+                    subject: "Priorities".into(),
+                    body: "Review priorities".into(),
+                    next_retry_at: None,
+                    attempts: vec![],
+                    recovery: Some(precondition),
+                    push: Some(bokkie_operator_api::ManagedPushDelivery {
+                        subscription_label: "Original phone".into(),
+                        expires_at: 1,
+                        device_status: Some("displayed".into()),
+                        device_reported_at: Some(2),
+                        accepted_ttl_seconds: None,
+                    }),
+                }),
+            });
+            assert!(
+                notification_resend_unavailable(LifecycleAction::ResendNotification, &item, 1)
+                    .is_some()
+            );
+            assert!(
+                notification_resend_unavailable(LifecycleAction::ResendNotification, &item, 0)
+                    .is_none()
+            );
+            assert!(
+                notification_resend_unavailable(LifecycleAction::ReconcileNotification, &item, 100)
+                    .is_none()
+            );
+            let mut model = AppModel::default();
+            model.apply_snapshot(snapshot_page(vec![item], None, 1));
+            model.selected_obligation = Some("expired-delivery".into());
+            model
+                .begin_confirmation_at(LifecycleAction::ReconcileNotification, 100)
+                .unwrap();
+            let confirmation = model.confirmation.as_ref().unwrap();
+            assert!(model.confirmation_matches_current_state(confirmation));
+            assert!(confirmation.consequence.contains("without sending again"));
+            assert_eq!(
+                confirmation
+                    .notification
+                    .as_ref()
+                    .unwrap()
+                    .push
+                    .as_ref()
+                    .unwrap()
+                    .device_status
+                    .as_deref(),
+                Some("displayed")
+            );
+            assert!(
+                model
+                    .begin_confirmation_at(LifecycleAction::ResendNotification, 100)
+                    .unwrap_err()
+                    .contains("deadline")
+            );
+        }
     }
 
     fn service(session_id: &str) -> ServiceIdentity {

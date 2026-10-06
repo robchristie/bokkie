@@ -205,6 +205,9 @@ enum Command {
         /// Explicit single-recipient private SMTP relay settings; enables reminders.
         #[arg(long)]
         notification_config: Option<PathBuf>,
+        /// Explicit VAPID configuration; enables Bokkie device enrolment.
+        #[arg(long)]
+        push_config: Option<PathBuf>,
         /// Explicit static UI asset directory served at /ui on this loopback origin.
         #[arg(long)]
         ui_dir: Option<PathBuf>,
@@ -418,6 +421,7 @@ struct ServeOptions {
     conversation_profile: Option<PathBuf>,
     enable_local_notes: bool,
     notification_config: Option<PathBuf>,
+    push_config: Option<PathBuf>,
 }
 
 impl From<FakeOutcomeArg> for ServiceFakeOutcome {
@@ -533,6 +537,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             conversation_profile,
             enable_local_notes,
             notification_config,
+            push_config,
             ui_dir,
         } => {
             serve(
@@ -563,6 +568,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                     conversation_profile,
                     enable_local_notes,
                     notification_config,
+                    push_config,
                     ui_dir,
                 },
             )
@@ -966,10 +972,31 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         .transpose()
         .map_err(AppError::Configuration)?
         .map(Arc::new);
+    let push = options
+        .push_config
+        .as_deref()
+        .map(bokkie::notifications::push::PushConfig::load)
+        .transpose()
+        .map_err(AppError::Configuration)?
+        .map(Arc::new);
+    let push_sender = push
+        .clone()
+        .map(|config| bokkie::notifications::push::PushSender::new(config, Arc::new(SystemClock)))
+        .transpose()
+        .map_err(AppError::Configuration)?
+        .map(Arc::new);
+    let reminder_sender: Option<Arc<dyn bokkie::notifications::NotificationSender + Send + Sync>> =
+        (notifications.is_some() || push_sender.is_some()).then(|| {
+            Arc::new(bokkie::notifications::ReminderSender {
+                smtp: notifications.clone(),
+                push: push_sender,
+            }) as Arc<dyn bokkie::notifications::NotificationSender + Send + Sync>
+        });
     let conversation = Some(bokkie::conversation_http::ConversationConfig {
         profile: conversation_profile.map(Arc::new),
         notes_enabled: options.enable_local_notes,
         notifications: notifications.clone(),
+        push: push.clone(),
         clock: None,
     });
 
@@ -1016,7 +1043,11 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
 
     // This is the service's sole migration step. Long-lived consumers below
     // only accept an already current immutable manifest.
-    drop(Store::open(&database)?);
+    let store = Store::open(&database)?;
+    if let Some(config) = &push {
+        store.validate_push_key(&config.public_key().map_err(AppError::Configuration)?)?;
+    }
+    drop(store);
     let database_executor = DbExecutor::start(database.clone())?;
     let scheduler_config = SchedulerConfig {
         database: database.clone(),
@@ -1101,16 +1132,14 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
             scheduler_config,
             Some(gardener),
             options.enable_local_notes,
-            notifications
-                .map(|n| n as Arc<dyn bokkie::notifications::NotificationSender + Send + Sync>),
+            reminder_sender,
         )?
     } else {
         Scheduler::start_with_notification_sender(
             scheduler_config,
             None,
             options.enable_local_notes,
-            notifications
-                .map(|n| n as Arc<dyn bokkie::notifications::NotificationSender + Send + Sync>),
+            reminder_sender,
         )?
     };
     let admission = scheduler.admission();

@@ -14,8 +14,13 @@ pub(super) fn create_intent(
     result: &str,
     now: i64,
 ) -> Result<(), StoreError> {
-    crate::notifications::validate_address(&definition.destination).map_err(StoreError::Invalid)?;
-    if definition.profile_revision != "reminder-v1"
+    let is_push =
+        crate::notifications::push::push_device_id(&definition.profile_revision).is_some();
+    if !is_push {
+        crate::notifications::validate_address(&definition.destination)
+            .map_err(StoreError::Invalid)?;
+    }
+    if (!is_push && definition.profile_revision != "reminder-v1")
         || definition.effects != ["store_local_result", "send_notification"]
     {
         return Err(StoreError::Conflict(
@@ -39,6 +44,9 @@ pub(super) fn create_intent(
     tx.execute("INSERT INTO notification_deliveries(id,task_id,source_obligation_id,destination,subject,body,message_id,created_at)
         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![id,task,source.obligation_id,definition.destination,
         definition.name,result,format!("<{id}@bokkie.local>"),now])?;
+    if is_push {
+        super::push::save_intent(tx, &id, definition, now)?;
+    }
     append_event(
         tx,
         &id,
@@ -55,8 +63,9 @@ pub(super) fn create_intent(
 fn intent(conn: &Connection, id: &str) -> Result<Option<NotificationIntent>, StoreError> {
     let mut intent = conn.query_row("SELECT id,task_id,source_obligation_id,destination,subject,body,message_id,created_at FROM notification_deliveries WHERE id=?1",
         [id], |r| Ok(NotificationIntent { id:r.get(0)?,task_id:r.get(1)?,source_obligation_id:r.get(2)?,destination:r.get(3)?,
-            subject:r.get(4)?,body:r.get(5)?,message_id:r.get(6)?,created_at:r.get(7)?,transport:None })).optional()?;
+            subject:r.get(4)?,body:r.get(5)?,message_id:r.get(6)?,created_at:r.get(7)?,transport:None,push:None })).optional()?;
     if let Some(intent) = &mut intent {
+        intent.push = super::push::intent(conn, id)?;
         let raw:Option<String> = conn.query_row("SELECT details_json FROM audit_events WHERE obligation_id=?1 AND event_type='notification_transport_bound' ORDER BY sequence LIMIT 1",
             [id],|r|r.get(0)).optional()?;
         intent.transport = raw
@@ -87,8 +96,10 @@ pub(crate) fn delivery(conn: &Connection, id: &str) -> Result<ManagedDelivery, S
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     let uncertain = obligation.state == ObligationState::Attention && started.is_some();
+    let push = super::push::projection(conn, id)?;
     let status = match obligation.state {
         _ if reconciled.is_some() => "reconciled",
+        ObligationState::Completed if push.is_some() => "accepted_by_push_service",
         ObligationState::Completed => "accepted_by_relay",
         ObligationState::Running => "sending",
         ObligationState::RetryScheduled => "retry_scheduled",
@@ -98,7 +109,7 @@ pub(crate) fn delivery(conn: &Connection, id: &str) -> Result<ManagedDelivery, S
     }
     .to_string();
     let detail = if reconciled.is_some() {
-        "Operator acknowledged this delivery as reconciled; relay acceptance is not proved".into()
+        "Operator acknowledged this delivery as reconciled; acceptance is not proved by that decision".into()
     } else {
         obligation
             .last_error
@@ -112,25 +123,26 @@ pub(crate) fn delivery(conn: &Connection, id: &str) -> Result<ManagedDelivery, S
     let attempts = conn.prepare("SELECT attempt_number,claimed_at,completed_at,outcome,error,evidence FROM attempts WHERE obligation_id=?1 ORDER BY id DESC LIMIT 20")?
         .query_map([id],|r|Ok(ManagedDeliveryAttempt { attempt_number:r.get(0)?,started_at:r.get(1)?,completed_at:r.get(2)?,outcome:r.get(3)?,
             detail:r.get::<_,Option<String>>(4)?.or(r.get(5)?) }))?.collect::<Result<Vec<_>,_>>()?;
-    let recovery = if uncertain {
-        Some(ActionPrecondition {
-            obligation_id: id.into(),
-            occurrence: obligation.occurrence,
-            state_revision: conn.query_row(
-                "SELECT max(sequence) FROM audit_events WHERE obligation_id=?1",
-                [id],
-                |r| r.get(0),
-            )?,
-            gardener_fingerprint: None,
-            gardener_proposal_instance_id: None,
-            gardener_source_commit: None,
-            gardener_source_observation_id: None,
-            gardener_source_inspection_id: None,
-            gardener_generation: None,
-        })
-    } else {
-        None
-    };
+    let recovery =
+        if uncertain || (push.is_some() && obligation.state == ObligationState::Attention) {
+            Some(ActionPrecondition {
+                obligation_id: id.into(),
+                occurrence: obligation.occurrence,
+                state_revision: conn.query_row(
+                    "SELECT max(sequence) FROM audit_events WHERE obligation_id=?1",
+                    [id],
+                    |r| r.get(0),
+                )?,
+                gardener_fingerprint: None,
+                gardener_proposal_instance_id: None,
+                gardener_source_commit: None,
+                gardener_source_observation_id: None,
+                gardener_source_inspection_id: None,
+                gardener_generation: None,
+            })
+        } else {
+            None
+        };
     Ok(ManagedDelivery {
         id: id.into(),
         status,
@@ -141,6 +153,7 @@ pub(crate) fn delivery(conn: &Connection, id: &str) -> Result<ManagedDelivery, S
         next_retry_at: obligation.next_wake_at,
         attempts,
         recovery,
+        push,
     })
 }
 
@@ -153,7 +166,10 @@ pub(super) fn reject_generic(tx: &Transaction<'_>, id: &str) -> Result<(), Store
     Ok(())
 }
 pub(super) fn validate_fenced_retry(tx: &Transaction<'_>, id: &str) -> Result<(), StoreError> {
-    if intent(tx, id)?.is_some() {
+    if let Some(intent) = intent(tx, id)? {
+        if intent.push.is_some() {
+            return Err(StoreError::Conflict("Use the saved push delivery's explicit recovery review; its destination and expiry cannot be changed by retry".into()));
+        }
         let started: Option<i64> = tx.query_row(
             "SELECT dispatch_started_at FROM notification_deliveries WHERE id=?1",
             [id],
@@ -183,7 +199,7 @@ pub(super) fn recover_expired(
         return Ok(false);
     }
     let obligation = require_obligation(tx, id)?;
-    let error = "Delivery worker lease expired after possible dispatch; reconcile relay acceptance before retrying";
+    let error = "Delivery worker lease expired after possible dispatch; check delivery evidence before retrying";
     let changed = tx.execute("UPDATE attempts SET completed_at=?3,outcome='lease_expired',retryable=0,failure_disposition='needs_reconciliation',error=?4
         WHERE obligation_id=?1 AND lease_generation=?2 AND completed_at IS NULL",params![id,obligation.lease_generation,now,error])?;
     if changed != 1 {
@@ -275,7 +291,7 @@ impl Store {
         verify_claim(&require_obligation(&tx, &claim.obligation_id)?, claim, now)?;
         let mut data = intent(&tx, &claim.obligation_id)?
             .ok_or_else(|| StoreError::NotFound(claim.obligation_id.clone()))?;
-        if data.transport.is_none() {
+        if data.transport.is_none() && data.push.is_none() {
             if let Some(transport) = transport.filter(|t| t.destination == data.destination) {
                 append_event(
                     &tx,
@@ -336,18 +352,43 @@ impl Store {
             NotificationOutcome::Accepted { detail } => Completion::Succeeded {
                 evidence: Some(bounded(detail)),
             },
+            NotificationOutcome::PushAccepted {
+                detail,
+                ttl_seconds,
+            } => {
+                let changed = tx.execute(
+                    "UPDATE push_deliveries SET accepted_ttl_seconds=?2 WHERE id=?1",
+                    params![claim.obligation_id, ttl_seconds],
+                )?;
+                if changed != 1 {
+                    return Err(StoreError::Conflict(
+                        "Push acceptance requires a saved push intent".into(),
+                    ));
+                }
+                Completion::Succeeded {
+                    evidence: Some(bounded(detail)),
+                }
+            }
+            NotificationOutcome::SubscriptionExpired { detail } => {
+                tx.execute(
+                    "UPDATE notification_deliveries SET dispatch_started_at=NULL WHERE id=?1",
+                    [&claim.obligation_id],
+                )?;
+                tx.execute("UPDATE push_configuration SET active=0,revision=revision+1 WHERE active=1 AND device_id=(SELECT device_id FROM push_deliveries WHERE id=?1)",[&claim.obligation_id])?;
+                Completion::Failed {disposition:FailureDisposition::HumanDecision,error:bounded(detail),evidence:Some("The push service rejected the saved subscription; explicitly enrol a device and review future destinations".into())}
+            }
             NotificationOutcome::Rejected { retryable, detail } => {
                 tx.execute(
                     "UPDATE notification_deliveries SET dispatch_started_at=NULL WHERE id=?1",
                     [&claim.obligation_id],
                 )?;
                 Completion::Failed { disposition:if retryable { FailureDisposition::RetrySafe } else { FailureDisposition::HumanDecision },
-                    error:bounded(detail),evidence:Some("Relay did not accept this message; retry cannot duplicate an accepted send".into()) }
+                    error:bounded(detail),evidence:Some("The delivery service did not accept this message; retry cannot duplicate an accepted send".into()) }
             }
             NotificationOutcome::Uncertain { detail } => Completion::Failed {
                 disposition: FailureDisposition::NeedsReconciliation,
                 error: bounded(detail),
-                evidence: Some("Relay acceptance is uncertain; automatic retry is blocked".into()),
+                evidence: Some("Acceptance is uncertain; automatic retry is blocked".into()),
             },
         };
         validate_completion(&completion)?;
@@ -384,7 +425,7 @@ impl Store {
         let before = delivery(&tx, id)?;
         if before.recovery.is_none() {
             return Err(StoreError::Conflict(
-                "notification is not awaiting uncertain-delivery reconciliation".into(),
+                "notification is not awaiting delivery reconciliation".into(),
             ));
         }
         match request.action {
@@ -396,6 +437,9 @@ impl Store {
                 )?;
             }
             NotificationRecovery::RetryAcknowledgingDuplicateRisk => {
+                if before.push.as_ref().is_some_and(|p| now >= p.expires_at) {
+                    return Err(StoreError::Conflict("The saved notification has expired. Resolve it without resending and explicitly review a new reminder if one is still needed".into()));
+                }
                 tx.execute(
                     "UPDATE notification_deliveries SET dispatch_started_at=NULL WHERE id=?1",
                     [id],

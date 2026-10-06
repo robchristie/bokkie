@@ -62,6 +62,39 @@ configuration and project-workspace hand-off are described in the
 [design direction](../../docs/conversation-home.md); this UI does not invent
 editable runtime settings or enabled integrations.
 
+## Notifications
+
+**Home → Notifications** shows the configured push device separately from this
+browser's permission. Enable only the browser or installed Bokkie you intend to
+use. On iPhone or iPad, add Bokkie to the Home Screen and open that app before
+enabling notifications. A different active device requires a separate reviewed
+disable confirmation. Failed registration keeps the exact request and browser
+subscription for retry; disabling retains admitted reminders and their history.
+The native attention interface directs setup to a supported browser.
+
+The worker displays the bounded, self-contained reminder without reading the
+Bokkie API. It suppresses expired pushes and uses the stable delivery identity as
+the notification tag. IndexedDB retains only receipt identity, expiry and device
+state; mutation tokens remain ephemeral. Failed authenticated reports retry on
+later app or worker activity. Private APIs and transcripts are never cached.
+Reminder history separates push-service acceptance from device display and
+opening reports. Missing reports do not trigger automatic resending. Expired or
+permanently failed saved intents support **Resolve without resending**; review
+the device for future occurrences or create an explicit new reminder. The server
+enforces each saved display deadline.
+
+The focused worker/setup regression checks are included in `tools/check-ui.sh`:
+
+```sh
+node --test apps/bokkie-attention-ui/web/*.test.mjs
+```
+
+`tools/ui-push-journey.mjs` uses only disposable fixture state, a synthetic
+subscription and CDP push injection into the actual worker with Bokkie's page
+closed. Its desktop/narrow captures need an opened-image review. Browser-fixture
+permission, source-level click invocation and push injection do not establish
+actual provider delivery, native OS tapping or physical phone behaviour.
+
 ## Operate the workspace
 
 Needs attention collects decisions and failures. Tasks shows configured work

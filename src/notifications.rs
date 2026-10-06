@@ -3,6 +3,7 @@ use std::{io::Read, path::Path};
 
 use serde::{Deserialize, Serialize};
 
+pub mod push;
 mod smtp;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,6 +17,7 @@ pub struct NotificationIntent {
     pub message_id: String,
     pub created_at: i64,
     pub transport: Option<NotificationTransport>,
+    pub push: Option<push::PushIntent>,
 }
 
 /// Immutable first-attempt transport identity. Changing runtime settings cannot
@@ -32,8 +34,42 @@ pub struct NotificationTransport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NotificationOutcome {
     Accepted { detail: String },
+    PushAccepted { detail: String, ttl_seconds: u32 },
+    SubscriptionExpired { detail: String },
     Rejected { retryable: bool, detail: String },
     Uncertain { detail: String },
+}
+
+/// The immutable intent selects the adapter; missing configuration never reroutes it.
+pub struct ReminderSender {
+    pub smtp: Option<std::sync::Arc<NotificationConfig>>,
+    pub push: Option<std::sync::Arc<push::PushSender>>,
+}
+impl NotificationSender for ReminderSender {
+    fn reminder_modes(&self) -> (bool, bool) {
+        (self.smtp.is_some(), self.push.is_some())
+    }
+    fn send(&self, intent: &NotificationIntent) -> NotificationOutcome {
+        if intent.push.is_some() {
+            self.push.as_ref().map_or_else(
+                || NotificationOutcome::Rejected {
+                    retryable: false,
+                    detail:
+                        "Bokkie push transport is unavailable; restore its original configuration"
+                            .into(),
+                },
+                |sender| sender.send(intent),
+            )
+        } else {
+            self.smtp.as_ref().map_or_else(
+                || NotificationOutcome::Rejected { retryable: false, detail: "The saved email transport is unavailable; restore its original configuration".into() },
+                |sender| sender.send(intent),
+            )
+        }
+    }
+    fn transport(&self) -> Option<NotificationTransport> {
+        self.smtp.as_ref().and_then(|sender| sender.transport())
+    }
 }
 
 pub trait NotificationSender {
@@ -41,6 +77,9 @@ pub trait NotificationSender {
     fn send(&self, intent: &NotificationIntent) -> NotificationOutcome;
     fn transport(&self) -> Option<NotificationTransport> {
         None
+    }
+    fn reminder_modes(&self) -> (bool, bool) {
+        (true, false)
     }
 }
 

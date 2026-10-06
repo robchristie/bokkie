@@ -155,6 +155,7 @@ pub fn operation_with_profiles(
                 Capability::EmailMonitor => "email_monitor",
                 Capability::Unavailable => "unavailable",
             };
+            let creating = base.is_none_or(|current| current.capability != capability);
             let mut definition = base
                 .filter(|current| current.capability == capability)
                 .cloned()
@@ -178,12 +179,13 @@ pub fn operation_with_profiles(
             definition.instructions = draft.instructions;
             definition.trigger = draft.trigger;
             definition.context_refs = draft.context_refs;
-            if capability == "reminder" && definition.destination == "Not configured" {
-                if let Some(profile) = profiles
-                    .iter()
-                    .find(|p| p.capability == "reminder" && p.available)
-                {
+            if capability == "reminder" && (creating || definition.destination == "Not configured")
+            {
+                if let Some(profile) = profiles.iter().find(|p| p.capability == "reminder") {
                     definition.destination = profile.destination.clone();
+                    definition.profile_revision = profile.revision.clone();
+                    definition.max_output_chars =
+                        definition.max_output_chars.min(profile.max_output_chars);
                 }
             }
             if !matches!(capability, "local_note" | "reminder") {

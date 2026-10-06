@@ -147,6 +147,9 @@ pub(super) fn show_task_detail(
             &format!("Destination: {}", delivery.destination),
             presentation,
         );
+        if let Some(evidence) = notification_device_evidence(delivery, "Australia/Adelaide") {
+            full_text(ui, "notification-device", &evidence, presentation);
+        }
         full_text(ui, "notification-subject", &delivery.subject, presentation);
         full_text(ui, "notification-message", &delivery.body, presentation);
         full_text(

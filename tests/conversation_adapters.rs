@@ -146,6 +146,7 @@ fn application(executor: &DbExecutor, runtime: ApiRuntime, notes: bool) -> Route
             conversation: Some(ConversationConfig {
                 profile: None,
                 notes_enabled: notes,
+                push: None,
                 notifications: None,
                 clock: Some(Arc::new(ManualClock::new(100))),
             }),
@@ -526,6 +527,7 @@ impl ModelApplication {
                 conversation: Some(ConversationConfig {
                     profile: Some(Arc::new(profile)),
                     notes_enabled: true,
+                    push: None,
                     notifications: None,
                     clock: Some(Arc::new(ManualClock::new(100))),
                 }),

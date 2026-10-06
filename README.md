@@ -12,7 +12,8 @@ The initial implementation is intentionally narrow:
 - cron recurrence with named time zones;
 - persistent model-backed task drafting and exact reviewed definition changes;
 - an explicitly enabled deterministic local-note runner with in-app results;
-- explicitly configured email reminders with durable delivery intent and recovery;
+- Bokkie Web Push reminders for one explicitly enrolled device, with durable
+  delivery intent, expiry and recovery; existing email reminders remain compatible;
 - a deterministic fake runner for qualification;
 - an explicitly enabled coding gardener restricted to `robchristie/bokkie`;
 - persisted inspection, proposal, implementation, and verification evidence;
@@ -234,8 +235,10 @@ stale and disable decisions until one same-session bounded rebuild completes.
 
 Build, run and qualification instructions, including the retained evidence and
 known accessibility/rendering limits, are in the [attention UI README](apps/bokkie-attention-ui/README.md).
-The UI remains a local single-user operator tool: it does not add authentication,
-notifications, remote access, automatic gardener execution, merge, deployment
+The UI remains a single-user operator tool. Browser device enrolment and reminder
+notifications use the explicitly configured Web Push adapter; native builds do
+not receive Web Push. It does not add authentication,
+remote access, automatic gardener execution, merge, deployment
 or release authority.
 
 The [local HTTP threat model](docs/http-api-threat-model.md) defines the exact

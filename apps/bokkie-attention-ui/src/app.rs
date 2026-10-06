@@ -1,6 +1,9 @@
 #[path = "conversation_ui.rs"]
 mod conversation_ui;
 
+#[path = "notifications_ui.rs"]
+mod notifications_ui;
+
 #[path = "task_ui.rs"]
 mod task_ui;
 
@@ -141,7 +144,7 @@ impl ActionKey for LifecycleAction {
             Self::Cancel => ("Cancel", "Cancel eligible non-terminal work", None),
             Self::ReconcileNotification => (
                 "Resolve without resending",
-                "Acknowledge the uncertain delivery without another send",
+                "Resolve the reviewed delivery without another send",
                 Some("Resolve delivery"),
             ),
             Self::ResendNotification => (
@@ -2444,6 +2447,14 @@ fn show_detail_actions(
                         Availability::Disabled {
                             reason: "Retained data may be stale; refresh before deciding".into(),
                         }
+                    } else if let Some(reason) = crate::model::notification_resend_unavailable(
+                        action,
+                        obligation,
+                        current_unix_seconds(),
+                    ) {
+                        Availability::Disabled {
+                            reason: reason.into(),
+                        }
                     } else if capability.available {
                         Availability::Enabled
                     } else {
@@ -2942,6 +2953,9 @@ fn next_step_label(obligation: &OperatorObligation, captured_at: Option<i64>) ->
         .and_then(|task| task.notification.as_ref())
     {
         return match delivery.status.as_str() {
+            "uncertain" | "needs_attention" if delivery.push.as_ref().is_some_and(|push| push.expires_at <= current_unix_seconds()) => "Resolve this saved delivery without resending. Create an explicit new reminder or review the notification device for future occurrences; the saved deadline cannot be extended.".into(),
+            "needs_attention" if delivery.push.is_some() => "Review the delivery history and resolve without resending. Review the notification device for future occurrences or create an explicit new reminder; this saved intent keeps its original device and deadline.".into(),
+            "uncertain" if delivery.push.is_some() => "Check your device and its notification settings, then resolve without resending or review the risk of a duplicate alert.".into(),
             "uncertain" => "Check your inbox, then resolve without resending or review the risk of a duplicate email.".into(),
             "needs_attention" => "Review the delivery history, address the cause and confirm Retry for this saved reminder.".into(),
             _ => notification_label(delivery).into(),
@@ -3254,14 +3268,60 @@ fn notification_label(delivery: &bokkie_operator_api::ManagedDelivery) -> &'stat
         "pending" => "Waiting to send",
         "sending" => "Sending the reminder",
         "retry_scheduled" => "Delivery temporarily unavailable; a retry is scheduled",
+        "uncertain" if delivery.push.is_some() => {
+            "Push acceptance is uncertain; an alert may already have appeared"
+        }
         "uncertain" => "Delivery uncertain: the email may already have arrived",
         "needs_attention" => "Delivery needs your input; automatic attempts have stopped",
         "reconciled" => "Resolved by you without another send; receipt was not verified",
+        "accepted_by_push_service" => {
+            "Accepted by the push service; device display is reported separately"
+        }
+        "expired" => "Expired before push-service acceptance; review delivery history",
         "accepted_by_relay" => {
             "Accepted by the mail relay; inbox delivery and device alerts are not confirmed"
         }
         _ => "Delivery status unavailable",
     }
+}
+
+fn notification_device_evidence(
+    delivery: &bokkie_operator_api::ManagedDelivery,
+    timezone: &str,
+) -> Option<String> {
+    let push = delivery.push.as_ref()?;
+    let state = match push.device_status.as_deref() {
+        Some("displayed") => "This device reported displaying the notification.",
+        Some("opened") => "This device reported opening Bokkie from the notification.",
+        Some("expired") => "This device reported expiry before display.",
+        _ => {
+            "No device report is available. This does not prove that the alert was missed. Check device notification settings; missing reports do not trigger another send."
+        }
+    };
+    let reported = push
+        .device_reported_at
+        .map(|at| {
+            format!(
+                " Report received {}.",
+                conversation_ui::local_time_in_zone(at, timezone)
+            )
+        })
+        .unwrap_or_default();
+    let recovery = if matches!(delivery.status.as_str(), "uncertain" | "needs_attention")
+        && push.expires_at <= current_unix_seconds()
+    {
+        " This device's clock is past the saved deadline. Open Needs attention to resolve without resending. Create an explicit new reminder or review the device for future occurrences. The server enforces the saved deadline."
+    } else {
+        ""
+    };
+    Some(format!(
+        "Device: {}. {}{} Display deadline: {}.{}",
+        push.subscription_label,
+        state,
+        reported,
+        conversation_ui::local_time_in_zone(push.expires_at, timezone),
+        recovery
+    ))
 }
 
 fn obligation_exception_label(obligation: &OperatorObligation) -> String {
@@ -3586,7 +3646,7 @@ fn poll_plan(snapshot: &bokkie_operator_api::OperatorSnapshot) -> (Duration, BTr
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn current_unix_seconds() -> i64 {
+pub(crate) fn current_unix_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
@@ -3595,7 +3655,7 @@ fn current_unix_seconds() -> i64 {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn current_unix_seconds() -> i64 {
+pub(crate) fn current_unix_seconds() -> i64 {
     (js_sys::Date::now() / 1_000.0) as i64
 }
 
@@ -4080,6 +4140,115 @@ mod tests {
             text.iter()
                 .any(|item| item.interaction == TextInteraction::Selectable)
         );
+    }
+
+    #[test]
+    fn expired_push_recovery_renders_resolution_and_disabled_resending() {
+        for width in [390.0, 1440.0] {
+            let context = egui::Context::default();
+            let preferences = UiPreferences::default();
+            apply_design_system_with_typography(&context, preferences, TypographyProfile::Reading);
+            let tokens = preferences
+                .tokens(false)
+                .with_typography_profile(TypographyProfile::Reading);
+            let mut obligation = fixture(1);
+            obligation.state = OperatorObligationState::Attention;
+            obligation.task = Some(bokkie_operator_api::OperatorTask {
+                engineering: None,
+                kind: bokkie_operator_api::OperatorTaskKind::NotificationDelivery,
+                title: "Expired push reminder".into(),
+                parent_task_id: Some("reminder".into()),
+                configuration: None,
+                proposal_instance_id: None,
+                notification: Some(bokkie_operator_api::ManagedDelivery {
+                    id: obligation.id.clone(),
+                    status: "needs_attention".into(),
+                    detail: "Push subscription is no longer valid; saved delivery expired".into(),
+                    destination: "Bokkie".into(),
+                    subject: "Reminder".into(),
+                    body: "Review priorities".into(),
+                    next_retry_at: None,
+                    attempts: vec![],
+                    recovery: capability(true, ActionConsequence::ReconcileNotification)
+                        .precondition,
+                    push: Some(bokkie_operator_api::ManagedPushDelivery {
+                        subscription_label: "Original phone".into(),
+                        expires_at: 1,
+                        device_status: None,
+                        device_reported_at: None,
+                        accepted_ttl_seconds: None,
+                    }),
+                }),
+            });
+            let read = TimelineReadModel {
+                related_obligations: &[],
+                obligation: Some(&obligation),
+                topic: None,
+                topic_error: None,
+                loading: false,
+                connection: &ConnectionState::Current,
+                action_busy: false,
+                snapshot_busy: false,
+            };
+            let mut nodes = vec![];
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut presentation = detail_presentation(ui, &obligation, tokens, 1.0);
+                        show_detail_actions(ui, &read, &obligation, &mut vec![], &mut presentation);
+                        nodes.extend(presentation.finish(ui).semantic_nodes);
+                    },
+                )
+                .textures_delta
+                .clear();
+            let resolve = nodes
+                .iter()
+                .find(|node| {
+                    node.actions
+                        .iter()
+                        .any(|action| action.0 == "reconcile_notification")
+                })
+                .unwrap();
+            assert!(resolve.enabled);
+            assert!(resolve.name.contains("Resolve without resending"));
+            let resend = nodes
+                .iter()
+                .find(|node| {
+                    node.actions
+                        .iter()
+                        .any(|action| action.0 == "resend_notification")
+                })
+                .unwrap();
+            assert!(!resend.enabled);
+            assert!(
+                resend
+                    .disabled_reason
+                    .as_deref()
+                    .unwrap()
+                    .contains("deadline")
+            );
+            assert!(
+                notification_device_evidence(
+                    obligation
+                        .task
+                        .as_ref()
+                        .unwrap()
+                        .notification
+                        .as_ref()
+                        .unwrap(),
+                    "Australia/Adelaide"
+                )
+                .unwrap()
+                .contains("resolve without resending")
+            );
+        }
     }
 
     #[test]
