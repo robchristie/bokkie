@@ -87,6 +87,9 @@ export function showSelectableBrief(document, text) {
   const explanation = document.createElement('p'); explanation.textContent = 'The browser could not confirm a clipboard copy. Select the full text below and copy it using your keyboard or device controls.';
   const field = document.createElement('textarea'); field.readOnly = true; field.value = text;
   field.setAttribute('aria-label','Complete saved hand-off brief');
+  // eframe listens for clipboard events on the document even while this native
+  // field is focused. Keep its canvas handler from cancelling native copying.
+  for (const name of ['copy', 'cut', 'paste']) field.addEventListener(name, event => event.stopPropagation());
   Object.assign(field.style,{flex:'1',minHeight:'120px',width:'100%',boxSizing:'border-box',font:'14px "Bokkie Inter", sans-serif',padding:'12px',resize:'none',background:'#14181e',color:'#f4f4f5'});
   const close = document.createElement('button'); close.type = 'button'; close.textContent = 'Close text panel'; close.style.minHeight = '34px'; close.style.font = 'inherit';
   const originalFocus = document.activeElement;
