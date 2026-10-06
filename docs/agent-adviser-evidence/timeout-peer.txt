@@ -1,0 +1,9 @@
+   Compiling bokkie v0.1.0 (/nvme/development/bokkie-agent-adviser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.48s
+     Running tests/conversation_adapters.rs (target/debug/deps/conversation_adapters-366d4ceb87b1b1ce)
+
+running 1 test
+hang-peer evidence: elapsed=6.037701062s, pid=3238264, peer_absent=ESRCH, adviser_ledger=failed, adviser_view=timeout, bokkie_return=completed, calls=2 before_and_after_replay
+test adviser_hanging_peer_is_stopped_by_process_deadline_then_bokkie_returns_without_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 6.14s

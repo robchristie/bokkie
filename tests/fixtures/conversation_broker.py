@@ -9,7 +9,8 @@ assert request['profile']['bwrap'] == '/usr/bin/true'
 SCENARIOS = ('fixture-ui', 'fixture-settings', 'fixture-empty', 'fixture-matches', 'fixture-fail',
              'fixture-invalid-json', 'fixture-malformed', 'fixture-read-fail',
              'fixture-repeat', 'fixture-adviser-main', 'fixture-adviser',
-             'fixture-adviser-fail', 'fixture-adviser-malformed', 'fixture-adviser-timeout')
+             'fixture-adviser-fail', 'fixture-adviser-malformed', 'fixture-adviser-timeout',
+             'fixture-adviser-hang')
 if request.get('models'):
     print(json.dumps({'codex_version':'0.160.0','models':[{
         'model':model,'displayName':model,'defaultReasoningEffort':'medium',
@@ -115,8 +116,16 @@ if request.get('output_schema'):
         print(json.dumps({'error': 'synthetic Astra failure'}))
         sys.exit(1)
     if scenario == 'fixture-adviser-timeout':
-        print(json.dumps({'error': 'synthetic Astra timed out'}))
+        print(json.dumps({'error': 'conversation deadline exceeded'}))
         sys.exit(1)
+    if scenario == 'fixture-adviser-hang':
+        import os
+        import signal
+        Path(control['adviser_pid']).write_text(str(os.getpid()))
+        # No reply and no self-imposed timeout: the Rust supervisor owns stopping
+        # and reaping this peer when the saved deadline plus teardown expires.
+        while True:
+            signal.pause()
     if scenario == 'fixture-adviser-malformed':
         print(json.dumps({'advice': 'forged', 'operation': 'activate'}))
         sys.exit(0)

@@ -113,5 +113,6 @@ number alone does not establish downgrade compatibility. Preserve the pre-update
 stopped-state backup and restore it only with separate data-operation authority
 when rolling back to such a binary.
 
-[Qualification](agent-settings-evidence/README.md) records observed source and
-runtime coverage for both increments.
+[Main settings qualification](agent-settings-evidence/README.md) and
+[adviser qualification](agent-adviser-evidence/README.md) record observed source
+and runtime coverage for both increments.

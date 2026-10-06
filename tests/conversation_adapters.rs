@@ -575,7 +575,11 @@ impl ModelApplication {
     }
 
     async fn finished(&self) -> ConversationView {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        self.finished_within(Duration::from_secs(5)).await
+    }
+
+    async fn finished_within(&self, timeout: Duration) -> ConversationView {
+        let deadline = Instant::now() + timeout;
         loop {
             let view: ConversationView = decoded(
                 request(
@@ -1629,4 +1633,91 @@ async fn adviser_context_rejection_settles_dispatch_and_returns_the_bounded_fail
     assert_eq!(ledger[0]["status"], "failed");
     assert_eq!(ledger[1]["status"], "completed");
     f.replay_is_free(&turn, &completed).await;
+}
+
+#[tokio::test]
+async fn adviser_hanging_peer_is_stopped_by_process_deadline_then_bokkie_returns_without_replay() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let f = ModelApplication::new("fixture-adviser-main").await;
+    let mut saved = f.configure_adviser(false, 2, "fixture-adviser-hang").await;
+    saved.adviser.as_mut().unwrap().role.timeout_seconds = 1;
+    let save = bokkie::AgentSettingsSaveRequest {
+        command_id: "one-second-adviser".into(),
+        expected_revision: saved.revision,
+        main: saved.main,
+        adviser: saved.adviser,
+    };
+    let _: bokkie::AgentSettingsView = decoded(
+        request(
+            &f.app,
+            Method::POST,
+            "/agent-settings",
+            Some(&f.token),
+            Some(json!(save)),
+        )
+        .await,
+    );
+    let pid_file = f._temporary.path().join("hanging-adviser.pid");
+    let mut turn = f.turn_request(0);
+    turn.consult_adviser = true;
+    turn.text =
+        json!({"record":f.record,"adviser_route":"manual","adviser_pid":pid_file}).to_string();
+    let started = Instant::now();
+    f.post_turn(&turn).await;
+    let completed = f.finished_within(Duration::from_secs(10)).await;
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_secs(6),
+        "The hang must reach its one-second deadline plus the five-second teardown allowance"
+    );
+    assert!(elapsed < Duration::from_secs(10));
+    assert!(
+        completed.request_error.is_none(),
+        "{:?}",
+        completed.request_error
+    );
+    let outcome = completed.adviser_outcome.as_ref().unwrap();
+    assert_eq!(outcome.status, "timeout");
+    assert!(
+        outcome
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("conversation broker timed out")
+    );
+    assert!(outcome.advice.is_none());
+    assert!(
+        completed
+            .messages
+            .last()
+            .unwrap()
+            .text
+            .contains("Astra consultation failed")
+    );
+    let ledger = f.invocations();
+    assert_eq!(ledger.len(), 2);
+    assert_eq!(ledger[0]["purpose"], "adviser_manual");
+    assert_eq!(ledger[0]["status"], "failed");
+    assert!(
+        ledger[0]["outcome"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("timed out")
+    );
+    assert_eq!(ledger[1]["purpose"], "after_advice");
+    assert_eq!(ledger[1]["status"], "completed");
+    assert_eq!(f.calls().len(), 2);
+    assert_eq!(f.calls()[0]["profile"]["timeout_seconds"], 1);
+    let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+    // A zero signal performs a read-only existence check; the supervisor must
+    // already have reaped the exact peer before returning its timeout outcome.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    f.replay_is_free(&turn, &completed).await;
+    eprintln!(
+        "hang-peer evidence: elapsed={elapsed:?}, pid={pid}, peer_absent=ESRCH, adviser_ledger=failed, adviser_view=timeout, bokkie_return=completed, calls=2 before_and_after_replay"
+    );
 }

@@ -252,6 +252,9 @@ impl ConversationProfile {
                 }
                 Ok(value)
             }
+            ProcessOutcome::TimedOut(_) => Err(
+                "conversation broker timed out after its saved deadline and teardown allowance; no proposal was applied".into(),
+            ),
             _ => Err(
                 "conversation broker exceeded its process bounds; no proposal was applied".into(),
             ),

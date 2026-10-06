@@ -42,3 +42,7 @@ recorded with the owning pull request; they do not assert production deployment.
 [validation](validation-desktop.png), [saved revision](saved-desktop.png), and
 [return to conversation](conversation-return-narrow.png) show the exercised states.
 
+
+The [adviser increment](../agent-adviser-evidence/README.md) extends this
+foundation with optional consultation, exact profile pinning, shared budgets,
+real timeout recovery and a bounded two-turn provider qualification.

@@ -1,0 +1,276 @@
+{
+  "source": "84b64011e8e43c5d2902bee799b34f3dc7cbe237",
+  "call_budget": 2,
+  "store": "disposable local synthetic fixture",
+  "production_mutations": false,
+  "scenario": "Explicit Astra consultation followed by Bokkie response",
+  "helpers": {
+    "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+    "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+  },
+  "fixture": {
+    "address": "127.0.0.1:34397",
+    "database_kind": "synthetic_fixture",
+    "now": 1790028000,
+    "resumed": false,
+    "root": "/tmp/bokkie-adviser-live-23047d92-e3ed-4ead-abcf-a149772a61cc",
+    "scheduler": "manual_stdin_only"
+  },
+  "saved_profile": {
+    "revision": 2,
+    "contract_version": 2,
+    "main": {
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "additional_instructions": "Give one short paragraph. This request needs no task lookup, drafting or changes.",
+      "timeout_seconds": 60,
+      "max_context_bytes": 65536,
+      "max_output_bytes": 16384,
+      "max_model_calls": 2
+    },
+    "adviser": {
+      "role": {
+        "model": "gpt-6-astra",
+        "effort": "high",
+        "additional_instructions": "Give concise advice on the question. Do not suggest task or settings changes.",
+        "timeout_seconds": 60,
+        "max_context_bytes": 65536,
+        "max_output_bytes": 16384,
+        "max_model_calls": 1
+      },
+      "automatic_consultation": false
+    }
+  },
+  "automatic_tool_schema_preflight": {
+    "codex_version": "0.160.0",
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "environments": [],
+    "ephemeral": true,
+    "approval_policy": "never",
+    "sandbox": {
+      "type": "readOnly",
+      "networkAccess": false
+    },
+    "instruction_sources": [],
+    "offered_tools": [
+      "bokkie_discuss",
+      "bokkie_lookup",
+      "bokkie_save_draft"
+    ],
+    "tool_namespace": "bokkie",
+    "tool_exposure": "direct_model_only",
+    "disabled_features": [
+      "apps",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "computer_use",
+      "code_mode",
+      "code_mode_host",
+      "code_mode_only",
+      "deferred_executor",
+      "goals",
+      "hooks",
+      "image_generation",
+      "in_app_browser",
+      "in_app_local_automation",
+      "memories",
+      "multi_agent",
+      "multi_agent_v2",
+      "plugins",
+      "remote_plugin",
+      "recommended_plugins",
+      "request_permissions_tool",
+      "shell_tool",
+      "shell_snapshot",
+      "skill_search",
+      "sleep_tool",
+      "token_budget",
+      "tool_suggest",
+      "unified_exec",
+      "view_image",
+      "workspace_dependencies",
+      "current_time_reminder",
+      "default_mode_request_user_input"
+    ],
+    "mcp_servers_enabled": [],
+    "model_calls": 0,
+    "filesystem": "read-only root; private temporary directory"
+  },
+  "conversation": {
+    "service": {
+      "build": "bokkie/0.1.0",
+      "api_contract_version": 1,
+      "schema_version": 16,
+      "process_id": 3236469,
+      "session_id": "0e6b70d1-f32e-42c8-a1d5-44d1deb6045a"
+    },
+    "id": "42198a3a-247c-4976-857e-f19965505b6b",
+    "revision": 2,
+    "selected_task_id": null,
+    "messages": [
+      {
+        "role": "user",
+        "text": "Explain briefly why conflicting requirements should be clarified before choosing an implementation. Please use Astra’s advice; answer in the conversation without looking up, creating or changing any task.",
+        "request_id": "26ba88c0-2d46-4af4-9de0-f0e021044b50"
+      },
+      {
+        "role": "assistant",
+        "text": "Clarifying conflicting requirements establishes which priorities and trade-offs should guide implementation, avoiding unsupported assumptions and reducing the risk of rework or a solution that fails to meet expectations.",
+        "request_id": "26ba88c0-2d46-4af4-9de0-f0e021044b50"
+      }
+    ],
+    "candidates": [],
+    "review": null,
+    "task": null,
+    "busy": false,
+    "request_error": null,
+    "runtime_available": true,
+    "adviser_available": true,
+    "activity": null,
+    "adviser_outcome": {
+      "request_id": "26ba88c0-2d46-4af4-9de0-f0e021044b50",
+      "profile_revision": 2,
+      "status": "completed",
+      "advice": "Clarifying conflicting requirements reveals which priorities and trade-offs should guide implementation, avoiding unsupported assumptions and rework. No specific conflict is supplied, so no clarification is needed for this general explanation.",
+      "error": null
+    },
+    "notes_available": true,
+    "reminders_available": false,
+    "receipt": null
+  },
+  "request_error": null,
+  "identical_replay_uses_saved_outcome": true,
+  "passed": true,
+  "budget": {
+    "reserved": 2,
+    "maximum": 2
+  },
+  "runtime_observations": [
+    {
+      "is_turn": false,
+      "turn_starts": 0,
+      "thread_starts": 0,
+      "models": "gpt-5.6-terra",
+      "effort": "medium",
+      "schema_only": false,
+      "dynamic_tool_count": 0,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "error": null
+    },
+    {
+      "is_turn": false,
+      "turn_starts": 0,
+      "thread_starts": 0,
+      "models": "gpt-5.6-terra",
+      "effort": "medium",
+      "schema_only": false,
+      "dynamic_tool_count": 0,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "error": null
+    },
+    {
+      "is_turn": false,
+      "turn_starts": 0,
+      "thread_starts": 0,
+      "models": "gpt-5.6-terra",
+      "effort": "medium",
+      "schema_only": false,
+      "dynamic_tool_count": 0,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "error": null
+    },
+    {
+      "is_turn": false,
+      "turn_starts": 0,
+      "thread_starts": 1,
+      "models": "gpt-6.1-sol",
+      "effort": "medium",
+      "schema_only": false,
+      "dynamic_tool_count": 3,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "sandbox": "read-only",
+      "approval_policy": "never",
+      "environments": [],
+      "error": null
+    },
+    {
+      "is_turn": false,
+      "turn_starts": 0,
+      "thread_starts": 0,
+      "models": "gpt-5.6-terra",
+      "effort": "medium",
+      "schema_only": false,
+      "dynamic_tool_count": 0,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "error": null
+    },
+    {
+      "is_turn": true,
+      "turn_starts": 1,
+      "thread_starts": 1,
+      "models": "gpt-6-astra",
+      "effort": "high",
+      "schema_only": true,
+      "dynamic_tool_count": 0,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "sandbox": "read-only",
+      "approval_policy": "never",
+      "environments": [],
+      "error": null
+    },
+    {
+      "is_turn": true,
+      "turn_starts": 1,
+      "thread_starts": 1,
+      "models": "gpt-6.1-sol",
+      "effort": "medium",
+      "schema_only": false,
+      "dynamic_tool_count": 3,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "sandbox": "read-only",
+      "approval_policy": "never",
+      "environments": [],
+      "error": null
+    }
+  ],
+  "actual_model_turn_starts": 2,
+  "invocations": [
+    {
+      "ordinal": 0,
+      "purpose": "adviser_manual",
+      "profile_revision": 2,
+      "status": "completed",
+      "outcome_json": "{\"advice\":\"Clarifying conflicting requirements reveals which priorities and trade-offs should guide implementation, avoiding unsupported assumptions and rework. No specific conflict is supplied, so no clarification is needed for this general explanation.\"}"
+    },
+    {
+      "ordinal": 1,
+      "purpose": "after_advice",
+      "profile_revision": 2,
+      "status": "completed",
+      "outcome_json": "{\"arguments\":{\"message\":\"Clarifying conflicting requirements establishes which priorities and trade-offs should guide implementation, avoiding unsupported assumptions and reducing the risk of rework or a solution that fails to meet expectations.\",\"reason\":\"answer\"},\"tool\":\"bokkie_discuss\"}"
+    }
+  ]
+}

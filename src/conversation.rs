@@ -113,7 +113,7 @@ impl Store {
                 let output = raw.as_deref().map(decode::<serde_json::Value>).transpose()?;
                 let bounded_field = |key: &str| output.as_ref().and_then(|v| v[key].as_str()).map(|s| s.chars().take(4096).collect());
                 let error: Option<String> = bounded_field("error");
-                let status = if error.as_deref().is_some_and(|e| e.contains("timed out") || e.contains("timeout") || e.contains("time limit")) { "timeout".into() } else { status };
+                let status = if error.as_deref().is_some_and(|e| e.contains("timed out") || e.contains("timeout") || e.contains("time limit") || e.contains("conversation deadline exceeded")) { "timeout".into() } else { status };
                 Ok(ConversationAdviserOutcome { request_id,profile_revision,status,advice:bounded_field("advice"),error })
             }).transpose()?;
             Ok(ConversationView{service,id:id.into(),revision,selected_task_id,messages,candidates:decode(&candidates)?,review,task,busy,request_error,runtime_available,adviser_available:false,activity,adviser_outcome,notes_available,reminders_available:false,receipt:receipt.map(|r|decode(&r)).transpose()?})

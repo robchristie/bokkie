@@ -335,7 +335,9 @@ async fn dispatch_invocation(
         Some(accepted.runtime.clone())
     };
     let remaining = accepted.deadline_unix - config(state).now();
-    // A consultation reserves a complete saved Bokkie timeout as well as its slot.
+    // Admission reserves Bokkie's saved model-time allowance and return slot.
+    // Separate bounded teardown may reduce aggregate wall-clock time; the return
+    // call is clamped to the remaining deadline or reports visible exhaustion.
     let available = remaining
         - if purpose.is_adviser() {
             accepted.runtime.timeout_seconds as i64
