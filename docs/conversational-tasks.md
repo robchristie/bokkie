@@ -128,7 +128,10 @@ catalogue pages; the model receives at most ten bounded messages plus the
 selected definition. Each user interaction starts a fresh ephemeral model turn
 with that reconstructed context, never copied runtime history. A successful empty
 catalogue lookup permits one bounded continuation to finish the original request;
-each interaction has at most two model invocations, each durably recorded. No model is
+the main-only role contract permits at most two model invocations. An enabled
+adviser uses the explicit version 2 [settings contract](agent-settings.md), with
+at most four total calls, one consultation and one empty-lookup continuation.
+Every dispatch and outcome is durably recorded. No model is
 started by a timer, refresh, note occurrence or unchanged-state poll.
 
 Five named model tools propose discussion, catalogue lookup, saving a candidate,

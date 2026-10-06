@@ -236,3 +236,18 @@ The backend's server-created `context.instruction` is
 extracted into developer instructions (maximum 16 KiB); all remaining context
 stays in the untrusted user-data message. Never populate that reserved field
 from user-supplied JSON.
+
+## Optional adviser routing
+
+[Persisted role settings](../../docs/agent-settings.md) configure one optional
+adviser. Trusted backend code calls the existing `generate(context,
+output_schema)` path for Astra: a strict advice object, no dynamic tools and no
+recursion. The same qualified App Server version, environment exclusion,
+read-only tool sandbox and Bubblewrap boundary apply. Bokkie's return uses the
+existing five-tool proposal contract, with advice as untrusted context.
+
+The version 2 role contract permits at most four shared request invocations,
+including one adviser and one successful-empty-lookup continuation. Request
+snapshots retain both profiles, instructions and an aggregate deadline. Dispatch
+admission reserves a Bokkie return slot/time; outcomes survive restart and retries.
+Catalogue reads, settings saves and ordinary refreshes still perform zero turns.

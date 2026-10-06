@@ -448,6 +448,7 @@ async fn unavailable_runtime_does_not_dispatch_and_http_catalogue_searches_beyon
         command_id: "unavailable-turn".into(),
         conversation_id: "not-dispatched".into(),
         expected_revision: 0,
+        consult_adviser: false,
         text: "Make a note".into(),
     };
     let error = request(
@@ -554,6 +555,7 @@ impl ModelApplication {
             command_id: "model-turn".into(),
             conversation_id: "model-conversation".into(),
             expected_revision: revision,
+            consult_adviser: false,
             text: json!({"record":self.record,"intent":"Find or prepare the requested reminder"})
                 .to_string(),
         }
@@ -596,9 +598,67 @@ impl ModelApplication {
     fn calls(&self) -> Vec<Value> {
         std::fs::read_to_string(&self.record)
             .unwrap_or_default()
-            .lines()
+            .split_inclusive('\n')
+            .filter(|line| line.ends_with('\n'))
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    async fn configure_adviser(
+        &self,
+        automatic: bool,
+        calls: u8,
+        model: &str,
+    ) -> bokkie::AgentProfileRevision {
+        let initial: bokkie::AgentSettingsView =
+            decoded(request(&self.app, Method::GET, "/agent-settings", None, None).await);
+        let initial = initial.profile.unwrap();
+        let mut main = initial.main.clone();
+        main.max_model_calls = calls;
+        let mut adviser = initial.main;
+        adviser.model = model.into();
+        adviser.effort = "high".into();
+        adviser.additional_instructions = "Explain the trade-off briefly".into();
+        adviser.max_model_calls = 1;
+        let save = bokkie::AgentSettingsSaveRequest {
+            command_id: format!("configure-adviser-{}", initial.revision),
+            expected_revision: initial.revision,
+            main,
+            adviser: Some(bokkie::AdviserRoleSettings {
+                role: adviser,
+                automatic_consultation: automatic,
+            }),
+        };
+        let saved: bokkie::AgentSettingsView = decoded(
+            request(
+                &self.app,
+                Method::POST,
+                "/agent-settings",
+                Some(&self.token),
+                Some(json!(save)),
+            )
+            .await,
+        );
+        assert!(saved.effective);
+        assert_eq!(saved.ceilings.unwrap().max_model_calls, 4);
+        assert!(
+            self.calls().is_empty(),
+            "Settings reads and saves must not invoke models"
+        );
+        saved.profile.unwrap()
+    }
+
+    fn invocations(&self) -> Vec<Value> {
+        let connection = rusqlite::Connection::open_with_flags(
+            self._temporary.path().join("model-http.sqlite"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut query = connection.prepare("SELECT ordinal,purpose,profile_revision,status,outcome_json FROM conversation_invocations ORDER BY ordinal").unwrap();
+        query.query_map([], |r| {
+            let outcome = r.get::<_,Option<String>>(4)?.map(|raw| serde_json::from_str::<Value>(&raw).unwrap());
+            Ok(json!({"ordinal":r.get::<_,u8>(0)?,"purpose":r.get::<_,String>(1)?,"revision":r.get::<_,i64>(2)?,"status":r.get::<_,String>(3)?,"outcome":outcome}))
+        }).unwrap().collect::<Result<Vec<_>,_>>().unwrap()
     }
 
     async fn replay_is_free(&self, turn: &ConversationTurnRequest, previous: &ConversationView) {
@@ -964,6 +1024,7 @@ async fn settings_http_are_validated_atomic_and_consumed_by_new_requests() {
     let save = AgentSettingsSaveRequest {
         command_id: "settings-save".into(),
         expected_revision: 1,
+        adviser: None,
         main: role.clone(),
     };
     let mut bad = save.clone();
@@ -1038,6 +1099,7 @@ async fn settings_edit_during_execution_pins_every_call_and_replay_bypasses_unav
     let save = AgentSettingsSaveRequest {
         command_id: "during-execution".into(),
         expected_revision: 1,
+        adviser: None,
         main,
     };
     let _: AgentSettingsView = decoded(
@@ -1121,5 +1183,450 @@ async fn aggregate_deadline_between_calls_leaves_no_unfinished_dispatch_on_failu
     assert_eq!(unfinished(), 0);
     f.store.conversation_interrupt("restart", 112).unwrap();
     assert_eq!(unfinished(), 0);
+    f.replay_is_free(&turn, &completed).await;
+}
+
+#[tokio::test]
+async fn adviser_explicit_consultation_is_schema_only_then_bokkie_returns_and_replay_is_free() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let f = ModelApplication::new("fixture-adviser-main").await;
+    let saved = f.configure_adviser(false, 2, "fixture-adviser").await;
+    let mut turn = f.turn_request(0);
+    turn.consult_adviser = true;
+    turn.text = json!({"record":f.record,"adviser_route":"manual"}).to_string();
+    let accepted = f.post_turn(&turn).await;
+    assert!(accepted.adviser_available);
+    let completed = f.finished().await;
+    assert!(
+        completed.request_error.is_none(),
+        "{:?}",
+        completed.request_error
+    );
+    assert!(
+        completed
+            .messages
+            .last()
+            .unwrap()
+            .text
+            .contains("Bokkie considered Astra")
+    );
+    assert!(completed.activity.is_none());
+    let advice = completed.adviser_outcome.as_ref().unwrap();
+    assert_eq!(advice.profile_revision, saved.revision);
+    assert_eq!(advice.status, "completed");
+    assert!(
+        advice
+            .advice
+            .as_deref()
+            .unwrap()
+            .contains("requirements conflict")
+    );
+    let calls = f.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["profile"]["model"], "fixture-adviser");
+    assert_eq!(calls[0]["profile"]["effort"], "high");
+    assert!(calls[0].get("tools").is_none());
+    assert!(calls[0]["context"].get("messages").is_none());
+    assert!(calls[0]["context"].get("available_capabilities").is_none());
+    assert_eq!(calls[1]["profile"]["model"], "fixture-adviser-main");
+    assert_eq!(calls[1]["context"]["adviser_result"]["status"], "completed");
+    assert!(
+        calls[1]["tools"][0]["inputSchema"]["properties"]
+            .get("difficulty")
+            .is_none()
+    );
+    let ledger = f.invocations();
+    assert_eq!(
+        ledger
+            .iter()
+            .map(|r| r["purpose"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["adviser_manual", "after_advice"]
+    );
+    assert!(
+        ledger
+            .iter()
+            .all(|r| r["revision"] == saved.revision && r["status"] == "completed")
+    );
+    f.replay_is_free(&turn, &completed).await;
+}
+
+#[tokio::test]
+async fn adviser_four_call_orderings_keep_both_profiles_pinned_during_settings_edit() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    for route in ["lookup_first", "advice_first"] {
+        let f = ModelApplication::new("fixture-adviser-main").await;
+        let saved = f.configure_adviser(true, 4, "fixture-adviser").await;
+        let release = f._temporary.path().join("release-main");
+        let mut turn = f.turn_request(0);
+        turn.text = json!({"record":f.record,"release":release,"adviser_route":route,"requirements":["Only at 9 am","Only at 10 am"]}).to_string();
+        f.post_turn(&turn).await;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while f.calls().is_empty() {
+            assert!(Instant::now() < deadline);
+            tokio::task::yield_now().await;
+        }
+        let mut revised = saved.main.clone();
+        revised.model = "fixture-settings".into();
+        revised.effort = "high".into();
+        revised.additional_instructions =
+            "This revision must not reach the accepted request".into();
+        revised.max_model_calls = 1;
+        let change = bokkie::AgentSettingsSaveRequest {
+            command_id: "edit-during-held-turn".into(),
+            expected_revision: saved.revision,
+            main: revised,
+            adviser: None,
+        };
+        let _: bokkie::AgentSettingsView = decoded(
+            request(
+                &f.app,
+                Method::POST,
+                "/agent-settings",
+                Some(&f.token),
+                Some(json!(change)),
+            )
+            .await,
+        );
+        std::fs::write(release, "release").unwrap();
+        let completed = f.finished().await;
+        assert!(
+            completed.request_error.is_none(),
+            "{route}: {:?}",
+            completed.request_error
+        );
+        let calls = f.calls();
+        assert_eq!(calls.len(), 4, "{route}");
+        for call in &calls {
+            let advisory = call.get("output_schema").is_some();
+            assert_eq!(
+                call["profile"]["model"],
+                if advisory {
+                    "fixture-adviser"
+                } else {
+                    "fixture-adviser-main"
+                }
+            );
+            assert_eq!(
+                call["profile"]["effort"],
+                if advisory { "high" } else { "medium" }
+            );
+            assert_eq!(
+                call["context"]["additional_instructions"],
+                if advisory {
+                    "Explain the trade-off briefly"
+                } else {
+                    ""
+                }
+            );
+        }
+        let ledger = f.invocations();
+        let expected = if route == "lookup_first" {
+            vec![
+                "main",
+                "empty_lookup_continuation",
+                "adviser_conflicting_requirements",
+                "after_advice",
+            ]
+        } else {
+            vec![
+                "main",
+                "adviser_conflicting_requirements",
+                "after_advice",
+                "empty_lookup_continuation",
+            ]
+        };
+        assert_eq!(
+            ledger
+                .iter()
+                .map(|r| r["purpose"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(
+            ledger
+                .iter()
+                .all(|r| r["revision"] == saved.revision && r["status"] == "completed")
+        );
+        f.replay_is_free(&turn, &completed).await;
+    }
+}
+
+#[tokio::test]
+async fn adviser_automatic_consultation_requires_enabled_grounded_supported_difficulty() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    for (enabled, route) in [
+        (false, "advice_first"),
+        (true, "invalid_quotes"),
+        (true, "unsupported_condition"),
+    ] {
+        let f = ModelApplication::new("fixture-adviser-main").await;
+        f.configure_adviser(enabled, 4, "fixture-adviser").await;
+        let mut turn = f.turn_request(0);
+        turn.text = json!({"record":f.record,"adviser_route":route,"requirements":["Only at 9 am","Only at 10 am"]}).to_string();
+        f.post_turn(&turn).await;
+        let completed = f.finished().await;
+        assert!(completed.request_error.is_some(), "{enabled}/{route}");
+        assert!(completed.adviser_outcome.is_none());
+        assert_eq!(f.calls().len(), 1);
+        assert_eq!(f.invocations().len(), 1);
+        assert!(completed.task.is_none());
+        f.replay_is_free(&turn, &completed).await;
+    }
+    let f = ModelApplication::new("fixture-adviser-main").await;
+    f.configure_adviser(true, 4, "fixture-adviser").await;
+    let mut turn = f.turn_request(0);
+    turn.text = json!({"record":f.record,"adviser_route":"manual"}).to_string();
+    f.post_turn(&turn).await;
+    let completed = f.finished().await;
+    assert!(completed.request_error.is_none());
+    assert_eq!(f.calls().len(), 1);
+    assert!(completed.adviser_outcome.is_none());
+}
+
+#[tokio::test]
+async fn adviser_failures_timeouts_and_malformed_advice_are_saved_then_bokkie_continues() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    for (model, status) in [
+        ("fixture-adviser-fail", "failed"),
+        ("fixture-adviser-timeout", "timeout"),
+        ("fixture-adviser-malformed", "failed"),
+    ] {
+        let f = ModelApplication::new("fixture-adviser-main").await;
+        f.configure_adviser(false, 2, model).await;
+        let mut turn = f.turn_request(0);
+        turn.consult_adviser = true;
+        turn.text = json!({"record":f.record,"adviser_route":"manual"}).to_string();
+        f.post_turn(&turn).await;
+        let completed = f.finished().await;
+        assert!(
+            completed.request_error.is_none(),
+            "{model}: {:?}",
+            completed.request_error
+        );
+        assert!(
+            completed
+                .messages
+                .last()
+                .unwrap()
+                .text
+                .contains("consultation failed")
+        );
+        let outcome = completed.adviser_outcome.as_ref().unwrap();
+        assert_eq!(outcome.status, status);
+        assert!(outcome.advice.is_none());
+        assert!(outcome.error.is_some());
+        assert_eq!(f.calls().len(), 2);
+        let ledger = f.invocations();
+        assert_eq!(ledger[0]["status"], "failed");
+        assert_eq!(ledger[1]["status"], "completed");
+        f.replay_is_free(&turn, &completed).await;
+    }
+}
+
+#[tokio::test]
+async fn adviser_return_budget_is_reserved_and_a_recursive_consult_cannot_dispatch_again() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    for (calls, route, expected_calls) in [(2, "advice_first", 1), (4, "repeat_advice", 3)] {
+        let f = ModelApplication::new("fixture-adviser-main").await;
+        f.configure_adviser(true, calls, "fixture-adviser").await;
+        let mut turn = f.turn_request(0);
+        turn.text = json!({"record":f.record,"adviser_route":route,"requirements":["Only at 9 am","Only at 10 am"]}).to_string();
+        f.post_turn(&turn).await;
+        let completed = f.finished().await;
+        assert!(completed.request_error.is_some());
+        assert_eq!(f.calls().len(), expected_calls);
+        assert!(f.invocations().iter().all(|r| r["status"] != "dispatched"));
+        assert!(completed.task.is_none());
+        f.replay_is_free(&turn, &completed).await;
+    }
+}
+
+#[tokio::test]
+async fn adviser_activity_and_restart_preserve_uncertain_dispatch_without_relaunching() {
+    use bokkie::conversation::InvocationPurpose;
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let mut f = ModelApplication::new("fixture-adviser-main").await;
+    f.configure_adviser(false, 2, "fixture-adviser").await;
+    let release = f._temporary.path().join("release-adviser");
+    let mut turn = f.turn_request(0);
+    turn.consult_adviser = true;
+    turn.text =
+        json!({"record":f.record,"adviser_route":"manual","adviser_release":release}).to_string();
+    f.post_turn(&turn).await;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while f.calls().is_empty() {
+        assert!(Instant::now() < deadline);
+        tokio::task::yield_now().await;
+    }
+    let running: ConversationView = decoded(
+        request(
+            &f.app,
+            Method::GET,
+            "/conversations/model-conversation",
+            None,
+            None,
+        )
+        .await,
+    );
+    assert_eq!(running.activity.as_deref(), Some("Consulting Astra"));
+    assert_eq!(
+        running.adviser_outcome.as_ref().unwrap().status,
+        "dispatched"
+    );
+    f.store
+        .conversation_interrupt("different-restart-session", 101)
+        .unwrap();
+    let interrupted: ConversationView = decoded(
+        request(
+            &f.app,
+            Method::GET,
+            "/conversations/model-conversation",
+            None,
+            None,
+        )
+        .await,
+    );
+    assert_eq!(
+        interrupted.adviser_outcome.as_ref().unwrap().status,
+        "interrupted"
+    );
+    assert!(
+        interrupted
+            .adviser_outcome
+            .as_ref()
+            .unwrap()
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("no automatic replay")
+    );
+    assert!(
+        f.store
+            .conversation_dispatch(&turn, 1, InvocationPurpose::AfterAdvice, 101)
+            .is_err()
+    );
+    f.replay_is_free(&turn, &interrupted).await;
+    std::fs::write(release, "release").unwrap();
+    // Restart fences the old owner: a later completion cannot replace its saved
+    // interrupted outcome or admit a return call.
+    assert_eq!(f.calls().len(), 1);
+    assert_eq!(f.invocations()[0]["status"], "interrupted");
+}
+
+#[tokio::test]
+async fn adviser_deadline_exhaustion_after_dispatch_leaves_saved_outcome_and_no_return_dispatch() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let f = ModelApplication::new("fixture-adviser-main").await;
+    f.configure_adviser(false, 2, "fixture-adviser").await;
+    let release = f._temporary.path().join("release-deadline-adviser");
+    let mut turn = f.turn_request(0);
+    turn.consult_adviser = true;
+    turn.text =
+        json!({"record":f.record,"adviser_route":"manual","adviser_release":release}).to_string();
+    f.post_turn(&turn).await;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while f.calls().is_empty() {
+        assert!(Instant::now() < deadline);
+        tokio::task::yield_now().await;
+    }
+    f.clock.set(111);
+    std::fs::write(release, "release").unwrap();
+    let completed = f.finished().await;
+    assert!(
+        completed
+            .request_error
+            .as_deref()
+            .unwrap()
+            .contains("time limit")
+    );
+    assert_eq!(f.calls().len(), 1);
+    assert_eq!(
+        completed.adviser_outcome.as_ref().unwrap().status,
+        "completed"
+    );
+    assert!(f.invocations().iter().all(|r| r["status"] != "dispatched"));
+    f.replay_is_free(&turn, &completed).await;
+}
+
+#[tokio::test]
+async fn adviser_time_reservation_refuses_consultation_before_consuming_a_slot() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let f = ModelApplication::new("fixture-adviser-main").await;
+    f.configure_adviser(true, 4, "fixture-adviser").await;
+    let release = f._temporary.path().join("release-low-time");
+    let mut turn = f.turn_request(0);
+    turn.text = json!({"record":f.record,"release":release,"adviser_route":"advice_first","requirements":["Only at 9 am","Only at 10 am"]}).to_string();
+    f.post_turn(&turn).await;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while f.calls().is_empty() {
+        assert!(Instant::now() < deadline);
+        tokio::task::yield_now().await;
+    }
+    f.clock.set(116);
+    std::fs::write(release, "release").unwrap();
+    let completed = f.finished().await;
+    assert!(
+        completed
+            .request_error
+            .as_deref()
+            .unwrap()
+            .contains("insufficient saved budget")
+    );
+    assert!(completed.adviser_outcome.is_none());
+    assert_eq!(f.calls().len(), 1);
+    assert_eq!(f.invocations().len(), 1);
+    assert_eq!(f.invocations()[0]["status"], "completed");
+    f.replay_is_free(&turn, &completed).await;
+}
+
+#[tokio::test]
+async fn adviser_context_rejection_settles_dispatch_and_returns_the_bounded_failure_to_bokkie() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let f = ModelApplication::new("fixture-adviser-main").await;
+    let mut saved = f.configure_adviser(false, 2, "fixture-adviser").await;
+    saved.adviser.as_mut().unwrap().role.max_context_bytes = 1024;
+    let save = bokkie::AgentSettingsSaveRequest {
+        command_id: "small-adviser-context".into(),
+        expected_revision: saved.revision,
+        main: saved.main,
+        adviser: saved.adviser,
+    };
+    let _: bokkie::AgentSettingsView = decoded(
+        request(
+            &f.app,
+            Method::POST,
+            "/agent-settings",
+            Some(&f.token),
+            Some(json!(save)),
+        )
+        .await,
+    );
+    let mut turn = f.turn_request(0);
+    turn.consult_adviser = true;
+    turn.text =
+        json!({"record":f.record,"adviser_route":"manual","intent":"x".repeat(2048)}).to_string();
+    f.post_turn(&turn).await;
+    let completed = f.finished().await;
+    assert!(completed.request_error.is_none());
+    assert!(
+        completed
+            .adviser_outcome
+            .as_ref()
+            .unwrap()
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("context or schema exceeded")
+    );
+    assert_eq!(
+        f.calls().len(),
+        1,
+        "The adviser must fail before launching its broker"
+    );
+    let ledger = f.invocations();
+    assert_eq!(ledger.len(), 2);
+    assert_eq!(ledger[0]["status"], "failed");
+    assert_eq!(ledger[1]["status"], "completed");
     f.replay_is_free(&turn, &completed).await;
 }

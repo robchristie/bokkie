@@ -584,8 +584,9 @@ Configure the model adapter and allowed local capability once. Copy
 to a private path outside the checkout. Set its absolute broker path to
 `tools/conversation-runtime/broker.py` in this checkout, its installed Codex path,
 and the bootstrap model/effort and hard time/byte ceilings. After first use,
-edit the main conversational role in **Settings**; saved changes apply to new
-requests. See the [settings precedence and recovery contract](agent-settings.md).
+edit the main conversational role and optional Astra adviser in **Settings**;
+saved changes apply to new requests. Adviser consultation shares Bokkie's finite
+request budget and cannot acquire tools or confirmation authority. See the [settings precedence and recovery contract](agent-settings.md).
 Keep `instructions.md` beside the
 broker. The configured local account must already be authorised and usable;
 Bokkie does not obtain credentials or alter global account settings. See the

@@ -8,7 +8,8 @@ assert request['profile']['codex'] == '/usr/bin/true'
 assert request['profile']['bwrap'] == '/usr/bin/true'
 SCENARIOS = ('fixture-ui', 'fixture-settings', 'fixture-empty', 'fixture-matches', 'fixture-fail',
              'fixture-invalid-json', 'fixture-malformed', 'fixture-read-fail',
-             'fixture-repeat')
+             'fixture-repeat', 'fixture-adviser-main', 'fixture-adviser',
+             'fixture-adviser-fail', 'fixture-adviser-malformed', 'fixture-adviser-timeout')
 if request.get('models'):
     print(json.dumps({'codex_version':'0.160.0','models':[{
         'model':model,'displayName':model,'defaultReasoningEffort':'medium',
@@ -16,8 +17,7 @@ if request.get('models'):
     } for model in SCENARIOS], 'model_calls':0}))
     sys.exit(0)
 context = request['context']
-text = next(message['text'] for message in reversed(context['messages'])
-            if message['role'] == 'user')
+text = context['current_request']
 def output(proposal):
     operation = proposal['operation']
     names = {'save_definition': 'bokkie_save_draft', 'discuss': 'bokkie_discuss',
@@ -30,9 +30,7 @@ def output(proposal):
     print(json.dumps({'tool': names[operation], 'arguments': args}))
 
 scenario = request['profile']['model']
-assert scenario in ('fixture-ui', 'fixture-empty', 'fixture-matches', 'fixture-fail',
-                    'fixture-invalid-json', 'fixture-malformed', 'fixture-read-fail',
-                    'fixture-repeat', 'fixture-settings')
+assert scenario in SCENARIOS
 if scenario == 'fixture-ui':
     # Exact fixed qualification inputs only. This is a test script, not a natural
     # language implementation or an alternative to live model acceptance.
@@ -94,13 +92,67 @@ if scenario == 'fixture-ui':
 control = json.loads(text)
 with Path(control['record']).open('a') as stream:
     stream.write(json.dumps(request) + '\n')
-if control.get('release') and 'lookup_result' not in context:
+def barrier(path):
+    if not path:
+        return
     import time
     deadline = time.monotonic() + 4
-    while not Path(control['release']).exists():
+    while not Path(path).exists():
         if time.monotonic() >= deadline:
             raise ValueError('synthetic barrier expired')
         time.sleep(0.001)
+
+if request.get('output_schema'):
+    assert scenario.startswith('fixture-adviser') and scenario != 'fixture-adviser-main'
+    assert 'tools' not in request
+    assert set(context) == {'additional_instructions', 'current_request', 'question',
+                            'conflicting_requirements', 'selected_task_summary'}
+    assert request['output_schema'] == {'type': 'object', 'properties': {'advice': {
+        'type': 'string', 'minLength': 1}}, 'required': ['advice'], 'additionalProperties': False}
+    assert 'no tools' in request['instructions']
+    barrier(control.get('adviser_release'))
+    if scenario == 'fixture-adviser-fail':
+        print(json.dumps({'error': 'synthetic Astra failure'}))
+        sys.exit(1)
+    if scenario == 'fixture-adviser-timeout':
+        print(json.dumps({'error': 'synthetic Astra timed out'}))
+        sys.exit(1)
+    if scenario == 'fixture-adviser-malformed':
+        print(json.dumps({'advice': 'forged', 'operation': 'activate'}))
+        sys.exit(0)
+    print(json.dumps({'advice': 'The requirements conflict. Ask which requirement takes priority; do not invent a task or an approval.'}))
+    sys.exit(0)
+
+if 'adviser_result' in context:
+    barrier(control.get('return_release'))
+elif 'lookup_result' not in context:
+    barrier(control.get('release'))
+
+if scenario == 'fixture-adviser-main':
+    route = control.get('adviser_route', 'manual')
+    if route == 'lookup_first' and 'lookup_result' not in context:
+        output({'operation': 'lookup', 'query': 'Adapter needle'})
+    elif route in ('lookup_first', 'advice_first', 'invalid_quotes', 'unsupported_condition', 'repeat_advice') and ('adviser_result' not in context or route == 'repeat_advice'):
+        quotes = control.get('requirements', ['Only at 9 am', 'Only at 10 am'])
+        if route == 'invalid_quotes':
+            quotes[1] = 'Invented requirement outside request'
+        output({'operation': 'discuss', 'reason': 'difficulty',
+                'message': 'I cannot reconcile these explicit requirements.',
+                'difficulty': {'condition': 'unsupported' if route == 'unsupported_condition' else 'conflicting_requirements',
+                               'question': 'Which requirement should Bokkie prioritise?',
+                               'requirements': quotes}})
+    elif route == 'advice_first' and 'lookup_result' not in context:
+        output({'operation': 'lookup', 'query': 'Adapter needle'})
+    else:
+        result = context.get('adviser_result')
+        if result is None:
+            message = 'Bokkie answered without a consultation.'
+        elif result['status'] == 'completed':
+            message = 'Bokkie considered Astra’s advice. Which requirement takes priority?'
+        else:
+            message = 'Bokkie continues: Astra consultation failed. ' + result['error']
+        output({'operation': 'discuss', 'reason': 'answer', 'message': message})
+    sys.exit(0)
 if scenario == 'fixture-settings':
     output({'operation':'discuss','reason':'answer','message':json.dumps({'model':scenario,'effort':request['profile']['effort'],'instructions':context['additional_instructions'],'timeout':request['profile']['timeout_seconds']})})
     sys.exit(0)

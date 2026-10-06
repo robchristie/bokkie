@@ -15,6 +15,7 @@ fn request(id: &str, revision: i64) -> ConversationTurnRequest {
         command_id: id.into(),
         conversation_id: "conversation".into(),
         expected_revision: revision,
+        consult_adviser: false,
         text: "Help define a local reminder, don't activate it".into(),
     }
 }
@@ -343,6 +344,14 @@ fn model_dispatches_are_bounded_durable_and_never_replayed() {
     store.conversation_begin(&req, "session", 100).unwrap();
     store.conversation_model_dispatch(&req, 0, 100).unwrap();
     assert!(store.conversation_model_dispatch(&req, 0, 100).is_err());
+    assert!(store.conversation_model_dispatch(&req, 1, 101).is_err());
+    store
+        .conversation_invocation_outcome(
+            &req.command_id,
+            0,
+            Ok(&serde_json::json!({"tool":"bokkie_lookup","arguments":{"query":"example"}})),
+        )
+        .unwrap();
     store.conversation_model_dispatch(&req, 1, 101).unwrap();
     assert!(store.conversation_model_dispatch(&req, 2, 102).is_err());
     assert_eq!(store.conversation_model_dispatch_count().unwrap(), 2);

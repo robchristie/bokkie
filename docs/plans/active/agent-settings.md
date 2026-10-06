@@ -2,9 +2,9 @@
 
 - Status: active
 - Reorientation budget: 180
-- Landed pull requests: none
+- Landed pull requests: https://github.com/robchristie/bokkie/pull/51
 - Owner: current agent-settings work package
-- Next Action: Qualify and land main settings, then deliver adviser routing.
+- Next Action: Implement and qualify the optional adviser against the merged foundation.
 - Production deployment: separate authority; source delivery only
 
 ## Outcome and scope
@@ -18,21 +18,25 @@ research and project hand-offs remain later work.
 
 | Increment | Contract | State |
 | --- | --- | --- |
-| 1 | Atomic immutable settings, live capability validation, pinned requests, compact UI | implementation |
-| 2 | One adviser, observable bounded escalation, shared budgets and durable outcomes | depends on 1 |
+| 1 | Atomic immutable settings, live capability validation, pinned requests, compact UI | merged #51 |
+| 2 | One adviser, observable bounded escalation, shared budgets and durable outcomes | implementation |
 
 ## Current phase
 
-Inspect current source and deployed Codex 0.160.0. Calibrate zero-turn capability
-lookup, then qualify bootstrap, save, pinning and recovery with deterministic
-peers. SQLite owns active settings after bootstrap; deployment retains executable,
-timezone and security ceilings. No model calls for reads or saves.
+Main settings landed at `ee687ffea2875bb30afc2f4abf68e6f366b7caf5`, with
+an identical tree to independently reviewed `eb1d2bafefa72773fc4d397e3c5dc57bb4304edd`.
+Canonical backend/UI checks, desktop/narrow browser qualification and PR CI
+passed, including post-merge CI run 37416231347.
 
-The question is whether the qualified runtime exposes exact model/effort choices
-and supports a tool-free adviser turn without weakening containment. The smallest
-probe is contained model/list and one schema-only offline turn. Runtime code and
-[qualification](../../agent-settings-evidence/README.md) own the evidence. Exit
-when capability membership, effective settings and bounded recovery are proved.
+Implement adviser contract version 2 in the isolated branch based on that merge.
+One tool-free adviser call shares a maximum four-call request allowance with
+Bokkie and one empty-lookup continuation. Manual consultation is explicit;
+automatic consultation requires enabled policy and two grounded conflicting
+requirements. Preserve immutable snapshots and durable invocation outcomes.
+Canonical backend/UI checks and the complete fixture browser journey passed.
+Runtime catalogue evidence confirms `gpt-6-astra` with `high` is available on the
+installed 0.160.0 account. The exit condition is real supported routing, bounded
+recovery, complete regression and opened-image evidence, then normal landing.
 
 ## Acceptance
 
@@ -47,4 +51,4 @@ when capability membership, effective settings and bounded recovery are proved.
 
 ## Next action
 
-Implement increment 1 and qualify its complete persisted configuration contract.
+Qualify adviser configuration, routing, budgets and recovery; complete both delivery gates.

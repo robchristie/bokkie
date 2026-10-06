@@ -15,10 +15,19 @@ pub struct AgentRoleSettings {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdviserRoleSettings {
+    pub role: AgentRoleSettings,
+    pub automatic_consultation: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AgentProfileRevision {
     pub revision: i64,
     pub contract_version: u8,
     pub main: AgentRoleSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adviser: Option<AdviserRoleSettings>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -45,4 +54,6 @@ pub struct AgentSettingsSaveRequest {
     pub command_id: String,
     pub expected_revision: i64,
     pub main: AgentRoleSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adviser: Option<AdviserRoleSettings>,
 }
