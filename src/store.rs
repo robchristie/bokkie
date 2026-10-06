@@ -5998,7 +5998,8 @@ mod tests {
                 (12, "0012_managed_tasks.sql".to_owned()),
                 (13, "0013_conversations.sql".to_owned()),
                 (14, "0014_notification_delivery.sql".to_owned()),
-                (15, "0015_bokkie_push.sql".to_owned())
+                (15, "0015_bokkie_push.sql".to_owned()),
+                (16, "0016_agent_settings.sql".to_owned())
             ]
         );
         drop(store);

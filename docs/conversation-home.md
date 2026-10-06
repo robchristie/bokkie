@@ -31,9 +31,9 @@ specialist identities belong in configuration and activity details.
 The global Tasks control opens that catalogue from both Home and Needs attention.
 Advanced tools retains the legacy execution-record ledger for operational work;
 it is not presented as another Tasks destination.
-- **Settings (next extension):** appearance, agent roles and project workspaces
-  in the target design. Only settings supported by a persisted backend contract may be
-  presented as effective editable configuration.
+- **Settings:** edit the main conversational role through the
+  [persisted settings contract](agent-settings.md). Optional specialist roles
+  and project workspaces remain separate extensions.
 
 On a wide screen, the conversation occupies the main reading column; selected
 task details occupy a secondary panel. On narrow screens, navigation and task
@@ -94,14 +94,12 @@ and tuning belong to role profiles rather than task forms or the scheduling
 kernel. Delegation is visible in activity when relevant, without requiring the
 operator to maintain separate chats with every worker.
 
-The current conversation runtime has one deployment-owned profile. Editable
-role profiles, delegation and escalation require a separate versioned persistence,
-capability-validation and runtime-consumption contract. Visual controls alone
-must not claim that these capabilities exist. The eventual settings editor
-should validate supported model/effort choices server-side and preview changes
-before saving. Pin a selected profile revision to each request, so retry retains
-its original model, effort, permissions and limits. Escalation needs a defined
-trigger and remaining budget; it does not acquire broader permissions.
+The main conversational role has immutable persisted settings, live model/effort
+validation and accepted-request pinning. Deployment configuration bootstraps it
+once and retains hard security ceilings; subsequent role tuning uses Settings.
+Additional instructions supplement mandatory backend/tool rules. Adviser
+consultation is the second increment of the agent-settings package and is not
+presented as enabled by the main-role editor.
 
 Development work should produce a concise hand-off to the selected project
 workspace: requested outcome, relevant context, constraints and a return link.

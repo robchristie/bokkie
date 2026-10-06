@@ -5,6 +5,7 @@
 //! in the same transaction. Runners receive an already-persisted claim and are
 //! deliberately invoked outside those transactions.
 
+pub mod agent_settings;
 pub mod app_server;
 pub mod conversation;
 pub mod conversation_http;

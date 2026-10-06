@@ -95,8 +95,10 @@ model access. To enable it, set both `codex_auth` to one authorised existing
 }
 ```
 
-Retain the profile's model, effort, timezone and byte/time bounds as deliberate
-operator settings. Do not treat this path-only excerpt as a complete profile.
+Retain the profile's model/effort as bootstrap values and its timezone and
+byte/time bounds as deployment-owned ceilings. [Persisted settings](agent-settings.md)
+become authoritative for editable role values after first use; changing the
+deployment model does not reset them. Do not treat this path-only excerpt as a complete profile.
 The account file is bind-mounted read-only at `/home/probe/.codex/auth.json`;
 its source must be a canonical regular-file path without symlinks. Startup fails
 if the configured file is absent or unreadable by the runtime. Enabling it derives
@@ -140,6 +142,10 @@ Focus/revoked permission and background Basic-auth receipt access require actual
 platform qualification. The source fixture proves closed-page worker behaviour;
 it is not a real push-service or phone test. Synthetic peers own failure/restart
 probes so production is not deliberately disrupted.
+
+Migration16 also stores agent profiles and accepted-request snapshots. Schema15
+binaries cannot open schema16; preserve a stopped-state backup for rollback.
+No new mount, account access or Docker/Bubblewrap policy is required.
 
 Migration15 appends immutable subscription generations and push intent/receipt
 state; applied migrations are unchanged. Schema14 and older binaries cannot open

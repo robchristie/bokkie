@@ -139,7 +139,9 @@ Open Bokkie’s **Home** to describe, find, refine, preview,
 activate, revise or pause/resume a managed task. The first executable capability
 creates durable local notes; research/email capabilities remain drafts with
 explicit blockers. One private conversation profile and `--enable-local-notes`
-enable ordinary UI task setup without per-task files or restarts. See the
+enable ordinary UI task setup without per-task files or restarts. **Settings**
+then edits the [persisted conversational role](docs/agent-settings.md), with
+changes applying to new requests. See the
 [operator setup](docs/operator-guide.md#conversational-task-management) and
 [definition/timing contract](docs/conversational-tasks.md).
 

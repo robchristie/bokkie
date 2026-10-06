@@ -25,6 +25,10 @@ pub struct ActionRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApiRequest {
     Bootstrap,
+    AgentSettings {
+        generation: u64,
+    },
+    SaveAgentSettings(bokkie_operator_api::AgentSettingsSaveRequest),
     Conversations,
     Conversation {
         id: String,
@@ -72,6 +76,7 @@ pub enum ApiRequest {
 #[derive(Debug)]
 pub enum ApiPayload {
     Bootstrap(ApiSession),
+    AgentSettings(bokkie_operator_api::AgentSettingsView),
     Conversations(bokkie_operator_api::ConversationList),
     Conversation(Box<bokkie_operator_api::ConversationView>),
     Catalogue(bokkie_operator_api::ManagedCataloguePage),
@@ -234,6 +239,7 @@ impl Transport {
         let endpoint = self.endpoint(request);
         match request {
             ApiRequest::Bootstrap
+            | ApiRequest::AgentSettings { .. }
             | ApiRequest::Conversations
             | ApiRequest::Conversation { .. }
             | ApiRequest::Catalogue { .. }
@@ -242,6 +248,7 @@ impl Transport {
             | ApiRequest::Changes { .. }
             | ApiRequest::Obligation { .. } => Ok(ehttp::Request::get(endpoint)),
             ApiRequest::Act(_)
+            | ApiRequest::SaveAgentSettings(_)
             | ApiRequest::ConversationTurn(_)
             | ApiRequest::ConversationSelect(_)
             | ApiRequest::ConversationConfirm(_)
@@ -255,6 +262,9 @@ impl Transport {
                     )
                 })?;
                 let body = match request {
+                    ApiRequest::SaveAgentSettings(value) => {
+                        serde_json::to_vec(value).expect("serialisable agent settings")
+                    }
                     ApiRequest::ConversationTurn(value) => {
                         serde_json::to_vec(value).expect("serialisable turn")
                     }
@@ -295,6 +305,9 @@ impl Transport {
 
     fn endpoint(&self, request: &ApiRequest) -> String {
         let path = match request {
+            ApiRequest::AgentSettings { .. } | ApiRequest::SaveAgentSettings(_) => {
+                "/agent-settings".into()
+            }
             ApiRequest::Conversations => "/conversations".into(),
             ApiRequest::Conversation { id, .. } => {
                 format!("/conversations/{}", encode_path_segment(id))
@@ -476,6 +489,11 @@ fn decode(
         };
     }
     match request {
+        ApiRequest::AgentSettings { .. } | ApiRequest::SaveAgentSettings(_) => {
+            let value = decode_json::<bokkie_operator_api::AgentSettingsView>(&response)?;
+            validate_response_identity(Some(&value.service), expected_session, "agent settings")?;
+            Ok(ApiPayload::AgentSettings(value))
+        }
         ApiRequest::Conversations => {
             let value = decode_json::<bokkie_operator_api::ConversationList>(&response)?;
             validate_response_identity(Some(&value.service), expected_session, "conversations")?;
@@ -785,6 +803,67 @@ mod tests {
                 .unwrap()
                 .contains(&"a".repeat(64))
         );
+    }
+
+    #[test]
+    fn agent_settings_transport_preserves_save_payload_and_checks_response_session() {
+        let transport = Transport::new("http://127.0.0.1:7744").unwrap();
+        let save = bokkie_operator_api::AgentSettingsSaveRequest {
+            command_id: "exact-settings-save".into(),
+            expected_revision: 7,
+            main: bokkie_operator_api::AgentRoleSettings {
+                model: "available-model".into(),
+                effort: "high".into(),
+                additional_instructions: "Keep exact\nentered values".into(),
+                timeout_seconds: 60,
+                max_context_bytes: 8192,
+                max_output_bytes: 4096,
+                max_model_calls: 2,
+            },
+        };
+        let request = ApiRequest::SaveAgentSettings(save.clone());
+        assert!(transport.http_request(&request, None).is_err());
+        let current = session("current", &"a".repeat(64));
+        let http = transport.http_request(&request, Some(&current)).unwrap();
+        assert_eq!(http.url, "http://127.0.0.1:7744/agent-settings");
+        assert_eq!(
+            serde_json::from_slice::<bokkie_operator_api::AgentSettingsSaveRequest>(&http.body)
+                .unwrap(),
+            save
+        );
+        assert_eq!(
+            http.headers.get("X-Bokkie-Mutation-Token"),
+            Some("a".repeat(64).as_str())
+        );
+        let read = ApiRequest::AgentSettings { generation: 15 };
+        let response = |identity| ehttp::Response {
+            url: http.url.clone(),
+            ok: true,
+            status: 200,
+            status_text: "OK".into(),
+            headers: ehttp::Headers::new(&[("Content-Type", "application/json")]),
+            bytes: serde_json::to_vec(&bokkie_operator_api::AgentSettingsView {
+                service: service(identity),
+                profile: None,
+                models: vec![],
+                ceilings: None,
+                effective: false,
+                unavailable_reason: Some("Runtime unavailable".into()),
+            })
+            .unwrap(),
+        };
+        assert!(matches!(
+            decode(&read, response("current"), Some(&current)),
+            Ok(ApiPayload::AgentSettings(_))
+        ));
+        assert!(matches!(
+            decode(&request, response("previous"), Some(&current)),
+            Err(ApiFailure::SessionChanged(_))
+        ));
+        assert!(matches!(
+            decode(&read, response("current"), None),
+            Err(ApiFailure::SessionChanged(_))
+        ));
     }
 
     #[test]

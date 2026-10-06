@@ -1,0 +1,49 @@
+{
+  "source": "f9c33857c5564f0320ec1c092e7dd1ffa44978d6",
+  "mode": "deterministic-model-peer",
+  "checks": [
+    "Owned browser target",
+    "Lantern layout",
+    "Lantern capture",
+    "Invalid finite time disables save without losing draft",
+    "Owned browser target",
+    "Lantern layout",
+    "Lantern capture",
+    "Physical editor saves model and supported effort",
+    "Instructions retained after validation",
+    "Finite limit saved",
+    "Navigation, editing and saving invoke zero model calls",
+    "Owned browser target",
+    "Lantern layout",
+    "Lantern capture",
+    "Owned browser target",
+    "Lantern layout",
+    "Lantern capture",
+    "Owned browser target",
+    "Lantern layout",
+    "Lantern capture",
+    "Unsent message survives Settings and return",
+    "Saved settings govern successful execution after return",
+    "Saved role survives fixture restart",
+    "Versioned settings migration in actual service"
+  ],
+  "captures": [
+    "settings-desktop",
+    "validation-desktop",
+    "saved-desktop",
+    "settings-narrow",
+    "conversation-return-narrow"
+  ],
+  "errors": [],
+  "fixture": {
+    "address": "127.0.0.1:39323",
+    "database_kind": "synthetic_fixture",
+    "now": 1790028000,
+    "resumed": true,
+    "root": "/tmp/bokkie-settings-7f17159d-b996-4439-bc97-d8a1443befa3",
+    "scheduler": "manual_stdin_only"
+  },
+  "browser": "151.0.7922.34",
+  "passed": true,
+  "dispatches": 1
+}
