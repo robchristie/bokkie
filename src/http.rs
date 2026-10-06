@@ -225,6 +225,7 @@ pub fn router_with_state(state: ApiState, ui_dir: Option<PathBuf>) -> Router {
 fn router_state_core(state: ApiState) -> Router {
     Router::new()
         .merge(crate::conversation_http::routes())
+        .merge(crate::push_http::routes())
         .route(
             "/engineering/outcomes",
             post(engineering_intake).get(engineering_list),
@@ -1990,6 +1991,9 @@ mod tests {
             "/operator/obligations/id/retry",
             "/operator/obligations/id/cancel",
             "/operator/notifications/id/recover",
+            "/notifications/push/register",
+            "/notifications/push/disable",
+            "/notifications/push/receipts",
             "/gardener/repository",
             "/gardener/proposals/fingerprint/approve",
             "/gardener/proposals/fingerprint/reject",
