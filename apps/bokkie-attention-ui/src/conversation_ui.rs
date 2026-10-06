@@ -8,7 +8,7 @@ use bokkie_operator_api::{
 #[derive(Default)]
 pub(super) struct ConversationState {
     pub open: bool,
-    id: Option<String>,
+    pub(super) id: Option<String>,
     view: Option<ConversationView>,
     history: Vec<ConversationSummary>,
     catalogue: Vec<ManagedCatalogueEntry>,
@@ -20,7 +20,7 @@ pub(super) struct ConversationState {
     query: String,
     applied_query: String,
     next_after: Option<String>,
-    text: String,
+    pub(super) text: String,
     consult_adviser: bool,
     pending: Option<ApiRequest>,
     in_flight: bool,
@@ -212,10 +212,13 @@ impl AttentionApp {
             return;
         }
         self.agent_settings.open = false;
+        self.handoff.open = false;
         self.conversation.open = true;
-        if task.is_some() || self.conversation.id.is_none() {
+        if task.is_some() {
             self.conversation
                 .switch(uuid::Uuid::new_v4().to_string(), task);
+        } else if self.conversation.id.is_none() {
+            self.conversation.id = Some(uuid::Uuid::new_v4().to_string());
         }
         self.refresh_conversation(context);
     }
@@ -305,6 +308,9 @@ impl AttentionApp {
                         self.conversation.text.clear();
                     }
                     self.conversation.pending = None;
+                }
+                if let Some(draft) = &view.handoff_draft {
+                    self.handoff.observe_draft(draft.clone());
                 }
                 self.conversation.accept(*view, session);
                 if let Some(task) = self.conversation.select_after_load.take() {
@@ -630,6 +636,9 @@ impl AttentionApp {
             });
         }
         match action {
+            Some(ConversationUiAction::Handoff(draft)) => {
+                self.open_handoff_draft(*draft, &context);
+            }
             Some(ConversationUiAction::New) => {
                 self.conversation = ConversationState {
                     open: true,
@@ -714,6 +723,7 @@ impl AttentionApp {
 }
 
 enum ConversationUiAction {
+    Handoff(Box<bokkie_operator_api::HandoffDraft>),
     New,
     Open(String),
     Search,
@@ -1107,6 +1117,39 @@ fn conversation_transcript(
             });
         ui.add_space(12.0);
     }
+    if let Some(draft) = &view.handoff_draft {
+        ui.group(|ui| {
+            ui.strong(if draft.saved_revision > 0 {
+                "Saved project hand-off"
+            } else {
+                "Project hand-off draft"
+            });
+            ui.label(&draft.brief.outcome);
+            if draft.saved_revision > 0 {
+                ui.label(format!("Saved revision {}", draft.saved_revision));
+            } else {
+                ui.label(format!(
+                    "Workspace query: {} · {} matching destinations",
+                    draft.project_query,
+                    draft.candidates.len()
+                ));
+            }
+            if button(
+                ui,
+                "bokkie.conversation.handoff",
+                if draft.saved_revision > 0 {
+                    "Open saved hand-off"
+                } else {
+                    "Review project hand-off"
+                },
+                true,
+                nodes,
+            ) {
+                *action = Some(ConversationUiAction::Handoff(Box::new(draft.clone())));
+            }
+        });
+        ui.add_space(8.0);
+    }
     if !view.candidates.is_empty() {
         ui.strong("Choose the task you mean");
     }
@@ -1375,7 +1418,14 @@ pub(super) fn button(
         })
         .inner;
     record_native_text_control(&response, NativeTextControlKind::Button);
-    observe(response.rect, id, label, UiRole::Button, enabled, nodes);
+    let observed = if id == "bokkie.conversation.handoff" {
+        response.rect.intersect(ui.clip_rect())
+    } else {
+        response.rect
+    };
+    if observed.is_positive() {
+        observe(observed, id, label, UiRole::Button, enabled, nodes);
+    }
     response.clicked()
 }
 fn catalogue_row(
@@ -1743,6 +1793,7 @@ mod tests {
             adviser_available: false,
             activity: None,
             adviser_outcome: None,
+            handoff_draft: None,
             notes_available: true,
             reminders_available: true,
             receipt: None,

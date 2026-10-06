@@ -147,6 +147,12 @@ changes applying to new requests. See the
 
 ## Engineering supervision
 
+For ordinary development requests, use the [project workspace hand-off](docs/project-handoffs.md):
+register a destination in Settings, discuss the outcome, review and save a concise
+brief, then copy it into a fresh session in the existing Codex workspace. Saved
+revisions and operator-entered result notes stay readable through return links.
+This route prepares work without activating an engineering task.
+
 The task-scoped engineering adapter extends the same Store lifecycle with durable
 outcome contracts, work packages, execution ownership, questions, submissions,
 acceptance and linked repairs. A completed worker leaves acceptance pending.

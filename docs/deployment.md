@@ -120,6 +120,19 @@ built-in tools and execution environments remain disabled.
 
 ## Restart, persistence and rollback
 
+### Preparing project hand-offs (separate deployment authority)
+
+The [project hand-off package](project-handoffs.md) appends migration17 with
+destination references, immutable brief revisions and attributed result/action
+records. Build the reviewed merged source and bundled UI through the existing
+image procedure. It needs no workspace mount, development-machine connection,
+credential, administration socket or containment-policy change. The existing
+configured public origin supplies saved return links under authenticated ingress.
+Keep a stopped-service state backup and prior immutable image/manifest before
+updating. Schema16 binaries cannot open schema17. Restoring the old backup for
+rollback is a separately authorised data operation; reconcile later reminder
+effects and history before restoring. Source landing alone does not deploy it.
+
 ### Preparing reminders (separate deployment authority)
 
 The selected primary destination is Bokkie Web Push. Source delivery does not
@@ -188,8 +201,9 @@ local SMTP peer for outage/restart/uncertainty probes, not production delivery
 failures or arbitrary recipients. Existing relay acceptance and suppressed DSNs
 do not supply an end-to-end delivery receipt.
 
-Migration14 introduced durable notification intents; this source now requires
-schema15. Older binaries must not be started against the upgraded database.
+Migration14 introduced durable notification intents and migration15 added Web
+Push state. This source requires schema17. Older binaries must not be started
+against the upgraded database.
 Retain the stopped-service state backup, old manifest and immutable image before
 an authorised update. Disabling notification configuration stops new reminder
 admission and sending while preserving queued intents, history and attention.

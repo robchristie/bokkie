@@ -167,6 +167,11 @@ impl ApiRuntime {
         self.identity.clone()
     }
 
+    /// Trusted configured origin; request and forwarding headers cannot select it.
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
     pub fn bootstrap(&self) -> SessionBootstrap {
         SessionBootstrap {
             service: self.identity(),

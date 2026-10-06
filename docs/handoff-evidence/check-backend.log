@@ -1,0 +1,531 @@
+...........................................................................................................................................................................................................................
+----------------------------------------------------------------------
+Ran 219 tests in 5.424s
+
+OK
+plan lint passed for 26 plan(s)
+toolchain contract passed: backend 1.85.0/MSRV 1.85; UI 1.97.1/MSRV 1.97
+   Compiling bokkie v0.1.0 (/nvme/development/bokkie)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.90s
+     Running unittests src/lib.rs (target/debug/deps/bokkie-151ff710b64de81f)
+
+running 371 tests
+test app_server::tests::malformed_json_aborts ... ok
+test app_server::tests::eof_aborts_instead_of_accepting_partial_output ... ok
+test app_server::tests::completed_turn_requires_final_agent_message ... ok
+test app_server::tests::mismatched_response_id_aborts ... ok
+test app_server::tests::completed_turn_rejects_an_oversized_final_message ... ok
+test app_server::tests::implementation_is_network_disabled_and_confined_to_worktree ... ok
+test app_server::tests::observer_error_aborts_before_turn_start ... ok
+test app_server::tests::failed_and_interrupted_completions_report_status ... ok
+test app_server::tests::verification_is_also_read_only ... ok
+test app_server::tests::mismatched_notification_identity_aborts ... ok
+test app_server::tests::unknown_server_request_aborts_without_inventing_a_response ... ok
+test app_server::tests::read_only_success_uses_stable_schema_and_orders_callbacks ... ok
+test app_server::tests::unexpected_approval_request_is_denied_before_abort ... ok
+test conversation_http::tests::conversation_calendar_uses_the_supplied_clock_and_named_zone ... ok
+test conversation_runtime::tests::rejects_oversized_context_before_process_start ... ok
+test conversation_runtime::tests::rejects_invalid_tool_surface_before_process_start ... ok
+test conversation_runtime::tests::accepts_bounded_efforts_for_catalogue_validation ... ok
+test conversation_runtime::tests::rejects_unbounded_or_ambiguous_profiles ... ok
+test doctor::tests::classifies_stale_missing_cached_mismatched_and_unowned_git_facts ... ok
+test conversation_tools::tests::revision_preserves_existing_trusted_bounds_and_profile ... ok
+test doctor::tests::command_observer_uses_only_the_exact_read_only_allowlist ... ok
+test app_server::tests::trusted_codex_command_uses_a_private_pid_namespace_boundary ... ok
+test doctor::tests::invalid_checkout_identity_stops_before_live_remote_observation ... ok
+test conversation_tools::tests::automatic_difficulty_requires_two_distinct_current_request_quotes_and_closed_fields ... ok
+test conversation_tests::model_tools_only_advertise_operations_for_trusted_selection ... ok
+test conversation_tools::tests::reminder_destination_is_backend_owned_and_preserved_on_revision ... ok
+test engineering_runtime::journal::tests::historical_replay ... ignored, requires an explicitly selected retained legacy journal
+test conversation_tools::tests::unavailable_drafts_do_not_acquire_note_effects_and_legacy_cannot_convert ... ok
+test conversation_tools::tests::defaults_and_authority_are_owned_by_backend ... ok
+Initialized empty Git repository in /tmp/.tmpP2VYt8/checkout/.git/
+Initialized empty Git repository in /tmp/.tmpA4MUg5/checkout/.git/
+[main (root-commit) 2277de1] Initialise fixture
+ 1 file changed, 1 insertion(+)
+ create mode 100644 README.md
+[main (root-commit) 2277de1] Initialise fixture
+ 1 file changed, 1 insertion(+)
+ create mode 100644 README.md
+test doctor::tests::incompatible_schema_is_reported_without_aborting_other_checks ... ok
+test app_server::tests::heartbeat_store_failure_stops_a_running_app_server ... ok
+test doctor::tests::hostile_checkout_transport_config_cannot_reach_live_observation ... ok
+test app_server::tests::shutdown_cancellation_stops_a_running_app_server ... ok
+test app_server::tests::stopped_stdin_reader_cannot_block_shutdown_cancellation ... ok
+test engineering_runtime::tests::child_review_rejects_missing_parent_failed_turn_and_mismatched_final ... ok
+test engineering_runtime::journal::tests::empty_legacy_torn_and_corrupt_segment_boundaries ... ok
+test engineering_runtime::journal::tests::python_segments_preserve_exact_sources_outputs_and_retained_evidence ... ok
+test conversation_runtime::tests::model_discovery_has_separate_bounded_transport_output ... ok
+test app_server::tests::stopped_stdin_reader_cannot_block_heartbeats_or_deadline ... ok
+test app_server::tests::real_pid_boundary_kills_a_daemonised_codex_descendant_before_mutation ... ok
+test conversation_tests::typed_model_boundary_cannot_supply_authority_or_confirm ... ok
+test agent_settings::tests::adviser_settings_share_the_revision_and_finite_budget_without_changing_legacy_payloads ... ok
+test agent_settings::tests::unsupported_settings_and_ceilings_never_partially_activate ... ok
+test conversation_tests::confirmed_change_and_conversation_receipt_are_atomic_and_replay_safe ... ok
+test engineering_runtime::tests::actual_child_review_is_discoverable_and_retains_exact_turn_provenance ... ok
+test engineering_runtime::tests::binary_evidence_pages_are_lossless_and_explicitly_encoded ... ok
+test engineering_runtime::tests::absolute_profile_deadline_survives_delayed_intake_without_changing_legacy_identity ... ok
+test agent_settings::tests::adviser_dispatches_reject_skipped_ordinals_repeats_a_fifth_call_and_uncertain_restart ... ok
+test engineering_runtime::tests::child_review_discovery_does_not_grant_root_tools_to_the_child ... ok
+test db_executor::tests::command_panic_is_typed_and_owner_thread_survives ... ok
+test conversation_tests::durable_requests_replay_and_restart_never_relaunch_or_confirm ... ok
+test agent_settings::tests::bootstrap_save_restart_and_request_snapshot_are_atomic ... ok
+test engineering_runtime::tests::continuation_question_and_checkpoint_caps_reach_intake_without_changing_legacy_identity ... ok
+test conversation_tests::model_dispatches_are_bounded_durable_and_never_replayed ... ok
+test engineering_runtime::tests::closeout_reconciliation_uses_frozen_intent_after_contract_change ... ok
+test doctor::tests::healthy_database_passes_without_mutation ... ok
+test conversation_tests::conversation_failure_keeps_draft_and_context_is_bounded ... ok
+test conversation_http::tests::unconfigured_reminder_draft_acquires_destination_only_in_a_fresh_exact_review ... ok
+test engineering_runtime::tests::default_mode_question_tool_waits_for_durable_supervisor_answer ... ok
+test engineering_runtime::tests::database_rejects_workspace_and_symlink_aliases_before_open ... ok
+test engineering_runtime::tests::cancelled_failed_admission_settles_without_runtime_repair_charge ... ok
+test engineering_runtime::tests::delivery_receipt_rejects_boolean_only_and_mismatched_ci_and_cleanup ... ok
+test db_executor::tests::full_queue_and_draining_shutdown_have_typed_results ... ok
+test engineering_runtime::tests::binary_asset_inspection_verifies_all_bytes_without_dumping_content ... ok
+test doctor::tests::real_git_reconciliation_leaves_database_and_repository_unchanged ... ok
+test doctor::tests::detects_attempt_projection_liveness_and_manifest_corruption ... ok
+test conversation_tests::selection_uses_catalogue_and_conflicts_do_not_silently_choose ... ok
+test doctor::tests::detects_unmapped_gardener_source_evidence ... ok
+test conversation_http::tests::primary_push_requires_enrolment_and_supplies_the_exact_generation_without_email_fallback ... ok
+test doctor::tests::running_liveness_uses_the_exact_lease_expiry_boundary ... ok
+test engineering_runtime::tests::dispatch_limits_honour_package_deadline_and_original_claim ... ok
+test engineering_runtime::tests::expired_claim_without_manifest_has_not_started_proof ... ok
+test engineering_runtime::tests::failed_pre_turn_start_parks_attention_and_charges_once ... ok
+test engineering_runtime::tests::independent_review_requires_observed_subagent_report ... ok
+test engineering_runtime::tests::github_profile_is_explicit_and_local_identity_is_unchanged ... ok
+test engineering_runtime::tests::github_tool_refuses_stale_and_unattributed_merge_before_host_call ... ok
+test engineering_runtime::tests::intake_replay_preserves_original_deadline_and_intent ... ok
+test engineering_runtime::tests::grouped_questions_and_saved_answers_survive_controller_replay ... ok
+test engineering_runtime::tests::failed_admission_after_lease_expiry_stays_parked ... ok
+test gardener::tests::prompt_normalisation_is_stable_but_preserves_internal_content ... ok
+test gardener::tests::proposal_instance_identity_is_deterministic_and_canonicalises_source_case ... ok
+test engineering_runtime::tests::invented_validation_and_changed_artefacts_are_rejected ... ok
+test engineering_runtime::tests::post_reap_submission_is_pending_assessment_and_replay_is_free ... ok
+test gardener_runner::tests::cleanup_disposition_is_typed_and_never_inferred_from_display_text ... ok
+test engineering_runtime::tests::github_delivery_replays_persisted_result_before_uncertain_commit_readback ... ok
+test engineering_runtime::tests::profile_rejects_infinite_bounds_and_overlapping_storage ... ok
+test engineering_runtime::tests::source_capture_failures_and_available_bindings_are_exposed_to_tools ... ok
+test engineering_runtime::tests::pre_spawn_failure_without_cessation_proof_remains_uncertain ... ok
+test engineering_runtime::tests::renewal_near_fixed_deadline_does_not_cancel_early ... ok
+test engineering_runtime::tests::stale_model_decision_cannot_refresh_its_snapshot ... ok
+test gardener_runner::tests::model_field_limits_match_json_schemas_and_count_unicode_characters ... ok
+test engineering_runtime::tests::github_host_branch_commit_and_receipt_replay_use_real_local_git_only ... ok
+test engineering_runtime::tests::segmented_journal_retains_paged_evidence_and_reconciles_once ... ok
+test engineering_runtime::tests::supervisor_dynamic_missing_information_routes_fact_without_new_authority ... ok
+test engineering_runtime::tests::supervisor_adapter_cancels_delegated_package_but_not_outcome ... ok
+test git_workspace::tests::creates_and_observes_a_ready_pr_from_structured_json ... ok
+test git_workspace::tests::cleanup_refuses_unsafe_dirty_and_foreign_worktrees ... ok
+test git_workspace::tests::live_real_gh_requires_authentication_even_for_public_pr_view ... ignored, live installed-gh probe; run explicitly during tool qualification
+test engineering_runtime::tests::textual_asset_content_remains_exact_even_with_a_binary_filename ... ok
+test git_workspace::tests::interrupted_gh_mutation_reports_ambiguous_external_state ... ok
+test git_workspace::tests::refuses_branch_and_path_collisions ... ok
+test events::tests::changes_derive_scoped_obligation_proposal_and_run_identities ... ok
+test git_workspace::tests::rejects_a_noncanonical_effective_fetch_url_before_fetching_or_creating_a_worktree ... ok
+test git_workspace::tests::rejects_malformed_json_and_a_noncanonical_pr_url ... ok
+test git_workspace::tests::rejects_pr_head_mismatch_and_non_ready_observations ... ok
+test git_workspace::tests::candidate_qualification_is_exact_deterministic_and_credential_free ... ok
+test git_workspace::tests::remote_branch_observation_rejects_a_missing_or_mismatched_ref ... ok
+test git_workspace::tests::commits_all_dirty_non_ignored_changes_and_pushes_only_the_named_ref ... ok
+test git_workspace::tests::started_non_zero_process_is_not_retried ... ok
+test git_workspace::tests::rechecks_and_rejects_a_noncanonical_effective_push_url_before_pushing ... ok
+test git_workspace::tests::validates_exact_identity_and_dedicated_branch_names ... ok
+test engineering_runtime::tests::expanded_reply_and_bad_request_do_not_block_later_requests_or_reaping ... ok
+test git_workspace::tests::retries_only_pre_start_executable_file_busy_errors ... ok
+test engineering_runtime::tests::unknown_broker_death_never_releases_the_writer ... ok
+test git_workspace::tests::shutdown_cancellation_stops_a_running_git_command ... ok
+test handoffs::tests::invalid_generated_briefs_are_rejected_before_persistence ... ok
+test git_workspace::tests::resolves_origin_main_and_creates_exact_detached_and_branch_heads ... ok
+test git_workspace::tests::unsafe_local_git_configuration_blocks_before_credentialled_processes ... ok
+test events::tests::cursor_validation_distinguishes_invalid_ahead_and_gap_inputs ... ok
+test git_workspace::tests::trusted_publication_creates_draft_then_promotes_with_narrow_credentials ... ok
+test engineering_runtime::tests::uncaptured_package_input_must_still_match_after_validation ... ok
+test engineering_runtime::tests::failed_pre_spawn_admission_parks_once_across_controller_restart ... ok
+test events::tests::envelope_rejects_orphans_duplicates_mismatches_and_mutation ... ok
+test events::tests::proposal_decision_changes_use_the_exact_persisted_instance_identity ... ok
+test events::tests::source_and_envelope_roll_back_as_one_transaction ... ok
+test git_workspace::tests::candidate_sandbox_resolves_offline_git_dependencies_with_read_only_cache ... ok
+test events::tests::same_second_live_events_follow_authoritative_source_insertion_sequence ... ok
+test events::tests::wal_writes_between_pages_do_not_cross_a_captured_watermark ... ok
+test events::tests::legacy_backfill_is_complete_deterministic_non_causal_and_survives_reopen ... ok
+test gardener_runner::tests::unconfigured_ordinary_claims_cannot_take_gardener_work ... ok
+test gardener_runner::tests::inspection_rejects_a_noncanonical_effective_origin_before_remote_or_codex_work ... ok
+test http::tests::remote_bind_is_rejected ... ok
+test engineering_runtime::tests::validation_rejects_checks_run_against_an_older_source ... ok
+test handoffs::tests::handoff_writes_and_receipts_roll_back_together_when_audit_fails ... ok
+test handoffs::tests::handoff_saves_are_replay_safe_and_identical_clicks_do_not_duplicate ... ok
+test handoffs::tests::invalid_and_missing_destinations_cannot_be_saved_or_interpreted_as_launch_routes ... ok
+test handoffs::tests::project_edits_fence_selection_and_never_rewrite_historical_destinations ... ok
+test handoffs::tests::handoff_ambiguity_revisions_return_and_results_survive_restart_without_execution ... ok
+test http::tests::bootstrap_health_and_snapshot_expose_identity_without_secret ... ok
+test http_security::tests::different_runtime_instances_rotate_tokens_and_sessions ... ok
+test http_security::tests::runtime_debug_and_identity_serialisation_do_not_expose_secret ... ok
+test http::tests::concurrent_http_commands_share_one_database_owner ... ok
+test http::tests::conditional_operator_route_rejects_a_later_occurrence ... ok
+test http::tests::engineering_cancellation_is_fenced_replay_safe_and_waits_for_cessation ... ok
+test http::tests::engineering_intake_requires_trusted_configuration ... ok
+test conversation_tests::stale_session_profile_definition_and_new_discussion_invalidate_review ... ok
+test http::tests::every_mutation_route_requires_the_explicit_session_header ... ok
+test http::tests::engineering_plain_intent_is_durable_replay_safe_and_fenced ... ok
+test http::tests::legacy_bodyless_mutations_require_json_and_reject_browser_simple_requests ... ok
+test notifications::push::tests::configuration_is_strict_bounded_and_redacted ... ok
+test notifications::push::tests::encrypted_payload_and_vapid_are_independently_verified ... ok
+test notifications::push::tests::accepted_expired_rejected_and_redirect_outcomes_are_distinct ... ok
+test notifications::push::tests::key_mismatch_and_expiry_fail_before_any_post_and_do_not_reroute ... ok
+test http::tests::incremental_changes_accept_the_dedicated_one_thousand_item_limit ... ok
+test notifications::push::tests::payload_bounds_topic_identity_and_lifetime_are_stable ... ok
+test http::tests::incremental_changes_are_typed_bounded_and_do_not_require_mutation_token ... ok
+test notifications::push::tests::subscription_policy_rejects_endpoint_and_key_bypasses ... ok
+test http::tests::read_routes_are_bounded_and_publish_durable_continuation_headers ... ok
+test notifications::push::tests::https_uses_original_hostname_and_rejects_a_different_certificate ... ok
+test notifications::smtp::tests::disconnect_and_malformed_reply_after_data_are_uncertain ... ok
+test notifications::smtp::tests::disconnect_before_data_and_unexpected_greeting_cannot_claim_acceptance ... ok
+test notifications::smtp::tests::encoding_preserves_text_without_header_or_data_injection ... ok
+test notifications::smtp::tests::final_success_temporary_and_permanent_replies_have_distinct_outcomes ... ok
+test notifications::smtp::tests::finite_message_bounds_and_sender_config_mismatch_fail_before_network ... ok
+test http::tests::root_redirect_requires_ui_configuration_and_valid_request_context ... ok
+test http::tests::operator_obligation_and_topic_reads_expose_identity_and_watermark ... ok
+test notifications::tests::configuration_is_bounded_strict_read_only_and_rejects_address_injection ... ok
+test notifications::push::tests::tls_handshake_is_inside_total_deadline_before_post ... ok
+test notifications::push::tests::lost_response_malformed_reply_and_total_deadline_require_reconciliation ... ok
+test http::tests::static_ui_uses_the_same_host_and_origin_boundary ... ok
+test operator::tests::implementation_titles_use_the_first_nonempty_line_and_bound_unicode_safely ... ok
+test http::tests::stale_confirmation_returns_transition_conflict_after_same_occurrence_cycle ... ok
+test notifications::smtp::tests::total_deadline_after_data_returns_uncertain_without_waiting_for_the_peer ... ok
+test http::tests::stopped_database_owner_returns_a_typed_service_error ... ok
+test engineering_runtime::tests::exhausted_large_journal_retains_exact_cessation_and_bounded_continuation ... ok
+test http::tests::wrong_and_rotated_tokens_fail_without_leaking_supplied_values ... ok
+test pagination::tests::cursor_rejects_tampering_scope_and_watermark_mismatch ... ok
+test pagination::tests::limits_have_a_bounded_default ... ok
+test http::tests::uncertain_notification_recovery_requires_exact_confirmation_and_never_claims_delivery ... ok
+test migrations::tests::applied_manifest_rows_are_immutable ... ok
+test process::tests::completed_child_cannot_bypass_the_output_limit ... ok
+test http::tests::operator_endpoints_return_shared_projection_and_missing_topic_is_not_found ... ok
+test process::tests::cancellation_kills_descendants_in_the_child_process_group ... ok
+test process::tests::completed_output_retains_exact_tail_and_digest_evidence ... ok
+test process::tests::completed_child_wins_a_cancellation_race_when_exit_is_already_observable ... ok
+test http::tests::task_configuration_route_saves_revision_and_rejects_stale_or_extra_fields ... ok
+test process::tests::heartbeat_failure_stops_the_child_with_a_typed_outcome ... ok
+test process::tests::completed_child_wins_a_deadline_race_when_exit_is_already_observable ... ok
+test process::tests::normal_completion_kills_silent_descendants_in_the_original_group ... ok
+test process::tests::interrupted_effect_is_reported_as_ambiguous_external_state ... ok
+test process::tests::oversized_jsonl_line_is_stopped_before_unbounded_accumulation ... ok
+test process::tests::oversized_stdin_message_is_rejected_with_a_typed_limit_outcome ... ok
+test recurrence::tests::named_zone_schedule_tracks_daylight_saving ... ok
+test recurrence::tests::recurrence_fields_are_bounded_before_parsing ... ok
+test runner::tests::runtime_evidence_is_unicode_safe_bounded_and_nul_free ... ok
+test runtime_trust::tests::canonical_identity_retains_a_multicall_invocation_name ... ok
+test runtime_trust::tests::credential_redaction_covers_raw_tokens_and_basic_authentication ... ok
+test runtime_trust::tests::detects_executable_replacement_after_startup ... ok
+test runtime_trust::tests::git_mutation_uses_basic_authentication_scoped_to_github ... ok
+test process::tests::continuous_output_is_stopped_with_tail_digest_and_truncation_evidence ... ok
+test runtime_trust::tests::resolves_only_the_controlled_path_and_binds_version_and_content ... ok
+test runtime_trust::tests::hostile_ambient_values_are_cleared_and_credential_scope_is_narrow ... ok
+test service::tests::backlogged_lane_workers_progress_while_the_other_lane_is_blocked ... ok
+test process::tests::never_exiting_child_reaches_absolute_deadline ... ok
+test service::tests::closing_admission_prevents_a_claim_waiting_for_the_gate ... ok
+test process::tests::heartbeats_continue_while_the_child_emits_output ... ok
+test service::tests::execution_lane_serialisation_keeps_the_future_outbox_identity_explicit ... ok
+test service::tests::invalid_capacity_is_rejected_before_the_database_is_opened ... ok
+test migrations::tests::domain_event_upgrade_preserves_envelope_cursors_and_append_only_guards ... ok
+test migrations::tests::compatible_open_requires_wal_without_changing_persistent_mode ... ok
+test migrations::tests::fresh_database_records_exact_digests_and_reopens_without_migration ... ok
+test service::tests::shutdown_error_aggregates_every_timed_out_worker ... ok
+test service::tests::worker_panics_are_reported_with_their_lane_identity ... ok
+test migrations::tests::v6_digest_bootstrap_preserves_domain_and_audit_evidence ... ok
+test migrations::tests::v8_backfills_only_unambiguous_legacy_failure_dispositions ... ok
+test http::tests::host_origin_and_browser_context_are_fail_closed ... ok
+test notifications::push::tests::store_created_intent_reaches_payload_and_encryption_with_its_exact_identity ... ok
+test operator::tests::expired_running_lease_is_projected_as_attention_until_store_recovers_it ... ok
+test operator::tests::deferred_operator_read_keeps_one_snapshot_across_owner_queries ... ok
+test operator::tests::same_occurrence_state_cycle_rejects_the_original_confirmation ... ok
+test operator::tests::later_occurrence_rejects_action_confirmed_for_an_earlier_occurrence ... ok
+test operator::tests::snapshot_owns_exception_liveness_order_and_exact_transition_capabilities ... ok
+test notifications::smtp::tests::concrete_scheduler_delivers_a_dated_reminder_without_a_browser_and_never_resends ... ok
+test push_http::tests::registration_is_authenticated_fenced_idempotent_and_never_exposes_subscription_secrets ... ok
+test service::tests::active_claim_does_not_mask_primary_failure_or_bounded_shutdown ... ok
+test service::tests::blocked_delivery_does_not_block_local_reminder_results_and_sends_once ... ok
+test service::tests::dropping_scheduler_stops_admission_and_reconciles_claimed_work ... ok
+test operator::tests::operator_snapshot_pages_keep_semantic_order_without_duplicates ... ok
+test service::tests::ordinary_capacity_is_bounded_and_shutdown_admits_no_more_claims ... ok
+test service::tests::store_failure_stops_admission_and_returns_a_typed_lane_cause ... ok
+test store::engineering::tests::authority_question_fences_writers_and_operator_reply_cannot_grant_authority ... ok
+test store::engineering::tests::acknowledged_submission_without_active_review_resumes_supervisor ... ok
+test store::engineering::tests::cancellation_owns_descendants_not_dependency_neighbours_and_retains_writers ... ok
+test store::engineering::tests::cancellation_retains_cessation_even_when_recovery_budget_is_exhausted ... ok
+test store::engineering::tests::cancelled_package_rejects_offline_result_without_losing_cessation ... ok
+test store::engineering::tests::cancelled_accepted_prerequisite_blocks_dispatch_and_surviving_dependent_closeout ... ok
+test store::engineering::tests::cancelling_required_child_does_not_permit_parent_acceptance ... ok
+test store::engineering::tests::ceased_execution_can_be_replaced_but_old_worker_and_offline_import_remain_fenced ... ok
+test store::engineering::tests::contract_and_message_watermarks_reject_stale_decisions_and_results ... ok
+test engineering_runtime::tests::replacement_reuses_bound_evidence_and_checks_coverage_before_submission ... ok
+test store::engineering::tests::exhausted_recovery_retains_offline_evidence_without_import_or_continuation ... ok
+test store::engineering::tests::expired_lease_retains_writer_and_only_trusted_reconciler_imports_offline_result ... ok
+test store::engineering::tests::fake_generic_routes_and_worker_self_acceptance_are_fenced ... ok
+test store::engineering::tests::github_delivery_cancellation_retains_pending_intent_until_reconciled ... ok
+test engineering_runtime::tests::large_evidence_pages_preserve_exact_bytes_and_bound_encoded_replies ... ok
+test store::engineering::tests::github_delivery_pending_intent_blocks_new_workers_and_acceptance ... ok
+test store::engineering::tests::github_delivery_merge_needs_supervisor_ceased_workers_and_verified_post_merge ... ok
+test operator::tests::gardener_proposal_requires_exact_action_and_topic_is_deterministic ... ok
+test gardener_runner::tests::inspection_uses_replaced_guidance_and_retains_the_exact_snapshot ... ok
+test store::engineering::tests::github_publication_roles_replay_and_verified_merge_requirements ... ok
+test store::engineering::tests::github_delivery_replays_intent_and_result_after_reopen ... ok
+test notifications::smtp::tests::synthetic_relay_outcomes_reconcile_the_durable_delivery_without_repeating_the_result ... ok
+test store::engineering::tests::missing_information_waits_for_operator_and_fresh_followup_gets_one_reconsideration ... ok
+test store::engineering::tests::package_relationships_require_current_same_outcome_and_budget_exhaustion_is_durable ... ok
+test store::engineering::tests::old_snapshot_without_supervisor_wait_digest_remains_dispatchable ... ok
+test store::engineering::tests::replay_survives_reopen_and_checks_full_actor_payload_and_preconditions ... ok
+test store::engineering::tests::repair_is_atomic_deduplicated_and_cannot_drop_criteria ... ok
+test store::engineering::tests::routine_question_wakes_supervisor_and_answer_receipt_is_exact_and_replayable ... ok
+test store::engineering::tests::required_child_acceptance_follows_successive_repairs ... ok
+test store::engineering::tests::stale_yield_cannot_acknowledge_a_new_submission ... ok
+test store::engineering::tests::submission_preflight_allows_distinct_evidence_per_criterion_and_rejects_duplicates ... ok
+test store::engineering::tests::submission_handover_is_atomic_pending_until_independent_exact_assessment ... ok
+test store::engineering::tests::supervisor_cannot_cancel_whole_outcome_or_old_contract_package ... ok
+test store::engineering::tests::acknowledged_submission_waits_for_review_without_consuming_quiet_turns ... ok
+test store::engineering::tests::supervisor_quiet_wait_preserves_worker_failure_attention ... ok
+test store::engineering::tests::supervisor_quiet_wait_breaks_for_worker_expiry_with_another_worker_active ... ok
+test store::engineering::tests::trusted_not_started_proof_settles_cancelled_dispatch_without_fake_reap ... ok
+test store::engineering::tests::invalid_offline_result_never_discards_valid_cessation ... ok
+test store::managed::tests::active_candidate_does_not_pause_and_admission_keeps_original_revision ... ok
+test store::engineering::tests::yielded_unanswered_question_resumes_even_with_another_healthy_worker ... ok
+test store::engineering::tests::supervisor_quiet_wait_survives_reopen_progress_and_lease_renewals ... ok
+test events::tests::large_history_is_consumed_only_in_bounded_pages ... ok
+test migrations::tests::incompatible_manifest_is_rejected_before_any_pending_migration_write ... ok
+test store::managed::tests::catalogue_engineering_uses_navigable_root_and_searches_outcome_identity ... ok
+test store::managed::tests::changed_current_once_waits_for_original_admission_and_keeps_accepted_date ... ok
+test store::managed::tests::catalogue_matches_separate_words_and_note_kind_without_literal_name_phrase ... ok
+test store::managed::tests::edits_replace_only_unadmitted_wake_and_pause_blocks_new_admission ... ok
+test store::managed::tests::draft_and_preview_never_create_obligations_and_changed_replays_conflict ... ok
+test store::managed::tests::catalogue_search_runs_in_database_beyond_first_page ... ok
+test store::managed::tests::named_timezone_preview_rejects_dst_gaps_and_folds_and_shifts_utc ... ok
+test store::managed::tests::overdue_recurrence_coalesces_backlog_strictly_after_completion ... ok
+test store::managed::tests::overdue_unadmitted_once_requires_explicit_new_date_but_recurrence_previews_future ... ok
+test store::managed::tests::final_finite_recurrence_keeps_result_and_completes_schedule_durably ... ok
+test store::managed::tests::paused_admitted_recurrence_finishes_without_new_wake_then_resumes_future ... ok
+test store::managed::tests::paused_admitted_work_retries_after_restart_and_oneoff_never_resumes ... ok
+test store::managed::tests::resume_preview_preserves_admitted_dated_retry_and_ignores_candidate ... ok
+test store::managed::tests::unavailable_capabilities_and_changed_session_profile_or_definition_cannot_activate ... ok
+test store::notifications::tests::dated_once_emits_one_result_and_intent_across_ticks_and_cannot_resume ... ok
+test store::notifications::tests::edit_and_pause_preserve_an_admitted_delivery_and_its_original_payload ... ok
+test store::engineering::tests::cancelled_auxiliary_can_close_only_with_uncancelled_criterion_coverage ... ok
+test store::notifications::tests::explicit_recovery_is_fenced_and_acknowledgement_does_not_claim_acceptance ... ok
+test store::notifications::tests::historical_run_keeps_its_definition_zone_after_schedule_revision ... ok
+test store::notifications::tests::intent_and_result_commit_atomically_and_incompatible_workers_cannot_claim ... ok
+test store::notifications::tests::legacy_local_note_still_stores_only_a_result ... ok
+test service::tests::saturated_store_claimants_alternate_lane_turns_in_both_directions ... ok
+test store::notifications::tests::payload_creation_failure_rolls_back_local_result_and_kernel_completion ... ok
+test store::notifications::tests::proved_permanent_rejection_can_use_normal_fenced_retry_of_the_same_intent ... ok
+test store::notifications::tests::proved_rejection_retries_same_payload_and_acceptance_never_replays ... ok
+test store::notifications::tests::reminder_recurrence_emits_distinct_intents_across_adelaide_dst ... ok
+test store::managed::tests::exhausted_notes_recover_only_with_fenced_operator_retry_and_keep_original_binding ... ok
+test store::engineering::tests::failed_runtime_reaps_and_parks_without_repeating_even_at_budget_limit ... ok
+test store::notifications::tests::retry_and_restart_keep_the_first_sender_and_relay_binding ... ok
+test store::notifications::tests::restart_before_dispatch_safely_retries_but_possible_dispatch_requires_attention ... ok
+test store::notifications::tests::temporary_rejection_exhaustion_retains_visible_attention_and_one_retryable_intent ... ok
+test store::push::tests::device_fence_is_checked_in_the_task_transaction_even_with_a_stale_profile_snapshot ... ok
+test store::push::tests::encoded_payload_limits_are_checked_before_activation ... ok
+test store::push::tests::acceptance_device_evidence_expiry_and_subscription_rejection_are_distinct ... ok
+test store::push::tests::admitted_work_and_uncertain_delivery_survive_restart_device_change_and_receipt_replay ... ok
+test store::push::tests::expired_push_is_resolved_without_extending_or_resending_its_saved_intent ... ok
+test store::push::tests::historical_enrolment_and_disable_receipts_never_claim_to_be_current_settings ... ok
+test store::push::tests::one_device_exact_commands_and_immutable_generations_preserve_history ... ok
+test store::push::tests::push_edits_pause_resume_and_review_replay_keep_one_outstanding_schedule ... ok
+test store::tests::approval_is_bound_to_each_recurring_occurrence ... ok
+test store::tests::all_proposal_instances_are_from_one_snapshot_during_atomic_multi_proposal_write ... ok
+test store::tests::audit_events_cannot_be_changed_or_deleted ... ok
+test store::notifications::tests::old_uncertain_delivery_remains_attention_after_twenty_new_recurring_results ... ok
+test store::tests::approval_recorded_before_a_new_source_is_not_inherited ... ok
+test store::tests::audit_metadata_limits_are_enforced_before_insert ... ok
+test store::tests::equivalent_prompts_create_source_bound_generations_across_commits ... ok
+test gardener_runner::tests::failed_candidate_check_is_durable_and_prevents_publication ... ok
+test store::tests::expired_claim_is_fenced_and_recovered_with_persisted_attempt ... ok
+test store::tests::every_run_write_is_fenced_after_the_claim_expires ... ok
+test store::tests::failures_back_off_then_exhaust_into_attention ... ok
+test store::tests::exact_run_created_before_supersession_is_fenced_at_its_stored_source ... ok
+test store::tests::fake_runner_persists_success_and_audit_history ... ok
+test store::tests::final_expired_lease_becomes_visible_attention ... ok
+test store::tests::gardener_registration_rejects_noncanonical_identity ... ok
+test store::tests::retry_delay_preserves_ordinary_capped_backoff ... ok
+test store::tests::retry_delay_saturates_at_the_i64_boundary ... ok
+test store::tests::append_only_audit_pages_pin_upper_bound_across_new_wal_writes ... ok
+test store::engineering::tests::github_delivery_requires_trusted_adapter_grant_and_current_execution ... ok
+test store::tests::gardener_registration_is_atomic_idempotent_and_survives_reopen ... ok
+test store::tests::inspection_field_limits_count_unicode_characters ... ok
+test store::tests::implementation_run_uses_the_exact_approved_proposal_instance_source ... ok
+test store::tests::inspection_identity_updates_are_write_once_and_exact_claim_fenced ... ok
+test store::tests::implementation_run_and_append_only_events_survive_reopen ... ok
+test store::tests::lease_renewals_are_bounded_by_each_heartbeat_and_identical_renewal_is_a_no_op ... ok
+test store::tests::implementation_run_enforces_ordering_write_once_heads_and_fresh_verification ... ok
+test store::tests::lifecycle_text_boundaries_count_unicode_and_reject_nul ... ok
+test store::tests::migration_backfills_one_source_authority_and_exact_run_without_rewriting_evidence ... ok
+test store::tests::migration_keeps_ambiguous_running_work_leased_but_prevents_reclaim ... ok
+test store::tests::migration_keeps_an_ambiguous_legacy_run_visible_but_fences_continuation ... ok
+test store::tests::migration_quarantines_ambiguous_multi_source_approval ... ok
+test store::tests::operator_retry_adds_a_new_attempt_without_rewriting_history ... ok
+test store::tests::proposal_decision_uses_occurrence_approval_and_content_stays_immutable ... ok
+test store::tests::renewal_is_fenced_at_the_lease_expiry_boundary ... ok
+test store::tests::migrations_are_reentrant_and_connection_is_hardened ... ok
+test store::tests::rejection_remains_visible_as_proposal_attention ... ok
+test store::tests::repeated_exact_decisions_preserve_history_and_use_the_latest_mapping ... ok
+test store::tests::repeated_same_source_observations_dedupe_to_one_instance ... ok
+test store::tests::successful_attempt_survives_unexpected_recurrence_evaluation_error ... ok
+test store::tests::successful_final_finite_recurrence_completes_atomically ... ok
+test store::tests::source_generation_evidence_tables_reject_updates_and_deletes ... ok
+test store::tests::supersession_rejects_stale_decisions_and_pre_run_claims ... ok
+test store::tests::task_configuration_migration_initialises_existing_registration_without_inventing_history ... ok
+test store::tests::obligation_pages_preserve_public_order_and_reject_tamper_scope_and_revision_mix ... ok
+test store::tests::terminal_inspection_result_and_gardening_history_are_append_only ... ok
+test store::tests::task_configuration_survives_reopen_and_rejects_stale_running_and_wrong_tasks ... ok
+test store::tests::two_connections_cannot_claim_one_attempt ... ok
+test store::managed::tests::competing_pause_and_claim_admit_at_most_one_and_preserve_original_work ... ok
+test store::engineering::tests::supervisor_quiet_wait_breaks_for_question_result_followup_and_cancellation ... ok
+test store::tests::turn_manifests_are_source_bound_append_only_and_claim_fenced ... ok
+test store::tests::terminal_rejected_and_cancelled_instances_do_not_block_a_later_generation ... ok
+test store::tests::every_failure_disposition_is_persisted_and_only_retry_safe_auto_retries ... ok
+test operator::tests::selected_topic_pages_over_large_scoped_history_without_global_materialisation ... ok
+test store::tests::two_store_lifecycle_model_preserves_fencing_liveness_and_typed_intent ... ok
+test store::model_tests::generated_worker_interleavings_preserve_authority_and_liveness ... ok
+test gardener_runner::tests::mismatched_reported_head_is_non_retryable_and_never_records_a_verdict ... ok
+test gardener_runner::tests::blocking_verdict_preserves_draft_pr_and_enters_attention ... ok
+test gardener_runner::tests::changed_pr_head_on_final_observation_enters_attention_without_a_verdict ... ok
+test gardener_runner::tests::complete_process_flow_persists_exact_identities_and_passes_verification ... ok
+
+test result: ok. 369 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 16.45s
+
+     Running unittests src/main.rs (target/debug/deps/bokkie-f5b22193ada0cd66)
+
+running 3 tests
+
+running 1 test
+
+running 1 test
+test tests::clap_definition_is_consistent ... ok
+test tests::one_shot_credential_input_is_closed_and_unavailable_to_a_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+test tests::one_shot_credential_input_is_closed_and_unavailable_to_a_child ... ok
+
+running 1 test
+test tests::credential_input_preserves_cross_process_database_visibility ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+
+running 1 test
+test tests::credential_input_preserves_cross_process_database_visibility ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+test tests::credential_input_preserves_cross_process_database_visibility ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+test tests::credential_input_preserves_cross_process_database_visibility ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/bokkie-conversation-fixture.rs (target/debug/deps/bokkie_conversation_fixture-53cb8b2d4e17d664)
+
+running 1 test
+test tests::calibration_seed_is_fixed_inactive_and_refuses_reuse ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/bin/bokkie-engineering.rs (target/debug/deps/bokkie_engineering-e8749fccfdb74adf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/bokkie-push-config.rs (target/debug/deps/bokkie_push_config-e64a72e48930be9b)
+
+running 1 test
+test tests::offline_configuration_is_private_loadable_and_never_overwrites_an_existing_key ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/bokkie-ui-fixture.rs (target/debug/deps/bokkie_ui_fixture-4efe73b82ea95104)
+
+running 2 tests
+test tests::experience_fixture_uses_store_transitions_for_ordinary_activity ... ok
+test tests::task_fixture_has_pending_work_and_an_exact_head_verified_result ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/adapters.rs (target/debug/deps/adapters-93f6410b16906071)
+
+running 14 tests
+test occupied_listener_prevents_startup_migration ... ok
+test ordinary_concurrency_is_validated_before_scheduler_claims ... ok
+test doctor_cli_reports_clean_state_without_mutating_or_creating_a_database ... ok
+test attention_ui_probe_reads_cancels_refreshes_and_serves_same_origin_assets ... ok
+test loopback_api_exposes_lifecycle_and_history ... ok
+test cli_lists_emit_bounded_page_envelopes_and_accept_continuations ... ok
+test gardener_service_requires_explicit_valid_runtime_configuration ... ok
+test scheduler_failure_stops_http_and_exits_non_zero ... ok
+test graceful_shutdown_cancels_and_reconciles_an_observed_in_flight_claim ... ok
+test cli_lifecycle_operations_return_structured_json_and_exit_statuses ... ok
+test exhausted_finite_recurrence_completes_without_stopping_unrelated_work ... ok
+test gardener_http_exposes_registration_evidence_and_decisions ... ok
+test gardener_cli_registers_and_exposes_persisted_state_and_decisions ... ok
+test killed_daemon_recovers_expired_claim_and_succeeds_once ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.21s
+
+     Running tests/conversation_adapters.rs (target/debug/deps/conversation_adapters-366d4ceb87b1b1ce)
+
+running 22 tests
+test managed_attention_retry_uses_existing_fenced_operator_http_and_preserves_occurrence ... ok
+test conversation_http_select_review_and_confirm_obey_bootstrap_and_restart_fences ... ok
+test unavailable_runtime_does_not_dispatch_and_http_catalogue_searches_beyond_loaded_page ... ok
+test production_scheduler_requires_note_opt_in_and_restart_preserves_one_result ... ok
+test adviser_automatic_consultation_requires_enabled_grounded_supported_difficulty ... ok
+test adviser_context_rejection_settles_dispatch_and_returns_the_bounded_failure_to_bokkie ... ok
+test adviser_deadline_exhaustion_after_dispatch_leaves_saved_outcome_and_no_return_dispatch ... ok
+test adviser_explicit_consultation_is_schema_only_then_bokkie_returns_and_replay_is_free ... ok
+test adviser_failures_timeouts_and_malformed_advice_are_saved_then_bokkie_continues ... ok
+test adviser_four_call_orderings_keep_both_profiles_pinned_during_settings_edit ... ok
+test adviser_activity_and_restart_preserve_uncertain_dispatch_without_relaunching ... ok
+test adviser_hanging_peer_is_stopped_by_process_deadline_then_bokkie_returns_without_replay ... ok
+test adviser_return_budget_is_reserved_and_a_recursive_consult_cannot_dispatch_again ... ok
+test adviser_time_reservation_refuses_consultation_before_consuming_a_slot ... ok
+test aggregate_deadline_between_calls_leaves_no_unfinished_dispatch_on_failure_or_restart ... ok
+test handoff_http_drafts_with_one_bounded_turn_then_transfers_without_models_or_tasks ... ok
+test model_http_repeated_lookup_exhausts_two_calls_without_creating_a_task ... ok
+test settings_http_are_validated_atomic_and_consumed_by_new_requests ... ok
+test model_http_nonempty_lookup_stops_at_candidates_until_operator_selects ... ok
+test model_http_empty_lookup_continues_once_saves_only_a_draft_and_replay_is_free ... ok
+test model_http_failed_or_malformed_peer_preserves_selected_draft_and_replay ... ok
+test settings_edit_during_execution_pins_every_call_and_replay_bypasses_unavailable_runtime ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.08s
+
+     Running tests/notification_config.rs (target/debug/deps/notification_config-0ad220c7fe8365dc)
+
+running 3 tests
+test invalid_notification_configuration_fails_before_database_creation ... ok
+test absent_notification_config_blocks_reminder_activation_and_valid_config_pins_the_profile_destination ... ok
+test reminder_confirmation_requires_the_complete_text_and_context_to_fit_without_truncation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/public_origin.rs (target/debug/deps/public_origin-f1eeaf045aed00e5)
+
+running 3 tests
+test public_origin_accepts_only_canonical_https_dns_origins ... ok
+test invalid_public_origin_or_bind_cannot_create_the_database ... ok
+test public_origin_fences_bootstrap_ui_and_mutations ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/reminder_agenda.rs (target/debug/deps/reminder_agenda-515d77038fc2fdf2)
+
+running 2 tests
+test today_uses_the_operators_calendar_and_preserves_task_specific_zone ... ok
+test agenda_filters_before_pagination_and_retains_named_zone_and_latest_result ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+    Checking bokkie v0.1.0 (/nvme/development/bokkie)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.38s

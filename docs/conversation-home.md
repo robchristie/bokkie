@@ -33,7 +33,9 @@ Advanced tools retains the legacy execution-record ledger for operational work;
 it is not presented as another Tasks destination.
 - **Settings:** edit the main conversational role through the
   [persisted settings contract](agent-settings.md). Optional specialist roles
-  and project workspaces remain separate extensions.
+  and **Project workspaces** configure hand-off destinations independently of
+  conversational model availability. **Hand-offs** opens saved briefs and return
+  notes through the [workspace hand-off contract](project-handoffs.md).
 
 On a wide screen, the conversation occupies the main reading column; selected
 task details occupy a secondary panel. On narrow screens, navigation and task
@@ -108,8 +110,9 @@ workspace: requested outcome, relevant context, constraints and a return link.
 The project workspace owns its Codex development workflow. Bokkie records the
 handoff and any supported returned status; it must not describe opening a link or
 preparing instructions as an accepted execution. Existing engineering supervision
-remains an advanced capability until a real workspace hand-off adapter is
-qualified. This redesign does not transplant rob-codex-workflow into Bokkie.
+remains an advanced capability. The [workspace hand-off](project-handoffs.md)
+prepares a versioned brief with a qualified manual copy/open/paste route. This does
+not transplant rob-codex-workflow into Bokkie.
 
 ## Qualification
 

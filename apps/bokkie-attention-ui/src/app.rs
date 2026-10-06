@@ -4,6 +4,9 @@ mod conversation_ui;
 #[path = "notifications_ui.rs"]
 mod notifications_ui;
 
+#[path = "handoff_ui.rs"]
+mod handoff_ui;
+
 #[path = "settings_ui.rs"]
 mod settings_ui;
 
@@ -260,6 +263,7 @@ struct EngineeringDraft {
 pub struct AttentionApp {
     conversation: conversation_ui::ConversationState,
     agent_settings: settings_ui::AgentSettingsState,
+    handoff: handoff_ui::HandoffState,
     engineering_draft: Option<EngineeringDraft>,
     engineering_saved_notice: bool,
     workspace: Workspace,
@@ -329,6 +333,7 @@ impl AttentionApp {
         let mut app = Self {
             conversation: conversation_ui::ConversationState::home(),
             agent_settings: settings_ui::AgentSettingsState::default(),
+            handoff: handoff_ui::HandoffState::default(),
             engineering_draft: None,
             engineering_saved_notice: false,
             workspace: operator_workspace(),
@@ -353,6 +358,7 @@ impl AttentionApp {
             last_test_snapshot: TestSnapshot::default(),
             test_observer,
         };
+        app.restore_handoff_local_state();
         app.dispatch(ApiRequest::Bootstrap, &creation.egui_ctx);
         app
     }
@@ -503,6 +509,10 @@ impl AttentionApp {
 
     fn poll_transport(&mut self, context: &egui::Context) {
         while let Ok(message) = self.receiver.try_recv() {
+            if handoff_ui::is_request(&message.request) {
+                self.handoff_response(message.request, message.result, context);
+                continue;
+            }
             if settings_ui::is_request(&message.request) {
                 self.agent_settings_response(message.request, message.result, context);
                 continue;
@@ -554,6 +564,7 @@ impl AttentionApp {
                     self.session = Some(session);
                     self.refresh_conversation(context);
                     self.refresh_agent_settings(false, context);
+                    self.refresh_handoff(context);
                     self.begin_full_rebuild(false, context);
                 }
                 (
@@ -1100,6 +1111,7 @@ impl AttentionApp {
     fn restart_session(&mut self, message: &str, context: &egui::Context) {
         self.conversation.reset_session();
         self.agent_settings.reset_session();
+        self.handoff.reset_session();
         self.session = None;
         self.model.record_session_change(message);
         self.model.topic_busy = false;
@@ -1220,6 +1232,7 @@ impl AttentionApp {
                 }
                 OperatorIntent::Navigate(pane) => {
                     self.agent_settings.open = false;
+                    self.handoff.open = false;
                     self.conversation.open = false;
                     self.collection = pane;
                     self.workspace.activate(pane);
@@ -1347,6 +1360,9 @@ impl AttentionApp {
         if engineering_button(ui, "bokkie.home.recent", "Recent", true, nodes) {
             self.open_conversation_history(ui.ctx());
         }
+        if engineering_button(ui, "bokkie.handoffs.open", "Hand-offs", true, nodes) {
+            self.open_handoffs(ui.ctx());
+        }
         if engineering_button(ui, "bokkie.settings.open", "Settings", true, nodes) {
             intents.push(OperatorIntent::OpenAgentSettings);
         }
@@ -1406,6 +1422,7 @@ impl eframe::App for AttentionApp {
         self.poll_transport(&context);
         self.drive_polling(&context);
         self.drive_conversation_poll(&context);
+        self.drive_handoff_browser(&context);
         let tokens = self.theme.resolve(
             self.preferences
                 .theme_variant(context.theme() == egui::Theme::Dark),
@@ -1422,7 +1439,7 @@ impl eframe::App for AttentionApp {
             .frame(application_bar_frame(&tokens))
             .exact_size(
                 application_bar_height(&tokens, self.preferences.font_scale)
-                    * if narrow_header { 2.0 } else { 1.0 },
+                    * if narrow_header { 3.0 } else { 1.0 },
             )
             .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1493,7 +1510,7 @@ impl eframe::App for AttentionApp {
                     });
                 });
                 if narrow_header {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         self.show_home_navigation(ui, &mut intents, &mut semantic_nodes);
                     });
                 }
@@ -1514,6 +1531,10 @@ impl eframe::App for AttentionApp {
                     .inner_margin(16.0),
             )
             .show(root_ui, |ui| {
+                if self.handoff.open {
+                    self.show_handoff(ui, &mut semantic_nodes);
+                    return;
+                }
                 if self.agent_settings.open {
                     self.show_agent_settings(
                         ui,
@@ -1738,6 +1759,7 @@ impl eframe::App for AttentionApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.write_native_test_snapshot();
+        self.persist_handoff_local_state();
     }
 }
 
@@ -3725,6 +3747,7 @@ fn observe_engineering_control(
         || id == "bokkie.engineering.dismiss-saved"
         || id == "bokkie.conversation.open"
         || id == "bokkie.settings.open"
+        || id == "bokkie.handoffs.open"
         || id == "bokkie.collection.all"
         || id.starts_with("bokkie.home.")
     {
@@ -5040,6 +5063,7 @@ mod tests {
         AttentionApp {
             conversation: conversation_ui::ConversationState::default(),
             agent_settings: settings_ui::AgentSettingsState::default(),
+            handoff: handoff_ui::HandoffState::default(),
             engineering_draft: None,
             engineering_saved_notice: false,
             workspace: operator_workspace(),

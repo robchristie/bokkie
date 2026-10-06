@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 python3 tools/toolchain_contract.py
+tools/prepare-web-font.sh
 node --test apps/bokkie-attention-ui/web/*.test.mjs
 cargo +1.97.1 test --locked -p bokkie-attention-ui --all-targets
 cargo +1.97.1 clippy --locked -p bokkie-attention-ui \

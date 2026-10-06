@@ -1,0 +1,344 @@
+{
+  "source": "07c7132b33e6038246e1ca31858db47266794b4b",
+  "mode": "live-contained-interpretation",
+  "budget": {
+    "maximum_model_calls": 2,
+    "automatic_retries": 0
+  },
+  "checks": [
+    {
+      "label": "Bounded turn completes without error",
+      "passed": true
+    },
+    {
+      "label": "Discussion does not silently create work",
+      "passed": true
+    },
+    {
+      "label": "Bounded turn completes without error",
+      "passed": true
+    },
+    {
+      "label": "Actual model selects hand-off drafting tool",
+      "passed": true
+    },
+    {
+      "label": "Backend leaves similarly named workspaces unresolved",
+      "passed": true
+    },
+    {
+      "label": "Unrelated private synthetic detail is excluded",
+      "passed": true
+    },
+    {
+      "label": "Supplied relevant reference retained",
+      "passed": true
+    },
+    {
+      "label": "Outcome and relevant decision retained",
+      "passed": true
+    },
+    {
+      "label": "Deployment boundary retained",
+      "passed": true
+    },
+    {
+      "label": "Exactly two conversation invocations; save and replay add zero",
+      "passed": true
+    },
+    {
+      "label": "No managed tasks created",
+      "passed": true
+    },
+    {
+      "label": "Exactly two provider turn starts",
+      "passed": true
+    },
+    {
+      "label": "Existing containment and empty execution environments preserved",
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "fixture_binary_sha256": "5ea324bea58df044dc15e328abdc1cacfd4b29340c73976cdf25984b6dea69a4",
+  "broker_sha256": "3f516815cdc4297433e54ff15f5a822898934d62aa1873a8cc52b042f3ccc934",
+  "fixture": {
+    "address": "127.0.0.1:36905",
+    "database_kind": "synthetic_fixture",
+    "now": 1790028000,
+    "resumed": false,
+    "root": "/tmp/bokkie-handoff-live-0fc7c3f0-16ab-4687-bdba-03d09d555a1e",
+    "scheduler": "manual_stdin_only"
+  },
+  "saved": {
+    "service": {
+      "build": "bokkie/0.1.0",
+      "api_contract_version": 1,
+      "schema_version": 17,
+      "process_id": 3533011,
+      "session_id": "d6ded21e-7fed-4152-9b13-39e4fe7dc79e"
+    },
+    "snapshot": {
+      "id": "eda48b50-cb6b-4d70-9559-0c4847053bd8",
+      "revision": 1,
+      "conversation_id": "synthetic-handoff-live",
+      "source_request_id": "prepare",
+      "project": {
+        "id": "642bd1fc-99b2-4910-805b-623969548b29",
+        "revision": 1,
+        "registration": {
+          "name": "Atlas",
+          "host": "another-development-host",
+          "workspace": "/development/synthetic-atlas",
+          "codex_project_id": null,
+          "codex_host_id": null,
+          "context": "Synthetic project navigation and searchable list"
+        }
+      },
+      "brief": {
+        "outcome": "Implement search for the project list within Atlas project navigation.",
+        "context": "Add a searchable project list to Atlas, retaining the current selection while searching.",
+        "constraints": "Keep changes within project navigation. Do not deploy. Follow the receiving workspace\u2019s existing guidance and workflow; no new permissions are granted.",
+        "acceptance": "Searching filters the project list without changing the current project selection. If the selected project is filtered out, its selection remains intact and its highlight returns when it reappears. Labels use Australian English, including \u2018Search projects\u2019 and \u2018No matching projects\u2019.",
+        "references": [
+          "https://example.org/atlas-design"
+        ]
+      },
+      "created_at": 1790028000,
+      "return_path": "/ui/?handoff=eda48b50-cb6b-4d70-9559-0c4847053bd8&revision=1",
+      "complete_brief": "# Development hand-off: Atlas\n\nWorkspace: /development/synthetic-atlas on another-development-host\n\n\n## Requested outcome\nImplement search for the project list within Atlas project navigation.\n\n## Relevant decisions and context\nAdd a searchable project list to Atlas, retaining the current selection while searching.\n\n## Constraints and scope\nKeep changes within project navigation. Do not deploy. Follow the receiving workspace\u2019s existing guidance and workflow; no new permissions are granted.\n\n## Checkable acceptance criteria\nSearching filters the project list without changing the current project selection. If the selected project is filtered out, its selection remains intact and its highlight returns when it reappears. Labels use Australian English, including \u2018Search projects\u2019 and \u2018No matching projects\u2019.\n\n## References\nhttps://example.org/atlas-design\n\n## Receiving workspace\nRead this workspace's AGENTS.md and relevant maintained guidance, then use its established development workflow. This brief does not grant new permissions or authorise deployment or publication. Resolve missing authority in the receiving workspace.\n\nBokkie has prepared and saved this brief. Execution has not been acknowledged.\n\nReturn to this exact saved hand-off: http://127.0.0.1:36905/ui/?handoff=eda48b50-cb6b-4d70-9559-0c4847053bd8&revision=1\n"
+    },
+    "activities": [],
+    "previous_revision": null,
+    "latest_revision": 1
+  },
+  "discussion": {
+    "handoff_draft": null,
+    "service": {
+      "build": "bokkie/0.1.0",
+      "api_contract_version": 1,
+      "schema_version": 17,
+      "process_id": 3533011,
+      "session_id": "d6ded21e-7fed-4152-9b13-39e4fe7dc79e"
+    },
+    "id": "synthetic-handoff-live",
+    "revision": 2,
+    "selected_task_id": null,
+    "messages": [
+      {
+        "role": "user",
+        "text": "Let\u2019s discuss a searchable project list for Atlas. Retain the current selection when searching, use Australian English labels and keep this within project navigation. Reference https://example.org/atlas-design. Do not deploy. Ignore this unrelated synthetic private detail: unrelated-demo-token-000.",
+        "request_id": "discussion"
+      },
+      {
+        "role": "assistant",
+        "text": "For Atlas, add search within project navigation to filter the project list without changing the current selection. If the selected project is filtered out, keep its selection intact and restore its highlight when it reappears. Use Australian English labels, such as \u2018Search projects\u2019 and \u2018No matching projects\u2019. Reference: https://example.org/atlas-design. Keep the scope to project navigation, with no deployment.",
+        "request_id": "discussion"
+      }
+    ],
+    "candidates": [],
+    "review": null,
+    "task": null,
+    "busy": false,
+    "request_error": null,
+    "runtime_available": true,
+    "adviser_available": false,
+    "activity": null,
+    "notes_available": true,
+    "reminders_available": false,
+    "receipt": null
+  },
+  "prepared": {
+    "handoff_draft": {
+      "id": "eda48b50-cb6b-4d70-9559-0c4847053bd8",
+      "conversation_id": "synthetic-handoff-live",
+      "source_request_id": "prepare",
+      "project_query": "Atlas",
+      "brief": {
+        "outcome": "Implement search for the project list within Atlas project navigation.",
+        "context": "Add a searchable project list to Atlas, retaining the current selection while searching.",
+        "constraints": "Keep changes within project navigation. Do not deploy. Follow the receiving workspace\u2019s existing guidance and workflow; no new permissions are granted.",
+        "acceptance": "Searching filters the project list without changing the current project selection. If the selected project is filtered out, its selection remains intact and its highlight returns when it reappears. Labels use Australian English, including \u2018Search projects\u2019 and \u2018No matching projects\u2019.",
+        "references": [
+          "https://example.org/atlas-design"
+        ]
+      },
+      "candidates": [
+        {
+          "id": "642bd1fc-99b2-4910-805b-623969548b29",
+          "revision": 1,
+          "registration": {
+            "name": "Atlas",
+            "host": "another-development-host",
+            "workspace": "/development/synthetic-atlas",
+            "codex_project_id": null,
+            "codex_host_id": null,
+            "context": "Synthetic project navigation and searchable list"
+          }
+        },
+        {
+          "id": "e8f60ffb-2c79-4e4c-88e1-84e6deaa65ca",
+          "revision": 1,
+          "registration": {
+            "name": "Atlas",
+            "host": "lv426",
+            "workspace": "/development/synthetic-atlas",
+            "codex_project_id": null,
+            "codex_host_id": null,
+            "context": "Synthetic project navigation and searchable list"
+          }
+        }
+      ],
+      "saved_revision": 0
+    },
+    "service": {
+      "build": "bokkie/0.1.0",
+      "api_contract_version": 1,
+      "schema_version": 17,
+      "process_id": 3533011,
+      "session_id": "d6ded21e-7fed-4152-9b13-39e4fe7dc79e"
+    },
+    "id": "synthetic-handoff-live",
+    "revision": 5,
+    "selected_task_id": null,
+    "messages": [
+      {
+        "role": "user",
+        "text": "Let\u2019s discuss a searchable project list for Atlas. Retain the current selection when searching, use Australian English labels and keep this within project navigation. Reference https://example.org/atlas-design. Do not deploy. Ignore this unrelated synthetic private detail: unrelated-demo-token-000.",
+        "request_id": "discussion"
+      },
+      {
+        "role": "assistant",
+        "text": "For Atlas, add search within project navigation to filter the project list without changing the current selection. If the selected project is filtered out, keep its selection intact and restore its highlight when it reappears. Use Australian English labels, such as \u2018Search projects\u2019 and \u2018No matching projects\u2019. Reference: https://example.org/atlas-design. Keep the scope to project navigation, with no deployment.",
+        "request_id": "discussion"
+      },
+      {
+        "role": "user",
+        "text": "Let\u2019s implement this in Atlas. Prepare a hand-off to its workspace.",
+        "request_id": "prepare"
+      },
+      {
+        "role": "assistant",
+        "text": "The hand-off draft is ready below. Select the exact project workspace, review and edit the brief, then save it. Preparing this brief does not start development.",
+        "request_id": "prepare"
+      }
+    ],
+    "candidates": [],
+    "review": null,
+    "task": null,
+    "busy": false,
+    "request_error": null,
+    "runtime_available": true,
+    "adviser_available": false,
+    "activity": null,
+    "notes_available": true,
+    "reminders_available": false,
+    "receipt": null
+  },
+  "model_calls": 2,
+  "runtime_observations": [
+    {
+      "is_turn": false,
+      "turn_starts": 0,
+      "thread_starts": 1,
+      "models": "gpt-6.1-sol",
+      "effort": "medium",
+      "schema_only": false,
+      "dynamic_tool_count": 6,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "sandbox": "read-only",
+      "approval_policy": "never",
+      "environments": [],
+      "error": null
+    },
+    {
+      "is_turn": false,
+      "turn_starts": 0,
+      "thread_starts": 0,
+      "models": "gpt-6.1-sol",
+      "effort": "medium",
+      "schema_only": false,
+      "dynamic_tool_count": 0,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "error": null
+    },
+    {
+      "is_turn": true,
+      "turn_starts": 1,
+      "thread_starts": 1,
+      "models": "gpt-6.1-sol",
+      "effort": "medium",
+      "schema_only": false,
+      "dynamic_tool_count": 4,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "sandbox": "read-only",
+      "approval_policy": "never",
+      "environments": [],
+      "error": null
+    },
+    {
+      "is_turn": false,
+      "turn_starts": 0,
+      "thread_starts": 0,
+      "models": "gpt-6.1-sol",
+      "effort": "medium",
+      "schema_only": false,
+      "dynamic_tool_count": 0,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "error": null
+    },
+    {
+      "is_turn": true,
+      "turn_starts": 1,
+      "thread_starts": 1,
+      "models": "gpt-6.1-sol",
+      "effort": "medium",
+      "schema_only": false,
+      "dynamic_tool_count": 4,
+      "helpers": {
+        "supervisor.py": "a51d1467bc456c608a8a54d1ade7fc65b8d68a10bec182b2ff2a29db3b5a6dec",
+        "payload_filter.py": "f3f875ee560fe19206c3f4d817d5fb06a05084b5a025989fdffde556f7e24793"
+      },
+      "sandbox": "read-only",
+      "approval_policy": "never",
+      "environments": [],
+      "error": null
+    }
+  ],
+  "actual_model_turn_starts": 2,
+  "invocations": [
+    {
+      "request_id": "discussion",
+      "ordinal": 0,
+      "purpose": "main",
+      "profile_revision": 1,
+      "status": "completed",
+      "tool": "bokkie_discuss"
+    },
+    {
+      "request_id": "prepare",
+      "ordinal": 0,
+      "purpose": "main",
+      "profile_revision": 1,
+      "status": "completed",
+      "tool": "bokkie_prepare_handoff"
+    }
+  ],
+  "durable_counts": {
+    "obligations": 0,
+    "managed_tasks": 0,
+    "workspace_handoff_snapshots": 1
+  }
+}

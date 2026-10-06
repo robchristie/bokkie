@@ -149,6 +149,8 @@ for line in sys.stdin:
         valid = {'type': 'function', 'name': 'bokkie_lookup', 'description': 'Lookup',
                  'inputSchema': {'type': 'object'}}
         self.assertEqual(broker.offered_tools([valid]), {'bokkie_lookup'})
+        handoff = dict(valid, name='bokkie_prepare_handoff')
+        self.assertEqual(broker.offered_tools([handoff]), {'bokkie_prepare_handoff'})
         for specs in ([], [valid, valid], [dict(valid, type='namespace')],
                       [dict(valid, name='shell')], [dict(valid, deferLoading=True)],
                       [dict(valid, inputSchema={'type': 'string'})],

@@ -1,0 +1,177 @@
+toolchain contract passed: backend 1.85.0/MSRV 1.85; UI 1.97.1/MSRV 1.97
+✔ copy succeeds only after the browser clipboard promise resolves (2.895433ms)
+✔ clipboard denial retains the complete selectable brief and reports failure honestly (0.428778ms)
+✔ return navigation pins a canonical same-origin snapshot without touching retained edits (0.397467ms)
+✔ initial return links work once and malformed/external links fail closed (0.25231ms)
+✔ a settled pointer copy does not suppress a later keyboard copy (0.516261ms)
+✔ unavailable local storage is reported without discarding in-memory use (0.123515ms)
+✔ explicit enable requests permission synchronously before any asynchronous work (1.583708ms)
+✔ unconfigured service and uninstalled iOS never prompt for permission (0.24044ms)
+✔ another active device requires separate disabling review and exact confirmation (0.279021ms)
+✔ lost response retains subscription and exact persisted request for retry after reload (1.315916ms)
+✔ revoked browser permission is visible even while server device remains active (0.183578ms)
+✔ restart between reviewed setup and mutation fails closed without enrolment (0.24426ms)
+✔ task links reject external paths and can queue exact task without clearing a draft (0.393387ms)
+✔ trusted canvas gesture can stage permission without making a network request (0.23874ms)
+✔ published setup revision changes on enrolment and disable, and stays stable on reads (0.177857ms)
+✔ stale revision-zero request needs reviewed local discard before a fresh revision-two enrolment (0.680649ms)
+✔ failed storage deletion retains the exact request and does not claim a discard (0.188718ms)
+✔ offline push is self-contained and displays before any Bokkie API request (1.4123ms)
+✔ receipt retry survives a new worker and obtains a fresh process token (0.338614ms)
+✔ expiry never displays and is reported separately from display (0.155577ms)
+✔ duplicate events and event races display one notification (0.173857ms)
+✔ storage failure preserves display and an immediate best-effort receipt (0.653448ms)
+✔ failed OS display never claims displayed (0.255481ms)
+✔ failed authenticated receipt has finite attempts and retries on activity (0.159006ms)
+✔ worker flush caps its receipt cohort (0.245901ms)
+✔ closed-page click opens only the exact same-origin task (0.889597ms)
+✔ existing page receives task context without navigation that would lose its composer (0.246691ms)
+✔ receipt states cannot regress from opened to displayed or expired (0.104285ms)
+✔ hostile deep links, injected URLs, mismatched identities and oversized payloads are rejected (0.293223ms)
+✔ valid Unicode title uses codepoints, and push identity cannot change under the same tag (0.126456ms)
+ℹ tests 30
+ℹ suites 0
+ℹ pass 30
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 69.827448
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/bokkie_attention_ui-5766f63ccfab7330)
+
+running 119 tests
+test app::conversation_ui::tests::dates_follow_definition_timezone_including_daylight_saving ... ok
+test app::conversation_ui::tests::notification_revision_refreshes_capability_once_without_discarding_composer_or_history ... ok
+test app::conversation_ui::tests::single_confirmation_requires_exact_current_backend_review ... ok
+test app::conversation_ui::tests::rotation_discards_confirmation_but_retains_unacknowledged_turn ... ok
+test app::conversation_ui::tests::global_navigation_preserves_conversation_context_and_unsent_message ... ok
+test app::conversation_ui::tests::scheduled_dates_use_adelaide_daylight_and_standard_time ... ok
+test app::handoff_ui::tests::definite_conflict_retains_edits_but_uncertain_failure_locks_the_exact_envelope ... ok
+test app::handoff_ui::tests::native_copy_is_a_durable_request_and_never_a_verified_clipboard_success ... ok
+test app::conversation_ui::tests::history_switch_owns_new_read_and_ignores_delayed_previous_responses ... ok
+test app::handoff_ui::tests::out_of_order_reads_and_old_mutations_cannot_replace_current_edits_or_pending_receipts ... ok
+test app::conversation_ui::tests::notification_revision_change_during_an_existing_read_waits_for_one_fresh_read ... ok
+test app::conversation_ui::tests::retained_turn_reconciles_only_its_durable_message ... ok
+test app::settings_ui::tests::adviser_defaults_never_invent_a_model_or_an_unadvertised_thinking_level ... ok
+test app::settings_ui::tests::adviser_enable_uses_advertised_defaults_and_expands_only_the_shared_budget ... ok
+test app::settings_ui::tests::conflict_and_definite_rejection_retain_entered_values_and_reload_is_deliberate ... ok
+test app::handoff_ui::tests::refresh_and_session_restart_keep_unsent_text_brief_edits_and_the_exact_pending_command ... ok
+test app::conversation_ui::tests::recurring_schedules_have_readable_common_patterns_and_honest_fallback ... ok
+test app::conversation_ui::tests::returning_to_same_conversation_rejects_its_previous_read_generation ... ok
+test app::conversation_ui::tests::task_context_switch_reads_new_chat_before_selecting_requested_task ... ok
+test app::handoff_ui::tests::home_reads_open_the_saved_revision_without_resurrecting_obsolete_model_text ... ok
+test app::handoff_ui::tests::ambiguous_destinations_require_selection_and_save_pins_the_exact_registration ... ok
+test app::conversation_ui::tests::stale_identity_revision_and_other_chat_cannot_replace_current_view ... ok
+test app::conversation_ui::tests::manual_adviser_choice_is_capability_checked_and_pinned_for_uncertain_retry ... ok
+test app::notifications_ui::tests::push_acceptance_and_device_evidence_remain_distinct ... ok
+test app::settings_ui::tests::unavailable_saved_profile_can_be_repaired_only_with_live_supported_choices ... ok
+test app::settings_ui::tests::settings_validation_checks_exact_capabilities_utf8_and_deployment_limits ... ok
+test app::settings_ui::tests::uncertain_adviser_save_retains_the_complete_role_policy_and_shared_budget ... ok
+test app::settings_ui::tests::uncertain_save_retains_exact_payload_through_refresh_and_session_restart ... ok
+test app::settings_ui::tests::settings_responses_are_fenced_by_read_generation_save_identity_and_session ... ok
+test app::handoff_ui::tests::project_conflict_requires_explicit_current_revision_adoption_and_retains_entered_fields ... ok
+test app::tests::active_lease_expiry_is_a_projection_refresh_deadline ... ok
+test app::handoff_ui::tests::settings_navigation_keeps_unsent_text_and_projects_do_not_depend_on_model_availability ... ok
+test app::tests::confirmation_actions_have_unique_stable_application_targets ... ok
+test app::tests::attention_search_matches_projected_reason_and_scheduling_stays_neutral ... ok
+test app::tests::attention_navigation_leaves_home_and_home_returns_without_a_model_turn ... ok
+test app::tests::detail_navigation_retains_collection_search_and_filter ... ok
+test app::tests::exact_gardener_decisions_route_to_affected_only_refresh ... ok
+test app::tests::engineering_details_do_not_use_generic_simulated_or_no_action_copy ... ok
+test app::tests::cursor_gap_enters_same_session_full_recovery_with_retained_state_stale ... ok
+test app::tests::engineering_cancellation_opens_a_separate_confirmation_without_dispatch ... ok
+test app::tests::engineering_failed_save_preserves_text_and_exact_replay_identity ... ok
+test app::tests::gardener_confirmation_renders_exact_source_bound_provenance ... ok
+test app::tests::exception_language_covers_retry_and_verification_attention ... ok
+test app::tests::lifecycle_actions_have_unique_stable_semantic_targets ... ok
+test app::tests::polling_is_bounded_and_uses_the_earliest_durable_wake ... ok
+test app::handoff_ui::tests::delayed_result_note_responses_and_exact_retries_preserve_new_text_and_navigation ... ok
+test app::tests::retry_and_cancel_consequences_are_backend_capability_driven ... ok
+test app::tests::routine_decisions_do_not_use_failure_emphasis_or_absent_metadata ... ok
+test app::tests::evidence_properties_keep_source_paths_when_fields_are_added_or_labels_repeat ... ok
+test app::tests::session_rotation_clears_token_and_confirmation_then_bootstraps_a_rebuild ... ok
+test app::tests::settings_conflict_requires_explicit_current_review_and_preserves_operator_text ... ok
+test app::tests::topic_language_exposes_provenance_without_making_json_primary ... ok
+test appearance::tests::collection_metadata_and_meaningful_control_edges_keep_contrast_in_every_mode ... ok
+test model::tests::change_walk_rejects_repeated_or_mismatched_continuations_and_marks_ambiguity ... ok
+test appearance::tests::every_identity_validates_all_four_modes ... ok
+test model::tests::change_walk_drains_one_pinned_watermark_without_misses_or_duplicates ... ok
+test model::tests::empty_database_becomes_current_and_disabled_reasons_are_observable ... ok
+test model::tests::exact_gardener_confirmation_carries_immutable_identity_and_draft_survives_conflict ... ok
+test model::tests::expired_push_attention_keeps_fenced_resolution_and_blocks_resending ... ok
+test model::tests::generic_approval_confirmation_and_post_action_refresh_state_are_explicit ... ok
+test model::tests::fixture_covers_all_lifecycle_states_and_empty_filtering ... ok
+test model::tests::global_watermark_and_action_state_revision_remain_independent ... ok
+test model::tests::later_proposal_generation_stales_an_open_confirmation ... ok
+test model::tests::page_assembly_rejects_duplicates_and_capture_or_watermark_mismatch ... ok
+test model::tests::process_session_change_invalidates_confirmation_and_retains_snapshot_stale ... ok
+test model::tests::settings_draft_is_revision_checked_and_session_changes_require_fresh_review ... ok
+test model::tests::snapshot_preserves_selection_and_backend_order ... ok
+test model::tests::snapshot_and_topic_pages_assemble_at_one_stable_capture_and_watermark ... ok
+test model::tests::stale_retained_state_disables_actions_without_dropping_data ... ok
+test appearance::tests::shared_style_and_custom_tokens_resolve_identical_app_colours ... ok
+test model::tests::task_collection_uses_projected_relationships_and_preserves_attention_children ... ok
+test model::tests::transition_conflict_keeps_the_operator_draft_and_retained_snapshot ... ok
+test model::tests::workspace_has_three_stable_valid_panes ... ok
+test model::tests::uncertain_delivery_requires_a_current_separate_recovery_confirmation ... ok
+test transport::tests::conversation_read_generation_is_not_sent_to_server ... ok
+test transport::tests::conversation_mutations_require_session_and_preserve_exact_command_body ... ok
+test transport::tests::endpoints_use_operator_reads_and_exact_lifecycle_paths ... ok
+test transport::tests::agent_settings_transport_preserves_save_payload_and_checks_response_session ... ok
+test transport::tests::every_projection_response_requires_the_exact_bootstrap_identity ... ok
+test transport::tests::every_lifecycle_action_body_carries_the_reviewed_precondition ... ok
+test transport::tests::incompatible_bootstrap_and_restarted_snapshot_fail_closed ... ok
+test transport::tests::handoff_transport_pins_revision_and_exact_mutation_body_under_the_bootstrap_token ... ok
+test transport::tests::projection_gap_and_invalid_cursor_are_recovery_failures ... ok
+test transport::tests::mutations_require_a_memory_only_session_and_submit_its_header ... ok
+test transport::tests::native_transport_accepts_only_literal_http_loopback_bases ... ok
+test transport::tests::stale_token_error_is_classified_as_a_session_change ... ok
+test transport::tests::transition_conflict_is_classified_separately_from_transport_failure ... ok
+test transport::tests::task_settings_transport_carries_exact_revision_and_memory_only_token ... ok
+test ui_observation::tests::current_frame_snapshot_excludes_offscreen_nodes_and_audits_cleanly ... ok
+test app::settings_ui::tests::clipped_control_semantics_keep_only_the_visible_interaction_region ... ok
+test model::tests::five_thousand_row_snapshot_applies_bounded_incremental_upserts_and_reorders ... ok
+test app::tests::repeated_detail_actions_keep_domain_identity_when_reordered ... ok
+test app::tests::reader_tail_is_observed_only_when_its_painted_rows_are_visible ... ok
+test ui_observation::tests::failed_text_attempts_survive_offscreen_filtering ... ok
+test app::tests::action_area_keeps_relevant_stale_actions_with_visible_explanation ... ok
+test app::settings_ui::tests::scroll_clipped_option_nodes_cannot_point_at_the_footer_beneath_them ... ok
+test app::notifications_ui::tests::device_disable_has_separate_confirmation_and_stale_state_disables_actions ... ok
+test app::notifications_ui::tests::unsupported_and_native_surfaces_do_not_offer_enrolment ... ok
+test app::conversation_ui::tests::composer_retains_send_control_with_a_long_multiline_draft ... ok
+test app::conversation_ui::tests::reminder_history_stays_within_a_narrow_details_column ... ok
+test app::tests::engineering_compose_controls_are_observable_at_desktop_and_narrow_widths ... ok
+test app::conversation_ui::tests::long_candidates_messages_and_definition_fit_narrow_viewport ... ok
+test app::tests::attention_rows_have_two_lines_and_visible_metadata_at_both_widths ... ok
+test app::tests::large_fixture_uses_a_bounded_materialised_range ... ok
+test app::handoff_ui::tests::editor_has_a_visible_sticky_save_and_scroll_bounded_fields_at_desktop_and_phone_widths ... ok
+test app::tests::conversation_workspace_controls_are_visible_at_desktop_and_narrow_widths ... ok
+test app::tests::collection_row_identity_survives_reordering_and_narrow_layout ... ok
+test app::tests::expired_push_recovery_renders_resolution_and_disabled_resending ... ok
+test app::tests::actual_evidence_reader_scrolls_to_long_tail_without_claiming_measurement ... ok
+test app::tests::confirmation_transition_observations_match_each_render_pass ... ok
+test app::conversation_ui::tests::long_transcript_and_error_keep_composer_inside_the_viewport ... ok
+test app::notifications_ui::tests::pending_discard_requires_review_and_stays_available_without_server_mutation_safety ... ok
+test app::tests::detail_presentation_identity_survives_desktop_and_narrow_navigation ... ok
+test app::settings_ui::tests::enabled_adviser_controls_remain_readable_at_desktop_and_narrow_widths ... ok
+test app::tests::row_recipes_contain_painted_text_at_normal_and_enlarged_scales ... ok
+test app::settings_ui::tests::settings_controls_and_sticky_save_fit_desktop_and_narrow_viewports ... ok
+test app::conversation_ui::tests::adviser_activity_does_not_move_the_composer_or_lose_its_draft ... ok
+test app::tests::task_settings_editor_and_review_have_complete_semantics_at_both_widths ... ok
+test app::tests::physical_search_input_filters_collections_through_repeated_layout ... ok
+
+test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+     Running unittests src/main.rs (target/debug/deps/bokkie_attention_ui-e496a1a6551116df)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Checking bokkie-attention-ui v0.1.0 (/nvme/development/bokkie/apps/bokkie-attention-ui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.69s
+   Compiling bokkie-attention-ui v0.1.0 (/nvme/development/bokkie/apps/bokkie-attention-ui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.70s
+   Compiling bokkie-attention-ui v0.1.0 (/nvme/development/bokkie/apps/bokkie-attention-ui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.21s

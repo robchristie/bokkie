@@ -21,3 +21,13 @@ body {
   color: #c8ccd4;
   font: 14px system-ui, sans-serif;
 }
+
+/* Reuse the application’s licensed reading face for the selectable DOM copy
+   panel, including systems without an installed browser UI font. */
+@font-face {
+  font-family: "Bokkie Inter";
+  src: url("./fonts/Inter-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}

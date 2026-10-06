@@ -1,5 +1,6 @@
 /target/
 /apps/bokkie-attention-ui/web/pkg/
+/apps/bokkie-attention-ui/web/fonts/
 /.ui-qualification-runtime/
 /node_modules/
 __pycache__/

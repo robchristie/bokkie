@@ -1,0 +1,252 @@
+{
+  "mode": "deterministic-model-peer",
+  "source": "dbe3ecfca3fe2d5d9994e5a6e390463c0da2b64b",
+  "started_at": "2026-10-06T12:23:37.497Z",
+  "checks": [
+    "Licensed web fallback font is served by the same Bokkie origin",
+    "Served web font matches the authoritative licensed Inter input",
+    "Browser reading face is loaded before mutation fault injection",
+    "Mutation /projects accepted",
+    "Physical Settings registration saves the first existing workspace",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Settings and project navigation retain the unsent composer",
+    "Synthetic turn completed without runtime error",
+    "Synthetic turn completed without runtime error",
+    "Backend presents two ambiguous similarly named projects on distinct hosts",
+    "Ambiguous workspace blocks saving until explicit project selection",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Browser reading face is loaded before mutation fault injection",
+    "Browser refresh preserves the explicit destination and entered brief",
+    "Reload preserves unsaved brief edits",
+    "Reload retains unsent conversational text",
+    "Injected lost response follows an accepted server save",
+    "Lost response durably retains the exact original mutation envelope",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Mutation /handoffs/save accepted",
+    "Operator retry sends the same request ID and every original field",
+    "Explicit workspace and edited brief are saved as one exact revision",
+    "Complete saved brief includes the edited context and exact return path",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Repeating an unchanged save reuses the immutable snapshot",
+    "Registration, reads, edits and repeated saves dispatch no additional model",
+    "Hand-off activity creates no execution task",
+    "Mutation /handoffs/activity accepted",
+    "Resolved browser clipboard write records reported copy success",
+    "Browser clipboard contains the complete exact saved brief",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Mutation /handoffs/activity accepted",
+    "Clipboard denial records failure rather than a requested-copy success",
+    "DOM copy fallback has loaded the product reading face",
+    "Selectable fallback contains every byte of the complete saved brief",
+    "Fallback full text is selected in a read-only native browser field",
+    "Physical selection and keyboard copying from the fallback replace the clipboard sentinel with the complete brief",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Mutation /handoffs/activity accepted",
+    "Opening guidance records an explicit manual-view action",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Copy fallback and manual opening guidance dispatch no model or execution task",
+    "Hand-off activity creates no execution task",
+    "Mutation /handoffs/activity accepted",
+    "Opening failure remains an operator-entered, unverified report",
+    "Opening failure does not create an execution acknowledgement",
+    "Reporting an opening failure dispatches no model or execution task",
+    "Hand-off activity creates no execution task",
+    "Delayed result response follows an accepted note save",
+    "Result note is saved as operator-entered observation",
+    "Delayed result acknowledgement and navigation preserve the newer unsent note",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Home opens the saved snapshot rather than resurrecting the original model draft",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Same-app return navigation retains the unsent composer",
+    "Browser reading face is loaded before mutation fault injection",
+    "Service restart retains the exact immutable saved brief",
+    "Service restart retains operator-entered result provenance",
+    "Return link and service restart retain an unfinished result note",
+    "Owned disposable browser target is unambiguous",
+    "Lantern layout collected",
+    "Lantern capture collected",
+    "Return navigation and restart trigger only reads",
+    "Hand-off activity creates no execution task"
+  ],
+  "captures": [
+    {
+      "name": "project-workspaces-desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "name": "ambiguous-draft-desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "name": "edited-draft-narrow",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "name": "uncertain-save-narrow",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "name": "saved-brief-narrow",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "name": "saved-brief-desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "name": "clipboard-fallback-desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "name": "clipboard-fallback-narrow",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "name": "manual-opening-desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "name": "operator-result-desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "name": "manual-result-narrow",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "name": "return-link-narrow",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "name": "restart-return-narrow",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    }
+  ],
+  "errors": [],
+  "network": [
+    {
+      "path": "/ui/fonts/Inter-Regular.ttf",
+      "status": 200,
+      "content_type": "font/ttf"
+    },
+    {
+      "path": "/ui/fonts/Inter-Regular.ttf",
+      "status": 200,
+      "content_type": "font/ttf"
+    },
+    {
+      "path": "/handoffs/save",
+      "error": "net::ERR_FAILED"
+    },
+    {
+      "path": "/ui/fonts/Inter-Regular.ttf",
+      "status": 200,
+      "content_type": "font/ttf"
+    }
+  ],
+  "console": [
+    {
+      "kind": "warning",
+      "text": "[eframe::web::app_runner] eframe-0.36.1/src/web/app_runner.rs:337: Unhandled egui viewport command: SetTheme(Dark) - not implemented in web backend"
+    },
+    {
+      "kind": "warning",
+      "text": "[eframe::web::app_runner] eframe-0.36.1/src/web/app_runner.rs:337: Unhandled egui viewport command: SetTheme(Dark) - not implemented in web backend"
+    },
+    {
+      "kind": "error",
+      "text": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "kind": "error",
+      "text": "TypeError: Failed to fetch\n    at __wbg_fetch_b371b952a61cca04 (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui.js:864:25)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_with_request::__wbg_fetch_b371b952a61cca04 externref shim (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[91305]:0x1840007)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_with_request (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[38994]:0x157b3bd)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_base::{closure#0} (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[2376]:0xc4fff1)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_jsvalue::{closure#0} (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[2353]:0xc47451)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_async::{closure#0} (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[5930]:0xf1cead)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch::{closure#0} (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[6148]:0xf38018)\n    at bokkie_attention_ui.wasm.<js_sys[b543097140b9ecb0]::futures::task::singlethread::Inner>::is_ready (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[28256]:0x143e290)\n    at bokkie_attention_ui.wasm.<js_sys[b543097140b9ecb0]::futures::task::singlethread::Tas"
+    },
+    {
+      "kind": "warning",
+      "text": "[eframe::web::app_runner] eframe-0.36.1/src/web/app_runner.rs:337: Unhandled egui viewport command: SetTheme(Dark) - not implemented in web backend"
+    }
+  ],
+  "target/debug/bokkie-conversation-fixture": "5ea324bea58df044dc15e328abdc1cacfd4b29340c73976cdf25984b6dea69a4",
+  "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "264042957ffd02d67522200f2b14c64d09e5151c695eca1ce9fd909935538489",
+  "tests/fixtures/conversation_broker.py": "5fea8e9f2c4fff7c9c69fda940a31a82cc572dcc27168610b2c23d653ce5b598",
+  "apps/bokkie-attention-ui/assets/fonts/Inter-Regular.ttf": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+  "fixture": {
+    "address": "127.0.0.1:33489",
+    "database_kind": "synthetic_fixture",
+    "now": 1790028000,
+    "resumed": true,
+    "root": "/tmp/bokkie-handoff-26b14074-3ea7-4301-b826-138b6d0b8fed",
+    "scheduler": "manual_stdin_only"
+  },
+  "served_font_sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+  "browser": "151.0.7922.34",
+  "passed": true,
+  "finished_at": "2026-10-06T12:23:54.221Z",
+  "dispatches": 2
+}

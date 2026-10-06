@@ -304,6 +304,7 @@ pub(super) fn is_request(request: &ApiRequest) -> bool {
 
 impl AttentionApp {
     pub(super) fn open_agent_settings(&mut self, context: &egui::Context) {
+        self.handoff.open = false;
         self.agent_settings.open = true;
         self.refresh_agent_settings(false, context);
     }
@@ -396,6 +397,7 @@ impl AttentionApp {
         let width = bounds.width().min(660.0);
         let rect = bounds.shrink2(egui::vec2((bounds.width() - width) / 2.0, 0.0));
         let mut return_home = false;
+        let mut projects = false;
         let mut reload = false;
         let mut save = false;
         let session_available = self.session.is_some();
@@ -404,7 +406,10 @@ impl AttentionApp {
                 PresentationScope::new("bokkie.settings"), SemanticUiId::new("bokkie.settings"));
             let state = &mut self.agent_settings;
             presentation.heading(ui, "heading", "Settings");
-            return_home = settings_button(ui, "return", "Return to conversation", true, &mut presentation);
+            ui.horizontal_wrapped(|ui| {
+                return_home = settings_button(ui, "return", "Return to conversation", true, &mut presentation);
+                projects = settings_button(ui, "projects", "Project workspaces", true, &mut presentation);
+            });
             settings_text(ui, "scope", "Main conversational role. Saved changes apply to new requests; running requests and retries keep their original settings.", TextRole::Secondary, &mut presentation);
             ui.add_space(8.0);
             let remaining = ui.available_rect_before_wrap();
@@ -487,6 +492,9 @@ impl AttentionApp {
         let context = ui.ctx().clone();
         if return_home {
             self.open_conversation(None, &context);
+        }
+        if projects {
+            self.open_project_workspaces(&context);
         }
         if reload {
             self.refresh_agent_settings(true, &context);
