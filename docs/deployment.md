@@ -6,7 +6,7 @@ and recovery. Conversation proposals use the pinned Codex App Server through
 the existing bounded broker. Engineering execution and coding-gardener runners
 are not enabled by this deployment.
 
-The [live activation record](deployment-evidence/live-nostromo.md) records the
+The [current activation record](deployment-evidence/live-agent-settings.md) records the
 installed revision, account/runtime qualification and restart evidence.
 
 ## Composition

@@ -5,6 +5,10 @@ The Home UI from [PR #47](https://github.com/robchristie/bokkie/pull/47) is live
 [https://bokkie.yutani.tech](https://bokkie.yutani.tech). This record supersedes the
 installed identity in the [initial activation record](live-nostromo.md).
 
+Agent settings were subsequently deployed; see the
+[current deployment record](live-agent-settings.md). The identities below
+describe the Home redesign update.
+
 ## Deployed identity and preserved configuration
 
 | Input | Observation |
