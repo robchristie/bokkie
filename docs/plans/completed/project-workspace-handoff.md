@@ -43,7 +43,7 @@ record operator-entered results; action reports never imply execution acceptance
 ## Evidence and limits
 
 [Retained results](../../handoff-evidence/README.md) include 219 Python tests, 369
-backend library tests and the complete integration suites, 118 UI Rust/30 Node
+backend library tests and the complete integration suites, 119 UI Rust/30 Node
 tests, native/Wasm builds, lint/format, the two-call deterministic browser journey
 and two actual provider turns through qualified Codex0.160.0.
 

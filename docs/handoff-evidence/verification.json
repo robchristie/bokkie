@@ -1,5 +1,5 @@
 {
-  "candidate": "377457a133c2cc03541054747242aea8dcde4ee4",
+  "candidate": "dbe3ecfca3fe2d5d9994e5a6e390463c0da2b64b",
   "source_sha256": {
     "Cargo.lock": "0597871ed920e9335f5f6de7fd43fc569227e8306de6ff851ebb3c3665ee5f54",
     "Cargo.toml": "82079a3c50a30ce74995293959bea2adc857a4cbc7ef65e4ed8bfeb4fac92b2d",
@@ -13,7 +13,7 @@
     "apps/bokkie-attention-ui/src/app.rs": "7ff5cc4fb06cb585eab84bff93995233235013049cee4cf16d1c76f757ef855e",
     "apps/bokkie-attention-ui/src/appearance.rs": "f698e6189ed5cb412e2c25604574008908c1e2f22b83f42be97812af3a44e485",
     "apps/bokkie-attention-ui/src/conversation_ui.rs": "5e08c6283fb9e0a64cae3a803ef4f8dfced1a83f37d06b66bf39e989c239b8c1",
-    "apps/bokkie-attention-ui/src/handoff_ui.rs": "9385c1b50d8b028dd742463352b78086009c336daa7afea379f0ec817d222c25",
+    "apps/bokkie-attention-ui/src/handoff_ui.rs": "a20cc76bb04a47095edff9f6f2494945186592e0889d45d51963591227f64348",
     "apps/bokkie-attention-ui/src/lib.rs": "0403df55ef82950b17e4c1863572497da232fa2cd918b6f25314561b32fa84d8",
     "apps/bokkie-attention-ui/src/main.rs": "4d85cc9aac3502edf5a04784180b0052390eadc4f45750c615b15023d93ed687",
     "apps/bokkie-attention-ui/src/model.rs": "0fc0c6741b4fdecf03b5159f9b561f7a6476970c8e1fc5abfae50154de4ec647",
@@ -125,7 +125,7 @@
     "tools/conversation-runtime/test_payload_filter.py": "fd07bd8ec2742f5056047bdfc82c89825d9f7b7e45a9895e7d3d4b7dd7ca1780",
     "tools/conversation-runtime/test_supervisor.py": "8cedeb632819804823350083ada319c63f6ef96e5325ddd37d709290c2a5d5ef",
     "tools/prepare-web-font.sh": "604d20471eb45901025b70c05eebc854475c7e7359be79dce0bfd3a19fc2e04e",
-    "tools/ui-handoff-journey.mjs": "df972e9a2b8ba7a9dd68ea28b3172edc792d13968521ac928b30ea390335ade3"
+    "tools/ui-handoff-journey.mjs": "fd556b6d1ae6c5bd706af49725357cbc91ce94bdef643784a2c18044b7f245c0"
   },
   "opened_images": [
     "project-workspaces-desktop.png",
@@ -154,7 +154,8 @@
       "command": "tools/check-ui.sh",
       "log": "check-ui.log",
       "outcome": "passed",
-      "record": "/tmp/bokkie-handoff-checks/command-log-58vcm2bv/outcome.json"
+      "record": "/tmp/bokkie-handoff-checks/command-log-yrh5pqn5/outcome.json"
     }
-  }
+  },
+  "review_repair": "Delayed result-note responses clear only unchanged submitted text belonging to the same selected record; 12 delayed/retry/navigation state cases and physical delayed-response navigation pass."
 }

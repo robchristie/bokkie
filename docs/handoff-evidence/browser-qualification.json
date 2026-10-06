@@ -1,7 +1,7 @@
 {
   "mode": "deterministic-model-peer",
-  "source": "377457a133c2cc03541054747242aea8dcde4ee4",
-  "started_at": "2026-10-06T11:31:37.984Z",
+  "source": "dbe3ecfca3fe2d5d9994e5a6e390463c0da2b64b",
+  "started_at": "2026-10-06T12:23:37.497Z",
   "checks": [
     "Licensed web fallback font is served by the same Bokkie origin",
     "Served web font matches the authoritative licensed Inter input",
@@ -71,8 +71,9 @@
     "Opening failure does not create an execution acknowledgement",
     "Reporting an opening failure dispatches no model or execution task",
     "Hand-off activity creates no execution task",
-    "Mutation /handoffs/activity accepted",
+    "Delayed result response follows an accepted note save",
     "Result note is saved as operator-entered observation",
+    "Delayed result acknowledgement and navigation preserve the newer unsent note",
     "Owned disposable browser target is unambiguous",
     "Lantern layout collected",
     "Lantern capture collected",
@@ -224,7 +225,7 @@
     },
     {
       "kind": "error",
-      "text": "TypeError: Failed to fetch\n    at __wbg_fetch_b371b952a61cca04 (http://127.0.0.1:40683/ui/pkg/bokkie_attention_ui.js:864:25)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_with_request::__wbg_fetch_b371b952a61cca04 externref shim (http://127.0.0.1:40683/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[91302]:0x183fe53)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_with_request (http://127.0.0.1:40683/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[38994]:0x157b2a7)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_base::{closure#0} (http://127.0.0.1:40683/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[2376]:0xc4feea)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_jsvalue::{closure#0} (http://127.0.0.1:40683/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[2353]:0xc4734a)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_async::{closure#0} (http://127.0.0.1:40683/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[5930]:0xf1cda6)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch::{closure#0} (http://127.0.0.1:40683/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[6148]:0xf37f11)\n    at bokkie_attention_ui.wasm.<js_sys[b543097140b9ecb0]::futures::task::singlethread::Inner>::is_ready (http://127.0.0.1:40683/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[28256]:0x143e15e)\n    at bokkie_attention_ui.wasm.<js_sys[b543097140b9ecb0]::futures::task::singlethread::Tas"
+      "text": "TypeError: Failed to fetch\n    at __wbg_fetch_b371b952a61cca04 (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui.js:864:25)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_with_request::__wbg_fetch_b371b952a61cca04 externref shim (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[91305]:0x1840007)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_with_request (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[38994]:0x157b3bd)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_base::{closure#0} (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[2376]:0xc4fff1)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_jsvalue::{closure#0} (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[2353]:0xc47451)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch_async::{closure#0} (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[5930]:0xf1cead)\n    at bokkie_attention_ui.wasm.ehttp[3f9231537d4ae52e]::web::fetch::{closure#0} (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[6148]:0xf38018)\n    at bokkie_attention_ui.wasm.<js_sys[b543097140b9ecb0]::futures::task::singlethread::Inner>::is_ready (http://127.0.0.1:33489/ui/pkg/bokkie_attention_ui_bg.wasm:wasm-function[28256]:0x143e290)\n    at bokkie_attention_ui.wasm.<js_sys[b543097140b9ecb0]::futures::task::singlethread::Tas"
     },
     {
       "kind": "warning",
@@ -232,20 +233,20 @@
     }
   ],
   "target/debug/bokkie-conversation-fixture": "5ea324bea58df044dc15e328abdc1cacfd4b29340c73976cdf25984b6dea69a4",
-  "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "226916947997da57fd0447f95cfe1608d68fe332767371575dc7a8b9494fd952",
+  "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "264042957ffd02d67522200f2b14c64d09e5151c695eca1ce9fd909935538489",
   "tests/fixtures/conversation_broker.py": "5fea8e9f2c4fff7c9c69fda940a31a82cc572dcc27168610b2c23d653ce5b598",
   "apps/bokkie-attention-ui/assets/fonts/Inter-Regular.ttf": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
   "fixture": {
-    "address": "127.0.0.1:40683",
+    "address": "127.0.0.1:33489",
     "database_kind": "synthetic_fixture",
     "now": 1790028000,
     "resumed": true,
-    "root": "/tmp/bokkie-handoff-f38142a1-4536-40e5-95f2-d3139593587c",
+    "root": "/tmp/bokkie-handoff-26b14074-3ea7-4301-b826-138b6d0b8fed",
     "scheduler": "manual_stdin_only"
   },
   "served_font_sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
   "browser": "151.0.7922.34",
   "passed": true,
-  "finished_at": "2026-10-06T11:31:54.379Z",
+  "finished_at": "2026-10-06T12:23:54.221Z",
   "dispatches": 2
 }

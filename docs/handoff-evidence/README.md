@@ -1,7 +1,7 @@
 # Project hand-off qualification
 
 The representative journey passes on committed candidate
-`377457a133c2cc03541054747242aea8dcde4ee4`. [Browser evidence](browser-qualification.json)
+`dbe3ecfca3fe2d5d9994e5a6e390463c0da2b64b`. [Browser evidence](browser-qualification.json)
 records the actual Polyorama UI and production router with a closed synthetic
 model peer. Two Atlas registrations on different hosts require explicit selection.
 No production deployment or project worker was started.
@@ -11,7 +11,7 @@ No production deployment or project worker was started.
 The physical browser cohort registers a workspace through Settings, discusses a
 searchable project list, requests a hand-off, resolves ambiguity, edits the brief,
 saves and copies it, follows the manual opening guide, reports an opening problem,
-attaches a separate result note, reopens the exact return link and restarts the
+attaches a separate result note while typing a newer note during a delayed response, reopens the exact return link and restarts the
 service. It also checks unsent text and local brief edits through navigation and
 browser reload, an accepted save with its response deliberately lost, exact retry,
 unchanged repeated saves, clipboard denial, full text selection and actual keyboard
@@ -49,7 +49,7 @@ command reuse, repeated saves, atomic rollback when audit fails, note provenance
 bounded brief validation and restart. The HTTP journey preserves mutation-token
 and wrong-origin rejection and proves registration/notes work without a model.
 
-[Canonical UI checks](check-ui.log) pass 118 Rust and 30 Node tests, Clippy,
+[Canonical UI checks](check-ui.log) pass 119 Rust and 30 Node tests, Clippy,
 native/Wasm builds and formatting. They include navigation/draft retention,
 ambiguity, revision conflicts and deliberate rebase, exact pending envelopes,
 transport identity, browser clipboard promises and native `CopyRequested` semantics.
@@ -76,7 +76,7 @@ policy `never` and empty execution environments. No production source, database,
 profile, mount, service or credential was changed. [Zero-turn preflight](runtime-preflight.json)
 accepted all six offered tools without widening the 32KiB catalogue bound.
 
-Later browser-copy and documentation changes do not change the interpreted
+Later browser-copy, result-note retention and documentation changes do not change the interpreted
 backend, mandatory instructions, profiles or broker. The successful live evidence
 is reused within its exhausted two-call budget. It establishes this representative
 interpretation, not universal language understanding or support for another runtime.

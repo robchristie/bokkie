@@ -1,7 +1,7 @@
 {
-  "frame_number": "34",
+  "frame_number": "35",
   "ui_snapshot": {
-    "frame": "34",
+    "frame": "35",
     "pixels_per_point": 1,
     "root": "application",
     "nodes": [
@@ -216,14 +216,14 @@
         "actions": []
       },
       {
-        "id": "bokkie.handoff.choose.0e8da24d-6241-4ff0-a91e-86f32dbb0e92",
+        "id": "bokkie.handoff.choose.0f5892f7-a01d-406e-98f1-6e3be91b7f21",
         "parent": "bokkie.handoff",
         "role": "button",
-        "name": "Atlas · Nostromo\n/synthetic/nostromo/atlas",
+        "name": "Selected: Atlas · Sulaco\n/synthetic/sulaco/atlas",
         "rect": {
           "min_x": 16,
           "min_y": 344,
-          "max_x": 203.46875,
+          "max_x": 189.25,
           "max_y": 386
         },
         "enabled": false,
@@ -232,14 +232,14 @@
         "actions": []
       },
       {
-        "id": "bokkie.handoff.choose.6f8f78d3-8c96-4011-9b9f-5b896dc08f98",
+        "id": "bokkie.handoff.choose.c5bd1d1b-ea61-46bf-97d2-8343d4a3e29d",
         "parent": "bokkie.handoff",
         "role": "button",
-        "name": "Selected: Atlas · Sulaco\n/synthetic/sulaco/atlas",
+        "name": "Atlas · Nostromo\n/synthetic/nostromo/atlas",
         "rect": {
           "min_x": 16,
           "min_y": 391,
-          "max_x": 189.25,
+          "max_x": 203.46875,
           "max_y": 433
         },
         "enabled": false,

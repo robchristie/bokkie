@@ -1,7 +1,7 @@
 {
-  "frame_number": "183",
+  "frame_number": "192",
   "ui_snapshot": {
-    "frame": "183",
+    "frame": "192",
     "pixels_per_point": 1,
     "root": "application",
     "nodes": [
@@ -222,9 +222,9 @@
         "name": "Result or opening problem",
         "rect": {
           "min_x": 16,
-          "min_y": 432,
+          "min_y": 584,
           "max_x": 374,
-          "max_y": 486.8125
+          "max_y": 638.8125
         },
         "enabled": true,
         "focused": false,
@@ -238,9 +238,9 @@
         "name": "Save result note",
         "rect": {
           "min_x": 16,
-          "min_y": 495.8125,
+          "min_y": 647.8125,
           "max_x": 140.59375,
-          "max_y": 529.8125
+          "max_y": 681.8125
         },
         "enabled": true,
         "focused": false,
@@ -254,57 +254,9 @@
         "name": "Report opening problem",
         "rect": {
           "min_x": 147.59375,
-          "min_y": 495.8125,
+          "min_y": 647.8125,
           "max_x": 325.5,
-          "max_y": 529.8125
-        },
-        "enabled": true,
-        "focused": false,
-        "selected": false,
-        "actions": []
-      },
-      {
-        "id": "bokkie.handoff.activity.0",
-        "parent": "bokkie.handoff",
-        "role": "section",
-        "name": "Browser reported brief copied\nClient-reported action; no execution acknowledgement · Tue 22 Sep 2026, 07:30 ACST (Australia/Adelaide)",
-        "rect": {
-          "min_x": 16,
-          "min_y": 534.8125,
-          "max_x": 352.9375,
-          "max_y": 602.8125
-        },
-        "enabled": true,
-        "focused": false,
-        "selected": false,
-        "actions": []
-      },
-      {
-        "id": "bokkie.handoff.activity.1",
-        "parent": "bokkie.handoff",
-        "role": "section",
-        "name": "Copy unavailable — selectable brief shown\nClient-reported action; no execution acknowledgement · Tue 22 Sep 2026, 07:30 ACST (Australia/Adelaide)",
-        "rect": {
-          "min_x": 16,
-          "min_y": 607.8125,
-          "max_x": 352.9375,
-          "max_y": 675.8125
-        },
-        "enabled": true,
-        "focused": false,
-        "selected": false,
-        "actions": []
-      },
-      {
-        "id": "bokkie.handoff.activity.2",
-        "parent": "bokkie.handoff",
-        "role": "section",
-        "name": "Manual opening guidance viewed\nClient-reported action; no execution acknowledgement · Tue 22 Sep 2026, 07:30 ACST (Australia/Adelaide)",
-        "rect": {
-          "min_x": 16,
-          "min_y": 680.8125,
-          "max_x": 352.9375,
-          "max_y": 684
+          "max_y": 681.8125
         },
         "enabled": true,
         "focused": false,

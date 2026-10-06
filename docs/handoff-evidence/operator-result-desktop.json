@@ -1,7 +1,7 @@
 {
-  "frame_number": "137",
+  "frame_number": "148",
   "ui_snapshot": {
-    "frame": "137",
+    "frame": "148",
     "pixels_per_point": 1,
     "root": "application",
     "nodes": [
@@ -242,7 +242,7 @@
           "max_x": 454.59375,
           "max_y": 568.8125
         },
-        "enabled": false,
+        "enabled": true,
         "focused": false,
         "selected": false,
         "actions": []
@@ -258,7 +258,7 @@
           "max_x": 639.5,
           "max_y": 568.8125
         },
-        "enabled": false,
+        "enabled": true,
         "focused": false,
         "selected": false,
         "actions": []
