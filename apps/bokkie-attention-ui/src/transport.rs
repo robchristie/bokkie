@@ -29,6 +29,21 @@ pub enum ApiRequest {
         generation: u64,
     },
     SaveAgentSettings(bokkie_operator_api::AgentSettingsSaveRequest),
+    Projects {
+        generation: u64,
+    },
+    SaveProject(bokkie_operator_api::ProjectSaveRequest),
+    Handoffs {
+        after: Option<String>,
+        generation: u64,
+    },
+    Handoff {
+        id: String,
+        revision: Option<i64>,
+        generation: u64,
+    },
+    SaveHandoff(bokkie_operator_api::HandoffSaveRequest),
+    HandoffActivity(bokkie_operator_api::HandoffActivityRequest),
     Conversations,
     Conversation {
         id: String,
@@ -77,6 +92,9 @@ pub enum ApiRequest {
 pub enum ApiPayload {
     Bootstrap(ApiSession),
     AgentSettings(Box<bokkie_operator_api::AgentSettingsView>),
+    Projects(bokkie_operator_api::ProjectList),
+    Handoffs(bokkie_operator_api::HandoffList),
+    Handoff(Box<bokkie_operator_api::HandoffView>),
     Conversations(bokkie_operator_api::ConversationList),
     Conversation(Box<bokkie_operator_api::ConversationView>),
     Catalogue(bokkie_operator_api::ManagedCataloguePage),
@@ -240,6 +258,9 @@ impl Transport {
         match request {
             ApiRequest::Bootstrap
             | ApiRequest::AgentSettings { .. }
+            | ApiRequest::Projects { .. }
+            | ApiRequest::Handoffs { .. }
+            | ApiRequest::Handoff { .. }
             | ApiRequest::Conversations
             | ApiRequest::Conversation { .. }
             | ApiRequest::Catalogue { .. }
@@ -248,6 +269,9 @@ impl Transport {
             | ApiRequest::Changes { .. }
             | ApiRequest::Obligation { .. } => Ok(ehttp::Request::get(endpoint)),
             ApiRequest::Act(_)
+            | ApiRequest::SaveProject(_)
+            | ApiRequest::SaveHandoff(_)
+            | ApiRequest::HandoffActivity(_)
             | ApiRequest::SaveAgentSettings(_)
             | ApiRequest::ConversationTurn(_)
             | ApiRequest::ConversationSelect(_)
@@ -262,6 +286,15 @@ impl Transport {
                     )
                 })?;
                 let body = match request {
+                    ApiRequest::SaveProject(value) => {
+                        serde_json::to_vec(value).expect("serialisable project")
+                    }
+                    ApiRequest::SaveHandoff(value) => {
+                        serde_json::to_vec(value).expect("serialisable hand-off")
+                    }
+                    ApiRequest::HandoffActivity(value) => {
+                        serde_json::to_vec(value).expect("serialisable hand-off activity")
+                    }
                     ApiRequest::SaveAgentSettings(value) => {
                         serde_json::to_vec(value).expect("serialisable agent settings")
                     }
@@ -308,6 +341,20 @@ impl Transport {
             ApiRequest::AgentSettings { .. } | ApiRequest::SaveAgentSettings(_) => {
                 "/agent-settings".into()
             }
+            ApiRequest::Projects { .. } | ApiRequest::SaveProject(_) => "/projects".into(),
+            ApiRequest::Handoffs { after, .. } => match after {
+                Some(after) => format!("/handoffs?after={}", encode_query_value(after)),
+                None => "/handoffs".into(),
+            },
+            ApiRequest::Handoff { id, revision, .. } => {
+                let mut path = format!("/handoffs/{}", encode_path_segment(id));
+                if let Some(revision) = revision {
+                    path.push_str(&format!("?revision={revision}"));
+                }
+                path
+            }
+            ApiRequest::SaveHandoff(_) => "/handoffs/save".into(),
+            ApiRequest::HandoffActivity(_) => "/handoffs/activity".into(),
             ApiRequest::Conversations => "/conversations".into(),
             ApiRequest::Conversation { id, .. } => {
                 format!("/conversations/{}", encode_path_segment(id))
@@ -493,6 +540,27 @@ fn decode(
             let value = decode_json::<bokkie_operator_api::AgentSettingsView>(&response)?;
             validate_response_identity(Some(&value.service), expected_session, "agent settings")?;
             Ok(ApiPayload::AgentSettings(Box::new(value)))
+        }
+        ApiRequest::Projects { .. } | ApiRequest::SaveProject(_) => {
+            let value = decode_json::<bokkie_operator_api::ProjectList>(&response)?;
+            validate_response_identity(
+                Some(&value.service),
+                expected_session,
+                "project workspaces",
+            )?;
+            Ok(ApiPayload::Projects(value))
+        }
+        ApiRequest::Handoffs { .. } => {
+            let value = decode_json::<bokkie_operator_api::HandoffList>(&response)?;
+            validate_response_identity(Some(&value.service), expected_session, "hand-offs")?;
+            Ok(ApiPayload::Handoffs(value))
+        }
+        ApiRequest::Handoff { .. }
+        | ApiRequest::SaveHandoff(_)
+        | ApiRequest::HandoffActivity(_) => {
+            let value = decode_json::<bokkie_operator_api::HandoffView>(&response)?;
+            validate_response_identity(Some(&value.service), expected_session, "hand-off")?;
+            Ok(ApiPayload::Handoff(Box::new(value)))
         }
         ApiRequest::Conversations => {
             let value = decode_json::<bokkie_operator_api::ConversationList>(&response)?;
@@ -1094,5 +1162,59 @@ mod tests {
             assert_eq!(http.method, ehttp::Method::GET);
             assert!(http.body.is_empty());
         }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn handoff_transport_pins_revision_and_exact_mutation_body_under_the_bootstrap_token() {
+        let transport = Transport::new("http://127.0.0.1:7744").unwrap();
+        let current = session("current", &"a".repeat(64));
+        let read = ApiRequest::Handoff {
+            id: "handoff/a".into(),
+            revision: Some(3),
+            generation: 7,
+        };
+        let http = transport.http_request(&read, Some(&current)).unwrap();
+        assert_eq!(
+            http.url,
+            "http://127.0.0.1:7744/handoffs/handoff%2Fa?revision=3"
+        );
+        assert_eq!(http.method, ehttp::Method::GET);
+        assert!(http.body.is_empty());
+        let request = bokkie_operator_api::HandoffSaveRequest {
+            command_id: "exact-command".into(),
+            draft_id: "draft".into(),
+            expected_revision: 2,
+            project_id: "project".into(),
+            project_revision: 8,
+            brief: bokkie_operator_api::HandoffBrief {
+                outcome: "Keep exact UTF-8 text: é".into(),
+                ..Default::default()
+            },
+        };
+        let save = ApiRequest::SaveHandoff(request.clone());
+        assert!(matches!(
+            transport.http_request(&save, None),
+            Err(ApiFailure::SessionChanged(_))
+        ));
+        let http = transport.http_request(&save, Some(&current)).unwrap();
+        assert_eq!(http.url, "http://127.0.0.1:7744/handoffs/save");
+        assert_eq!(http.method, ehttp::Method::POST);
+        assert_eq!(
+            serde_json::from_slice::<bokkie_operator_api::HandoffSaveRequest>(&http.body).unwrap(),
+            request
+        );
+        let http = transport
+            .http_request(
+                &ApiRequest::Handoffs {
+                    after: Some("cursor/+".into()),
+                    generation: 9,
+                },
+                Some(&current),
+            )
+            .unwrap();
+        assert_eq!(
+            http.url,
+            "http://127.0.0.1:7744/handoffs?after=cursor%2F%2B"
+        );
     }
 }

@@ -19,6 +19,23 @@ pub fn tools_with_adviser(managed_selected: bool, legacy_selected: bool, automat
     ]});
     let mut result = vec![
         tool(
+            "bokkie_prepare_handoff",
+            "Prepare a concise DEVELOPMENT hand-off to an existing project workspace when the operator asks to implement work there or prepare a hand-off. This is separate from scheduled tasks and engineering supervision. Supply a short project identifying phrase and relevant brief fields. The backend resolves registrations and the operator selects the exact destination, edits and saves. Never invent a project identity or launch route. No task, worker, execution acceptance or permission is created. Ask for missing outcome or project through bokkie_discuss when necessary.",
+            object(
+                json!({
+                    "project_query":text("Project name or identifying phrase explicitly requested by the operator; not a guessed destination."),
+                    "brief":object(json!({
+                        "outcome":text("Requested development outcome, concise and concrete."),
+                        "context":text("Only relevant decisions and context from this discussion; no transcript, credentials or unrelated private material. Empty when absent."),
+                        "constraints":text("Scope boundaries and constraints. Preserve the operator's restrictions; do not grant new permissions."),
+                        "acceptance":text("Concrete checkable acceptance criteria for the receiving workspace."),
+                        "references":{"type":"array","maxItems":12,"items":text("Relevant HTTP/HTTPS source link actually supplied in the discussion. Never invent links; [] when absent.")}
+                    }), &["outcome","context","constraints","acceptance","references"])
+                }),
+                &["project_query", "brief"],
+            ),
+        ),
+        tool(
             "bokkie_discuss",
             "Discuss an exploratory idea, answer feedback or ask about material missing information. This does NOT save a draft. For a sufficiently specified request to create or refine a task, use bokkie_save_draft instead. A request to keep a task inactive still permits saving its draft.",
             object(
@@ -53,7 +70,10 @@ pub fn tools_with_adviser(managed_selected: bool, legacy_selected: bool, automat
         result.push(tool("bokkie_propose", "Prepare an operator review card for activation, pause or resume of the selected task. This does not perform the action. A model-generated yes or approval never confirms it.", object(json!({"action":{"type":"string","enum":["activate","pause","resume"]}}), &["action"])));
     }
     if automatic {
-        let schema = &mut result[0]["inputSchema"];
+        let schema = &mut result
+            .iter_mut()
+            .find(|t| t["name"] == "bokkie_discuss")
+            .unwrap()["inputSchema"];
         schema["properties"]["reason"]["enum"]
             .as_array_mut()
             .unwrap()
@@ -72,6 +92,12 @@ pub fn tools_with_adviser(managed_selected: bool, legacy_selected: bool, automat
 struct ToolProposal {
     tool: String,
     arguments: Value,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HandoffProposal {
+    project_query: String,
+    brief: bokkie_operator_api::HandoffBrief,
 }
 
 #[derive(Deserialize)]
@@ -176,6 +202,22 @@ pub fn operation_with_adviser(
         ));
     }
     match proposal.tool.as_str() {
+        "bokkie_prepare_handoff" => {
+            let draft: HandoffProposal = decode(proposal.arguments)?;
+            crate::handoffs::validate_brief(&draft.brief)?;
+            if draft.project_query.trim().is_empty()
+                || draft.project_query.len() > 160
+                || draft.project_query.contains('\0')
+            {
+                return Err(StoreError::Invalid(
+                    "Supply a bounded explicit project query".into(),
+                ));
+            }
+            Ok(ConversationOperation::PrepareHandoff {
+                project_query: draft.project_query,
+                brief: Box::new(draft.brief),
+            })
+        }
         "bokkie_discuss" => {
             let Discussion {
                 message,

@@ -24,7 +24,7 @@ MAX_MODELS = 128
 MODEL_PAGE_SIZE = 64
 MAX_MODEL_PAGES = 16
 QUALIFIED_VERSION = "0.160.0"
-TOOL_NAMES = frozenset(('bokkie_discuss', 'bokkie_lookup', 'bokkie_save_draft',
+TOOL_NAMES = frozenset(('bokkie_prepare_handoff', 'bokkie_discuss', 'bokkie_lookup', 'bokkie_save_draft',
                         'bokkie_preview', 'bokkie_propose'))
 TOOL_NAMESPACE = 'bokkie'
 DISABLED = (

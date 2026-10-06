@@ -26,6 +26,7 @@ BOKKIE_API_BASE=http://127.0.0.1:7744 \
 Build the browser module and serve the source assets on Bokkie's origin:
 
 ```sh
+tools/prepare-web-font.sh
 cargo +1.97.1 build --locked -p bokkie-attention-ui --lib \
   --target wasm32-unknown-unknown
 wasm-bindgen \
@@ -41,7 +42,9 @@ cargo +1.97.1 run --locked -p bokkie -- \
 ```
 
 Then open `http://127.0.0.1:7744/ui/`. The generated `web/pkg` directory is
-ignored. This arrangement adds no CORS policy, multi-user authentication, proxy,
+ignored. `web/fonts` is also generated from the existing licensed Inter source
+for a readable browser clipboard fallback, independently of installed host fonts.
+This arrangement adds no CORS policy, multi-user authentication, proxy,
 non-loopback listener or second database path.
 
 ## Conversation workspace
@@ -66,6 +69,18 @@ configures its profile and explicit conflict policy; **Consult Astra** requests
 one consultation in the same conversation, with durable outcome details.
 Unsupported integrations
 remain unavailable.
+
+**Settings → Project workspaces** registers development destinations independently
+of model availability. Ask Bokkie to prepare a hand-off in ordinary language,
+choose the project/host, edit and save the brief, then copy it into that existing
+Codex workspace. **Hand-offs** reopens exact saved revisions and attributed manual
+result notes. **How to open workspace** gives the qualified manual route; it starts
+no session and supplies no execution acknowledgement. See the [hand-off guide](../../docs/project-handoffs.md).
+
+`tools/ui-handoff-journey.mjs` qualifies synthetic ambiguity, editing, replay,
+clipboard success/denial and selectable fallback, manual opening, return navigation
+and service restart. It uses the production UI/router with a closed deterministic
+model peer. Open its desktop/narrow PNGs before judging layout and readability.
 
 ## Notifications
 

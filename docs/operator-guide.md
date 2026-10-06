@@ -579,6 +579,22 @@ service opt-in. There is no supported destructive migration or downgrade path.
 
 ## Conversational task management
 
+For development hand-offs, **Settings → Project workspaces** maintains destination
+references and **Hand-offs** reads saved brief revisions. Discuss the outcome in
+Home, ask for a hand-off, select the exact project/host, edit and save. Copy the
+complete brief, manually select that project in Codex and paste into a fresh
+session. The [hand-off guide](project-handoffs.md) defines registry ownership,
+validation, clipboard fallback, return links and result-note provenance. These
+records are separate from task activation and advanced engineering supervision;
+copy/opening evidence does not establish execution acceptance.
+
+The model-free routes are `GET/POST /projects`, `GET /handoffs`,
+`GET /handoffs/{id}?revision=N`, `POST /handoffs/save` and
+`POST /handoffs/activity`. Mutations retain the existing same-origin/token
+boundary and command replay protection. `/handoffs` uses an optional `after`
+identity cursor; each page contains at most 20 latest snapshots. Omitting a
+revision reads the latest saved revision; exact return links always pin one.
+
 Configure the model adapter and allowed local capability once. Copy
 [`conversation-local.json`](../instructions/profiles/conversation-local.json)
 to a private path outside the checkout. Set its absolute broker path to

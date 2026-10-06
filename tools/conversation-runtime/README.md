@@ -41,10 +41,10 @@ no retry or thread-resume path. The compatibility method
 `generate(context, output_schema)` still accepts an object-root structured-output
 schema, with any operation union under a required object property.
 
-The tool method takes one to five unique Codex function specifications:
+The tool method takes one to six unique Codex function specifications:
 `{"type":"function","name":"bokkie_lookup","description":"…","inputSchema":{"type":"object",…},"deferLoading":false}`.
 The allowed names are `bokkie_discuss`, `bokkie_lookup`, `bokkie_save_draft`,
-`bokkie_preview` and `bokkie_propose`; the backend offers only the operations
+`bokkie_preview`, `bokkie_propose` and `bokkie_prepare_handoff`; the backend offers only the operations
 legal for that interaction. Caller-supplied namespaces and deferred loading are forbidden.
 The broker registers these functions within the fixed `bokkie` namespace and
 requires that exact namespace on every proposal request. It sets the process-only

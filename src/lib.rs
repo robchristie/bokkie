@@ -21,6 +21,8 @@ pub mod execution_lane;
 pub mod gardener;
 pub mod gardener_runner;
 pub mod git_workspace;
+pub mod handoff_http;
+pub mod handoffs;
 pub mod http;
 pub mod http_security;
 pub mod managed;

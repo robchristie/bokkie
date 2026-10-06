@@ -14,8 +14,10 @@ use axum::{
 use bokkie::{
     ConversationAction, ConversationConfirmRequest, ConversationList, ConversationReview,
     ConversationSelectRequest, ConversationTurnRequest, ConversationView, DbExecutor,
+    HandoffActivityKind, HandoffActivityRequest, HandoffSaveRequest, HandoffView,
     ManagedCapabilityProfile, ManagedCataloguePage, ManagedTaskDefinition, ManagedTaskStatus,
-    ManualClock, NewObligation, ObligationState, SessionBootstrap, Store, SystemClock, UnixClock,
+    ManualClock, NewObligation, ObligationState, ProjectList, ProjectRegistration,
+    ProjectSaveRequest, SessionBootstrap, Store, SystemClock, UnixClock,
     conversation_http::ConversationConfig,
     http::{ApiState, router_with_state},
     http_security::{ApiRuntime, MUTATION_TOKEN_HEADER},
@@ -492,6 +494,223 @@ async fn unavailable_runtime_does_not_dispatch_and_http_catalogue_searches_beyon
 // Serialise only tests that exercise the two-slot production model admission.
 // Their subprocess peers are deterministic; clocks never advance while polling.
 static MODEL_PEER_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tokio::test]
+async fn handoff_http_drafts_with_one_bounded_turn_then_transfers_without_models_or_tasks() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let fixture = ModelApplication::new("fixture-handoff").await;
+    let mut destinations = Vec::new();
+    for host in ["lv426", "remote-development"] {
+        let payload = ProjectSaveRequest {
+            command_id: uuid::Uuid::new_v4().to_string(),
+            project_id: uuid::Uuid::new_v4().to_string(),
+            expected_revision: 0,
+            registration: ProjectRegistration {
+                name: "Atlas".into(),
+                host: host.into(),
+                workspace: "/development/atlas".into(),
+                codex_project_id: None,
+                codex_host_id: None,
+                context: "Synthetic project navigation".into(),
+            },
+        };
+        assert_eq!(
+            request(
+                &fixture.app,
+                Method::POST,
+                "/projects",
+                None,
+                Some(serde_json::to_value(&payload).unwrap())
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        let saved: ProjectList = decoded(
+            request(
+                &fixture.app,
+                Method::POST,
+                "/projects",
+                Some(&fixture.token),
+                Some(serde_json::to_value(payload).unwrap()),
+            )
+            .await,
+        );
+        destinations = saved.items;
+    }
+    assert_eq!(
+        fixture.store.conversation_model_dispatch_count().unwrap(),
+        0
+    );
+    let mut turn = fixture.turn_request(0);
+    turn.text="Prepare a hand-off for Atlas to add a searchable project list with Australian English labels.".into();
+    fixture.post_turn(&turn).await;
+    let view = fixture.finished().await;
+    assert_eq!(view.request_error, None);
+    assert!(view.selected_task_id.is_none());
+    assert!(view.review.is_none());
+    let draft = view.handoff_draft.unwrap();
+    assert_eq!(draft.candidates.len(), 2);
+    let mut save = HandoffSaveRequest {
+        command_id: "handoff-save".into(),
+        draft_id: draft.id.clone(),
+        expected_revision: 0,
+        project_id: destinations[0].id.clone(),
+        project_revision: 1,
+        brief: draft.brief.clone(),
+    };
+    save.brief.acceptance.push_str(" Keyboard search works.");
+    let saved: HandoffView = decoded(
+        request(
+            &fixture.app,
+            Method::POST,
+            "/handoffs/save",
+            Some(&fixture.token),
+            Some(serde_json::to_value(&save).unwrap()),
+        )
+        .await,
+    );
+    let repeated: HandoffView = decoded(
+        request(
+            &fixture.app,
+            Method::POST,
+            "/handoffs/save",
+            Some(&fixture.token),
+            Some(serde_json::to_value(&save).unwrap()),
+        )
+        .await,
+    );
+    assert_eq!(saved.snapshot, repeated.snapshot);
+    assert!(
+        saved
+            .snapshot
+            .complete_brief
+            .contains(&format!("http://{AUTHORITY}{}", saved.snapshot.return_path))
+    );
+    for kind in [
+        HandoffActivityKind::CopyFailed,
+        HandoffActivityKind::ManualOpeningViewed,
+        HandoffActivityKind::ResultNote,
+    ] {
+        let action = HandoffActivityRequest {
+            command_id: uuid::Uuid::new_v4().to_string(),
+            handoff_id: draft.id.clone(),
+            revision: 1,
+            kind,
+            note: "Synthetic operator-entered outcome".into(),
+        };
+        let _: HandoffView = decoded(
+            request(
+                &fixture.app,
+                Method::POST,
+                "/handoffs/activity",
+                Some(&fixture.token),
+                Some(serde_json::to_value(action).unwrap()),
+            )
+            .await,
+        );
+    }
+    let unknown=request(&fixture.app,Method::POST,"/projects",Some(&fixture.token),Some(json!({"command_id":"invented","project_id":uuid::Uuid::new_v4().to_string(),"expected_revision":0,"registration":{"name":"Project","host":"lv426","workspace":"/development/project","codex_project_id":null,"codex_host_id":null,"context":"","opening_url":"codex://project/guess"}}))).await;
+    assert_eq!(unknown.0, StatusCode::UNPROCESSABLE_ENTITY);
+    fixture.post_turn(&turn).await;
+    assert_eq!(
+        fixture.store.conversation_model_dispatch_count().unwrap(),
+        1
+    );
+    assert!(fixture.store.list().unwrap().is_empty());
+    let model_free = router_with_state(
+        ApiState {
+            executor: fixture.executor.clone(),
+            runtime: runtime(),
+            engineering_intake: None,
+            conversation: None,
+        },
+        None,
+    );
+    let read: HandoffView = decoded(
+        request(
+            &model_free,
+            Method::GET,
+            &format!("/handoffs/{}?revision=1", draft.id),
+            None,
+            None,
+        )
+        .await,
+    );
+    assert_eq!(read.snapshot, saved.snapshot);
+    assert_eq!(read.activities.len(), 3);
+    let projects: ProjectList =
+        decoded(request(&model_free, Method::GET, "/projects", None, None).await);
+    assert_eq!(projects.items.len(), 2);
+    let bootstrap = bootstrap(&model_free).await;
+    let model_free_project = ProjectSaveRequest {
+        command_id: "model-free-project".into(),
+        project_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision: 0,
+        registration: ProjectRegistration {
+            name: "Offline registration".into(),
+            host: "different-host".into(),
+            workspace: "/development/offline".into(),
+            codex_project_id: None,
+            codex_host_id: None,
+            context: String::new(),
+        },
+    };
+    let registered: ProjectList = decoded(
+        request(
+            &model_free,
+            Method::POST,
+            "/projects",
+            Some(&bootstrap.mutation_token),
+            Some(serde_json::to_value(model_free_project).unwrap()),
+        )
+        .await,
+    );
+    assert_eq!(registered.items.len(), 3);
+    let action = HandoffActivityRequest {
+        command_id: "model-free-result".into(),
+        handoff_id: draft.id.clone(),
+        revision: 1,
+        kind: HandoffActivityKind::ResultNote,
+        note: "Operator-reported result while drafting model is unavailable".into(),
+    };
+    let reported: HandoffView = decoded(
+        request(
+            &model_free,
+            Method::POST,
+            "/handoffs/activity",
+            Some(&bootstrap.mutation_token),
+            Some(serde_json::to_value(action).unwrap()),
+        )
+        .await,
+    );
+    assert!(
+        reported
+            .activities
+            .last()
+            .unwrap()
+            .provenance
+            .contains("not independently verified")
+    );
+    let bad = Request::builder()
+        .method(Method::POST)
+        .uri("/handoffs/save")
+        .header("host", AUTHORITY)
+        .header("origin", "https://wrong.example.org")
+        .header("content-type", "application/json")
+        .header(MUTATION_TOKEN_HEADER, bootstrap.mutation_token)
+        .body(Body::from(serde_json::to_vec(&save).unwrap()))
+        .unwrap();
+    assert_eq!(
+        model_free.oneshot(bad).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        fixture.store.conversation_model_dispatch_count().unwrap(),
+        1
+    );
+    fixture.executor.shutdown().unwrap();
+}
 
 struct ModelApplication {
     _temporary: TempDir,

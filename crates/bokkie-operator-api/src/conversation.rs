@@ -65,6 +65,8 @@ pub struct ConversationReview {
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ConversationView {
+    #[serde(default)]
+    pub handoff_draft: Option<crate::HandoffDraft>,
     pub service: ServiceIdentity,
     pub id: String,
     pub revision: i64,

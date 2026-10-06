@@ -225,6 +225,7 @@ pub fn router_with_state(state: ApiState, ui_dir: Option<PathBuf>) -> Router {
 fn router_state_core(state: ApiState) -> Router {
     Router::new()
         .merge(crate::conversation_http::routes())
+        .merge(crate::handoff_http::routes())
         .merge(crate::push_http::routes())
         .route(
             "/engineering/outcomes",

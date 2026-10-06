@@ -6,7 +6,7 @@ import sys
 request = json.loads(sys.stdin.readline())
 assert request['profile']['codex'] == '/usr/bin/true'
 assert request['profile']['bwrap'] == '/usr/bin/true'
-SCENARIOS = ('fixture-ui', 'fixture-settings', 'fixture-empty', 'fixture-matches', 'fixture-fail',
+SCENARIOS = ('fixture-handoff', 'fixture-ui', 'fixture-settings', 'fixture-empty', 'fixture-matches', 'fixture-fail',
              'fixture-invalid-json', 'fixture-malformed', 'fixture-read-fail',
              'fixture-repeat', 'fixture-adviser-main', 'fixture-adviser',
              'fixture-adviser-fail', 'fixture-adviser-malformed', 'fixture-adviser-timeout',
@@ -22,7 +22,8 @@ text = context['current_request']
 def output(proposal):
     operation = proposal['operation']
     names = {'save_definition': 'bokkie_save_draft', 'discuss': 'bokkie_discuss',
-             'lookup': 'bokkie_lookup', 'preview': 'bokkie_preview', 'propose': 'bokkie_propose'}
+             'lookup': 'bokkie_lookup', 'preview': 'bokkie_preview', 'propose': 'bokkie_propose',
+             'prepare_handoff': 'bokkie_prepare_handoff'}
     if operation == 'save_definition':
         definition = proposal['definition']
         args = {key: definition[key] for key in ('name', 'purpose', 'instructions', 'capability', 'trigger', 'context_refs') if key in definition}
@@ -32,6 +33,19 @@ def output(proposal):
 
 scenario = request['profile']['model']
 assert scenario in SCENARIOS
+if scenario == 'fixture-handoff':
+    if text == 'Prepare a hand-off for Atlas to add a searchable project list with Australian English labels.':
+        output({'operation': 'prepare_handoff', 'project_query': 'Atlas', 'brief': {
+            'outcome': 'Add a searchable project list with Australian English labels.',
+            'context': 'Use the existing project navigation and retain the current selection.',
+            'constraints': 'Keep the change within the selected project workspace. Do not deploy or publish.',
+            'acceptance': 'Search filters the project list. Clearing search restores every project. Labels use Australian English. Existing navigation still works.',
+            'references': []}})
+    elif text == 'Let’s discuss a searchable project list for Atlas. Keep the current selection when searching.':
+        output({'operation':'discuss','reason':'exploration','message':'We can retain the current project selection while filtering the list. Ask for a hand-off when ready.'})
+    else:
+        raise ValueError('input is outside the closed synthetic hand-off journey')
+    sys.exit(0)
 if scenario == 'fixture-ui':
     # Exact fixed qualification inputs only. This is a test script, not a natural
     # language implementation or an alternative to live model acceptance.
