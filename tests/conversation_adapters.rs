@@ -499,6 +499,7 @@ struct ModelApplication {
     app: Router,
     token: String,
     record: std::path::PathBuf,
+    clock: Arc<ManualClock>,
 }
 impl ModelApplication {
     async fn new(scenario: &str) -> Self {
@@ -519,6 +520,7 @@ impl ModelApplication {
             max_output_bytes: 16384,
         };
         profile.validate().unwrap();
+        let clock = Arc::new(ManualClock::new(100));
         let app = router_with_state(
             ApiState {
                 executor: executor.clone(),
@@ -529,7 +531,7 @@ impl ModelApplication {
                     notes_enabled: true,
                     push: None,
                     notifications: None,
-                    clock: Some(Arc::new(ManualClock::new(100))),
+                    clock: Some(clock.clone()),
                 }),
             },
             None,
@@ -543,6 +545,7 @@ impl ModelApplication {
             app,
             token,
             record,
+            clock,
         }
     }
 
@@ -1074,4 +1077,49 @@ async fn settings_edit_during_execution_pins_every_call_and_replay_bypasses_unav
     );
     assert_eq!(replay.messages, completed.messages);
     assert_eq!(f.calls().len(), 2);
+}
+
+#[tokio::test]
+async fn aggregate_deadline_between_calls_leaves_no_unfinished_dispatch_on_failure_or_restart() {
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let mut f = ModelApplication::new("fixture-empty").await;
+    let release = f._temporary.path().join("release-deadline");
+    let mut turn = f.turn_request(0);
+    turn.text = json!({"record":f.record,"release":release,"intent":"Find a reminder"}).to_string();
+    f.post_turn(&turn).await;
+    let wait_limit = Instant::now() + Duration::from_secs(3);
+    while f.calls().is_empty() {
+        assert!(Instant::now() < wait_limit);
+        tokio::task::yield_now().await;
+    }
+    f.clock.set(111);
+    std::fs::write(release, "release").unwrap();
+    let completed = f.finished().await;
+    assert!(
+        completed
+            .request_error
+            .as_deref()
+            .unwrap()
+            .contains("time limit")
+    );
+    assert_eq!(f.calls().len(), 1);
+    assert_eq!(f.store.conversation_model_dispatch_count().unwrap(), 1);
+    let connection = rusqlite::Connection::open_with_flags(
+        f._temporary.path().join("model-http.sqlite"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let unfinished = || {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM conversation_invocations WHERE status='dispatched'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(unfinished(), 0);
+    f.store.conversation_interrupt("restart", 112).unwrap();
+    assert_eq!(unfinished(), 0);
+    f.replay_is_free(&turn, &completed).await;
 }

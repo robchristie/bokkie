@@ -342,28 +342,34 @@ async fn run_turn(
     // the user's request. Failed reads never become evidence of absence.
     let mut step = 0;
     let operation = loop {
-        let r = request.clone();
-        state
-            .executor
-            .execute(move |s| s.conversation_model_dispatch(&r, step, now))
-            .await?;
-        let mut bounded_runtime = (*profile).clone();
-        let remaining = accepted.deadline_unix - config(state).now();
-        if remaining <= 0 {
+        let dispatch_clock = config(state);
+        if accepted.deadline_unix <= dispatch_clock.now() {
             return Err(StoreError::Invalid(
                 "This request has reached its saved time limit".into(),
             )
             .into());
         }
-        bounded_runtime.timeout_seconds = bounded_runtime.timeout_seconds.min(remaining as u64);
-        let runtime = Arc::new(bounded_runtime);
-        let input = context.clone();
-        let runtime_tools = offered_tools.clone();
-        let result =
+        let r = request.clone();
+        state
+            .executor
+            .execute(move |s| s.conversation_model_dispatch(&r, step, dispatch_clock.now()))
+            .await?;
+        let remaining = accepted.deadline_unix - config(state).now();
+        // Every exit after a reservation settles its outcome, even if time
+        // expires while waiting for the database owner.
+        let result = if remaining <= 0 {
+            Err("This request has reached its saved time limit".to_owned())
+        } else {
+            let mut bounded_runtime = (*profile).clone();
+            bounded_runtime.timeout_seconds = bounded_runtime.timeout_seconds.min(remaining as u64);
+            let runtime = Arc::new(bounded_runtime);
+            let input = context.clone();
+            let runtime_tools = offered_tools.clone();
             tokio::task::spawn_blocking(move || runtime.generate_tools(input, runtime_tools))
                 .await
                 .map_err(|_| "Conversation runtime worker failed".to_owned())
-                .and_then(|r| r);
+                .and_then(|r| r)
+        };
         let outcome = result.clone();
         let id = request.command_id.clone();
         state
