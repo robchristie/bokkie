@@ -341,20 +341,25 @@ impl AttentionApp {
                     self.read_handoff_list(None, context);
                 }
                 if let ApiRequest::HandoffActivity(activity) = &request {
-                    if activity.kind == HandoffActivityKind::ResultNote {
-                        self.handoff.retained.note.clear();
+                    if v.snapshot.id != activity.handoff_id
+                        || v.snapshot.revision != activity.revision
+                    {
+                        self.handoff.error =
+                            Some("Bokkie returned a different activity record or revision.".into());
+                        return;
                     }
-                    if self
-                        .handoff
-                        .retained
-                        .selected
-                        .as_ref()
-                        .is_some_and(|(id, rev)| {
-                            id != &v.snapshot.id || *rev != v.snapshot.revision
-                        })
+                    // A settled request belongs to its submitted record. Navigation
+                    // and newer note text must survive a delayed response or retry.
+                    if self.handoff.retained.selected.as_ref()
+                        != Some(&(activity.handoff_id.clone(), activity.revision))
                     {
                         self.handoff.retained.pending = None;
                         return;
+                    }
+                    if activity.kind == HandoffActivityKind::ResultNote
+                        && self.handoff.retained.note == activity.note
+                    {
+                        self.handoff.retained.note.clear();
                     }
                 }
                 self.handoff.retained.selected = Some((v.snapshot.id.clone(), v.snapshot.revision));
@@ -1526,5 +1531,87 @@ mod tests {
             app.handoff.retained.editors[&saved.id].draft.brief.context,
             "Keep these unsaved edits to a saved brief"
         );
+    }
+    #[test]
+    fn delayed_result_note_responses_and_exact_retries_preserve_new_text_and_navigation() {
+        for uncertain in [false, true] {
+            for destination in [
+                Some((draft().id, 1)),
+                Some(("another-record".into(), 2)),
+                None,
+            ] {
+                for entered in ["Submitted note", "A newer unsent note"] {
+                    let mut app = app();
+                    let submitted = HandoffActivityRequest {
+                        command_id: "original-note-command".into(),
+                        handoff_id: draft().id,
+                        revision: 1,
+                        kind: HandoffActivityKind::ResultNote,
+                        note: "Submitted note".into(),
+                    };
+                    let request = ApiRequest::HandoffActivity(submitted.clone());
+                    app.handoff.retained.pending = Some(Pending::Activity(submitted.clone()));
+                    app.handoff.retained.selected = Some((submitted.handoff_id.clone(), 1));
+                    app.handoff.retained.note = submitted.note.clone();
+                    app.handoff.in_flight = true;
+                    if uncertain {
+                        app.handoff_response(
+                            request.clone(),
+                            Err(ApiFailure::Other("response lost".into())),
+                            &egui::Context::default(),
+                        );
+                        // Reload/restart restores the exact request, not the newly typed note.
+                        let raw = serde_json::to_string(&app.handoff.retained).unwrap();
+                        app.handoff.retained = serde_json::from_str(&raw).unwrap();
+                        app.handoff.reset_session();
+                        assert_eq!(
+                            app.handoff.retained.pending.as_ref().unwrap().request(),
+                            request
+                        );
+                    }
+                    app.handoff.retained.note = entered.into();
+                    app.handoff.retained.selected = destination.clone();
+                    app.handoff.in_flight = true;
+                    let d = draft();
+                    let response = HandoffView {
+                        service: service(),
+                        snapshot: HandoffSnapshot {
+                            id: d.id,
+                            revision: 1,
+                            conversation_id: d.conversation_id,
+                            source_request_id: d.source_request_id,
+                            project: d.candidates[0].clone(),
+                            brief: d.brief,
+                            created_at: 1,
+                            return_path: "/ui/".into(),
+                            complete_brief: "Saved brief".into(),
+                        },
+                        activities: vec![],
+                        previous_revision: None,
+                        latest_revision: 1,
+                    };
+                    app.handoff_response(
+                        request,
+                        Ok(ApiPayload::Handoff(Box::new(response))),
+                        &egui::Context::default(),
+                    );
+                    let same_record = destination == Some((submitted.handoff_id, 1));
+                    assert_eq!(
+                        app.handoff.retained.note,
+                        if same_record && entered == submitted.note {
+                            ""
+                        } else {
+                            entered
+                        }
+                    );
+                    assert_eq!(
+                        app.handoff.retained.selected, destination,
+                        "An old activity must not navigate away from the chosen surface"
+                    );
+                    assert!(app.handoff.retained.pending.is_none());
+                    assert!(!app.handoff.in_flight);
+                }
+            }
+        }
     }
 }
