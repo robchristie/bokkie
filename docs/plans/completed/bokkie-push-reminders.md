@@ -1,11 +1,13 @@
 # Bokkie push reminders
 
-- Status: active
+- Status: complete
+- Delivery state: acceptance-complete
+- Acceptance state: passed
+- Acceptance evidence: [Qualification](../../push-evidence/README.md)
+- Landing evidence: https://github.com/robchristie/bokkie/pull/50
 - Owner: Bokkie integration conductor
 - Reorientation budget: 140
 - Baseline: `75f864b7afea5dc4ff7cd140c50f6de10f7677c7`
-- Landed pull requests: none for this package
-- Next action: commit, qualify the exact candidate and complete independent review/CI.
 
 ## Outcome and boundaries
 
@@ -22,16 +24,17 @@ Source implementation and reviewed landing are authorised. Production deployment
 live credentials, notification permission enrolment and external test sends are
 separate. Device selection is pending; do independent source work meanwhile.
 
-## Current phase
+## Accepted result
 
 Implementation and source acceptance passed. The maintained headed Chromium/Xvfb
 journey passed 106 checks including actual closed-page/offline worker display,
 receipt recovery, schedule edits, pause/resume, stable-origin restart/retry and
 uncertain dispatch reconciliation. All thirteen screenshots were opened and judged.
 Canonical backend and UI checks passed. The rejected headless reopening captures
-remain private evidence; the maintained headed route qualifies readable reopening.
-Next is the exact committed candidate journey, independent review and CI. No
-production configuration, provider send or physical device test was performed.
+remain private evidence; the headed route qualifies readable reopening. Source
+checks retain relevant input identities and full logs. The owning PR records the
+exact committed journey, independent review, CI and source landing.
+No production configuration, provider send or physical device test was performed.
 
 ## Increments and dependency order
 
@@ -49,16 +52,16 @@ production configuration, provider send or physical device test was performed.
 
 ## Acceptance
 
-- Enrol one device explicitly without replacing another device silently.
-- Draft, preview and confirm a reminder with concrete dates and Bokkie destination.
-- Due occurrence saves one result and delivery intent without a model call.
-- Service worker handles a push with the page closed and opens exact context.
-- History distinguishes acceptance, device evidence and actionable failures.
-- Deterministic restart, temporary failure, expiry and uncertainty recovery pass.
-- Edits/pause/resume and replay cannot create duplicate schedules or silent rerouting.
-- Old tasks/history, authentication, Docker and Bubblewrap contracts pass regression.
-- Open and judge desktop/narrow screenshots with readable composer and actions.
-- Complete source checks, independent review, CI, merge and post-merge checks.
+- [x] Enrol one device explicitly without replacing another device silently.
+- [x] Draft, preview and confirm a reminder with concrete dates and Bokkie destination.
+- [x] Due occurrence saves one result and delivery intent without a model call.
+- [x] Service worker handles a push with the page closed and opens exact context.
+- [x] History distinguishes acceptance, device evidence and actionable failures.
+- [x] Deterministic restart, temporary failure, expiry and uncertainty recovery pass.
+- [x] Edits/pause/resume and replay cannot create duplicate schedules or silent rerouting.
+- [x] Old tasks/history, authentication, Docker and Bubblewrap contracts pass regression.
+- [x] Open and judge desktop/narrow screenshots with readable composer and actions.
+- [x] Source checks and representative qualification passed; normal review/CI/landing evidence is recorded in the owning PR.
 
 ## Bounded exploration
 
@@ -76,5 +79,5 @@ explicit deployment qualification, never inferred from a browser fixture.
 | --- | --- | --- |
 | Source baseline | verified against live release | no deployment authorised |
 | Push transport/store | implemented; deterministic tests pass | passed canonical backend check |
-| Device/UI | 106 checks and opened screenshots passed | exact committed candidate journey |
+| Device/UI | 106 checks and opened screenshots passed | selected device/provider proof belongs to deployment |
 | Source delivery | preparing candidate | exact journey, independent review and CI |

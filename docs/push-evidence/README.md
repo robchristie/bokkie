@@ -52,7 +52,7 @@ input hashes: 219 Python tests, 355 backend unit tests (two existing ignored),
 backend adapter/integration tests, 91 Rust UI tests and 22 JavaScript tests passed,
 with formatting, Clippy and native/Wasm builds. Store checks include a device
 change between profile read and task transaction; stale snapshots cannot activate
-or resume work for a disabled device. The owning PR binds the final committed
+or resume work for a disabled device. [PR #50](https://github.com/robchristie/bokkie/pull/50) binds the final committed
 candidate journey and independent review/CI evidence.
 
 All thirteen retained screenshots were opened and judged at 1440×900 and 390×844.
