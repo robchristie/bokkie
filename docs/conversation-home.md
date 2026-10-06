@@ -97,9 +97,11 @@ operator to maintain separate chats with every worker.
 The main conversational role has immutable persisted settings, live model/effort
 validation and accepted-request pinning. Deployment configuration bootstraps it
 once and retains hard security ceilings; subsequent role tuning uses Settings.
-Additional instructions supplement mandatory backend/tool rules. Adviser
-consultation is the second increment of the agent-settings package and is not
-presented as enabled by the main-role editor.
+Additional instructions supplement mandatory backend/tool rules. An optional
+Astra adviser has its own persisted profile inside a disclosure. Consultation is
+requested beside the composer or through an explicitly enabled, grounded
+conflicting-requirements policy. The conversation shows activity and the useful
+outcome through Bokkie, with a shared finite request budget.
 
 Development work should produce a concise hand-off to the selected project
 workspace: requested outcome, relevant context, constraints and a return link.

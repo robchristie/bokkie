@@ -61,7 +61,10 @@ Missing research/email adapters are visible activation blockers. Agent role
 configuration and project-workspace hand-off are described in the
 [design direction](../../docs/conversation-home.md); the main role is editable in **Settings**, with live supported model/effort
 choices, additional instructions and finite limits. See the
-[settings contract](../../docs/agent-settings.md). Unsupported integrations
+[settings contract](../../docs/agent-settings.md). The optional Astra disclosure
+configures its profile and explicit conflict policy; **Consult Astra** requests
+one consultation in the same conversation, with durable outcome details.
+Unsupported integrations
 remain unavailable.
 
 ## Notifications

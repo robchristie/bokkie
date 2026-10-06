@@ -76,7 +76,7 @@ pub enum ApiRequest {
 #[derive(Debug)]
 pub enum ApiPayload {
     Bootstrap(ApiSession),
-    AgentSettings(bokkie_operator_api::AgentSettingsView),
+    AgentSettings(Box<bokkie_operator_api::AgentSettingsView>),
     Conversations(bokkie_operator_api::ConversationList),
     Conversation(Box<bokkie_operator_api::ConversationView>),
     Catalogue(bokkie_operator_api::ManagedCataloguePage),
@@ -492,7 +492,7 @@ fn decode(
         ApiRequest::AgentSettings { .. } | ApiRequest::SaveAgentSettings(_) => {
             let value = decode_json::<bokkie_operator_api::AgentSettingsView>(&response)?;
             validate_response_identity(Some(&value.service), expected_session, "agent settings")?;
-            Ok(ApiPayload::AgentSettings(value))
+            Ok(ApiPayload::AgentSettings(Box::new(value)))
         }
         ApiRequest::Conversations => {
             let value = decode_json::<bokkie_operator_api::ConversationList>(&response)?;
@@ -820,6 +820,7 @@ mod tests {
                 max_output_bytes: 4096,
                 max_model_calls: 2,
             },
+            adviser: None,
         };
         let request = ApiRequest::SaveAgentSettings(save.clone());
         assert!(transport.http_request(&request, None).is_err());
@@ -1054,6 +1055,7 @@ mod tests {
             conversation_id: "chat".into(),
             expected_revision: 7,
             text: "Explain task".into(),
+            consult_adviser: true,
         });
         assert!(matches!(
             transport.http_request(&request, None),

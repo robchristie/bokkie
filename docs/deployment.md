@@ -145,7 +145,10 @@ probes so production is not deliberately disrupted.
 
 Migration16 also stores agent profiles and accepted-request snapshots. Schema15
 binaries cannot open schema16; preserve a stopped-state backup for rollback.
-No new mount, account access or Docker/Bubblewrap policy is required.
+No new mount, account access or Docker/Bubblewrap policy is required. Adviser
+profiles use role contract version2 within schema16; the main-settings-only
+binary does not understand these profiles. Retain the pre-update stopped-state
+backup for an authorised rollback; matching schema numbers are insufficient.
 
 Migration15 appends immutable subscription generations and push intent/receipt
 state; applied migrations are unchanged. Schema14 and older binaries cannot open

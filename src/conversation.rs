@@ -30,6 +30,10 @@ pub enum ConversationOperation {
     Discuss {
         message: String,
     },
+    Consult {
+        question: String,
+        requirements: [String; 2],
+    },
     Lookup {
         query: String,
     },
@@ -41,6 +45,32 @@ pub enum ConversationOperation {
     Propose {
         action: ConversationAction,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InvocationPurpose {
+    Main,
+    EmptyLookupContinuation,
+    AdviserManual,
+    AdviserConflictingRequirements,
+    AfterAdvice,
+}
+impl InvocationPurpose {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::EmptyLookupContinuation => "empty_lookup_continuation",
+            Self::AdviserManual => "adviser_manual",
+            Self::AdviserConflictingRequirements => "adviser_conflicting_requirements",
+            Self::AfterAdvice => "after_advice",
+        }
+    }
+    pub fn is_adviser(self) -> bool {
+        matches!(
+            self,
+            Self::AdviserManual | Self::AdviserConflictingRequirements
+        )
+    }
 }
 
 type ConversationRow = (i64, Option<String>, String, Option<String>, Option<String>);
@@ -74,7 +104,19 @@ impl Store {
             let busy=store.connection.query_row("SELECT EXISTS(SELECT 1 FROM conversation_requests WHERE conversation_id=?1 AND status='running')",[id],|r|r.get(0))?;
             let request_error=store.connection.query_row("SELECT error FROM conversation_requests WHERE conversation_id=?1 ORDER BY rowid DESC LIMIT 1",[id],|r|r.get::<_,Option<String>>(0)).optional()?.flatten();
             let task=if let Some(selected)=&selected_task_id { match store.managed_detail_in_read(selected){Ok(t)=>Some(t),Err(StoreError::NotFound(_))=>None,Err(e)=>return Err(e)} } else {None};
-            Ok(ConversationView{service,id:id.into(),revision,selected_task_id,messages,candidates:decode(&candidates)?,review,task,busy,request_error,runtime_available,notes_available,reminders_available:false,receipt:receipt.map(|r|decode(&r)).transpose()?})
+            let activity = if busy {
+                let latest: Option<(String,String)> = store.connection.query_row("SELECT i.purpose,i.status FROM conversation_invocations i JOIN conversation_requests r ON r.command_id=i.request_id WHERE r.conversation_id=?1 AND r.status='running' ORDER BY i.ordinal DESC LIMIT 1", [id], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+                Some(if latest.is_some_and(|(purpose,status)| purpose.starts_with("adviser_") && status == "dispatched") { "Consulting Astra" } else { "Bokkie continues" }.into())
+            } else { None };
+            let adviser_row: Option<(String,i64,String,Option<String>)> = store.connection.query_row("SELECT i.request_id,i.profile_revision,i.status,i.outcome_json FROM conversation_invocations i JOIN conversation_requests r ON r.command_id=i.request_id WHERE r.conversation_id=?1 AND i.purpose IN ('adviser_manual','adviser_conflicting_requirements') ORDER BY r.rowid DESC,i.ordinal DESC LIMIT 1", [id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+            let adviser_outcome = adviser_row.map(|(request_id,profile_revision,status,raw)| -> Result<_,StoreError> {
+                let output = raw.as_deref().map(decode::<serde_json::Value>).transpose()?;
+                let bounded_field = |key: &str| output.as_ref().and_then(|v| v[key].as_str()).map(|s| s.chars().take(4096).collect());
+                let error: Option<String> = bounded_field("error");
+                let status = if error.as_deref().is_some_and(|e| e.contains("timed out") || e.contains("timeout") || e.contains("time limit") || e.contains("conversation deadline exceeded")) { "timeout".into() } else { status };
+                Ok(ConversationAdviserOutcome { request_id,profile_revision,status,advice:bounded_field("advice"),error })
+            }).transpose()?;
+            Ok(ConversationView{service,id:id.into(),revision,selected_task_id,messages,candidates:decode(&candidates)?,review,task,busy,request_error,runtime_available,adviser_available:false,activity,adviser_outcome,notes_available,reminders_available:false,receipt:receipt.map(|r|decode(&r)).transpose()?})
         })
     }
     /// Durable dispatch precedes model execution. Identical retries do not launch again.
@@ -158,16 +200,28 @@ impl Store {
         let accepted = if let Some((deployment, models, instructions)) = settings {
             crate::agent_settings::bootstrap(&tx, deployment, now)?;
             let profile = crate::agent_settings::active(&tx)?;
-            crate::agent_settings::validate_role(&profile.main, deployment, models)?;
-            let mut runtime = deployment.clone();
-            runtime.model = profile.main.model.clone();
-            runtime.effort = profile.main.effort.clone();
-            runtime.timeout_seconds = profile.main.timeout_seconds;
-            runtime.max_context_bytes = profile.main.max_context_bytes;
-            runtime.max_output_bytes = profile.main.max_output_bytes;
+            crate::agent_settings::validate_profile(
+                &profile.main,
+                profile.adviser.as_ref(),
+                deployment,
+                models,
+            )?;
+            if request.consult_adviser && profile.adviser.is_none() {
+                return Err(StoreError::Invalid(
+                    "Configure the optional Astra adviser before requesting consultation".into(),
+                ));
+            }
+            let runtime = crate::agent_settings::role_runtime(deployment, &profile.main);
+            let adviser_runtime = profile
+                .adviser
+                .as_ref()
+                .map(|adviser| crate::agent_settings::role_runtime(deployment, &adviser.role));
+            let adviser_instructions = adviser_runtime
+                .as_ref()
+                .map(|_| crate::agent_settings::ADVISER_INSTRUCTIONS.to_owned());
             let deadline_unix =
                 now + (runtime.timeout_seconds * u64::from(profile.main.max_model_calls)) as i64;
-            Some(encode(&crate::agent_settings::AcceptedAgentProfile{profile,runtime,mandatory_instructions:instructions.into(),permissions:"read-only; network-off; no execution environments; proposal-only tools; operator confirmation required".into(),deadline_unix})?)
+            Some(encode(&crate::agent_settings::AcceptedAgentProfile{profile,runtime,mandatory_instructions:instructions.into(),adviser_runtime,adviser_instructions,permissions:"read-only tool sandbox; tool network access denied; provider networking retained; no execution environments; proposal-only main tools; schema-only adviser with no tools or delegation; operator confirmation required".into(),deadline_unix})?)
         } else {
             None
         };
@@ -207,11 +261,24 @@ impl Store {
         step: u8,
         now: i64,
     ) -> Result<(), StoreError> {
-        if step > 1 {
-            return Err(StoreError::Invalid(
-                "conversation continuation bound exceeded".into(),
-            ));
-        }
+        self.conversation_dispatch(
+            request,
+            step,
+            if step == 0 {
+                InvocationPurpose::Main
+            } else {
+                InvocationPurpose::EmptyLookupContinuation
+            },
+            now,
+        )
+    }
+    pub fn conversation_dispatch(
+        &mut self,
+        request: &ConversationTurnRequest,
+        step: u8,
+        purpose: InvocationPurpose,
+        now: i64,
+    ) -> Result<(), StoreError> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -219,6 +286,16 @@ impl Store {
         if !running {
             return Err(StoreError::Conflict(
                 "conversation request is no longer running".into(),
+            ));
+        }
+        let payload: String = tx.query_row(
+            "SELECT payload_json FROM conversation_requests WHERE command_id=?1",
+            [&request.command_id],
+            |r| r.get(0),
+        )?;
+        if payload != encode(request)? {
+            return Err(StoreError::Conflict(
+                "Conversation dispatch must use its exact accepted request".into(),
             ));
         }
         let accepted: Option<String> = tx.query_row(
@@ -229,15 +306,117 @@ impl Store {
         let profile = accepted
             .map(|raw| decode::<crate::agent_settings::AcceptedAgentProfile>(&raw))
             .transpose()?;
+        let prior = {
+            let mut statement = tx.prepare("SELECT ordinal,purpose,status,outcome_json FROM conversation_invocations WHERE request_id=?1 ORDER BY ordinal")?;
+            statement
+                .query_map([&request.command_id], |r| {
+                    Ok((
+                        r.get::<_, u8>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        if prior.len() != usize::from(step)
+            || prior.iter().enumerate().any(|(ordinal, row)| {
+                usize::from(row.0) != ordinal
+                    || matches!(row.2.as_str(), "dispatched" | "interrupted")
+            })
+        {
+            return Err(StoreError::Conflict(
+                "Conversation dispatch is repeated, uncertain or out of sequence".into(),
+            ));
+        }
+        let last = prior.last();
+        let had_adviser = prior.iter().any(|r| r.1.starts_with("adviser_"));
+        let had_lookup = prior.iter().any(|r| r.1 == "empty_lookup_continuation");
+        let valid = match purpose {
+            InvocationPurpose::Main => step == 0 && !request.consult_adviser,
+            InvocationPurpose::AdviserManual => {
+                step == 0
+                    && request.consult_adviser
+                    && profile
+                        .as_ref()
+                        .is_some_and(|p| p.profile.adviser.is_some())
+            }
+            InvocationPurpose::AdviserConflictingRequirements => {
+                !had_adviser
+                    && profile.as_ref().is_some_and(|p| {
+                        p.profile
+                            .adviser
+                            .as_ref()
+                            .is_some_and(|a| a.automatic_consultation)
+                    })
+                    && last.is_some_and(|r| {
+                        r.2 == "completed"
+                            && matches!(r.1.as_str(), "main" | "empty_lookup_continuation")
+                            && r.3.as_ref().is_some_and(|raw| {
+                                let offered = crate::conversation_tools::tools_with_adviser(
+                                    false, false, true,
+                                );
+                                decode::<serde_json::Value>(raw).ok().is_some_and(|output| {
+                                    matches!(
+                                        crate::conversation_tools::operation_with_adviser(
+                                            output,
+                                            &offered,
+                                            None,
+                                            &[],
+                                            &request.text
+                                        ),
+                                        Ok(ConversationOperation::Consult { .. })
+                                    )
+                                })
+                            })
+                    })
+            }
+            InvocationPurpose::AfterAdvice => last.is_some_and(|r| {
+                r.1.starts_with("adviser_") && matches!(r.2.as_str(), "completed" | "failed")
+            }),
+            InvocationPurpose::EmptyLookupContinuation => {
+                !had_lookup
+                    && last.is_some_and(|r| {
+                        r.2 == "completed"
+                            && matches!(r.1.as_str(), "main" | "after_advice")
+                            && r.3.as_ref().is_some_and(|raw| {
+                                decode::<serde_json::Value>(raw)
+                                    .ok()
+                                    .is_some_and(|v| v["tool"] == "bokkie_lookup")
+                            })
+                    })
+            }
+        };
+        if !valid || (profile.is_none() && step > 1) {
+            return Err(StoreError::Invalid(
+                "Conversation invocation purpose is unavailable or exhausted".into(),
+            ));
+        }
         if let Some(p) = &profile {
-            if step >= p.profile.main.max_model_calls || now >= p.deadline_unix {
+            if now >= p.deadline_unix {
+                return Err(StoreError::Invalid(
+                    "This request has reached its saved time limit".into(),
+                ));
+            }
+            if step >= p.profile.main.max_model_calls || step >= 4 {
                 return Err(StoreError::Invalid(
                     "This request has reached its saved execution limit".into(),
                 ));
             }
+            if purpose.is_adviser()
+                && (step + 1 >= p.profile.main.max_model_calls
+                    || p.deadline_unix - now <= p.runtime.timeout_seconds as i64)
+            {
+                return Err(StoreError::Invalid(
+                    "This request has insufficient saved budget for Astra and Bokkie's return call"
+                        .into(),
+                ));
+            }
         }
-        tx.execute("INSERT INTO conversation_invocations(request_id,ordinal,purpose,profile_revision,status,dispatched_at) VALUES(?1,?2,?3,?4,'dispatched',?5)",params![request.command_id,step,if step==0{"main"}else{"empty_lookup_continuation"},profile.map(|p|p.profile.revision),now]).map_err(|e| match e {rusqlite::Error::SqliteFailure(_,_)=>StoreError::Conflict("Conversation dispatch already recorded".into()),_=>e.into()})?;
-        let details = encode(&json!({"request_id":request.command_id,"step":step}))?;
+        tx.execute("INSERT INTO conversation_invocations(request_id,ordinal,purpose,profile_revision,status,dispatched_at) VALUES(?1,?2,?3,?4,'dispatched',?5)",params![request.command_id,step,purpose.as_str(),profile.map(|p|p.profile.revision),now]).map_err(|e| match e {rusqlite::Error::SqliteFailure(_,_)=>StoreError::Conflict("Conversation dispatch already recorded".into()),_=>e.into()})?;
+        let details = encode(
+            &json!({"request_id":request.command_id,"step":step,"purpose":purpose.as_str()}),
+        )?;
         let duplicate: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM domain_events WHERE entity_kind='conversation' AND entity_id=?1 AND event_type='conversation_model_dispatch' AND details_json=?2)",params![request.conversation_id,details],|r|r.get(0))?;
         if duplicate {
             return Err(StoreError::Conflict(

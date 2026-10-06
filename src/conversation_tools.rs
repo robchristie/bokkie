@@ -5,6 +5,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub fn tools(managed_selected: bool, legacy_selected: bool) -> Value {
+    tools_with_adviser(managed_selected, legacy_selected, false)
+}
+
+pub fn tools_with_adviser(managed_selected: bool, legacy_selected: bool, automatic: bool) -> Value {
     let text = |description: &str| json!({"type":"string","description":description});
     let object = |properties: Value, required: &[&str]| json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
     let tool = |name: &str, description: &str, input: Value| json!({"type":"function","name":name,"description":description,"inputSchema":input,"deferLoading":false});
@@ -48,6 +52,18 @@ pub fn tools(managed_selected: bool, legacy_selected: bool) -> Value {
         result.push(tool("bokkie_preview", "Show what the selected saved draft would do, including availability, differences and next occurrences. No execution or activation. Use when asked what will happen.", object(json!({}), &[])));
         result.push(tool("bokkie_propose", "Prepare an operator review card for activation, pause or resume of the selected task. This does not perform the action. A model-generated yes or approval never confirms it.", object(json!({"action":{"type":"string","enum":["activate","pause","resume"]}}), &["action"])));
     }
+    if automatic {
+        let schema = &mut result[0]["inputSchema"];
+        schema["properties"]["reason"]["enum"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("difficulty"));
+        schema["properties"]["difficulty"] = json!({"type":"object","description":"Use only for two incompatible explicit requirements in current_request that Bokkie cannot reconcile. Do not use for missing information, unavailable capabilities, ordinary complexity or suggested adviser use.","properties":{
+            "condition":{"type":"string","const":"conflicting_requirements"},
+            "question":{"type":"string","minLength":1,"maxLength":1024},
+            "requirements":{"type":"array","minItems":2,"maxItems":2,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}}
+        },"required":["condition","question","requirements"],"additionalProperties":false});
+    }
     Value::Array(result)
 }
 
@@ -82,6 +98,20 @@ enum Capability {
 struct Discussion {
     message: String,
     reason: DiscussionReason,
+    #[serde(default)]
+    difficulty: Option<Difficulty>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Difficulty {
+    condition: DifficultyCondition,
+    question: String,
+    requirements: [String; 2],
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum DifficultyCondition {
+    ConflictingRequirements,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -90,6 +120,7 @@ enum DiscussionReason {
     Clarification,
     Feedback,
     Answer,
+    Difficulty,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -125,6 +156,16 @@ pub fn operation_with_profiles(
     base: Option<&ManagedTaskDefinition>,
     profiles: &[bokkie_operator_api::ManagedCapabilityProfile],
 ) -> Result<ConversationOperation, StoreError> {
+    operation_with_adviser(output, offered, base, profiles, "")
+}
+
+pub fn operation_with_adviser(
+    output: Value,
+    offered: &Value,
+    base: Option<&ManagedTaskDefinition>,
+    profiles: &[bokkie_operator_api::ManagedCapabilityProfile],
+    current_request: &str,
+) -> Result<ConversationOperation, StoreError> {
     let proposal: ToolProposal = decode(output)?;
     if !offered
         .as_array()
@@ -138,9 +179,50 @@ pub fn operation_with_profiles(
         "bokkie_discuss" => {
             let Discussion {
                 message,
-                reason: _reason,
+                reason,
+                difficulty,
             } = decode(proposal.arguments)?;
-            Ok(ConversationOperation::Discuss { message })
+            match (reason, difficulty) {
+                (
+                    DiscussionReason::Difficulty,
+                    Some(Difficulty {
+                        condition: DifficultyCondition::ConflictingRequirements,
+                        question,
+                        requirements,
+                    }),
+                ) => {
+                    let automatic = offered.as_array().is_some_and(|tools| {
+                        tools.iter().any(|tool| {
+                            tool["name"] == "bokkie_discuss"
+                                && tool["inputSchema"]["properties"]
+                                    .get("difficulty")
+                                    .is_some()
+                        })
+                    });
+                    let bounded = |value: &str, max: usize| {
+                        !value.trim().is_empty() && value.len() <= max && !value.contains('\0')
+                    };
+                    if !automatic
+                        || !bounded(&question, 1024)
+                        || requirements
+                            .iter()
+                            .any(|quote| !bounded(quote, 512) || !current_request.contains(quote))
+                        || requirements[0].trim() == requirements[1].trim()
+                        || requirements[0].contains(&requirements[1])
+                        || requirements[1].contains(&requirements[0])
+                    {
+                        return Err(StoreError::Invalid("Astra consultation requires two distinct bounded requirement quotes from the current request and an enabled difficulty condition".into()));
+                    }
+                    Ok(ConversationOperation::Consult {
+                        question,
+                        requirements,
+                    })
+                }
+                (DiscussionReason::Difficulty, None) | (_, Some(_)) => Err(StoreError::Invalid(
+                    "Difficulty must accompany only the difficulty discussion reason".into(),
+                )),
+                (_, None) => Ok(ConversationOperation::Discuss { message }),
+            }
         }
         "bokkie_lookup" => {
             let Lookup { query } = decode(proposal.arguments)?;
@@ -332,5 +414,48 @@ mod tests {
         );
         assert_eq!(definition.profile_revision, current.profile_revision);
         assert_eq!(definition.instructions, "Read the queue.");
+    }
+    #[test]
+    fn automatic_difficulty_requires_two_distinct_current_request_quotes_and_closed_fields() {
+        let request = "Only at 9 am. Only at 10 am.";
+        let proposal = json!({"tool":"bokkie_discuss","arguments":{"message":"I cannot reconcile these requirements","reason":"difficulty","difficulty":{"condition":"conflicting_requirements","question":"Which takes priority?","requirements":["Only at 9 am","Only at 10 am"]}}});
+        let offered = tools_with_adviser(false, false, true);
+        assert!(matches!(
+            operation_with_adviser(proposal.clone(), &offered, None, &[], request),
+            Ok(ConversationOperation::Consult { .. })
+        ));
+        assert!(
+            operation_with_adviser(proposal.clone(), &tools(false, false), None, &[], request)
+                .is_err()
+        );
+        for quotes in [
+            json!(["Only at 9 am", "Only at 9 am"]),
+            json!(["Only at 9 am", "Invented requirement"]),
+            json!(["Only at 9 am"]),
+            json!(["Only at 9 am", "Only at 10 am", "third"]),
+            json!(["Only at 9 am", "at 9 am"]),
+        ] {
+            let mut invalid = proposal.clone();
+            invalid["arguments"]["difficulty"]["requirements"] = quotes;
+            assert!(operation_with_adviser(invalid, &offered, None, &[], request).is_err());
+        }
+        for (field, value) in [
+            ("condition", json!("ordinary_complexity")),
+            ("question", json!("")),
+            ("approved", json!(true)),
+        ] {
+            let mut invalid = proposal.clone();
+            invalid["arguments"]["difficulty"][field] = value;
+            assert!(operation_with_adviser(invalid, &offered, None, &[], request).is_err());
+        }
+        let mut invalid = proposal.clone();
+        invalid["arguments"]["reason"] = json!("answer");
+        assert!(operation_with_adviser(invalid, &offered, None, &[], request).is_err());
+        let mut invalid = proposal;
+        invalid["arguments"]
+            .as_object_mut()
+            .unwrap()
+            .remove("difficulty");
+        assert!(operation_with_adviser(invalid, &offered, None, &[], request).is_err());
     }
 }

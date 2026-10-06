@@ -12,6 +12,8 @@ pub struct ConversationTurnRequest {
     pub conversation_id: String,
     pub expected_revision: i64,
     pub text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub consult_adviser: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +36,14 @@ pub struct ConversationMessage {
     pub role: String,
     pub text: String,
     pub request_id: String,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ConversationAdviserOutcome {
+    pub request_id: String,
+    pub profile_revision: i64,
+    pub status: String,
+    pub advice: Option<String>,
+    pub error: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -66,6 +76,12 @@ pub struct ConversationView {
     pub busy: bool,
     pub request_error: Option<String>,
     pub runtime_available: bool,
+    #[serde(default)]
+    pub adviser_available: bool,
+    #[serde(default)]
+    pub activity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adviser_outcome: Option<ConversationAdviserOutcome>,
     pub notes_available: bool,
     #[serde(default)]
     pub reminders_available: bool,

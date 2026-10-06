@@ -1,0 +1,67 @@
+{
+  "source_base": "84b64011e8e43c5d2902bee799b34f3dc7cbe237",
+  "input_state": "Working candidate with timeout diagnostic and hang-regression repairs; source hashes identify the checked files. Subsequent plan/evidence edits do not change these inputs.",
+  "source_sha256": {
+    "src/agent_settings.rs": "2e8fc47883d0de221f61301d85f586f340d7109939f26a4ab5302285f9ff0c29",
+    "src/conversation.rs": "d63bb4b731768ca85c996fdf41366b509076a624e2997bc72f6c834fd47ba56f",
+    "src/conversation_http.rs": "062842ede4f4744f5fbedd6ccf6152b907eb5024c7e63a25e18af05fbedf387f",
+    "src/conversation_runtime.rs": "7c979f9958b093ecefa5fbe3d235743b1e70da5b30c5e7cb1a3f7eaacc8d3232",
+    "src/conversation_tools.rs": "7f421814347f0621e3aebff95731741b9713159f986efa7d5e09bb427cfb04be",
+    "src/conversation_tests.rs": "143a4f84581bbfd5b67c3fe13e0124504ab547fd52a4f3d5d3834419206cf8f3",
+    "crates/bokkie-operator-api/src/agent_settings.rs": "40d0e7567fa293e714657872a51caf01e1bc43ba9457552b18a272b64b9c5b8e",
+    "crates/bokkie-operator-api/src/conversation.rs": "78c265f134ef9efd549afcc2209cd7a411911dcb28a416ca5ef89cf21c509eed",
+    "tests/conversation_adapters.rs": "c80fef5dfef792c7f2876a0007e36834f7ce7e72fd9094521c1a0a110dd4e005",
+    "tests/fixtures/conversation_broker.py": "bc326bfdae337a78877cddb56f9ae2ba82677e2c824302306f546a1d9dc6310a",
+    "apps/bokkie-attention-ui/src/settings_ui.rs": "0a364ca99f8b58777b6078a0e2ef1c3a0adf7b531274b356aa4f348a4ccb1c02",
+    "apps/bokkie-attention-ui/src/conversation_ui.rs": "428647136ba950a73a0fae0c30fa880543d9e2a4525842a1df8a1807361bd273",
+    "apps/bokkie-attention-ui/src/transport.rs": "c6db5afff7180810001ae95557ea5c7c14ba7cc8b2200d56c206b91dc89ebbb9",
+    "tools/conversation-runtime/broker.py": "6b74d53c8d55188d90b608173757ac8228cc2ed2dc44710e51b2267a4cf02e0f",
+    "tools/ui-agent-settings.mjs": "b8e64fbf8faa93bdfecc65943465195b661aa3c3fe9f064f20802a9547578d36"
+  },
+  "backend": {
+    "command": "tools/check.sh",
+    "result": "passed",
+    "python_tests": 219,
+    "library_tests_passed": 363,
+    "existing_library_ignores": 2,
+    "conversation_adapter_tests_passed": 21,
+    "log": "/tmp/bokkie-adviser-check-backend-final.log"
+  },
+  "ui": {
+    "command": "tools/check-ui.sh",
+    "result": "passed",
+    "rust_tests_passed": 108,
+    "native_and_wasm_builds": "passed",
+    "clippy_and_formatting": "passed",
+    "log": "/tmp/bokkie-adviser-check-ui-final.log"
+  },
+  "browser": {
+    "command": "node tools/ui-agent-settings.mjs",
+    "source": "84b64011e8e43c5d2902bee799b34f3dc7cbe237",
+    "result": "passed",
+    "fixture_calls": 7,
+    "provider_calls": 0,
+    "captured_and_opened_images": 10,
+    "report": "qualification.json"
+  },
+  "live": {
+    "source": "84b64011e8e43c5d2902bee799b34f3dc7cbe237",
+    "result": "passed",
+    "call_budget": 2,
+    "actual_turn_starts": 2,
+    "report": "live-qualification.json",
+    "reuse": "Only subsequent runtime changes are timeout diagnostic/classification branches; successful broker/profile routing and containment are unchanged."
+  },
+  "hang_peer": {
+    "command": "cargo test --locked --test conversation_adapters adviser_hanging_peer_is_stopped_by_process_deadline_then_bokkie_returns_without_replay -- --nocapture",
+    "result": "passed",
+    "observed_elapsed_seconds": 6.037701062,
+    "peer_reaped": "ESRCH",
+    "adviser_ledger": "failed",
+    "adviser_view": "timeout",
+    "bokkie_return": "completed",
+    "calls_before_and_after_replay": 2,
+    "raw_log": "timeout-peer.txt",
+    "feedback_cost": "One real hang case adds about six seconds to the adapter suite; no deliberate provider timeout is exercised."
+  }
+}

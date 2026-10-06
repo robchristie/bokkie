@@ -21,6 +21,7 @@ pub(super) struct ConversationState {
     applied_query: String,
     next_after: Option<String>,
     text: String,
+    consult_adviser: bool,
     pending: Option<ApiRequest>,
     in_flight: bool,
     reading: Option<(String, u64)>,
@@ -85,6 +86,17 @@ impl ConversationState {
         self.select_after_load = task;
         self.poll_at = None;
         self.panel = None;
+    }
+
+    fn turn_request(&self, text: String) -> Option<ConversationTurnRequest> {
+        let view = self.view.as_ref()?;
+        Some(ConversationTurnRequest {
+            command_id: engineering_command_id(),
+            conversation_id: view.id.clone(),
+            expected_revision: view.revision,
+            text,
+            consult_adviser: self.consult_adviser && view.adviser_available,
+        })
     }
 
     fn begin_read(&mut self, generation: u64) -> Option<ApiRequest> {
@@ -545,6 +557,14 @@ impl AttentionApp {
             174.0
         } else {
             138.0
+        } + if state
+            .view
+            .as_ref()
+            .is_some_and(|view| view.adviser_available)
+        {
+            28.0
+        } else {
+            0.0
         };
         let composer = egui::Rect::from_min_max(
             egui::pos2(main.left(), (main.bottom() - footer_height).max(main.top())),
@@ -663,17 +683,13 @@ impl AttentionApp {
             }
             Some(ConversationUiAction::Send | ConversationUiAction::Preview) => {
                 self.conversation.panel = None;
-                if let Some(view) = &self.conversation.view {
-                    let request = ApiRequest::ConversationTurn(ConversationTurnRequest {
-                        command_id: engineering_command_id(),
-                        conversation_id: view.id.clone(),
-                        expected_revision: view.revision,
-                        text: if matches!(action, Some(ConversationUiAction::Preview)) {
-                            "Preview this task".into()
-                        } else {
-                            self.conversation.text.clone()
-                        },
-                    });
+                let text = if matches!(action, Some(ConversationUiAction::Preview)) {
+                    "Preview this task".into()
+                } else {
+                    self.conversation.text.clone()
+                };
+                if let Some(request) = self.conversation.turn_request(text) {
+                    let request = ApiRequest::ConversationTurn(request);
                     self.send_conversation_mutation(request, &context);
                 }
             }
@@ -754,6 +770,24 @@ fn conversation_composer(
                 .view
                 .as_ref()
                 .is_some_and(|view| view.runtime_available);
+            if state
+                .view
+                .as_ref()
+                .is_some_and(|view| view.adviser_available)
+            {
+                let response = ui.add_enabled(
+                    state.pending.is_none() && !state.in_flight,
+                    egui::Checkbox::new(&mut state.consult_adviser, "Consult Astra"),
+                );
+                observe(
+                    response.rect,
+                    "bokkie.conversation.consult-adviser",
+                    "Consult Astra",
+                    UiRole::Section,
+                    response.enabled(),
+                    nodes,
+                );
+            }
             ui.horizontal_wrapped(|ui| {
                 if state.pending.is_some() {
                     if button(
@@ -780,7 +814,13 @@ fn conversation_composer(
                         *action = Some(ConversationUiAction::Send);
                     }
                     if busy {
-                        ui.small("Bokkie is preparing a response…");
+                        ui.small(
+                            state
+                                .view
+                                .as_ref()
+                                .and_then(|view| view.activity.as_deref())
+                                .unwrap_or("Bokkie is preparing a response…"),
+                        );
                     }
                 }
             });
@@ -1163,7 +1203,74 @@ fn conversation_transcript(
     }
     if view.busy {
         ui.spinner();
-        ui.label("Bokkie is preparing a response. This conversation is saved.");
+        let activity = view
+            .activity
+            .as_deref()
+            .unwrap_or("Bokkie is preparing a response. This conversation is saved.");
+        let response = ui.add(egui::Label::new(activity).wrap());
+        observe(
+            response.rect,
+            "bokkie.conversation.activity",
+            activity,
+            UiRole::Section,
+            true,
+            nodes,
+        );
+    }
+    if let Some(outcome) = &view.adviser_outcome {
+        let label = match outcome.status.as_str() {
+            "completed" => "Astra provided advice",
+            "failed" => "Astra consultation failed",
+            "interrupted" => "Astra consultation interrupted",
+            "timeout" => "Astra consultation timed out",
+            "dispatched" => "Consulting Astra",
+            _ => "Astra consultation",
+        };
+        let disclosure = egui::CollapsingHeader::new(label)
+            .id_salt(("conversation-adviser-outcome", &outcome.request_id))
+            .default_open(outcome.error.is_some())
+            .show(ui, |ui| {
+                if let Some(advice) = &outcome.advice {
+                    let response = ui.add(egui::Label::new(advice).wrap().selectable(true));
+                    observe(
+                        response.rect,
+                        "bokkie.conversation.adviser-advice",
+                        advice,
+                        UiRole::Section,
+                        true,
+                        nodes,
+                    );
+                }
+                if let Some(error) = &outcome.error {
+                    let response = ui.add(egui::Label::new(error).wrap().selectable(true));
+                    observe(
+                        response.rect,
+                        "bokkie.conversation.adviser-error",
+                        error,
+                        UiRole::Section,
+                        true,
+                        nodes,
+                    );
+                }
+                ui.small(format!(
+                    "Agent settings revision {}",
+                    outcome.profile_revision
+                ));
+                egui::CollapsingHeader::new("Consultation details")
+                    .id_salt(("conversation-adviser-provenance", &outcome.request_id))
+                    .show(ui, |ui| {
+                        ui.label(format!("Request: {}", outcome.request_id));
+                        ui.label(format!("Status: {}", outcome.status));
+                    });
+            });
+        observe(
+            disclosure.header_response.rect,
+            "bokkie.conversation.adviser-outcome",
+            label,
+            UiRole::Section,
+            true,
+            nodes,
+        );
     }
     ui.add_space(12.0);
 }
@@ -1633,9 +1740,127 @@ mod tests {
             busy: false,
             request_error: None,
             runtime_available: true,
+            adviser_available: false,
+            activity: None,
+            adviser_outcome: None,
             notes_available: true,
             reminders_available: true,
             receipt: None,
+        }
+    }
+
+    #[test]
+    fn manual_adviser_choice_is_capability_checked_and_pinned_for_uncertain_retry() {
+        let mut current = view("chat", "current", 5);
+        current.adviser_available = true;
+        let mut state = ConversationState {
+            open: true,
+            id: Some("chat".into()),
+            view: Some(current),
+            text: "Retain this request".into(),
+            consult_adviser: true,
+            ..Default::default()
+        };
+        let request = state.turn_request(state.text.clone()).unwrap();
+        assert!(request.consult_adviser);
+        state.pending = Some(ApiRequest::ConversationTurn(request.clone()));
+        state.consult_adviser = false;
+        state.reset_session();
+        assert_eq!(
+            state.pending,
+            Some(ApiRequest::ConversationTurn(request.clone()))
+        );
+        state.consult_adviser = true;
+        state.view.as_mut().unwrap().adviser_available = false;
+        assert!(
+            !state
+                .turn_request(state.text.clone())
+                .unwrap()
+                .consult_adviser
+        );
+        assert_eq!(state.pending, Some(ApiRequest::ConversationTurn(request)));
+    }
+
+    #[test]
+    fn adviser_activity_does_not_move_the_composer_or_lose_its_draft() {
+        for (width, height) in [(1440.0, 900.0), (390.0, 844.0)] {
+            let context = egui::Context::default();
+            Appearance::default().apply(&context);
+            let mut app = super::super::tests::test_app();
+            let mut current = view("chat", "current", 5);
+            current.busy = true;
+            current.adviser_available = true;
+            app.conversation = ConversationState {
+                open: true,
+                id: Some("chat".into()),
+                view: Some(current),
+                text: "Keep this unsent text.\n".repeat(150),
+                consult_adviser: true,
+                ..Default::default()
+            };
+            let before = app.conversation.text.clone();
+            for activity in ["Consulting Astra", "Bokkie continuing"] {
+                app.conversation.view.as_mut().unwrap().activity = Some(activity.into());
+                if activity == "Bokkie continuing" {
+                    app.conversation.view.as_mut().unwrap().adviser_outcome =
+                        Some(bokkie_operator_api::ConversationAdviserOutcome {
+                            request_id: "saved-adviser-request".into(),
+                            profile_revision: 7,
+                            status: "failed".into(),
+                            advice: None,
+                            error: Some(
+                                "Astra did not return advice within the saved limit.".into(),
+                            ),
+                        });
+                }
+                let mut nodes = vec![];
+                for _ in 0..3 {
+                    nodes.clear();
+                    context
+                        .run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, height),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| app.show_conversation(ui, &mut nodes, &mut vec![]),
+                        )
+                        .textures_delta
+                        .clear();
+                }
+                for id in [
+                    "bokkie.conversation.text",
+                    "bokkie.conversation.consult-adviser",
+                    "bokkie.conversation.send",
+                ] {
+                    let node = nodes
+                        .iter()
+                        .find(|node| node.id == SemanticUiId::new(id))
+                        .unwrap_or_else(|| panic!("missing {id} at {width}"));
+                    assert!(
+                        node.rect.min_x >= 0.0
+                            && node.rect.max_x <= width
+                            && node.rect.max_y <= height,
+                        "{id}: {:?}",
+                        node.rect
+                    );
+                }
+                assert!(nodes.iter().any(|node| node.id
+                    == SemanticUiId::new("bokkie.conversation.activity")
+                    && node.name == activity));
+                if activity == "Bokkie continuing" {
+                    assert!(nodes.iter().any(|node| node.id
+                        == SemanticUiId::new("bokkie.conversation.adviser-outcome")
+                        && node.name == "Astra consultation failed"));
+                    assert!(nodes.iter().any(|node| node.id
+                        == SemanticUiId::new("bokkie.conversation.adviser-error")
+                        && node.name.contains("saved limit")));
+                }
+                assert_eq!(app.conversation.text, before);
+                assert!(app.conversation.consult_adviser);
+            }
         }
     }
 
@@ -1656,6 +1881,7 @@ mod tests {
             id: Some("chat".into()),
             view: Some(saved.clone()),
             text: "An unsent message\nwith two lines".into(),
+            consult_adviser: true,
             panel: Some(ConversationPanel::Details),
             ..Default::default()
         };
@@ -1676,6 +1902,7 @@ mod tests {
         assert!(app.conversation.open);
         assert_eq!(app.conversation.id.as_deref(), Some("chat"));
         assert_eq!(app.conversation.text, "An unsent message\nwith two lines");
+        assert!(app.conversation.consult_adviser);
         assert_eq!(
             app.conversation.view.as_ref().unwrap().messages,
             saved.messages
@@ -1878,6 +2105,7 @@ mod tests {
             conversation_id: "chat".into(),
             expected_revision: 0,
             text: "retain me".into(),
+            consult_adviser: false,
         });
         let mut state = ConversationState {
             id: Some("chat".into()),
@@ -1944,6 +2172,7 @@ mod tests {
             conversation_id: "chat".into(),
             expected_revision: 1,
             text: "Keep".into(),
+            consult_adviser: false,
         }));
         state.reset_session();
         assert!(matches!(
