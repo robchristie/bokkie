@@ -422,8 +422,8 @@ with tempfile.TemporaryDirectory() as directory:
  print(result.stdout)
 ''', '--preflight-managed' if scratch else '--preflight'])
         require(catalogue['model_calls'] == 0 and catalogue['offered_tools'] ==
-                (['bokkie_discuss', 'bokkie_lookup', 'bokkie_preview', 'bokkie_propose', 'bokkie_save_draft']
-                 if scratch else ['bokkie_discuss', 'bokkie_lookup', 'bokkie_save_draft']),
+                (['bokkie_discuss', 'bokkie_lookup', 'bokkie_prepare_handoff', 'bokkie_preview', 'bokkie_propose', 'bokkie_save_draft']
+                 if scratch else ['bokkie_discuss', 'bokkie_lookup', 'bokkie_prepare_handoff', 'bokkie_save_draft']),
                 'actual conversation catalogue preflight differs')
         account = execute('account-integrity-after', account_arguments)
         if scratch:
