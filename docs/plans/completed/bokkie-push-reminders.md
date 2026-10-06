@@ -27,9 +27,9 @@ separate. Device selection is pending; do independent source work meanwhile.
 ## Accepted result
 
 Implementation and source acceptance passed. The maintained headed Chromium/Xvfb
-journey passed 106 checks including actual closed-page/offline worker display,
+journey passed 131 checks including actual closed-page/offline worker display,
 receipt recovery, schedule edits, pause/resume, stable-origin restart/retry and
-uncertain dispatch reconciliation. All thirteen screenshots were opened and judged.
+uncertain dispatch reconciliation. All seventeen screenshots were opened and judged.
 Canonical backend and UI checks passed. The rejected headless reopening captures
 remain private evidence; the headed route qualifies readable reopening. Source
 checks retain relevant input identities and full logs. The owning PR records the
@@ -79,5 +79,5 @@ explicit deployment qualification, never inferred from a browser fixture.
 | --- | --- | --- |
 | Source baseline | verified against live release | no deployment authorised |
 | Push transport/store | implemented; deterministic tests pass | passed canonical backend check |
-| Device/UI | 106 checks and opened screenshots passed | selected device/provider proof belongs to deployment |
-| Source delivery | preparing candidate | exact journey, independent review and CI |
+| Device/UI | 131 checks and opened screenshots passed | selected device/provider proof belongs to deployment |
+| Source delivery | source acceptance complete | owning PR retains review/CI/landing evidence |

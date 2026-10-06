@@ -168,7 +168,12 @@ fn replay(
                     "Notification command identity was reused with different input",
                 ));
             }
-            serde_json::from_str(&json).map_err(|_| invalid("Invalid saved notification receipt"))
+            let receipt:PushSetup=serde_json::from_str(&json).map_err(|_| invalid("Invalid saved notification receipt"))?;
+            let current:i64=tx.query_row("SELECT revision FROM push_configuration WHERE singleton=1",[],|r|r.get(0))?;
+            if current!=receipt.configuration_revision {
+                return Err(conflict("This notification command was already applied, but device settings have changed. Refresh and review the current settings before another change"));
+            }
+            Ok(receipt)
         })
         .transpose()
 }
@@ -997,5 +1002,49 @@ mod tests {
             store.managed_detail(&id).unwrap().status,
             bokkie_operator_api::ManagedTaskStatus::Paused
         );
+    }
+    #[test]
+    fn historical_enrolment_and_disable_receipts_never_claim_to_be_current_settings() {
+        let mut store = Store::open_in_memory().unwrap();
+        let key = config().public_key().unwrap();
+        let r = PushRegisterRequest {
+            command_id: Uuid::new_v4().to_string(),
+            configuration_revision: 0,
+            label: "Phone".into(),
+            endpoint: "https://fcm.googleapis.com/fcm/send/synthetic-historical".into(),
+            keys: PushKeys {
+                p256dh: key.clone(),
+                auth: URL_SAFE_NO_PAD.encode([9; 16]),
+            },
+        };
+        let first = store
+            .register_push(&r, identity(), &key, 3600, 100)
+            .unwrap();
+        let disable = PushDisableRequest {
+            command_id: Uuid::new_v4().to_string(),
+            configuration_revision: first.configuration_revision,
+        };
+        store
+            .disable_push(&disable, identity(), Some(key.clone()), 3600)
+            .unwrap();
+        assert!(
+            store
+                .register_push(&r, identity(), &key, 3600, 102)
+                .is_err()
+        );
+        let after = store
+            .push_setup(identity(), Some(key.clone()), 3600)
+            .unwrap();
+        assert!(!after.device.unwrap().active);
+        assert_eq!(after.configuration_revision, 2);
+        enrol(&mut store, "New phone");
+        assert!(
+            store
+                .disable_push(&disable, identity(), Some(key.clone()), 3600)
+                .is_err()
+        );
+        let current = store.push_setup(identity(), Some(key), 3600).unwrap();
+        assert!(current.device.unwrap().active);
+        assert_eq!(current.configuration_revision, 3);
     }
 }

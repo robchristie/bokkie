@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPushSetup } from './push-setup.js';
 const key = Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 1)]).toString('base64url');
-function fixture({ active = false, ios = false, installed = true, configured = true, permission = 'default', failRegister = false } = {}) {
+function fixture({ active = false, ios = false, installed = true, configured = true, permission = 'default', failRegister = false, configurationRevision = 3 } = {}) {
   const calls = [], storage = new Map();
-  let setup = { service: { session_id: 's', build: 'bokkie' }, configured, configuration_revision: 3, vapid_public_key: key,
+  let setup = { service: { session_id: 's', build: 'bokkie' }, configured, configuration_revision: configurationRevision, vapid_public_key: key,
     device: active ? { id: 'device-a', label: 'Other phone', active: true } : null, ttl_seconds: 3600 };
-  const state = { failRegister, permission, requests: [], subscriptions: 0 };
+  const state = { failRegister, permission, requests: [], subscriptions: 0, unsubscribes: 0 };
+  let commandNumber = 0;
   const current = { options: { applicationServerKey: Uint8Array.from(Buffer.from(key, 'base64url')).buffer },
+    unsubscribe: async () => { state.unsubscribes++; },
     toJSON: () => ({ endpoint: 'https://push.example.test/id', keys: { p256dh: 'p256dh', auth: 'auth' } }) };
   const registration = { active: { postMessage: value => calls.push(['message', value]) }, pushManager: {
     getSubscription: async () => state.subscriptions ? current : null,
@@ -20,7 +22,7 @@ function fixture({ active = false, ios = false, installed = true, configured = t
     navigator: { userAgent: ios ? 'iPhone' : 'Chromium', platform: 'Linux', serviceWorker: {
       register: async () => registration, ready: Promise.resolve(registration),
     } }, Notification: notification, PushManager: {}, isSecureContext: true,
-    matchMedia: () => ({ matches: installed }), randomUUID: () => '12345678-1234-4234-8234-123456789abc',
+    matchMedia: () => ({ matches: installed }), randomUUID: () => `12345678-1234-4234-8234-${String(++commandNumber).padStart(12, '0')}`,
     location: { href: 'https://bokkie.example.test/ui/', origin: 'https://bokkie.example.test', search: '' },
     history: { replaceState: (_a, _b, url) => calls.push(['history', url]) },
     fetch: async (path, options) => {
@@ -29,12 +31,14 @@ function fixture({ active = false, ios = false, installed = true, configured = t
       if (path.endsWith('/register')) {
         state.requests.push(JSON.parse(options.body));
         if (state.failRegister) throw Error('lost registration response');
-        setup = { ...setup, configuration_revision: 4, device: { id: 'device-a', label: state.requests.at(-1).label, active: true } };
+        if (state.requests.at(-1).configuration_revision !== setup.configuration_revision) return { ok: false, status: 409 };
+        setup = { ...setup, configuration_revision: setup.configuration_revision + 1, device: { id: 'device-a', label: state.requests.at(-1).label, active: true } };
       }
       if (path.endsWith('/disable')) setup = { ...setup, configuration_revision: 5, device: { ...setup.device, active: false } };
       return { ok: true, json: async () => setup };
     } };
-  return { state, calls, storage, env, controller: createPushSetup(env), registration };
+  return { state, calls, storage, env, controller: createPushSetup(env), registration,
+    setSetup: changes => { setup = { ...setup, ...changes }; }, getSetup: () => setup };
 }
 
 test('explicit enable requests permission synchronously before any asynchronous work', async () => {
@@ -119,4 +123,65 @@ test('published setup revision changes on enrolment and disable, and stays stabl
   await f.controller.refresh(); assert.equal(f.controller.snapshot().configuration_revision, 4);
   f.controller.reviewDisable(); await f.controller.disable();
   assert.equal(f.controller.snapshot().configuration_revision, 5);
+});
+
+
+test('stale revision-zero request needs reviewed local discard before a fresh revision-two enrolment', async () => {
+  const f = fixture({ configurationRevision: 0, failRegister: true });
+  await f.controller.refresh(); await f.controller.enable('Original browser');
+  const original = f.state.requests[0], saved = f.storage.get('bokkie-push-pending-v1');
+  assert.equal(original.configuration_revision, 0);
+  assert.equal(f.controller.snapshot().pending, true);
+  f.state.failRegister = false;
+  f.setSetup({ configuration_revision: 2, device: { id: 'another-device', label: 'Other browser', active: false } });
+  f.storage.set('bokkie-push-device-v1', JSON.stringify('previous-local-device'));
+  const reload = createPushSetup(f.env); await reload.refresh();
+  for (let n = 0; n < 2; n++) {
+    await reload.enable('Edited name must not change the retained request');
+    assert.match(reload.snapshot().error, /409/);
+    await reload.refresh();
+  }
+  assert.deepEqual(f.state.requests, [original, original, original]);
+  assert.equal(reload.snapshot().pending, true); assert.equal(reload.snapshot().can_disable, false);
+  const serverBefore = structuredClone(f.getSetup());
+  const postCount = () => f.calls.filter(([name, _path, options]) => name === 'fetch' && options?.method === 'POST').length;
+  const postsBefore = postCount();
+  await reload.discardPending(); // No review: no effect.
+  assert.equal(f.storage.get('bokkie-push-pending-v1'), saved);
+  reload.reviewDiscardPending();
+  assert.equal(reload.snapshot().pending_discard_review, 'Original browser');
+  assert.equal(reload.snapshot().can_enable, false);
+  assert.equal(f.storage.get('bokkie-push-pending-v1'), saved);
+  reload.cancelDiscardPending();
+  assert.equal(reload.snapshot().pending, true);
+  assert.equal(f.storage.get('bokkie-push-pending-v1'), saved);
+  reload.reviewDiscardPending(); await reload.discardPending();
+  assert.equal(reload.snapshot().pending, false);
+  assert.equal(reload.snapshot().configuration_revision, 2);
+  assert.equal(f.storage.has('bokkie-push-pending-v1'), false);
+  assert.equal(f.storage.get('bokkie-push-device-v1'), JSON.stringify('previous-local-device'));
+  assert.deepEqual(f.getSetup(), serverBefore);
+  assert.equal(postCount(), postsBefore);
+  assert.equal(f.state.subscriptions, 1); assert.equal(f.state.unsubscribes, 0);
+  assert.equal(f.state.requests.length, 3); // Discard never auto-enrols.
+  await reload.enable('Fresh chosen browser');
+  const fresh = f.state.requests[3];
+  assert.equal(fresh.configuration_revision, 2);
+  assert.notEqual(fresh.command_id, original.command_id);
+  assert.equal(fresh.label, 'Fresh chosen browser');
+  assert.equal(fresh.endpoint, original.endpoint);
+  assert.deepEqual(fresh.keys, original.keys);
+  assert.equal(f.state.subscriptions, 1); assert.equal(f.state.unsubscribes, 0);
+  assert.equal(reload.snapshot().active, true);
+});
+
+test('failed storage deletion retains the exact request and does not claim a discard', async () => {
+  const f = fixture({ failRegister: true }); await f.controller.refresh(); await f.controller.enable('Browser');
+  const saved = f.storage.get('bokkie-push-pending-v1');
+  f.env.storage.removeItem = () => { throw Error('Storage deletion unavailable'); };
+  f.controller.reviewDiscardPending(); await f.controller.discardPending();
+  assert.equal(f.controller.snapshot().pending, true);
+  assert.match(f.controller.snapshot().status, /retained/);
+  assert.equal(f.storage.get('bokkie-push-pending-v1'), saved);
+  assert.equal(f.state.unsubscribes, 0);
 });

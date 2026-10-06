@@ -643,6 +643,11 @@ separate review before enrolling another. Then preview and confirm affected task
 destinations again; existing admitted work and queued deliveries retain their
 original device. An expired subscription appears as attention and needs enrolment
 again. The model cannot grant permission or change notification configuration.
+If an exact pending enrolment keeps failing after settings change, review and
+confirm discarding that local request. This does not change any Bokkie device or
+history and keeps the browser subscription. Refresh then explicitly enable again
+against current settings; an uncertain request remains available for exact replay
+until you choose to discard it.
 
 The sender uses encrypted payloads, VAPID and validated HTTPS provider endpoints
 for Apple, Google and Mozilla. TLS verifies the original hostname while connecting

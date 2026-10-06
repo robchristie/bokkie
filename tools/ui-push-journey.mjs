@@ -54,6 +54,11 @@ async function stop() {
   if (fixture && fixture.exitCode == null) { const done = once(fixture, 'exit'); fixture.stdin.end('{"stop":true}\n'); await done; }
 }
 const get = async path => (await fetch(origin + path)).json();
+async function fixtureMutation(path, body) {
+ const bootstrap=await get('/bootstrap');const response=await fetch(origin+path,{method:'POST',headers:{'Content-Type':'application/json','Origin':origin,'X-Bokkie-Mutation-Token':bootstrap.mutation_token},body:JSON.stringify(body)});
+ if(!response.ok)throw Error('Synthetic setup mutation failed: '+response.status); return response.json();
+}
+
 const snapshot = () => page.evaluate(() => window.__BOKKIE_ATTENTION_HANDLE.test_snapshot());
 const check = (condition, text) => { if (!condition) throw Error(text); report.checks.push(text); };
 async function until(observation, condition, label, seconds = 15) {
@@ -68,12 +73,22 @@ async function until(observation, condition, label, seconds = 15) {
 async function ready() {
   await page.waitForFunction(() => window.__BOKKIE_ATTENTION_HANDLE?.test_snapshot().interaction.connection === 'current', null, { timeout: 30000 });
 }
-async function click(id) {
+async function reveal(id) {
   const node = await until(async () => {
-    const value = (await snapshot()).ui_snapshot.nodes.find(node => node.id === id);
-    if (value && value.rect.max_y <= page.viewportSize().height && value.rect.min_y >= 0) return value;
-    await page.mouse.move(page.viewportSize().width * 0.75, 350); await page.mouse.wheel(0, 250); return null;
+    const nodes = (await snapshot()).ui_snapshot.nodes;
+    const value = nodes.find(node => node.id === id);
+    const composer = nodes.find(node => node.id === 'bokkie.conversation.text');
+    const back = nodes.find(node => node.id === 'bokkie.conversation.panel-back');
+    const notificationPanel = id.startsWith('bokkie.notifications.');
+    const bottom = notificationPanel && composer ? composer.rect.min_y - 24 : page.viewportSize().height;
+    const top = notificationPanel && back ? back.rect.max_y + 6 : 0;
+    if (value && value.rect.max_y <= bottom && value.rect.min_y >= top) return value;
+    await page.mouse.move(page.viewportSize().width * 0.8, 350); await page.mouse.wheel(0, value && value.rect.min_y < top ? -250 : 250); return null;
   }, node => !!node, id);
+  return node;
+}
+async function click(id) {
+  const node = await reveal(id);
   check(node.enabled, `Enabled ${id}`);
   await page.mouse.click((node.rect.min_x + node.rect.max_x) / 2, (node.rect.min_y + node.rect.max_y) / 2);
   await page.waitForTimeout(150);
@@ -123,7 +138,9 @@ async function capture(name) {
 }
 async function widths(name) {
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
-    await page.setViewportSize(viewport); await page.waitForTimeout(250); await capture(name + '-' + viewport.width);
+    await page.setViewportSize(viewport); await page.waitForTimeout(250);
+    if(name==='enrolment-recovery') await reveal('bokkie.notifications.pending-discard-confirm');
+    await capture(name + '-' + viewport.width);
     const composer = (await snapshot()).ui_snapshot.nodes.find(node => node.id === 'bokkie.conversation.text');
     if (!['delivery-attention','recovery-confirmation'].includes(name)) check(composer && composer.rect.min_y >= 0 && composer.rect.max_y < viewport.height, `Composer remains visible on Home at ${viewport.width}`);
     else check((await snapshot()).ui_snapshot.nodes.some(node=>node.enabled && node.actions?.some(action=>['reconcile_notification','confirm_lifecycle_action'].includes(action))), `Delivery recovery action is reachable at ${viewport.width}`);
@@ -183,10 +200,30 @@ try {
   });
   await cdp.send('ServiceWorker.enable');
   page = await context.newPage(); page.on('pageerror', error => report.errors.push(String(error)));
-  page.on('console', message => {if(message.type()==='error')report.errors.push(message.text());});
+  page.on('console', message => {if(message.type()==='error') {if(report.injecting_registration_failure && message.location().url===origin+'/notifications/push/register' && /503|409/.test(message.text())) (report.expected_registration_errors??=[]).push(message.text());else report.errors.push(message.text());}});
   await page.bringToFront();
   await page.goto(origin + '/ui/'); await ready();
   await click('bokkie.home.notifications'); await widths('notification-setup');
+  // Reproduce the reviewed stale-pending case without touching a provider.
+  report.injecting_registration_failure = true;
+  await page.route('**/notifications/push/register', route => route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{message:'Synthetic registration failed before reaching Bokkie'}})}), {times:1});
+  await click('bokkie.notifications.enable');
+  await until(()=>page.evaluate(()=>JSON.parse(window.__BOKKIE_PUSH.snapshotJSON())),state=>state.pending && !state.busy,'retained failed enrolment');
+  report.injecting_registration_failure = false;
+  const initialSetup=await get('/notifications/push');
+  const other=await fixtureMutation('/notifications/push/register',{command_id:randomUUID(),configuration_revision:initialSetup.configuration_revision,label:'Synthetic other browser',endpoint:'https://fcm.googleapis.com/fcm/send/bokkie-other-fixture-only',keys:{p256dh:ecdh.getPublicKey().toString('base64url'),auth:Buffer.alloc(16,9).toString('base64url')}});
+  await fixtureMutation('/notifications/push/disable',{command_id:randomUUID(),configuration_revision:other.configuration_revision});
+  await page.reload();await ready();await click('bokkie.home.notifications');
+  await until(()=>page.evaluate(()=>JSON.parse(window.__BOKKIE_PUSH.snapshotJSON())),state=>state.configuration_revision===2 && state.pending,'reloaded obsolete pending enrolment');
+  report.injecting_registration_failure = true; await click('bokkie.notifications.enable');
+  await until(()=>page.evaluate(()=>JSON.parse(window.__BOKKIE_PUSH.snapshotJSON())),state=>state.pending && !state.busy && !!state.error,'exact obsolete enrolment rejection');
+  report.injecting_registration_failure = false;
+  await widths('stale-enrolment'); await click('bokkie.notifications.pending-discard-review'); await widths('enrolment-recovery');
+  await click('bokkie.notifications.pending-discard-cancel');
+  check(await page.evaluate(()=>JSON.parse(window.__BOKKIE_PUSH.snapshotJSON()).pending),'Cancelling recovery preserves the exact pending request');
+  await click('bokkie.notifications.pending-discard-review'); await click('bokkie.notifications.pending-discard-confirm');
+  await until(()=>page.evaluate(()=>JSON.parse(window.__BOKKIE_PUSH.snapshotJSON())),state=>!state.pending && state.ready && state.configuration_revision===2,'explicit local discard and fresh settings');
+  const unchangedSetup=await get('/notifications/push');check(unchangedSetup.configuration_revision===2 && !unchangedSetup.device.active,'Discard changes no Bokkie device or history');
   await click('bokkie.notifications.enable');
   const setup = await until(() => get('/notifications/push'), value => value.device?.active, 'explicit synthetic device enrolment');
   check(await page.evaluate(() => window.__BOKKIE_SYNTHETIC_SUBSCRIPTIONS) === 1, 'One physical enrolment action creates one synthetic subscription without contacting a provider');
@@ -218,7 +255,7 @@ try {
   check((await notificationState()).notifications.filter(notification => notification.tag === payload.id).length === 1, 'Duplicate CDP push keeps one notification tag');
   await context.setOffline(false);
   page = await context.newPage(); page.on('pageerror', error => report.errors.push(String(error)));
-  page.on('console', message => {if(message.type()==='error')report.errors.push(message.text());});
+  page.on('console', message => {if(message.type()==='error') {if(report.injecting_registration_failure && message.location().url===origin+'/notifications/push/register' && /503|409/.test(message.text())) (report.expected_registration_errors??=[]).push(message.text());else report.errors.push(message.text());}});
   await page.bringToFront();
   await page.goto(origin + '/ui/'); await ready();
   const reported = await until(() => get(`/tasks/managed/${taskId}`), value => value.runs.some(run => run.delivery?.push?.device_status === 'displayed'), 'queued device receipt after app activity');

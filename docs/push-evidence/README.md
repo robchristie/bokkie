@@ -33,7 +33,7 @@ uses published pinned `web-push`/Mozilla `ece`, not a hand-written encryption sc
 
 ## Browser and interface evidence
 
-[The deterministic browser journey](qualification.json) passed 106 checks using
+[The deterministic browser journey](qualification.json) passed 131 checks using
 one marked synthetic database/subscription, the production router, actual `/ui/`
 worker and CDP push injection. One reminder survives timing clarification, exact
 review, conversational assent without activation, confirmation, due result,
@@ -48,14 +48,19 @@ Click routing uses the production function and real notification data with an
 explicitly synthetic WindowClient adapter; no native OS tap is claimed.
 
 [Source checks](source-checks.json) retain complete backend/UI logs and relevant
-input hashes: 219 Python tests, 355 backend unit tests (two existing ignored),
-backend adapter/integration tests, 91 Rust UI tests and 22 JavaScript tests passed,
-with formatting, Clippy and native/Wasm builds. Store checks include a device
+input hashes: 219 Python tests, 356 backend unit tests (two existing ignored),
+backend adapter/integration tests, 92 Rust UI tests and 24 JavaScript tests passed,
+with formatting, Clippy and native/Wasm builds. Review repaired a stale local enrolment at revision0 after another browser advanced
+settings to inactive revision2: exact retries remain unchanged until explicit local
+discard, which preserves the subscription and all backend state before a fresh
+user choice. The physical journey exercises reload, rejection, review/cancel,
+confirmation and a new enrolment. Historical command receipts cannot pretend to
+be current settings after a later device change. Store checks include a device
 change between profile read and task transaction; stale snapshots cannot activate
 or resume work for a disabled device. [PR #50](https://github.com/robchristie/bokkie/pull/50) binds the final committed
 candidate journey and independent review/CI evidence.
 
-All thirteen retained screenshots were opened and judged at 1440×900 and 390×844.
+All seventeen retained screenshots were opened and judged at 1440×900 and 390×844.
 Home's composer, device controls, exact text/destination/dates and result are
 readable. Task completion, push acceptance and device reports are distinct. The
 attention desk and recovery modal expose saved text/device and reachable actions;
@@ -63,6 +68,8 @@ technical data is disclosed. Panel/transcript scrolling is intentional.
 
 | State | Desktop | Narrow |
 | --- | --- | --- |
+| Stale enrolment | [image](stale-enrolment-1440.png) | [image](stale-enrolment-390.png) |
+| Enrolment recovery | [image](enrolment-recovery-1440.png) | [image](enrolment-recovery-390.png) |
 | Notification setup | [image](notification-setup-1440.png) | [image](notification-setup-390.png) |
 | Enrolled device | [image](notification-enabled-1440.png) | [image](notification-enabled-390.png) |
 | Exact review | [image](reminder-review-1440.png) | [image](reminder-review-390.png) |

@@ -20,7 +20,7 @@ export function createPushSetup(env, repaint = () => {}) {
   let setup = null, registration = null, pending = readSaved(env.storage, 'bokkie-push-pending-v1');
   let localDevice = readSaved(env.storage, 'bokkie-push-device-v1');
   let taskLinkRead = false, queuedTask = null, gesturePermission = null;
-  let busy = false, error = '', status = 'Loading notification settings…', disableReview = null;
+  let busy = false, error = '', status = 'Loading notification settings…', disableReview = null, pendingDiscardReview = null;
   const installed = () => env.matchMedia('(display-mode: standalone)').matches || env.navigator.standalone === true;
   const ios = () => /iPad|iPhone|iPod/.test(env.navigator.userAgent)
     || (env.navigator.platform === 'MacIntel' && env.navigator.maxTouchPoints > 1);
@@ -48,7 +48,7 @@ export function createPushSetup(env, repaint = () => {}) {
     ?.postMessage({ type: 'bokkie-retry-push-receipts' });
   async function refresh() {
     if (busy) return;
-    busy = true; disableReview = null; update('Loading notification settings…');
+    busy = true; disableReview = null; pendingDiscardReview = null; update('Loading notification settings…');
     try {
       setup = await request('/notifications/push');
       if (!setup || typeof setup.configured !== 'boolean' || !Number.isSafeInteger(setup.configuration_revision)) {
@@ -70,9 +70,10 @@ export function createPushSetup(env, repaint = () => {}) {
     return { busy, error, status, supported: supported(), installed: installed(), ios: ios(), permission,
       configured: setup?.configured === true, configuration_revision: setup?.configuration_revision ?? null, ready: !!registration,
       active, device_label: setup?.device?.label ?? '', local_device: active && localDevice === setup.device.id,
-      can_enable: !busy && !!registration && setup?.configured === true && supported()
+      can_enable: !busy && !pendingDiscardReview && !!registration && setup?.configured === true && supported()
         && (!ios() || installed()) && permission !== 'denied' && (!active || !!pending),
-      can_disable: !busy && active, pending: !!pending, disable_review: disableReview?.label ?? null };
+      can_disable: !busy && !pendingDiscardReview && active, pending: !!pending, disable_review: disableReview?.label ?? null,
+      can_discard_pending: !busy && !!pending, pending_discard_review: pendingDiscardReview?.label ?? null };
   }
   async function finishEnable(permissionPromise, label) {
     busy = true; update('Enabling notifications on this device…');
@@ -115,6 +116,28 @@ export function createPushSetup(env, repaint = () => {}) {
     gesturePermission = null;
     return finishEnable(permission, label);
   }
+  function reviewDiscardPending() {
+    if (busy || !pending) return;
+    disableReview = null;
+    pendingDiscardReview = { request: pending, label: pending.body?.label ?? 'this device' };
+    repaint();
+  }
+  async function discardPending() {
+    if (busy || !pendingDiscardReview || pending !== pendingDiscardReview.request) return;
+    // Confirmed local discard is separate from every server/device operation.
+    // Keep the request when storage refuses deletion; never claim it was forgotten.
+    try {
+      env.storage.removeItem('bokkie-push-pending-v1');
+      if (env.storage.getItem('bokkie-push-pending-v1') != null) throw Error('Saved request remains in storage');
+    } catch (failure) {
+      update('The pending request was retained because browser storage could not discard it.', String(failure.message ?? failure));
+      return;
+    }
+    pending = null; pendingDiscardReview = null; gesturePermission = null;
+    setup = null; // Enrolment stays unavailable until the current server setup is read.
+    await refresh();
+    update(`The local enrolment request was discarded. It may already have been accepted; no Bokkie device or history was changed, and the browser subscription is retained. ${status} Enabling again requires a fresh choice.`, error);
+  }
   function reviewDisable() {
     if (!snapshot().can_disable) return;
     disableReview = { label: setup.device.label, revision: setup.configuration_revision, service: setup.service,
@@ -139,7 +162,8 @@ export function createPushSetup(env, repaint = () => {}) {
       try { gesturePermission = env.Notification.requestPermission(); }
       catch (failure) { update(status, `Notification permission could not be requested: ${failure.message ?? failure}`); }
     }
-  }, reviewDisable, disable, cancelDisable: () => { disableReview = null; repaint(); },
+  }, reviewDiscardPending, discardPending, cancelDiscardPending: () => { pendingDiscardReview = null; repaint(); },
+    reviewDisable, disable, cancelDisable: () => { disableReview = null; repaint(); },
     retryReceipts, snapshotJSON: () => JSON.stringify(snapshot()),
     queueTaskLink: task => { try { taskURL(task, env.location.origin); queuedTask = task; repaint(); } catch {} },
     takeTaskLink: () => {

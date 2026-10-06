@@ -20,6 +20,8 @@ struct BrowserPushState {
     can_enable: bool,
     can_disable: bool,
     pending: bool,
+    can_discard_pending: bool,
+    pending_discard_review: Option<String>,
     disable_review: Option<String>,
 }
 
@@ -152,6 +154,39 @@ fn show_state(
         ) {
             // Direct call preserves browser user activation for requestPermission.
             action("enable", label);
+        }
+    }
+    if let Some(device) = &state.pending_discard_review {
+        ui.separator();
+        ui.add(egui::Label::new(format!("Discard the local enrolment request for {device}? It may already have been accepted. This only forgets this saved request; no Bokkie device or history changes, and the browser subscription is retained. Settings will refresh before you can make a fresh enrolment choice.")).wrap());
+        if button(
+            ui,
+            "bokkie.notifications.pending-discard-confirm",
+            "Confirm discard pending request",
+            !state.busy,
+            nodes,
+        ) {
+            action("discardPending", "");
+        }
+        if button(
+            ui,
+            "bokkie.notifications.pending-discard-cancel",
+            "Keep exact request",
+            !state.busy,
+            nodes,
+        ) {
+            action("cancelDiscardPending", "");
+        }
+    } else if state.can_discard_pending {
+        ui.add(egui::Label::new("An exact enrolment request is retained for retry. If settings have changed and it cannot succeed, review discarding only this local request before choosing again.").wrap());
+        if button(
+            ui,
+            "bokkie.notifications.pending-discard-review",
+            "Review discarding pending request",
+            !state.busy,
+            nodes,
+        ) {
+            action("reviewDiscardPending", "");
         }
     }
     if let Some(device) = &state.disable_review {
@@ -295,5 +330,56 @@ mod tests {
                 .iter()
                 .any(|node| node.id.0 == "bokkie.notifications.disable-review")
         );
+    }
+    #[test]
+    fn pending_discard_requires_review_and_stays_available_without_server_mutation_safety() {
+        for width in [390.0, 1440.0] {
+            for reviewing in [false, true] {
+                let context = egui::Context::default();
+                let state = BrowserPushState {
+                    configured: true,
+                    supported: true,
+                    ready: true,
+                    pending: true,
+                    can_discard_pending: true,
+                    pending_discard_review: reviewing.then(|| "Reviewed browser".into()),
+                    ..Default::default()
+                };
+                let mut nodes = vec![];
+                let mut label = "Browser".to_owned();
+                context
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 2000.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            show_state(ui, &mut label, false, &mut nodes, &state, true);
+                        },
+                    )
+                    .textures_delta
+                    .clear();
+                let id = if reviewing {
+                    "bokkie.notifications.pending-discard-confirm"
+                } else {
+                    "bokkie.notifications.pending-discard-review"
+                };
+                assert!(nodes.iter().any(|node| node.id.0 == id && node.enabled));
+                assert_eq!(
+                    nodes
+                        .iter()
+                        .any(|node| node.id.0 == "bokkie.notifications.pending-discard-confirm"),
+                    reviewing
+                );
+                assert!(
+                    !nodes
+                        .iter()
+                        .any(|node| node.id.0 == "bokkie.notifications.enable" && node.enabled)
+                );
+            }
+        }
     }
 }
