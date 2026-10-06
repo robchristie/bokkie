@@ -108,6 +108,12 @@ pub(crate) const MIGRATIONS: &[MigrationManifestEntry] = &[
         sql: include_str!("../migrations/0015_bokkie_push.sql"),
         sha256: "93a52b88bb2ac9cc0aa1dabe2c4bbdd5992c011c4b2b815b9854103a0f0d23a3",
     },
+    MigrationManifestEntry {
+        version: 16,
+        name: "0016_agent_settings.sql",
+        sql: include_str!("../migrations/0016_agent_settings.sql"),
+        sha256: "203968d88cf4a19801ebfe3f4e932dda67c10727860655bb8330347548576887",
+    },
 ];
 
 pub(crate) fn migrate(connection: &mut Connection) -> Result<(), StoreError> {

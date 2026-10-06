@@ -31,7 +31,7 @@ pub(super) struct ConversationState {
     poll_at: Option<Instant>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum ConversationPanel {
     Tasks,
     History,
@@ -199,6 +199,7 @@ impl AttentionApp {
         if task.is_some() && (self.conversation.pending.is_some() || self.conversation.in_flight) {
             return;
         }
+        self.agent_settings.open = false;
         self.conversation.open = true;
         if task.is_some() || self.conversation.id.is_none() {
             self.conversation
@@ -210,6 +211,11 @@ impl AttentionApp {
     pub(super) fn open_conversation_tasks(&mut self, context: &egui::Context) {
         self.open_conversation(None, context);
         self.conversation.panel = Some(ConversationPanel::Tasks);
+    }
+
+    pub(super) fn open_conversation_history(&mut self, context: &egui::Context) {
+        self.open_conversation(None, context);
+        self.conversation.panel = Some(ConversationPanel::History);
     }
 
     fn open_saved_conversation(&mut self, id: String, context: &egui::Context) {
@@ -1631,6 +1637,55 @@ mod tests {
             reminders_available: true,
             receipt: None,
         }
+    }
+
+    #[test]
+    fn global_navigation_preserves_conversation_context_and_unsent_message() {
+        let mut app = super::super::tests::test_app();
+        let current = session("current");
+        app.session = Some(current.clone());
+        let mut saved = view("chat", "current", 5);
+        saved.selected_task_id = Some("selected-task".into());
+        saved.messages.push(ConversationMessage {
+            role: "assistant".into(),
+            text: "A retained response".into(),
+            request_id: "done".into(),
+        });
+        app.conversation = ConversationState {
+            open: true,
+            id: Some("chat".into()),
+            view: Some(saved.clone()),
+            text: "An unsent message\nwith two lines".into(),
+            panel: Some(ConversationPanel::Details),
+            ..Default::default()
+        };
+        let context = egui::Context::default();
+        app.open_agent_settings(&context);
+        assert!(app.agent_settings.open);
+        app.apply_intents(vec![OperatorIntent::Navigate(INBOX_PANE_ID)], &context);
+        assert!(!app.agent_settings.open);
+        assert!(!app.conversation.open);
+        app.open_conversation_tasks(&context);
+        assert_eq!(app.conversation.panel, Some(ConversationPanel::Tasks));
+        app.open_agent_settings(&context);
+        app.open_conversation_history(&context);
+        assert_eq!(app.conversation.panel, Some(ConversationPanel::History));
+        app.open_agent_settings(&context);
+        app.open_conversation(None, &context);
+        assert!(!app.agent_settings.open);
+        assert!(app.conversation.open);
+        assert_eq!(app.conversation.id.as_deref(), Some("chat"));
+        assert_eq!(app.conversation.text, "An unsent message\nwith two lines");
+        assert_eq!(
+            app.conversation.view.as_ref().unwrap().messages,
+            saved.messages
+        );
+        assert_eq!(
+            app.conversation.view.as_ref().unwrap().selected_task_id,
+            saved.selected_task_id
+        );
+        assert!(app.conversation.pending.is_none());
+        assert!(!app.model.action_busy);
     }
 
     #[test]

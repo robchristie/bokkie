@@ -4,6 +4,9 @@ mod conversation_ui;
 #[path = "notifications_ui.rs"]
 mod notifications_ui;
 
+#[path = "settings_ui.rs"]
+mod settings_ui;
+
 #[path = "task_ui.rs"]
 mod task_ui;
 
@@ -179,6 +182,7 @@ enum OperatorIntent {
     Refresh,
     ComposeEngineering,
     OpenConversation(Option<String>),
+    OpenAgentSettings,
     CancelEngineering {
         expected: bokkie_operator_api::EngineeringOutcomePrecondition,
     },
@@ -255,6 +259,7 @@ struct EngineeringDraft {
 
 pub struct AttentionApp {
     conversation: conversation_ui::ConversationState,
+    agent_settings: settings_ui::AgentSettingsState,
     engineering_draft: Option<EngineeringDraft>,
     engineering_saved_notice: bool,
     workspace: Workspace,
@@ -323,6 +328,7 @@ impl AttentionApp {
         }
         let mut app = Self {
             conversation: conversation_ui::ConversationState::home(),
+            agent_settings: settings_ui::AgentSettingsState::default(),
             engineering_draft: None,
             engineering_saved_notice: false,
             workspace: operator_workspace(),
@@ -497,6 +503,10 @@ impl AttentionApp {
 
     fn poll_transport(&mut self, context: &egui::Context) {
         while let Ok(message) = self.receiver.try_recv() {
+            if settings_ui::is_request(&message.request) {
+                self.agent_settings_response(message.request, message.result, context);
+                continue;
+            }
             if conversation_ui::is_request(&message.request) {
                 self.conversation_response(message.request, message.result, context);
                 continue;
@@ -543,6 +553,7 @@ impl AttentionApp {
                 (ApiRequest::Bootstrap, Ok(ApiPayload::Bootstrap(session))) => {
                     self.session = Some(session);
                     self.refresh_conversation(context);
+                    self.refresh_agent_settings(false, context);
                     self.begin_full_rebuild(false, context);
                 }
                 (
@@ -741,7 +752,9 @@ impl AttentionApp {
 
     fn request_is_current(&self, request: &ApiRequest) -> bool {
         match request {
-            request if conversation_ui::is_request(request) => true,
+            request if conversation_ui::is_request(request) || settings_ui::is_request(request) => {
+                true
+            }
             ApiRequest::Bootstrap
             | ApiRequest::Act(_)
             | ApiRequest::ConfigureTask { .. }
@@ -1086,6 +1099,7 @@ impl AttentionApp {
 
     fn restart_session(&mut self, message: &str, context: &egui::Context) {
         self.conversation.reset_session();
+        self.agent_settings.reset_session();
         self.session = None;
         self.model.record_session_change(message);
         self.model.topic_busy = false;
@@ -1114,6 +1128,7 @@ impl AttentionApp {
         for intent in intents {
             match intent {
                 OperatorIntent::OpenConversation(task) => self.open_conversation(task, context),
+                OperatorIntent::OpenAgentSettings => self.open_agent_settings(context),
                 OperatorIntent::ComposeEngineering => {
                     if self.engineering_draft.is_none() {
                         self.engineering_draft = Some(EngineeringDraft {
@@ -1204,6 +1219,7 @@ impl AttentionApp {
                     }
                 }
                 OperatorIntent::Navigate(pane) => {
+                    self.agent_settings.open = false;
                     self.conversation.open = false;
                     self.collection = pane;
                     self.workspace.activate(pane);
@@ -1328,7 +1344,17 @@ impl AttentionApp {
         if engineering_button(ui, "bokkie.home.tasks", "Tasks", true, nodes) {
             self.open_conversation_tasks(ui.ctx());
         }
-        let label = format!("Needs attention · {}", self.model.exceptions().count());
+        if engineering_button(ui, "bokkie.home.recent", "Recent", true, nodes) {
+            self.open_conversation_history(ui.ctx());
+        }
+        if engineering_button(ui, "bokkie.settings.open", "Settings", true, nodes) {
+            intents.push(OperatorIntent::OpenAgentSettings);
+        }
+        let label = if ui.available_width() < 400.0 {
+            "Needs attention".to_owned()
+        } else {
+            format!("Needs attention · {}", self.model.exceptions().count())
+        };
         let response = ui.selectable_label(false, &label);
         record_navigation(
             &response,
@@ -1488,6 +1514,15 @@ impl eframe::App for AttentionApp {
                     .inner_margin(16.0),
             )
             .show(root_ui, |ui| {
+                if self.agent_settings.open {
+                    self.show_agent_settings(
+                        ui,
+                        tokens,
+                        &mut semantic_nodes,
+                        &mut text_observations,
+                    );
+                    return;
+                }
                 if self.conversation.open {
                     self.show_conversation(ui, &mut semantic_nodes, &mut intents);
                     return;
@@ -3689,6 +3724,7 @@ fn observe_engineering_control(
     let parent = if id == "bokkie.engineering.new"
         || id == "bokkie.engineering.dismiss-saved"
         || id == "bokkie.conversation.open"
+        || id == "bokkie.settings.open"
         || id == "bokkie.collection.all"
         || id.starts_with("bokkie.home.")
     {
@@ -5003,6 +5039,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         AttentionApp {
             conversation: conversation_ui::ConversationState::default(),
+            agent_settings: settings_ui::AgentSettingsState::default(),
             engineering_draft: None,
             engineering_saved_notice: false,
             workspace: operator_workspace(),

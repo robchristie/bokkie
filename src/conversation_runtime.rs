@@ -12,6 +12,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Model metadata has a separate finite budget; proposal output keeps its profile bound.
+const MAX_MODEL_CATALOGUE_BYTES: usize = 256 * 1024;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationProfile {
@@ -61,7 +64,9 @@ impl ConversationProfile {
                 .model
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
-            || !matches!(self.effort.as_str(), "low" | "medium" | "high")
+            || self.effort.is_empty()
+            || self.effort.len() > 128
+            || self.effort.chars().any(char::is_control)
             || self.timezone.parse::<chrono_tz::Tz>().is_err()
             || !(1..=180).contains(&self.timeout_seconds)
             || !(1024..=131072).contains(&self.max_context_bytes)
@@ -77,6 +82,12 @@ impl ConversationProfile {
     /// Checks effective installed capability settings without starting a model turn.
     pub fn preflight(&self) -> Result<Value, String> {
         self.invoke(json!({"profile": self, "preflight": true}))
+    }
+
+    /// Discovers the installed model catalogue without starting a thread or model turn.
+    /// The broker validates metadata and each later invocation rechecks its selected pair.
+    pub fn models(&self) -> Result<Value, String> {
+        self.invoke(json!({"profile": self, "models": true}))
     }
 
     /// Returns untrusted proposed JSON. The caller must deserialise and validate it
@@ -181,12 +192,17 @@ impl ConversationProfile {
 
     fn invoke(&self, request: Value) -> Result<Value, String> {
         self.validate()?;
+        let output_bytes = if request.get("models") == Some(&Value::Bool(true)) {
+            MAX_MODEL_CATALOGUE_BYTES + 1 // Allow the terminating JSON line newline.
+        } else {
+            self.max_output_bytes + 8192
+        };
         let limits = ProcessLimits {
             stdin_message_bytes: 256 * 1024,
-            stdout_bytes: self.max_output_bytes + 8192,
+            stdout_bytes: output_bytes,
             stderr_bytes: 8192,
-            jsonl_line_bytes: self.max_output_bytes + 8192,
-            final_message_bytes: self.max_output_bytes + 8192,
+            jsonl_line_bytes: output_bytes,
+            final_message_bytes: output_bytes,
             ..ProcessLimits::default()
         };
         let supervisor =
@@ -271,6 +287,61 @@ mod tests {
         p = profile();
         p.codex = "/tmp/codex".into();
         assert!(p.validate().is_err());
+    }
+    #[test]
+    fn accepts_bounded_efforts_for_catalogue_validation() {
+        for effort in [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra",
+            "provider-custom",
+        ] {
+            let mut p = profile();
+            p.effort = effort.into();
+            assert!(p.validate().is_ok(), "{effort}");
+        }
+        for effort in ["".to_owned(), "x".repeat(129), "high\n".to_owned()] {
+            let mut p = profile();
+            p.effort = effort;
+            assert!(p.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn model_discovery_has_separate_bounded_transport_output() {
+        let directory = tempfile::tempdir_in("/dev/shm").unwrap();
+        let broker = directory.path().join("catalogue-peer.py");
+        fs::write(
+            &broker,
+            "import json,sys\nrequest=json.load(sys.stdin)\nprint(json.dumps({'models': [{'description': 'x'*12000}], 'model_calls': 0}))\n",
+        )
+        .unwrap();
+        let mut p = profile();
+        p.broker = broker;
+        let result = p.models().unwrap();
+        assert_eq!(result["model_calls"], 0);
+        assert_eq!(
+            result["models"][0]["description"].as_str().unwrap().len(),
+            12000
+        );
+        assert!(
+            p.generate(json!({}), json!({"type":"object"}))
+                .unwrap_err()
+                .contains("bound")
+        );
+        fs::write(
+            &p.broker,
+            format!(
+                "import json,sys\nrequest=json.load(sys.stdin)\nprint(json.dumps({{'models': 'x'*{MAX_MODEL_CATALOGUE_BYTES}}}))\n"
+            ),
+        )
+        .unwrap();
+        assert!(p.models().unwrap_err().contains("bound"));
     }
     #[test]
     fn rejects_oversized_context_before_process_start() {

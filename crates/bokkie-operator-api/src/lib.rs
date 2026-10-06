@@ -1,3 +1,5 @@
+mod agent_settings;
+pub use agent_settings::*;
 mod conversation;
 pub use conversation::*;
 // Wasm-safe wire contract for Bokkie's authoritative operator projection.
@@ -13,7 +15,7 @@ use serde_json::Value;
 /// Version of the HTTP contract consumed by the bundled operator UI.
 pub const API_CONTRACT_VERSION: u32 = 1;
 /// Exact SQLite migration version understood by this build of the UI.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 15;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 16;
 /// Stable package identity; the per-process session ID distinguishes restarts.
 pub const BOKKIE_BUILD_ID: &str = concat!("bokkie/", env!("CARGO_PKG_VERSION"));
 

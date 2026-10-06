@@ -19,6 +19,10 @@ _filter_spec.loader.exec_module(_filter_module)
 payload_filter_fd = _filter_module.payload_filter_fd
 
 MAX_WIRE = 2 * 1024 * 1024
+MAX_MODEL_CATALOGUE_BYTES = 256 * 1024
+MAX_MODELS = 128
+MODEL_PAGE_SIZE = 64
+MAX_MODEL_PAGES = 16
 QUALIFIED_VERSION = "0.160.0"
 TOOL_NAMES = frozenset(('bokkie_discuss', 'bokkie_lookup', 'bokkie_save_draft',
                         'bokkie_preview', 'bokkie_propose'))
@@ -45,6 +49,73 @@ Use Australian English. Follow the trusted operation contract in developer instr
 
 def encoded_size(value):
     return len(json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode())
+
+
+def reasoning_effort(value):
+    # Codex 0.160.0's schema advertises a non-empty string, rather than an enum.
+    return (isinstance(value, str) and bool(value) and len(value.encode()) <= 128 and
+            not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value))
+
+
+def model_catalogue(peer):
+    models, identities, model_names, cursors = [], set(), set(), set()
+    cursor = None
+    for _ in range(MAX_MODEL_PAGES):
+        page = peer.rpc('model/list', {'cursor': cursor, 'limit': MODEL_PAGE_SIZE,
+                                       'includeHidden': False})
+        if (not isinstance(page, dict) or not isinstance(page.get('data'), list) or
+                len(page['data']) > MODEL_PAGE_SIZE):
+            raise ValueError('installed model catalogue has an invalid page')
+        for model in page['data']:
+            if (not isinstance(model, dict) or
+                    any(not isinstance(model.get(key), str) or not model[key]
+                        for key in ('id', 'model', 'displayName')) or
+                    not isinstance(model.get('description'), str) or
+                    type(model.get('hidden')) is not bool or
+                    type(model.get('isDefault')) is not bool or
+                    not reasoning_effort(model.get('defaultReasoningEffort')) or
+                    not isinstance(model.get('supportedReasoningEfforts'), list) or
+                    len(model['supportedReasoningEfforts']) > 32):
+                raise ValueError('installed model catalogue has invalid metadata')
+            if (len(model['model'].encode()) > 128 or
+                    any(not (char.isascii() and (char.isalnum() or char in '-_.'))
+                        for char in model['model']) or
+                    model['id'] in identities or model['model'] in model_names):
+                raise ValueError('installed model catalogue has invalid or duplicate identities')
+            efforts = set()
+            for option in model['supportedReasoningEfforts']:
+                if (not isinstance(option, dict) or
+                        not reasoning_effort(option.get('reasoningEffort')) or
+                        not isinstance(option.get('description'), str) or
+                        option['reasoningEffort'] in efforts):
+                    raise ValueError('installed model catalogue has invalid reasoning efforts')
+                efforts.add(option['reasoningEffort'])
+            identities.add(model['id'])
+            model_names.add(model['model'])
+            models.append(model)
+            if len(models) > MAX_MODELS:
+                raise ValueError('installed model catalogue exceeded its model bound')
+        catalogue = {'codex_version': QUALIFIED_VERSION, 'models': models, 'model_calls': 0}
+        if encoded_size(catalogue) > MAX_MODEL_CATALOGUE_BYTES:
+            raise ValueError('installed model catalogue exceeded its byte bound')
+        cursor = page.get('nextCursor')
+        if cursor is None:
+            return catalogue
+        if (not isinstance(cursor, str) or not cursor or len(cursor.encode()) > 1024 or
+                cursor in cursors or not page['data']):
+            raise ValueError('installed model catalogue has an invalid pagination cursor')
+        cursors.add(cursor)
+    raise ValueError('installed model catalogue exceeded its page bound')
+
+
+def verify_model(catalogue, profile):
+    for model in catalogue['models']:
+        if model['model'] == profile['model'] and not model['hidden']:
+            if any(option['reasoningEffort'] == profile['effort']
+                   for option in model['supportedReasoningEfforts']):
+                return
+            break
+    raise ValueError('selected conversation model and effort are unavailable')
 
 
 def offered_tools(value):
@@ -321,6 +392,8 @@ class Peer:
 
 def run(request):
     profile = request['profile']
+    if 'models' in request and (request['models'] is not True or set(request) != {'profile', 'models'}):
+        raise ValueError('conversation model discovery requires its own request')
     specs = request.get('tools')
     names = offered_tools(specs) if 'tools' in request else None
     config = configuration(profile)
@@ -338,6 +411,10 @@ def run(request):
         peer.send({'method': 'initialized', 'params': {}})
         effective = peer.rpc('config/read', {'cwd': '/tmp/conversation', 'includeLayers': False})['config']
         verify_config(effective)
+        catalogue = model_catalogue(peer)
+        if request.get('models'):
+            return catalogue
+        verify_model(catalogue, profile)
         started = peer.rpc('thread/start', {
             'cwd': '/tmp/conversation', 'model': profile['model'],
             'allowProviderModelFallback': False, 'approvalPolicy': 'never',

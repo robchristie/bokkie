@@ -84,6 +84,35 @@ impl Store {
         session: &str,
         now: i64,
     ) -> Result<bool, StoreError> {
+        self.conversation_begin_inner(request, session, now, None)
+    }
+    pub fn conversation_begin_profiled(
+        &mut self,
+        request: &ConversationTurnRequest,
+        session: &str,
+        now: i64,
+        deployment: &crate::conversation_runtime::ConversationProfile,
+        models: &[AgentModelOption],
+        instructions: &str,
+    ) -> Result<bool, StoreError> {
+        self.conversation_begin_inner(
+            request,
+            session,
+            now,
+            Some((deployment, models, instructions)),
+        )
+    }
+    fn conversation_begin_inner(
+        &mut self,
+        request: &ConversationTurnRequest,
+        session: &str,
+        now: i64,
+        settings: Option<(
+            &crate::conversation_runtime::ConversationProfile,
+            &[AgentModelOption],
+            &str,
+        )>,
+    ) -> Result<bool, StoreError> {
         bounded(&request.command_id, 128)?;
         bounded(&request.conversation_id, 128)?;
         bounded(&request.text, 8192)?;
@@ -126,7 +155,27 @@ impl Store {
                 "conversation request is already in progress".into(),
             ));
         }
+        let accepted = if let Some((deployment, models, instructions)) = settings {
+            crate::agent_settings::bootstrap(&tx, deployment, now)?;
+            let profile = crate::agent_settings::active(&tx)?;
+            crate::agent_settings::validate_role(&profile.main, deployment, models)?;
+            let mut runtime = deployment.clone();
+            runtime.model = profile.main.model.clone();
+            runtime.effort = profile.main.effort.clone();
+            runtime.timeout_seconds = profile.main.timeout_seconds;
+            runtime.max_context_bytes = profile.main.max_context_bytes;
+            runtime.max_output_bytes = profile.main.max_output_bytes;
+            let deadline_unix =
+                now + (runtime.timeout_seconds * u64::from(profile.main.max_model_calls)) as i64;
+            Some(encode(&crate::agent_settings::AcceptedAgentProfile{profile,runtime,mandatory_instructions:instructions.into(),permissions:"read-only; network-off; no execution environments; proposal-only tools; operator confirmation required".into(),deadline_unix})?)
+        } else {
+            None
+        };
         tx.execute("INSERT INTO conversation_requests(command_id,conversation_id,payload_json,session_id,status,created_at) VALUES (?1,?2,?3,?4,'running',?5)",params![request.command_id,request.conversation_id,raw,session,now])?;
+        tx.execute(
+            "UPDATE conversation_requests SET accepted_profile_json=?2 WHERE command_id=?1",
+            params![request.command_id, accepted],
+        )?;
         tx.execute("INSERT INTO conversation_messages(conversation_id,request_id,role,text,created_at) VALUES (?1,?2,'user',?3,?4)",params![request.conversation_id,request.command_id,request.text,now])?;
         tx.execute("UPDATE conversations SET revision=revision+1,proposal_id=NULL,updated_at=?2 WHERE id=?1",params![request.conversation_id,now])?;
         event(&tx, &request.conversation_id, now)?;
@@ -142,6 +191,7 @@ impl Store {
             s.query_map([session], |r| r.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?
         };
+        tx.execute("UPDATE conversation_invocations SET status='interrupted',outcome_json='{\"error\":\"Service restarted after dispatch; no automatic replay\"}' WHERE status='dispatched' AND request_id IN(SELECT command_id FROM conversation_requests WHERE status='running' AND session_id<>?1)",[session])?;
         tx.execute("UPDATE conversation_requests SET status='interrupted',error='Conversation interrupted by service restart. Saved drafts remain available; send a new message to continue. No activation was inferred.' WHERE status='running' AND session_id<>?1",[session])?;
         for id in ids {
             event(&tx, &id, now)?;
@@ -171,6 +221,22 @@ impl Store {
                 "conversation request is no longer running".into(),
             ));
         }
+        let accepted: Option<String> = tx.query_row(
+            "SELECT accepted_profile_json FROM conversation_requests WHERE command_id=?1",
+            [&request.command_id],
+            |r| r.get(0),
+        )?;
+        let profile = accepted
+            .map(|raw| decode::<crate::agent_settings::AcceptedAgentProfile>(&raw))
+            .transpose()?;
+        if let Some(p) = &profile {
+            if step >= p.profile.main.max_model_calls || now >= p.deadline_unix {
+                return Err(StoreError::Invalid(
+                    "This request has reached its saved execution limit".into(),
+                ));
+            }
+        }
+        tx.execute("INSERT INTO conversation_invocations(request_id,ordinal,purpose,profile_revision,status,dispatched_at) VALUES(?1,?2,?3,?4,'dispatched',?5)",params![request.command_id,step,if step==0{"main"}else{"empty_lookup_continuation"},profile.map(|p|p.profile.revision),now]).map_err(|e| match e {rusqlite::Error::SqliteFailure(_,_)=>StoreError::Conflict("Conversation dispatch already recorded".into()),_=>e.into()})?;
         let details = encode(&json!({"request_id":request.command_id,"step":step}))?;
         let duplicate: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM domain_events WHERE entity_kind='conversation' AND entity_id=?1 AND event_type='conversation_model_dispatch' AND details_json=?2)",params![request.conversation_id,details],|r|r.get(0))?;
         if duplicate {
@@ -180,6 +246,27 @@ impl Store {
         }
         tx.execute("INSERT INTO domain_events(entity_kind,entity_id,event_type,occurred_at,details_json) VALUES ('conversation',?1,'conversation_model_dispatch',?2,?3)",params![request.conversation_id,now,details])?;
         tx.commit()?;
+        Ok(())
+    }
+    pub fn conversation_invocation_outcome(
+        &mut self,
+        request_id: &str,
+        step: u8,
+        result: Result<&serde_json::Value, &str>,
+    ) -> Result<(), StoreError> {
+        let (status, outcome) = match result {
+            Ok(output) => ("completed", encode(output)?),
+            Err(error) => (
+                "failed",
+                encode(&json!({"error":error.chars().take(2048).collect::<String>()}))?,
+            ),
+        };
+        let changed=self.connection.execute("UPDATE conversation_invocations SET status=?3,outcome_json=?4 WHERE request_id=?1 AND ordinal=?2 AND status='dispatched'",params![request_id,step,status,outcome])?;
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "Invocation outcome was already recorded or interrupted".into(),
+            ));
+        }
         Ok(())
     }
     pub fn conversation_model_dispatch_count(&self) -> Result<i64, StoreError> {

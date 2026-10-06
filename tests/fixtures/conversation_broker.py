@@ -6,6 +6,15 @@ import sys
 request = json.loads(sys.stdin.readline())
 assert request['profile']['codex'] == '/usr/bin/true'
 assert request['profile']['bwrap'] == '/usr/bin/true'
+SCENARIOS = ('fixture-ui', 'fixture-settings', 'fixture-empty', 'fixture-matches', 'fixture-fail',
+             'fixture-invalid-json', 'fixture-malformed', 'fixture-read-fail',
+             'fixture-repeat')
+if request.get('models'):
+    print(json.dumps({'codex_version':'0.160.0','models':[{
+        'model':model,'displayName':model,'defaultReasoningEffort':'medium',
+        'supportedReasoningEfforts':[{'reasoningEffort':effort,'description':effort} for effort in ('low','medium','high')]
+    } for model in SCENARIOS], 'model_calls':0}))
+    sys.exit(0)
 context = request['context']
 text = next(message['text'] for message in reversed(context['messages'])
             if message['role'] == 'user')
@@ -23,7 +32,7 @@ def output(proposal):
 scenario = request['profile']['model']
 assert scenario in ('fixture-ui', 'fixture-empty', 'fixture-matches', 'fixture-fail',
                     'fixture-invalid-json', 'fixture-malformed', 'fixture-read-fail',
-                    'fixture-repeat')
+                    'fixture-repeat', 'fixture-settings')
 if scenario == 'fixture-ui':
     # Exact fixed qualification inputs only. This is a test script, not a natural
     # language implementation or an alternative to live model acceptance.
@@ -85,6 +94,16 @@ if scenario == 'fixture-ui':
 control = json.loads(text)
 with Path(control['record']).open('a') as stream:
     stream.write(json.dumps(request) + '\n')
+if control.get('release') and 'lookup_result' not in context:
+    import time
+    deadline = time.monotonic() + 4
+    while not Path(control['release']).exists():
+        if time.monotonic() >= deadline:
+            raise ValueError('synthetic barrier expired')
+        time.sleep(0.001)
+if scenario == 'fixture-settings':
+    output({'operation':'discuss','reason':'answer','message':json.dumps({'model':scenario,'effort':request['profile']['effort'],'instructions':context['additional_instructions'],'timeout':request['profile']['timeout_seconds']})})
+    sys.exit(0)
 if scenario == 'fixture-fail':
     print(json.dumps({'error': 'synthetic broker failure'}))
     sys.exit(1)

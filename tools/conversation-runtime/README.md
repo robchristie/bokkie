@@ -19,6 +19,16 @@ Model, effort, request deadline, context/output byte bounds and the default
 `Australia/Adelaide` timezone belong to the profile. The backend owns authorised
 note identity/revision and provides those facts with each bounded context.
 
+`ConversationProfile::models()` discovers exact visible model identifiers and
+supported thinking levels through contained `model/list`, without starting a
+thread or turn. Discovery is bounded to 128 models, 16 pages and 256 KiB. Every
+preflight and generation revalidates the selected pair before `thread/start`.
+Codex 0.160.0 advertises effort strings rather than a fixed enum; no model alias
+or shared list of effort options is assumed.
+
+The [role settings contract](../../docs/agent-settings.md) owns bootstrap,
+precedence, atomic saves, accepted snapshots and invocation accounting.
+
 `ConversationProfile::preflight()` checks the installed runtime without starting
 a model turn. `preflight_tools(tools)` additionally registers the exact offered
 catalogue with `thread/start` and reports its names, still with zero model turns.

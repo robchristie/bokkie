@@ -937,3 +937,141 @@ async fn managed_attention_retry_uses_existing_fenced_operator_http_and_preserve
         1
     );
 }
+
+#[tokio::test]
+async fn settings_http_are_validated_atomic_and_consumed_by_new_requests() {
+    use bokkie::{AgentSettingsSaveRequest, AgentSettingsView};
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let mut f = ModelApplication::new("fixture-empty").await;
+    let response = request(&f.app, Method::GET, "/agent-settings", None, None).await;
+    let initial: AgentSettingsView = decoded(response);
+    assert!(initial.effective);
+    let original = initial.profile.unwrap();
+    assert_eq!(original.main.model, "fixture-empty");
+    assert!(!f.record.exists());
+    assert_eq!(f.store.conversation_model_dispatch_count().unwrap(), 0);
+    let mut role = original.main;
+    role.model = "fixture-settings".into();
+    role.effort = "high".into();
+    role.additional_instructions = "Use concise Australian English.".into();
+    role.timeout_seconds = 3;
+    role.max_context_bytes = 16384;
+    role.max_output_bytes = 4096;
+    role.max_model_calls = 1;
+    let save = AgentSettingsSaveRequest {
+        command_id: "settings-save".into(),
+        expected_revision: 1,
+        main: role.clone(),
+    };
+    let mut bad = save.clone();
+    bad.command_id = "bad-pair".into();
+    bad.main.effort = "unsupported".into();
+    let rejected = request(
+        &f.app,
+        Method::POST,
+        "/agent-settings",
+        Some(&f.token),
+        Some(json!(bad)),
+    )
+    .await;
+    assert_eq!(rejected.0, StatusCode::BAD_REQUEST);
+    assert!(f.store.agent_settings(None, 100).unwrap().unwrap().revision == 1);
+    let response = request(
+        &f.app,
+        Method::POST,
+        "/agent-settings",
+        Some(&f.token),
+        Some(json!(save)),
+    )
+    .await;
+    let saved: AgentSettingsView = decoded(response);
+    assert_eq!(saved.profile.unwrap().main, role);
+    assert!(!f.record.exists());
+    let turn = f.turn_request(0);
+    f.post_turn(&turn).await;
+    let view = f.finished().await;
+    assert!(!view.busy);
+    assert!(view.request_error.is_none());
+    let calls: Vec<Value> = std::fs::read_to_string(&f.record)
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["profile"]["model"], "fixture-settings");
+    assert_eq!(calls[0]["profile"]["effort"], "high");
+    assert_eq!(
+        calls[0]["context"]["additional_instructions"],
+        role.additional_instructions
+    );
+    assert_eq!(calls[0]["profile"]["timeout_seconds"], 3);
+    assert_eq!(calls[0]["profile"]["max_context_bytes"], 16384);
+    assert_eq!(calls[0]["profile"]["max_output_bytes"], 4096);
+    f.replay_is_free(&turn, &view).await;
+}
+
+#[tokio::test]
+async fn settings_edit_during_execution_pins_every_call_and_replay_bypasses_unavailable_runtime() {
+    use bokkie::{AgentSettingsSaveRequest, AgentSettingsView};
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let f = ModelApplication::new("fixture-empty").await;
+    let initial: AgentSettingsView =
+        decoded(request(&f.app, Method::GET, "/agent-settings", None, None).await);
+    let release = f._temporary.path().join("release");
+    let mut turn = f.turn_request(0);
+    turn.text = json!({"record":f.record,"release":release,"intent":"Find or prepare a reminder"})
+        .to_string();
+    f.post_turn(&turn).await;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while f.calls().is_empty() {
+        assert!(Instant::now() < deadline);
+        tokio::task::yield_now().await;
+    }
+    let mut main = initial.profile.unwrap().main;
+    main.model = "fixture-settings".into();
+    main.effort = "high".into();
+    main.additional_instructions = "Changed while running".into();
+    main.max_model_calls = 1;
+    let save = AgentSettingsSaveRequest {
+        command_id: "during-execution".into(),
+        expected_revision: 1,
+        main,
+    };
+    let _: AgentSettingsView = decoded(
+        request(
+            &f.app,
+            Method::POST,
+            "/agent-settings",
+            Some(&f.token),
+            Some(json!(save)),
+        )
+        .await,
+    );
+    std::fs::write(release, "release").unwrap();
+    let completed = f.finished().await;
+    assert!(
+        completed.request_error.is_none(),
+        "{:?}",
+        completed.request_error
+    );
+    let calls = f.calls();
+    assert_eq!(calls.len(), 2);
+    for call in calls {
+        assert_eq!(call["profile"]["model"], "fixture-empty");
+        assert_eq!(call["profile"]["effort"], "medium");
+        assert_eq!(call["context"]["additional_instructions"], "");
+    }
+    let disabled = application(&f.executor, runtime(), true);
+    let replay: ConversationView = decoded(
+        request(
+            &disabled,
+            Method::POST,
+            "/conversations/turn",
+            Some(&bootstrap(&disabled).await.mutation_token),
+            Some(json!(turn)),
+        )
+        .await,
+    );
+    assert_eq!(replay.messages, completed.messages);
+    assert_eq!(f.calls().len(), 2);
+}

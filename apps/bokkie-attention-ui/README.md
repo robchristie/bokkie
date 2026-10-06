@@ -59,8 +59,10 @@ once; ordinary task changes stay in the UI. **Engineering intake** remains under
 **Needs attention → Advanced tools**, retaining its separate supervision contract.
 Missing research/email adapters are visible activation blockers. Agent role
 configuration and project-workspace hand-off are described in the
-[design direction](../../docs/conversation-home.md); this UI does not invent
-editable runtime settings or enabled integrations.
+[design direction](../../docs/conversation-home.md); the main role is editable in **Settings**, with live supported model/effort
+choices, additional instructions and finite limits. See the
+[settings contract](../../docs/agent-settings.md). Unsupported integrations
+remain unavailable.
 
 ## Notifications
 
