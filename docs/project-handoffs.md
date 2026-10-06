@@ -18,7 +18,7 @@ Codex owns desktop project registration and host connections. Bokkie's SQLite
 address book owns only destination references. The operator maintains and
 synchronises them when the actual workspace changes. There is no background
 synchronisation or live path/host reachability check. Server validation checks
-canonical UUID identities, bounded text and absolute POSIX or Windows host paths
+canonical UUID identities, bounded text and absolute POSIX or Windows drive paths
 without accessing a destination filesystem. URLs, relative paths and parent
 traversal are rejected. Paths refer to the named host, not Bokkie's container.
 
@@ -36,8 +36,8 @@ Discuss a concrete development outcome, then ask, for example:
 
 The existing bounded conversation runtime drafts the outcome, relevant decisions,
 constraints, checkable acceptance and supplied reference links. It receives bounded
-recent discussion and a bounded project-name/context summary; host paths and
-desktop identities are excluded from that summary. Only relevant material belongs
+recent discussion and a bounded project-name/context summary; the workspace-path
+and desktop-identity fields are omitted. Only relevant material belongs
 in the brief. Complete transcripts, credentials and unrelated private material
 must be omitted. Review generated text and acceptance criteria before transfer.
 
