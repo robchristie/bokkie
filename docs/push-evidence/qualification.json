@@ -1,0 +1,372 @@
+{
+  "source": "75f864b7afea5dc4ff7cd140c50f6de10f7677c7",
+  "tracked_diff_sha256": "63a8d1e999817538b1da4f424c01b67c98df68e26ba4c515d99c5ba8db5cfab4",
+  "started_at": "2026-10-06T01:15:03.554Z",
+  "mode": "synthetic subscription + transport, actual service worker + CDP push injection; no provider send or model",
+  "budget": {
+    "seconds": 300,
+    "model_dispatches": 0
+  },
+  "checks": [
+    "Fixture-owned Xvfb display is ready without TCP exposure",
+    "Enabled bokkie.home.notifications",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Composer remains visible on Home at 1440",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Composer remains visible on Home at 390",
+    "Enabled bokkie.notifications.enable",
+    "One physical enrolment action creates one synthetic subscription without contacting a provider",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Composer remains visible on Home at 1440",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Composer remains visible on Home at 390",
+    "Enabled bokkie.conversation.panel-back",
+    "Enabled bokkie.conversation.text",
+    "Composer receives text through its focused browser input",
+    "Enabled bokkie.conversation.send",
+    "Enabled bokkie.conversation.text",
+    "Composer receives text through its focused browser input",
+    "Enabled bokkie.conversation.send",
+    "Review shows five concrete reminder dates",
+    "Review retains the reminder capability",
+    "Enabled bokkie.conversation.text",
+    "Composer receives text through its focused browser input",
+    "Enabled bokkie.conversation.send",
+    "Conversational assent leaves the exact draft inactive",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Composer remains visible on Home at 1440",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Composer remains visible on Home at 390",
+    "Enabled bokkie.conversation.confirm",
+    "The Bokkie page is closed; only a blank observation tab remains",
+    "Push payload pins the exact saved task",
+    "Due execution and push admission make no model dispatches",
+    "One due occurrence saves one result",
+    "History records push-service acceptance separately from device evidence",
+    "The offline worker displays the self-contained reminder text",
+    "Successful display is retained in actual IndexedDB",
+    "Offline display leaves an unreported durable receipt",
+    "Duplicate CDP push keeps one notification tag",
+    "A device report does not replace push-service acceptance",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Production click function with a synthetic WindowClient reaches the exact existing task-selection API",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Composer remains visible on Home at 1440",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Composer remains visible on Home at 390",
+    "History distinguishes opening from display",
+    "Receipt replay and notification opening do not run a model",
+    "Enabled bokkie.conversation.text",
+    "Composer receives text through its focused browser input",
+    "Enabled bokkie.conversation.send",
+    "Schedule change stays inactive until its exact confirmation",
+    "Enabled bokkie.conversation.confirm",
+    "Enabled bokkie.conversation.text",
+    "Composer receives text through its focused browser input",
+    "Enabled bokkie.conversation.send",
+    "Enabled bokkie.conversation.confirm",
+    "Pause preserves task and conversation identity",
+    "Enabled bokkie.conversation.text",
+    "Composer receives text through its focused browser input",
+    "Enabled bokkie.conversation.send",
+    "Enabled bokkie.conversation.confirm",
+    "Resume preserves the same task with future timing",
+    "Restart preserves the exact browser origin and device registration",
+    "Restart safely retries proved nonacceptance under the same delivery identity",
+    "Restart after possible dispatch never automatically resends",
+    "Enabled bokkie.collection.attention",
+    "Enabled bokkie.inbox-row.delivery-354a5c5e-875e-4a16-b16a-cf63c1ea2590",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Delivery recovery action is reachable at 1440",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Delivery recovery action is reachable at 390",
+    "Enabled presentation.2f1290621736772d",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Delivery recovery action is reachable at 1440",
+    "Application framebuffer contains visible content",
+    "Lantern identifies the application page separately from the CDP observation tab",
+    "Lantern layout collection completed",
+    "Delivery recovery action is reachable at 390",
+    "Enabled action.confirm_lifecycle_action",
+    "The complete journey retains one task and no duplicate schedules",
+    "Delivery recovery and polling make no model dispatches"
+  ],
+  "captures": [
+    {
+      "name": "notification-setup-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 356,
+        "frame": "15",
+        "png_sha256": "61ad70dd164d056df98249900a94f7865c2defcebfeea6a72f96922c78ceffbb",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "notification-setup-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 336,
+        "frame": "22",
+        "png_sha256": "0a8e31408471ba11f86044c4d68901938f70f4b38669c9b6f8cfff460e1bcc16",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "notification-enabled-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 343,
+        "frame": "34",
+        "png_sha256": "d289e0c77249d80c336a83e7a1b56a651233413857dcf69b1c7af07ee106822a",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "notification-enabled-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 328,
+        "frame": "49",
+        "png_sha256": "fe7329007cd2e15f0296ab4f89ba0140ee55d5d2a076b36724ce9f91f5d87680",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "reminder-review-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 406,
+        "frame": "285",
+        "png_sha256": "252d2ffc72fd7615e7a8871a9c121f4fd9fd715ddb263469c5745542e204d580",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "reminder-review-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 330,
+        "frame": "292",
+        "png_sha256": "e194cee8d90c956bc8aa1b28a5503acc869e24dd09f9b801e9673289c5ac8e2c",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "reopened-home",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 359,
+        "frame": "10",
+        "png_sha256": "bfef6a6b7153d3b2c3812af562d642c5d457844a82f4c5456abc9c2c2773b1f0",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "task-result-and-device-report-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 365,
+        "frame": "18",
+        "png_sha256": "9f6bb6ffb6757cd77a6fdf5b8593b23e2b0f068a075b7a0142d449e1a471f91a",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "task-result-and-device-report-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 331,
+        "frame": "25",
+        "png_sha256": "89934d1ac717e17f19104aebac5ce14bdfed21dc3e95c137e067f0862096a395",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "delivery-attention-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 366,
+        "frame": "18",
+        "png_sha256": "b86b6ea38b17036121551a54010622882699710123cb801d2c636ef440494f56",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "delivery-attention-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 329,
+        "frame": "25",
+        "png_sha256": "5a23d78c4ee7ef0dedd3bab5d7187654c3e8e8238db483e9f2466a843b42ba6c",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "recovery-confirmation-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 410,
+        "frame": "51",
+        "png_sha256": "362406961a274bd6013bd78b9f9dadbff7a460f78f86b84b46985b3b4b083eb0",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    },
+    {
+      "name": "recovery-confirmation-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "settling": {
+        "samples": 2,
+        "elapsed_ms": 332,
+        "frame": "65",
+        "png_sha256": "3a42aa89a60113fb479301ffe65ace1ec6cc3f7c17bb1b45e12d0057f235da66",
+        "criterion": "two consecutive identical framebuffers and semantic layouts; unchanged frame across final capture"
+      },
+      "expectations": "Readable current state and notification actions, bounded detail scrolling, visible composer, no overlap or clipped controls. Pixels require the owner to open and judge."
+    }
+  ],
+  "errors": [],
+  "passed": true,
+  "limitations": [
+    "Browser permission is granted by the fixture, with a synthetic subscription. This is not operator device enrolment.",
+    "CDP injects decrypted JSON into the actual worker. Provider encryption and delivery require separate transport evidence.",
+    "Notification click routing is invoked synthetically using actual notification data; no native OS tap or physical phone delivery is claimed."
+  ],
+  "target/debug/bokkie-conversation-fixture": "6a42c4ec323ed44ecb6ab5cf6337e7bb66832fc024e9c5930cdd5159d4af07eb",
+  "apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm": "42e2d024fbb28f8acc28468fa23a7d7c0667db1df78a61d2839f43cfbaf9a492",
+  "apps/bokkie-attention-ui/web/service-worker.js": "84b00a550f61ccf9b08bed7c6bddbc63450ddd1b8ece0825c2520fc49bc86123",
+  "apps/bokkie-attention-ui/web/push-worker.js": "dd03b0f040701327cab41b3ca46ede4a87d323470607f5e25a3b8dae48e5cb91",
+  "apps/bokkie-attention-ui/web/push-setup.js": "4670ceed019004565deac31d57e7df7081d8d61166bfda138b002fadac78de3a",
+  "initial": {
+    "address": "127.0.0.1:40127",
+    "database_kind": "synthetic_fixture",
+    "now": 1790028000,
+    "resumed": false,
+    "root": "/nvme/development/bokkie/.ui-qualification-runtime/push-complete-recovery/state-7d42adcd-8d1f-480a-b9df-fd988bc741ff",
+    "scheduler": "manual_stdin_only"
+  },
+  "display_errors": "_XSERVTransmkdir: Owner of /tmp/.X11-unix should be set to root\nThe XKEYBOARD keymap compiler (xkbcomp) reports:\n> Warning:          Multiple symbols for level 1/group 1 on key <FK23>\n>                   Using F23, ignoring XF86TouchpadOff\n> Warning:          Symbol map for key <FK23> redefined\n>                   Using last definition for conflicting fields\n> Warning:          Symbol map for key <FK24> redefined\n>                   Using last definition for conflicting fields\n> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOn\n> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOff\n> Warning:          Could not resolve keysym XF86ActionOnSelection\n> Warning:          Could not resolve keysym XF86ContextualInsert\n> Warning:          Could not resolve keysym XF86ContextualQuery\nErrors from xkbcomp are not fatal to the X server\n",
+  "graphics": "headed full Chromium on fixture-owned Xvfb and Vulkan",
+  "browser": "151.0.7922.34",
+  "browser_channel": "chromium",
+  "device": {
+    "id": "3ea605b2-b9e7-412e-8abe-055415ba98c3",
+    "label": "This device",
+    "active": true
+  },
+  "offline_worker": {
+    "notifications": [
+      {
+        "title": "Bokkie · Bokkie TEST: Review today’s priorities",
+        "body": "Review today’s priorities.",
+        "tag": "delivery-3c54fc6e-30f8-4c6b-93b8-0ce6d0250180",
+        "renotify": false,
+        "data": {
+          "id": "delivery-3c54fc6e-30f8-4c6b-93b8-0ce6d0250180",
+          "task_id": "task-e2ec0967-53bf-43e2-80c7-c6e46bb47ee2"
+        }
+      }
+    ],
+    "records": [
+      {
+        "id": "delivery-3c54fc6e-30f8-4c6b-93b8-0ce6d0250180",
+        "task_id": "task-e2ec0967-53bf-43e2-80c7-c6e46bb47ee2",
+        "expires_at": 1791329400,
+        "state": "displayed",
+        "reported": null
+      }
+    ]
+  },
+  "broker_dispatches": 6,
+  "model_dispatches": 0,
+  "synthetic_push_events": 2,
+  "external_push_sends": 0,
+  "finished_at": "2026-10-06T01:15:28.709Z"
+}

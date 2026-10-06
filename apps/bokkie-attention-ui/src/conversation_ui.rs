@@ -13,6 +13,10 @@ pub(super) struct ConversationState {
     history: Vec<ConversationSummary>,
     catalogue: Vec<ManagedCatalogueEntry>,
     panel: Option<ConversationPanel>,
+    notification_label: String,
+    notification_revision: Option<i64>,
+    notification_refresh_pending: bool,
+    pending_task_link: Option<String>,
     query: String,
     applied_query: String,
     next_after: Option<String>,
@@ -32,6 +36,7 @@ enum ConversationPanel {
     Tasks,
     History,
     Details,
+    Notifications,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -92,6 +97,30 @@ impl ConversationState {
         }
         self.reading = Some((id.clone(), generation));
         Some(ApiRequest::Conversation { id, generation })
+    }
+
+    fn observe_notification_revision(&mut self, revision: Option<i64>) {
+        let Some(revision) = revision else {
+            return;
+        };
+        if self.notification_revision == Some(revision) {
+            return;
+        }
+        let previously_observed = self.notification_revision.replace(revision).is_some();
+        // A first read already contains configuration observed before it starts.
+        // A changed configuration, or one observed during/after a read, needs one
+        // fresh projection. This is a read only: no turn, mutation or model run.
+        self.notification_refresh_pending |=
+            previously_observed || self.view.is_some() || self.reading.is_some();
+    }
+
+    fn begin_notification_refresh(&mut self, generation: u64) -> Option<ApiRequest> {
+        if !self.notification_refresh_pending || !self.open || self.pending.is_some() {
+            return None;
+        }
+        let request = self.begin_read(generation)?;
+        self.notification_refresh_pending = false;
+        Some(request)
     }
 
     fn finish_read(&mut self, id: &str, generation: u64) -> bool {
@@ -333,8 +362,41 @@ impl AttentionApp {
     }
 
     pub(super) fn drive_conversation_poll(&mut self, context: &egui::Context) {
-        if !self.conversation.open || self.session.is_none() {
+        if self.session.is_none() {
             return;
+        }
+        self.conversation
+            .observe_notification_revision(notifications_ui::configuration_revision());
+        if self.conversation.pending_task_link.is_none() {
+            self.conversation.pending_task_link = notifications_ui::take_task_link();
+            if self.conversation.pending_task_link.is_some() {
+                self.conversation.open = true;
+            }
+        }
+        if !self.conversation.in_flight
+            && self.conversation.pending.is_none()
+            && let Some(task) = self.conversation.pending_task_link.take()
+        {
+            self.conversation.open = true;
+            if self.conversation.view.is_some() {
+                self.select_conversation_task(task, context);
+            } else {
+                self.conversation.select_after_load = Some(task);
+                self.refresh_conversation(context);
+            }
+        }
+        if !self.conversation.open {
+            return;
+        }
+        if self.conversation.notification_refresh_pending
+            && !self.conversation.in_flight
+            && self.conversation.reading.is_none()
+            && self.conversation.pending.is_none()
+        {
+            let generation = self.fresh_generation();
+            if let Some(request) = self.conversation.begin_notification_refresh(generation) {
+                self.dispatch(request, context);
+            }
         }
         if let Some(at) = self.conversation.poll_at {
             if at <= Instant::now()
@@ -400,6 +462,23 @@ impl AttentionApp {
                     None
                 } else {
                     Some(ConversationPanel::History)
+                };
+            }
+            if button(
+                ui,
+                "bokkie.home.notifications",
+                "Notifications",
+                true,
+                nodes,
+            ) {
+                if state.notification_label.is_empty() {
+                    state.notification_label = "This device".into();
+                }
+                state.panel = if state.panel == Some(ConversationPanel::Notifications) {
+                    None
+                } else {
+                    notifications_ui::refresh();
+                    Some(ConversationPanel::Notifications)
                 };
             }
             if ui.max_rect().width() < 1000.0
@@ -716,6 +795,7 @@ fn conversation_panel(
             ConversationPanel::Tasks => "Tasks and drafts",
             ConversationPanel::History => "Recent conversations",
             ConversationPanel::Details => "Task details",
+            ConversationPanel::Notifications => "Notifications",
         });
         if show_back
             && button(
@@ -734,6 +814,9 @@ fn conversation_panel(
         .id_salt("conversation-context")
         .auto_shrink([false, false])
         .show(ui, |ui| match panel {
+            ConversationPanel::Notifications => {
+                notifications_ui::show(ui, &mut state.notification_label, mutable, nodes);
+            }
             ConversationPanel::History => {
                 for summary in &state.history {
                     let label = if summary.last_text.is_empty() {
@@ -1033,7 +1116,7 @@ fn conversation_transcript(
             .or(task.candidate.as_ref())
             .is_some_and(|revision| revision.definition.capability == "reminder")
     {
-        ui.add(egui::Label::new("Email delivery is unavailable in this runtime. The saved reminder and history are retained; configure notifications before relying on its schedule.").wrap());
+        ui.add(egui::Label::new("Reminder notifications are unavailable in this runtime. The saved reminder and history are retained; configure notifications before relying on its schedule.").wrap());
     }
     if let Some(task) = &view.task
         && let Some(run) = task.runs.iter().find(|run| run.result.is_some())
@@ -1052,6 +1135,9 @@ fn conversation_transcript(
                         egui::Label::new(format!("Notification: {}", notification_label(delivery)))
                             .wrap(),
                     );
+                    if let Some(evidence) = notification_device_evidence(delivery, &run.timezone) {
+                        ui.add(egui::Label::new(evidence).wrap());
+                    }
                 }
                 if let Some(result) = &run.result {
                     let response = ui.add(egui::Label::new(result).wrap().selectable(true));
@@ -1114,7 +1200,7 @@ fn review_card(
     });
 }
 
-fn observe(
+pub(super) fn observe(
     rect: egui::Rect,
     id: &str,
     name: &str,
@@ -1136,7 +1222,7 @@ fn observe(
     node.enabled = enabled;
     nodes.push(node);
 }
-fn button(
+pub(super) fn button(
     ui: &mut egui::Ui,
     id: &str,
     label: &str,
@@ -1149,6 +1235,7 @@ fn button(
             | "bokkie.conversation.history"
             | "bokkie.conversation.details"
             | "bokkie.conversation.panel-back"
+            | "bokkie.home.notifications"
     );
     let wrap = if navigation {
         let text_width = ui
@@ -1443,11 +1530,18 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
             if let Some(delivery) = &run.delivery {
                 ui.add(egui::Label::new(format!("Notification: {}", notification_label(delivery))).wrap().selectable(true));
                 ui.add(egui::Label::new(format!("Destination: {}", delivery.destination)).wrap());
+                if let Some(evidence) = notification_device_evidence(delivery, &run.timezone) {
+                    ui.add(egui::Label::new(evidence).wrap());
+                }
                 if let Some(at) = delivery.next_retry_at {
                     ui.label(format!("Next delivery attempt: {}", local_time_in_zone(at, &run.timezone)));
                 }
                 if matches!(delivery.status.as_str(), "needs_attention" | "uncertain") {
-                    ui.label("Open Needs attention to review recovery. The reminder result is already saved.");
+                    ui.label(if delivery.push.is_some() {
+                        "Open Needs attention to resolve this delivery without resending or review an available recovery. The result is already saved; its device and deadline remain pinned."
+                    } else {
+                        "Open Needs attention to review recovery. The reminder result is already saved."
+                    });
                 }
                 egui::CollapsingHeader::new("Delivery history and provenance").id_salt((&delivery.id,"history")).show(ui, |ui| {
                     ui.label(format!("Delivery identity: {}", delivery.id));
@@ -1466,7 +1560,7 @@ fn trigger_timezone(trigger: &ManagedTrigger) -> &str {
         }
     }
 }
-fn local_time_in_zone(seconds: i64, timezone: &str) -> String {
+pub(super) fn local_time_in_zone(seconds: i64, timezone: &str) -> String {
     let Ok(zone) = timezone.parse::<chrono_tz::Tz>() else {
         return format!("Invalid time zone: {timezone}");
     };
@@ -1538,6 +1632,74 @@ mod tests {
             receipt: None,
         }
     }
+
+    #[test]
+    fn notification_revision_refreshes_capability_once_without_discarding_composer_or_history() {
+        let session = session("current");
+        let mut state = ConversationState {
+            open: true,
+            id: Some("chat".into()),
+            text: "Keep this unsent draft".into(),
+            ..Default::default()
+        };
+        state.observe_notification_revision(Some(3));
+        assert!(state.begin_notification_refresh(1).is_none());
+        let mut initial = view("chat", "current", 5);
+        initial.reminders_available = false;
+        initial.messages.push(ConversationMessage {
+            role: "user".into(),
+            text: "Saved transcript".into(),
+            request_id: "saved-request".into(),
+        });
+        state.accept(initial.clone(), &session);
+        state.observe_notification_revision(Some(4));
+        assert_eq!(
+            state.begin_notification_refresh(2),
+            Some(ApiRequest::Conversation {
+                id: "chat".into(),
+                generation: 2
+            })
+        );
+        state.observe_notification_revision(Some(4));
+        assert!(state.begin_notification_refresh(3).is_none());
+        assert!(state.finish_read("chat", 2));
+        let mut refreshed = initial.clone();
+        refreshed.reminders_available = true;
+        state.accept(refreshed, &session);
+        assert!(state.view.as_ref().unwrap().reminders_available);
+        assert_eq!(state.view.as_ref().unwrap().messages, initial.messages);
+        assert_eq!(state.text, "Keep this unsent draft");
+        assert_eq!(state.id.as_deref(), Some("chat"));
+        assert!(state.pending.is_none());
+        state.observe_notification_revision(Some(4));
+        assert!(state.begin_notification_refresh(4).is_none());
+        state.observe_notification_revision(Some(5)); // Disabling also refreshes the same projection.
+        assert!(matches!(
+            state.begin_notification_refresh(5),
+            Some(ApiRequest::Conversation { .. })
+        ));
+    }
+
+    #[test]
+    fn notification_revision_change_during_an_existing_read_waits_for_one_fresh_read() {
+        let mut state = ConversationState {
+            open: true,
+            id: Some("chat".into()),
+            ..Default::default()
+        };
+        state.observe_notification_revision(Some(3));
+        assert!(state.begin_read(1).is_some());
+        state.observe_notification_revision(Some(4));
+        assert!(state.begin_notification_refresh(2).is_none());
+        assert!(state.notification_refresh_pending);
+        assert!(state.finish_read("chat", 1));
+        assert!(state.begin_notification_refresh(2).is_some());
+        assert!(!state.notification_refresh_pending);
+        assert!(state.finish_read("chat", 2));
+        state.observe_notification_revision(Some(4));
+        assert!(state.begin_notification_refresh(3).is_none());
+    }
+
     #[test]
     fn reminder_history_stays_within_a_narrow_details_column() {
         use bokkie_operator_api::{ManagedDelivery, ManagedRun, ManagedTaskStatus};
@@ -1571,6 +1733,7 @@ mod tests {
                         next_retry_at: None,
                         attempts: vec![],
                         recovery: None,
+                        push: None,
                     }),
                 }],
             };

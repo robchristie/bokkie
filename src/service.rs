@@ -453,7 +453,9 @@ fn scheduler_loop(
     for slot in 0..config.ordinary_concurrency {
         let worker_config = config.clone();
         let worker_admission = admission.clone();
-        let reminders = notifications.is_some();
+        let reminders = notifications
+            .as_ref()
+            .map_or((false, false), |sender| sender.reminder_modes());
         let worker_clock = clock.clone();
         let id = ExecutionWorkerId {
             lane: ExecutionLane::Ordinary,
@@ -464,7 +466,7 @@ fn scheduler_loop(
                 &worker_config,
                 &worker_admission,
                 notes && slot == 0,
-                reminders && slot == 0,
+                (reminders.0 && slot == 0, reminders.1 && slot == 0),
                 worker_clock,
             )
         }) {
@@ -667,15 +669,21 @@ fn ordinary_lane_loop_with_notes(
     config: &SchedulerConfig,
     admission: &ClaimAdmission,
     notes: bool,
-    reminders: bool,
+    reminders: (bool, bool),
     clock: SchedulerClock,
 ) -> Result<(), LaneFailureCause> {
     let mut store = close_on_error(admission, Store::open_compatible(&config.database))?;
 
     while !admission.is_closed() {
-        if notes || reminders {
+        if notes || reminders.0 || reminders.1 {
             let claims = admission.claim(ExecutionLane::Ordinary, || {
-                store.claim_due_managed(clock.now(), config.lease_seconds, 1, notes, reminders)
+                store.claim_due_managed_modes(
+                    clock.now(),
+                    config.lease_seconds,
+                    1,
+                    notes,
+                    reminders,
+                )
             })?;
             let Some(mut claims) = claims else {
                 break;

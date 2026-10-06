@@ -63,6 +63,7 @@ fn absent_notification_config_blocks_reminder_activation_and_valid_config_pins_t
     let mut config = ConversationConfig {
         profile: None,
         notes_enabled: false,
+        push: None,
         notifications: None,
         clock: None,
     };

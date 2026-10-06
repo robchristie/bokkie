@@ -6,7 +6,7 @@ COPY src/ src/
 COPY migrations/ migrations/
 COPY crates/ crates/
 COPY apps/ apps/
-RUN cargo +1.85.0 build --locked --release --bin bokkie --bin bokkie-conversation-fixture
+RUN cargo +1.85.0 build --locked --release --bin bokkie --bin bokkie-conversation-fixture --bin bokkie-push-config
 
 FROM rust:1.85.0-bookworm@sha256:16a7f242108de02f10fe4a392991679bafa7694e59f5b40a54d5af1be9b40d03 AS ui
 RUN rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown \
@@ -24,7 +24,7 @@ RUN cargo +1.97.1 build --locked --release -p bokkie-attention-ui --lib --target
 
 FROM node:22-bookworm-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732 AS runtime
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bubblewrap python3 ca-certificates libseccomp2 \
+    && apt-get install -y --no-install-recommends bubblewrap python3 ca-certificates libseccomp2 libssl3 \
     && test "$(bwrap --version)" = 'bubblewrap 0.8.0' \
     && rm -rf /var/lib/apt/lists/* \
     && npm install --global @openai/codex@0.160.0 \
@@ -41,7 +41,7 @@ COPY tools/conversation-runtime/broker.py tools/conversation-runtime/instruction
 # Synthetic checks replay the same runtime without changing the service entrypoint.
 COPY tools/container-probe/probe.py /opt/probe.py
 COPY tools/container-probe/qualify.py /opt/qualify.py
-COPY --from=backend /source/target/release/bokkie /source/target/release/bokkie-conversation-fixture /usr/local/bin/
+COPY --from=backend /source/target/release/bokkie /source/target/release/bokkie-conversation-fixture /source/target/release/bokkie-push-config /usr/local/bin/
 COPY --from=ui /source/apps/bokkie-attention-ui/web/ /opt/ui/
 COPY apps/bokkie-attention-ui/assets/fonts/Inter-LICENSE.txt /opt/ui/licenses/Inter-LICENSE.txt
 COPY LICENSE /usr/share/doc/bokkie/LICENSE

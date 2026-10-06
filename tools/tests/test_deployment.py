@@ -1,5 +1,6 @@
 """Offline deployment contracts; no Docker socket or account material is used."""
 import copy
+import base64
 import importlib.util
 import json
 import os
@@ -88,6 +89,30 @@ class DeploymentTests(unittest.TestCase):
                 config = {**self.config, key: value}
                 with self.assertRaises(ValueError):
                     self.load(config)
+
+    def test_push_configuration_preserves_private_mount_and_runtime_boundaries(self):
+        path = self.root / 'push.json'
+        push = {'vapid_private_key': base64.urlsafe_b64encode(bytes([7]) * 32).decode().rstrip('='),
+                'subject': 'https://' + self.config['hostname'],
+                'timeout_ms': 2000, 'ttl_seconds': 3600}
+        path.write_text(json.dumps(push))
+        config = self.load({**self.config, 'push_config': str(path)})
+        runtime = MODULE.runtime(config, self.root)
+        self.assertIn('--push-config', runtime['Cmd'])
+        self.assertEqual(set(runtime['NetworkingConfig']['EndpointsConfig']), {'proxy'})
+        self.assertIn({'Type': 'bind', 'Source': str(path),
+                       'Target': '/opt/push-config.json', 'ReadOnly': True}, runtime['HostConfig']['Mounts'])
+        self.assertEqual(runtime['HostConfig']['CapDrop'], ['ALL'])
+        self.assertTrue(runtime['HostConfig']['ReadonlyRootfs'])
+        self.assertNotIn(push['vapid_private_key'], json.dumps(runtime))
+        for change in ({'subject': 'https://another.example.org'}, {'timeout_ms': True},
+                       {'ttl_seconds': 0}, {'vapid_private_key': 'secret'}, {'extra': 1}):
+            path.write_text(json.dumps({**push, **change}))
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.load({**self.config, 'push_config': str(path)})
+        path.write_text(' ' * 8193)
+        with self.assertRaises(ValueError):
+            self.load({**self.config, 'push_config': str(path)})
 
     def test_image_revision_mismatch_fails_before_container_mutation(self):
         def inspect(method, path, value=None, missing=False):

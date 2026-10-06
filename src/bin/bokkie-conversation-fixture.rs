@@ -1,4 +1,5 @@
 //! Isolated, manually clocked conversation qualification using the production router.
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bokkie::{
     DbExecutor, ManualClock, Store, UnixClock,
     conversation_http::ConversationConfig,
@@ -34,6 +35,8 @@ struct Control {
     #[serde(default)]
     reminder_tick: bool,
     delivery: Option<SyntheticDelivery>,
+    #[serde(default)]
+    push_payload: bool,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +45,7 @@ enum SyntheticDelivery {
     Accepted,
     RetryableRejection,
     PermanentRejection,
+    SubscriptionExpired,
     Uncertain,
     CrashBeforeSend,
     CrashAfterDispatch,
@@ -73,17 +77,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut profile_path = None;
     let mut root = None;
     let mut ui_dir = None;
+    let mut port: u16 = 0;
     let mut resume = false;
     let mut preflight = false;
     let mut preflight_managed = false;
     let mut synthetic_reminders = false;
+    let mut synthetic_push = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--profile" => profile_path = args.next().map(PathBuf::from),
             "--root" => root = args.next().map(PathBuf::from),
+            "--port" => {
+                port = args
+                    .next()
+                    .ok_or("--port requires a decimal port")?
+                    .parse()?
+            }
             "--ui-dir" => ui_dir = args.next().map(PathBuf::from),
             "--resume" => resume = true,
             "--synthetic-reminders" => synthetic_reminders = true,
+            "--synthetic-push-reminders" => {
+                synthetic_reminders = true;
+                synthetic_push = true;
+            }
             "--preflight" => preflight = true,
             "--preflight-managed" => {
                 preflight = true;
@@ -152,7 +168,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     drop(Store::open(&database)?);
     let executor = DbExecutor::start(database)?;
     let listener =
-        tokio::net::TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).await?;
+        tokio::net::TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
+            .await?;
     let address = listener.local_addr()?;
     let runtime = ApiRuntime::new(
         address,
@@ -170,7 +187,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         conversation: Some(ConversationConfig {
             profile,
             notes_enabled: true,
-            notifications: synthetic_reminders.then(|| {
+            push: synthetic_push.then(|| {
+                Arc::new(bokkie::notifications::push::PushConfig {
+                    vapid_private_key: URL_SAFE_NO_PAD.encode([7; 32]),
+                    subject: "https://bokkie.example.org".into(),
+                    timeout_ms: 100,
+                    ttl_seconds: 3600,
+                })
+            }),
+            notifications: (synthetic_reminders && !synthetic_push).then(|| {
                 Arc::new(bokkie::notifications::NotificationConfig {
                     relay_host: "127.0.0.1".into(),
                     relay_port: 9,
@@ -269,8 +294,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 store.begin_notification_send(&claim, now)?;
                                 use bokkie::notifications::NotificationOutcome;
                                 let result = match outcome {
-                                    SyntheticDelivery::Accepted => Some(NotificationOutcome::Accepted { detail: "Synthetic relay accepted; no external email was sent".into() }),
+                                    SyntheticDelivery::Accepted => Some(if store.notification_intent(&claim.obligation_id)?.push.is_some(){NotificationOutcome::PushAccepted{detail:"Synthetic push service accepted; no external push was sent".into(),ttl_seconds:3600}}else{NotificationOutcome::Accepted { detail: "Synthetic relay accepted; no external email was sent".into() }}),
                                     SyntheticDelivery::RetryableRejection => Some(NotificationOutcome::Rejected { retryable: true, detail: "Synthetic temporary pre-acceptance rejection".into() }),
+                                    SyntheticDelivery::SubscriptionExpired => Some(NotificationOutcome::SubscriptionExpired {detail:"Synthetic subscription expired; no external push was sent".into()}),
                                     SyntheticDelivery::PermanentRejection => Some(NotificationOutcome::Rejected { retryable: false, detail: "Synthetic permanent rejection".into() }),
                                     SyntheticDelivery::Uncertain => Some(NotificationOutcome::Uncertain { detail: "Synthetic acceptance acknowledgement was lost".into() }),
                                     SyntheticDelivery::CrashAfterDispatch | SyntheticDelivery::CrashBeforeSend => None,
@@ -286,7 +312,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             details.push(store.managed_detail(&entry.id)?);
                         }
                     }
-                    Ok(json!({"now":now,"ran":ran,"reminder_ran":reminder_ran,"catalogue":catalogue,"details":details,"model_calls":store.conversation_model_dispatch_count()?}))
+                    let mut payload=None;
+                    if control.push_payload {
+                        if !synthetic_push{return Err(bokkie::StoreError::Invalid("Push payload output requires a marked synthetic push fixture".into()));}
+                        for detail in &details {for run in &detail.runs {if let Some(delivery)=&run.delivery {let intent=store.notification_intent(&delivery.id)?;if intent.push.is_some(){payload=Some(serde_json::from_slice::<serde_json::Value>(&bokkie::notifications::push::payload(&intent).map_err(bokkie::StoreError::Invalid)?).map_err(|e|bokkie::StoreError::Invalid(e.to_string()))?);break;}}}}
+                    }
+                    Ok(json!({"push_payload":payload,"now":now,"ran":ran,"reminder_ran":reminder_ran,"catalogue":catalogue,"details":details,"model_calls":store.conversation_model_dispatch_count()?}))
                 })
                 .await;
             match result {

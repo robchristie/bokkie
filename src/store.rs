@@ -1,6 +1,7 @@
 mod engineering;
 pub(crate) mod managed;
 pub(crate) mod notifications;
+mod push;
 
 use std::{
     path::Path,
@@ -5996,7 +5997,8 @@ mod tests {
                 (11, "0011_engineering_supervision.sql".to_owned()),
                 (12, "0012_managed_tasks.sql".to_owned()),
                 (13, "0013_conversations.sql".to_owned()),
-                (14, "0014_notification_delivery.sql".to_owned())
+                (14, "0014_notification_delivery.sql".to_owned()),
+                (15, "0015_bokkie_push.sql".to_owned())
             ]
         );
         drop(store);

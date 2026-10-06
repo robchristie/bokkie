@@ -104,6 +104,8 @@ pub struct ManagedDelivery {
     pub attempts: Vec<ManagedDeliveryAttempt>,
     /// Present only when operator reconciliation is legal at this exact revision.
     pub recovery: Option<crate::ActionPrecondition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push: Option<crate::ManagedPushDelivery>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ManagedDeliveryAttempt {
@@ -147,6 +149,12 @@ pub struct ManagedCapabilityProfile {
     pub max_output_chars: u32,
 }
 impl ManagedCapabilityProfile {
+    pub fn web_push(id: &str, label: &str) -> Self {
+        let mut profile = Self::reminder(format!("Bokkie on {label}"));
+        profile.revision = format!("reminder-web-push-v1/{id}");
+        profile.max_output_chars = 2000;
+        profile
+    }
     pub fn reminder(destination: impl Into<String>) -> Self {
         Self {
             capability: "reminder".into(),

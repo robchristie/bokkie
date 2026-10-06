@@ -28,6 +28,7 @@ pub mod notifications;
 pub mod operator;
 pub mod pagination;
 pub mod process;
+pub mod push_http;
 pub mod recurrence;
 pub mod runner;
 pub mod runtime_trust;

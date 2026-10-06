@@ -609,7 +609,70 @@ unchanged scope needs no second permission prompt. **New conversation** begins
 an independent discussion; **Recent conversations** restores saved context.
 Normal tasks need no per-task profile file or service restart.
 
-Local notes store in-app results. To enable deterministic email reminders, pass
+### Bokkie push notifications
+
+Local notes store in-app results. To make Bokkie itself the reminder destination,
+configure standards Web Push once, then explicitly enrol one browser/device in
+**Home → Notifications**. The [installable web shell](../apps/bokkie-attention-ui/web/manifest.webmanifest)
+keeps the same Home, Tasks and conversations. iPhone/iPad require Add to Home
+Screen and permission inside that installed app; Android/desktop depend on the
+receiving browser and device settings. Installation alone does not enable alerts.
+
+Create a new private configuration offline, as the runtime's authorised UID:
+
+```sh
+cargo run --locked --bin bokkie-push-config -- \
+  --output /absolute/private/push.json --subject https://bokkie.yutani.tech
+```
+
+The helper creates a mode-0600 regular file and refuses overwrite. Preserve the
+key across restart and back it up privately with deployment configuration. It
+does not enrol a service, acquire an account or send a notification. Its strict
+JSON fields are `vapid_private_key` (raw 32-byte P-256 key in unpadded base64url),
+`subject` (HTTPS contact origin), `timeout_ms` (100–3000) and `ttl_seconds`
+(60–86400, supplied default 3600). Pass `--push-config /absolute/private/push.json`
+when starting `serve`; the key never belongs in Git, model context or evidence.
+The deployed image also includes `/usr/local/bin/bokkie-push-config`.
+
+On the chosen device, name it and explicitly enable notifications. Review a
+reminder's destination, complete text, zone and next dates before confirming.
+Without an enrolled device, new Bokkie reminders remain blocked, including when
+legacy email is configured. Old email definitions keep their original destination.
+Only one active subscription generation is supported. Disable it through a
+separate review before enrolling another. Then preview and confirm affected task
+destinations again; existing admitted work and queued deliveries retain their
+original device. An expired subscription appears as attention and needs enrolment
+again. The model cannot grant permission or change notification configuration.
+
+The sender uses encrypted payloads, VAPID and validated HTTPS provider endpoints
+for Apple, Google and Mozilla. TLS verifies the original hostname while connecting
+to DNS-validated public addresses; redirects, ambient proxies and automatic POST
+replay are disabled. Stable Topic/tag identities reduce duplicate delivery/display,
+but do not guarantee exactly-once alerts. Complete UTF-8 payload bounds are checked
+before activation; an oversized reminder is blocked rather than truncated.
+
+A queued push can display with Bokkie's page closed or its server unavailable.
+An offline device depends on provider retention, bounded by the saved absolute
+expiry; retries cannot extend it. Provider acceptance does not prove an alert.
+History separately shows device display/opening reports when received. The worker
+displays first, then reports through the existing authenticated edge with a fresh
+mutation token. Basic authentication or connectivity may prevent background
+reports; the local queue retries on later app/worker activity. No unauthenticated
+ingress exception is added, and missing reports never cause automatic resends.
+An expired payload is not displayed. Focus, revoked permission, browser shutdown
+and OS power settings must be qualified on the actual receiving device.
+
+Known temporary nonacceptance gets bounded retry. Permanent/exhausted/uncertain
+push delivery remains in Needs your input and Needs attention. Inspect the exact
+saved text/device and any late device report. Resolve without resending retains
+history; an explicit resend retains the original identity and duplicate risk.
+Expired intent cannot be extended: resolve it and review a new reminder if needed.
+Disabling configuration retains schedules, intents and history; restore the
+original configuration to resume its admitted responsibilities.
+
+### Existing email reminders
+
+To enable deterministic email reminders without Web Push, pass
 `--notification-config /absolute/private/notifications.json` at service startup.
 That JSON selects one existing trusted SMTP relay and one exact recipient:
 

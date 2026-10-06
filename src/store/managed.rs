@@ -111,10 +111,12 @@ fn capability_blockers(
         reasons.push("Note or reminder instructions are required".into());
     }
     // The available runner set is deliberately closed, even if a caller advertises another profile.
-    if !matches!(
+    if !(matches!(
         (def.capability.as_str(), def.profile_revision.as_str()),
         ("local_note", "local-note-v1") | ("reminder", "reminder-v1")
-    ) {
+    ) || def.capability == "reminder"
+        && crate::notifications::push::push_device_id(&def.profile_revision).is_some())
+    {
         reasons.push(format!(
             "Capability {} has no installed execution adapter",
             def.capability
@@ -144,7 +146,8 @@ fn capability_blockers(
     }
     if def.capability == "reminder"
         && (def.effects != ["store_local_result", "send_notification"]
-            || crate::notifications::validate_address(&def.destination).is_err())
+            || (crate::notifications::push::push_device_id(&def.profile_revision).is_none()
+                && crate::notifications::validate_address(&def.destination).is_err()))
     {
         reasons.push("Reminders require the reviewed notification destination and effects".into());
     }
@@ -163,6 +166,13 @@ fn capability_blockers(
         };
         if def.instructions.chars().count() + context_chars > def.max_output_chars as usize {
             reasons.push("The complete reminder text and context exceed the delivery limit; shorten the draft before confirming".into());
+        }
+        if crate::notifications::push::push_device_id(&def.profile_revision).is_some() {
+            let body = crate::managed::render_local_note(def);
+            let envelope = json!({"version":1,"id":format!("delivery-{}",Uuid::nil()),"task_id":format!("task-{}",Uuid::nil()),"title":def.name,"body":body,"receipt_token":"0".repeat(64),"expires_at":i64::MAX});
+            if serde_json::to_vec(&envelope).map_or(true, |bytes| bytes.len() > 3200) {
+                reasons.push("The complete notification exceeds the device's delivery limit; shorten the text before confirming".into());
+            }
         }
     }
     reasons
@@ -499,21 +509,45 @@ impl Store {
         now: i64,
     ) -> Result<(), StoreError> {
         let task = self.managed_detail(id)?;
-        if task.status != ManagedTaskStatus::Draft || task.active.is_some() {
-            return Ok(());
-        }
-        let Some(candidate) = task.candidate.as_ref().filter(|candidate| {
-            candidate.definition.capability == "reminder"
-                && candidate.definition.destination == "Not configured"
-        }) else {
+        let Some(candidate) =
+            task.candidate
+                .as_ref()
+                .or(task.active.as_ref())
+                .filter(|candidate| {
+                    candidate.definition.capability == "reminder"
+                        && ((candidate.definition.destination == "Not configured"
+                            && task.active.is_none())
+                            || crate::notifications::push::push_device_id(
+                                &candidate.definition.profile_revision,
+                            )
+                            .is_some())
+                })
+        else {
             return Ok(());
         };
-        let Some(profile) = profile_for(&candidate.definition, profiles).filter(|p| p.available)
+        let Some(profile) = profiles
+            .iter()
+            .find(|p| p.capability == "reminder")
+            .filter(|p| p.available)
         else {
             return Ok(());
         };
         let mut definition = candidate.definition.clone();
+        if definition.profile_revision == profile.revision
+            && definition.destination == profile.destination
+        {
+            return Ok(());
+        }
+        // Existing email tasks are never implicitly converted. A device change
+        // prepares only an inactive revision, requiring a fresh exact review.
+        if crate::notifications::push::push_device_id(&definition.profile_revision).is_some()
+            && crate::notifications::push::push_device_id(&profile.revision).is_none()
+        {
+            return Ok(());
+        }
         definition.destination = profile.destination.clone();
+        definition.profile_revision = profile.revision.clone();
+        definition.max_output_chars = definition.max_output_chars.min(profile.max_output_chars);
         self.managed_revise(
             &format!("reminder-destination:{id}:{}", task.configuration_revision),
             id,
@@ -697,6 +731,16 @@ impl Store {
         notes: bool,
         reminders: bool,
     ) -> Result<Vec<Claim>, StoreError> {
+        self.claim_due_managed_modes(now, lease_seconds, limit, notes, (reminders, reminders))
+    }
+    pub(crate) fn claim_due_managed_modes(
+        &mut self,
+        now: i64,
+        lease_seconds: i64,
+        limit: usize,
+        notes: bool,
+        reminders: (bool, bool),
+    ) -> Result<Vec<Claim>, StoreError> {
         if lease_seconds <= 0 || limit > 100 {
             return Err(invalid(
                 "note claim lease must be positive and batch at most 100",
@@ -710,9 +754,11 @@ impl Store {
             JOIN managed_tasks t ON t.id=b.task_id JOIN managed_definitions d ON d.task_id=b.task_id AND d.revision=b.definition_revision
             WHERE o.state IN ('pending','retry_scheduled') AND o.next_wake_at<=?1
               AND ((?3 AND b.profile_revision='local-note-v1' AND json_extract(d.definition_json,'$.capability')='local_note')
-                   OR (?4 AND b.profile_revision='reminder-v1' AND json_extract(d.definition_json,'$.capability')='reminder'))
+                   OR (?4 AND b.profile_revision='reminder-v1' AND json_extract(d.definition_json,'$.capability')='reminder')
+                   OR (?5 AND b.profile_revision LIKE 'reminder-web-push-v1/%' AND json_extract(d.definition_json,'$.capability')='reminder'
+                     AND (b.admitted_at IS NOT NULL OR EXISTS(SELECT 1 FROM push_configuration pc WHERE pc.active=1 AND b.profile_revision='reminder-web-push-v1/'||pc.device_id))))
               AND (b.admitted_at IS NOT NULL OR (t.status='active' AND t.active_revision=b.definition_revision))
-            ORDER BY o.next_wake_at,o.id LIMIT ?2")?.query_map(params![now,limit as i64,notes,reminders],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
+            ORDER BY o.next_wake_at,o.id LIMIT ?2")?.query_map(params![now,limit as i64,notes,reminders.0,reminders.1],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
         let mut claims = Vec::new();
         for id in ids {
             let claim = apply_transition(
@@ -875,7 +921,7 @@ impl Store {
                    coalesce(json_extract(d.definition_json,'$.trigger.timezone'),?8) AS timezone,
                    (SELECT r.result FROM managed_bindings b JOIN managed_results r ON r.obligation_id=b.obligation_id WHERE b.task_id=t.id ORDER BY r.created_at DESC,r.rowid DESC LIMIT 1) AS latest_result,
                    (SELECT max(r.created_at) FROM managed_bindings b JOIN managed_results r ON r.obligation_id=b.obligation_id WHERE b.task_id=t.id) AS result_at,
-                   (t.candidate_revision IS NOT NULL OR t.status='draft' OR EXISTS(SELECT 1 FROM managed_bindings b JOIN obligations o ON o.id=b.obligation_id WHERE b.task_id=t.id AND (o.state IN ('attention','awaiting_approval') OR (o.state='running' AND o.lease_expires_at<=?9))) OR EXISTS(SELECT 1 FROM notification_deliveries nd JOIN obligations no ON no.id=nd.id WHERE nd.task_id=t.id AND (no.state='attention' OR (no.state='running' AND no.lease_expires_at<=?9)))) AS needs_input,
+                   (t.candidate_revision IS NOT NULL OR t.status='draft' OR (t.status IN ('active','paused') AND json_extract(d.definition_json,'$.profile_revision') LIKE 'reminder-web-push-v1/%' AND NOT EXISTS(SELECT 1 FROM push_configuration pc WHERE pc.active=1 AND json_extract(d.definition_json,'$.profile_revision')='reminder-web-push-v1/'||pc.device_id)) OR EXISTS(SELECT 1 FROM managed_bindings b JOIN obligations o ON o.id=b.obligation_id WHERE b.task_id=t.id AND (o.state IN ('attention','awaiting_approval') OR (o.state='running' AND o.lease_expires_at<=?9))) OR EXISTS(SELECT 1 FROM notification_deliveries nd JOIN obligations no ON no.id=nd.id WHERE nd.task_id=t.id AND (no.state='attention' OR (no.state='running' AND no.lease_expires_at<=?9)))) AS needs_input,
                    (SELECT c.id FROM conversations c WHERE c.selected_task_id=t.id ORDER BY c.updated_at DESC,c.id LIMIT 1) AS conversation_id
             FROM managed_tasks t JOIN managed_definitions d ON d.task_id=t.id AND d.revision=coalesce(t.active_revision,t.candidate_revision)
             UNION ALL
@@ -910,10 +956,11 @@ pub(super) fn validate_fenced_retry(tx: &Transaction<'_>, id: &str) -> Result<()
     ).optional()?;
     if let Some((admitted, profile, capability)) = binding {
         if admitted.is_none()
-            || !matches!(
+            || !(matches!(
                 (profile.as_str(), capability.as_str()),
                 ("local-note-v1", "local_note") | ("reminder-v1", "reminder")
-            )
+            ) || capability == "reminder"
+                && crate::notifications::push::push_device_id(&profile).is_some())
         {
             return Err(conflict(
                 "this managed occurrence requires its designated recovery adapter",
@@ -991,6 +1038,7 @@ pub(crate) fn activate_in_transaction(
         return Err(conflict("completed one-off cannot be activated again"));
     }
     let reasons = blockers(&candidate.definition, profiles, now);
+    super::push::validate_destination(tx, &candidate.definition)?;
     if !reviewed.blockers.is_empty() || !reasons.is_empty() {
         return Err(conflict(&format!(
             "activation blocked: {}",
@@ -1048,6 +1096,7 @@ pub(crate) fn resume_in_transaction(
         .active
         .ok_or_else(|| conflict("task has no active definition"))?;
     let retained = retained_admission(tx, id)?.is_some();
+    super::push::validate_destination(tx, &active.definition)?;
     let reasons = resume_blockers(&active.definition, profiles, now, retained);
     if !reasons.is_empty() {
         return Err(conflict(&format!("resume blocked: {}", reasons.join("; "))));

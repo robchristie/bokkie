@@ -497,6 +497,7 @@ mod tests {
             message_id: "<delivery-fixture@bokkie.local>".into(),
             created_at: 0,
             transport: config.transport(),
+            push: None,
         };
         (config, intent, join)
     }
@@ -808,6 +809,7 @@ mod tests {
             message_id: "<bounded@bokkie.local>".into(),
             created_at: 0,
             transport: config.transport(),
+            push: None,
         };
         assert!(encode_message(&intent, &config.from_address).unwrap().len() < MAX_MESSAGE_BYTES);
         intent.body.push('x');

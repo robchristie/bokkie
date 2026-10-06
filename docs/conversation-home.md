@@ -56,7 +56,10 @@ One clear action reviews the exact change; confirmation remains an explicit
 operator action. Natural-language assent never bypasses the existing review
 contract. An ambiguous task match requires selection.
 
-A new reminder uses the one configured email destination. “Every weekday at 9”
+A new reminder uses the explicitly enrolled Bokkie device when Web Push is
+configured. **Notifications** on Home shows the device, installation guidance
+and explicit enable/disable actions. Permission requires an actual user gesture;
+the UI cannot grant it or silently replace another device. “Every weekday at 9”
 needs am/pm clarification; an omitted zone uses Australia/Adelaide, while an
 explicit zone is preserved. Review shows the concrete next dates and exact
 reminder text. Without notification configuration, reminder activation is blocked
@@ -70,9 +73,13 @@ is prominent and selectable; old runs and provenance remain available in detail.
 An unrelated change must not erase a draft or invalidate an unaffected review.
 Restart, session change and revision conflicts retain existing fail-closed rules.
 
-Occurrence completion and notification delivery are distinct. Results show relay
-acceptance, a scheduled retry or actionable delivery attention. Relay acceptance
-does not prove inbox receipt or a phone alert. An uncertain send offers explicit
+Occurrence completion and notification delivery are distinct. Results show push
+service acceptance, separate device display/opening evidence, a scheduled retry
+or actionable delivery attention. A successful display report does not prove
+the person read the reminder; absent reports do not prove no alert appeared.
+Tapping a notification opens its exact task in the existing conversation, retaining
+an unsent message in an already open page. Existing email definitions keep their
+selected recipient and relay acceptance history. An uncertain send offers explicit
 review to resolve without resending or resend with a stated duplicate risk; the
 confirmation identifies the saved text and destination. Transport diagnostics
 and stable delivery identities belong in disclosures.

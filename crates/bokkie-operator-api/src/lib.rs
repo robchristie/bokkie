@@ -4,6 +4,8 @@ pub use conversation::*;
 
 mod managed;
 pub use managed::*;
+mod push;
+pub use push::*;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11,7 +13,7 @@ use serde_json::Value;
 /// Version of the HTTP contract consumed by the bundled operator UI.
 pub const API_CONTRACT_VERSION: u32 = 1;
 /// Exact SQLite migration version understood by this build of the UI.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 14;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 15;
 /// Stable package identity; the per-process session ID distinguishes restarts.
 pub const BOKKIE_BUILD_ID: &str = concat!("bokkie/", env!("CARGO_PKG_VERSION"));
 

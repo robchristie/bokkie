@@ -120,6 +120,43 @@ built-in tools and execution environments remain disabled.
 
 ### Preparing reminders (separate deployment authority)
 
+The selected primary destination is Bokkie Web Push. Source delivery does not
+enable it in production. For an authorised update, create the private VAPID
+configuration using the [operator setup](operator-guide.md#bokkie-push-notifications),
+readable by the exact deployed UID, and set optional `push_config` in release.json
+to its canonical regular-file path. The launcher mounts it read-only at
+`/opt/push-config.json` and passes `--push-config`. Omitted/null keeps push disabled.
+Push needs outbound HTTPS to the selected browser's validated push service;
+the existing `proxy` network suffices. No host port, credential mount expansion,
+public ingress exception, Docker or Bubblewrap relaxation is introduced.
+The image includes OpenSSL3 runtime libraries and CA trust for HTTPS.
+
+Use the exact merged image and existing authenticated HTTPS edge. On the explicitly
+chosen device, install/open Bokkie, enable notifications through an actual gesture,
+review and confirm one clearly labelled test reminder. Agree a finite live test
+count first. Verify its system notification with Bokkie closed, tap to its task,
+and inspect submission versus display/open evidence. Device offline behaviour,
+Focus/revoked permission and background Basic-auth receipt access require actual
+platform qualification. The source fixture proves closed-page worker behaviour;
+it is not a real push-service or phone test. Synthetic peers own failure/restart
+probes so production is not deliberately disrupted.
+
+Migration15 appends immutable subscription generations and push intent/receipt
+state; applied migrations are unchanged. Schema14 and older binaries cannot open
+the upgraded database. Retain a stopped-service backup, prior image/manifest and
+private VAPID key before an authorised update. Preserve that key on restart;
+rotation while a device is active fails closed. To change it, explicitly disable
+the old device, rotate configuration, enrol again and review future task destinations.
+Old admitted intents retain their key/device identity and cannot be rerouted.
+Disabling push stops new admission/sending while retaining stored responsibility.
+It cannot retract a push already accepted by a provider or displayed on a device.
+Restoring an older database remains a separately authorised data operation; inspect
+possible sends before restarting to avoid replaying reminders.
+
+Existing SMTP configuration remains available for old tasks or a deployment that
+deliberately selects email instead of push. It is not implicitly substituted for
+an unconfigured Bokkie device:
+
 Source delivery does not enable production notifications. After selecting the
 recipient and an existing authorised sender, place the strict configuration from
 the [operator guide](operator-guide.md#conversational-task-management) in a private
@@ -142,8 +179,8 @@ local SMTP peer for outage/restart/uncertainty probes, not production delivery
 failures or arbitrary recipients. Existing relay acceptance and suppressed DSNs
 do not supply an end-to-end delivery receipt.
 
-Migration14 appends durable notification intents; applied migrations are unchanged.
-An older schema13 binary must not be started against the upgraded database.
+Migration14 introduced durable notification intents; this source now requires
+schema15. Older binaries must not be started against the upgraded database.
 Retain the stopped-service state backup, old manifest and immutable image before
 an authorised update. Disabling notification configuration stops new reminder
 admission and sending while preserving queued intents, history and attention.
