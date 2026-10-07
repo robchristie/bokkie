@@ -6,7 +6,7 @@ and recovery. Conversation proposals use the pinned Codex App Server through
 the existing bounded broker. Engineering execution and coding-gardener runners
 are not enabled by this deployment.
 
-The [current activation record](deployment-evidence/live-project-handoff.md) records the
+The [current activation record](deployment-evidence/live-authenticated-push.md) records the
 installed revision, account/runtime qualification and restart evidence.
 
 ## Composition
@@ -234,7 +234,11 @@ owner's backup process. Do not copy a live SQLite file without its WAL protocol.
 
 For an update, stop the unit, retain the previous source, image and release
 manifest, stage the reviewed replacement, install its versioned profile, then
-start and verify. Roll back the source/image/manifest only when the older kernel
+render with the maintained launcher from its final source path, start and verify.
+The renderer resolves policy paths when loaded; an imported manager from a staging
+directory must be reloaded after that directory moves. Validate preparatory
+metadata/configuration guards before stopping the service where possible.
+Roll back the source/image/manifest only when the older kernel
 supports the on-disk schema; otherwise restore the stopped-service backup as a
 separately authorised data operation. Never run two runtime instances against
 the same SQLite database. Removing a deployment stops/disables its unit first;
