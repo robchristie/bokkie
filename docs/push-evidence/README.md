@@ -92,3 +92,10 @@ requires Home Screen and explicit permission, as described by
 A closed page test does not prove behaviour after browser force-quit, OS power
 restriction, cleared site storage or notification permission revocation. Background
 Basic authentication may prevent receipt reporting even when an alert appears.
+
+## Authenticated loading repair
+
+The [authenticated loading evidence](authenticated-loading/README.md) records
+the manifest credential correction, classic worker/import update regression and
+updated synthetic reminder journey. Production and the chosen device remain
+separate qualification requirements.

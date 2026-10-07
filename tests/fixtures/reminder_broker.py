@@ -6,6 +6,13 @@ import sys
 request = json.loads(sys.stdin.readline())
 assert request['profile']['codex'] == '/usr/bin/true'
 assert request['profile']['bwrap'] == '/usr/bin/true'
+if request.get('models'):
+    print(json.dumps({'codex_version': '0.160.0', 'models': [{
+        'model': 'synthetic-reminder-peer', 'displayName': 'Synthetic reminder peer',
+        'defaultReasoningEffort': 'medium',
+        'supportedReasoningEfforts': [{'reasoningEffort': 'medium', 'description': 'Synthetic only'}],
+    }], 'model_calls': 0}))
+    sys.exit(0)
 context = request['context']
 text = context['current_request']
 

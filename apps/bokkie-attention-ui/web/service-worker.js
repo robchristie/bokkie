@@ -1,4 +1,7 @@
-import { createPushWorker, createReceiptStore } from './push-worker.js';
+// Chromium module-worker script requests omit HTTP authentication credentials.
+// Classic script and importScripts requests retain same-origin authentication.
+importScripts('./push-worker-core.js');
+const { createPushWorker, createReceiptStore } = self.BokkiePushWorker;
 
 const worker = createPushWorker(self, createReceiptStore(self.indexedDB));
 self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));

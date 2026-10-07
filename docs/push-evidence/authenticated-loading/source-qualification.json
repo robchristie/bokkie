@@ -1,0 +1,182 @@
+{
+  "phase": "source qualification; real device/provider acceptance remains separate",
+  "ingress": {
+    "source": "1d7d4f2bb0fe83273e55cb37141f09123e22c941",
+    "browser": "151.0.7922.34",
+    "images": {
+      "nginx": "sha256:e7257f1ef28ba17cf7c248cb8ccf6f0c6e0228ab9c315c152f9c203cd34cf6d1",
+      "runtime": "sha256:c9042b73560b7cbba6b3413cb1ef557e2babc67c1aa35cbaf95a13b9290f2f73"
+    },
+    "inputs": {
+      "index.html": "ace5761a84fdcc244832e4a2d9c7b714f89e6b22bd219da3eb3b1d9d904acbf0",
+      "manifest.webmanifest": "7236f6383440dfbded87453f8e83ebbb2e73c06142f0101c094471e98ac3ed0d",
+      "service-worker.js": "4f36094b8c9be3a780e60da8a6deeec34ffa6b4ec645edee2f1efbe5beea4f3b",
+      "push-worker-core.js": "2c2b657bf10ee2783270301da62bbb82f92366bf52e7824f42f632ab07dfaaa6",
+      "push-worker.js": "0897f7c15aa004315c9ff91fa89aa6cdef6e3d3b832c40825fc10bca682dc967",
+      "push-setup.js": "731828e0464b675fabf79386a5e563c31a700d2f24e2e1a39ae68043f0b47d4f",
+      "styles.css": "d793620b77280ba73af5864ceb39031b5bb7fedeb12f0a4127a0aab2de13735c",
+      "deploy/manage.py": "3dec0bc07f168b7e8b204b7145fd440457df526367d44940b9f5d8ec9bf9f124",
+      "tools/ui-authenticated-push.mjs": "78ea874e4c38a7054dab6d3632e35c55d029ec0b84e6c03aa19394cfccc63fc5"
+    },
+    "checks": [
+      "Owned remote fixture directory has the expected unique path",
+      "Disposable ingress is published on host loopback only",
+      "Anonymous GET /ui/ receives the nginx Basic-auth challenge",
+      "Anonymous GET /ui/manifest.webmanifest receives the nginx Basic-auth challenge",
+      "Anonymous GET /ui/service-worker.js receives the nginx Basic-auth challenge",
+      "Anonymous GET /ui/push-worker-core.js receives the nginx Basic-auth challenge",
+      "Anonymous GET /ui/push-worker.js receives the nginx Basic-auth challenge",
+      "Anonymous GET /ui/push-setup.js receives the nginx Basic-auth challenge",
+      "Anonymous GET /bootstrap receives the nginx Basic-auth challenge",
+      "Anonymous GET /notifications/push receives the nginx Basic-auth challenge",
+      "Anonymous GET /tasks receives the nginx Basic-auth challenge",
+      "Anonymous GET /conversations receives the nginx Basic-auth challenge",
+      "Anonymous POST /notifications/push/register stays protected",
+      "Anonymous POST /notifications/push/disable stays protected",
+      "Anonymous POST /notifications/push/receipts stays protected",
+      "Anonymous POST /conversations/turn stays protected",
+      "Generated ingress rejects a different Host before authentication",
+      "New browser context starts without a worker, cookies or reused profile",
+      "Fresh browser navigation negotiates a normal HTTP Basic-auth challenge",
+      "Chromium recognises the authenticated manifest as the Bokkie standalone app",
+      "Actual setup activates the classic worker and executes its imported core with cache bypass",
+      "Authenticated page fetch succeeds while Chromium module-worker registration reproduces the 401 cause",
+      "Explicit unchanged update retains the active worker without creating an installation",
+      "Dependency update leaves the actual worker entry bytes unchanged",
+      "The newly activated worker executes the changed imported dependency",
+      "Changing only the imported dependency creates one new activated worker that executes the new marker",
+      "Refresh retains the updated registration and actual notification setup readiness",
+      "Regression finishes with zero notifications and no provider subscription",
+      "Chromium independently reports the initial and dependency-updated activated versions in one app registration",
+      "Generated nginx removes Basic credentials before forwarding to the upstream",
+      "No mutation, push receipt, model or provider path reaches the synthetic upstream",
+      "Authenticated worker loading reaches the generated ingress upstream for /ui/service-worker.js",
+      "Authenticated worker loading reaches the generated ingress upstream for /ui/push-worker-core.js",
+      "Initial load, unchanged update and dependency update revalidate the imported core through nginx despite its one-hour cache lifetime",
+      "Owned edge container was removed",
+      "Owned runtime container was removed"
+    ],
+    "passed": true,
+    "cleanup": {
+      "tunnel_stopped": true,
+      "edge": "removed",
+      "runtime": "removed",
+      "remote_fixture": "removed"
+    },
+    "limitations": [
+      "Literal HTTP loopback is a browser secure context; production HTTPS, DNS and device behaviour need separate qualification.",
+      "Actual generated nginx Basic-auth routes are used, with a synthetic static/API upstream and a fixture bootstrap in place of the graphical UI.",
+      "Only the imported core gets a fixture marker; the service-worker entry script and setup registration code retain their candidate bytes.",
+      "Renderer load/run validation, the production launcher and real Bokkie mutation boundaries are not exercised."
+    ],
+    "model_calls": 0,
+    "provider_attempts": 0,
+    "notifications": 0
+  },
+  "synthetic_push_journey": {
+    "source_at_start": "2dc07e14eec40259a51793b116f61a2901db526e",
+    "tracked_diff_sha256": "7323b43a1ad0f60e130bc38bf8d3e3613a54f26a6d4e2de989315a44f7a9deac",
+    "passed": true,
+    "checks": 131,
+    "browser": "151.0.7922.34",
+    "graphics": "headed full Chromium on fixture-owned Xvfb and Vulkan",
+    "errors": [],
+    "limitations": [
+      "Browser permission is granted by the fixture, with a synthetic subscription. This is not operator device enrolment.",
+      "CDP injects decrypted JSON into the actual worker. Provider encryption and delivery require separate transport evidence.",
+      "Notification click routing is invoked synthetically using actual notification data; no native OS tap or physical phone delivery is claimed."
+    ]
+  },
+  "opened_images": [
+    {
+      "name": "delivery-attention-1440.png",
+      "sha256": "99eb00b2f29318f4503bf9a600b649aba7edf1db18944fd1f83045fc60baad00",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "delivery-attention-390.png",
+      "sha256": "38464805fc8ca789dae179da5876fff7a7ac288753cb6f6684dd129500f3c6c8",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "enrolment-recovery-1440.png",
+      "sha256": "ac749a3f2c754c58b9463f24430ec4fa7c9118cd2517b8bed1e025e582e17cb3",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "enrolment-recovery-390.png",
+      "sha256": "3c211d5465e0db0e8b44a0e4f2017dac84f4b103850998d631290c5b1cc4200b",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "notification-enabled-1440.png",
+      "sha256": "6894e50426286bc3687bd1f39955df272414bddd454a2de082e92dd54302a8dc",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "notification-enabled-390.png",
+      "sha256": "1ce6a09ce700578989b8e19e5dd42038cfbac3b10e8088207089214e04a369fb",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "notification-setup-1440.png",
+      "sha256": "12af3c010b7a26369213ae06e5d3322505f5a5563176f34bde025bc81da5a18f",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "notification-setup-390.png",
+      "sha256": "040d20f5e957bc5dab40b2b07356c84266eb0ced423a24b7132f5747e23b97e4",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "recovery-confirmation-1440.png",
+      "sha256": "74637f47e17e6a446cc81f87086c627df782c52740a603c0e3ec1ed94738efd0",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "recovery-confirmation-390.png",
+      "sha256": "75000159bff443e097ac98dfd969fc3e36d56ffaa7d962fa4080fc5d9e216682",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "reminder-review-1440.png",
+      "sha256": "8dc87a91da349f9cae67cf46c45656103ffc374c7c467b7ec0715eff02c76a17",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "reminder-review-390.png",
+      "sha256": "936d535f76cfa67639d710cfa67c77d15edee334957a1b8ec4fb9b39b5fb8bf4",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "reopened-home.png",
+      "sha256": "7019ba3d8c3cfc496097180b2727275b520122cd6c09f98beaf9b51d097349ae",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "stale-enrolment-1440.png",
+      "sha256": "34aff050b85356b30f0871639d44f15ab0baa53cc5c7775eb20b9132abee01b9",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "stale-enrolment-390.png",
+      "sha256": "226bfa935f6c90e475ded1bb0f2233aa77dce88540d9b48e7d3188d095dd6bd2",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "task-result-and-device-report-1440.png",
+      "sha256": "13d42df7140d2657e50707c305257bcc3ccfc4dae4a4e213e542312756029f00",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    },
+    {
+      "name": "task-result-and-device-report-390.png",
+      "sha256": "da79d19c278cbb705b0c638abdbae628f68db99c043ea130916dc121b1b41dd3",
+      "judgement": "Readable nonblank app; actions and evidence are clear; narrow panel/transcript scrolling is intentional."
+    }
+  ],
+  "canonical": {
+    "backend": "tools/check.sh passed: 219 Python tests; backend unit/adapter/integration tests, Clippy and format",
+    "ui": "tools/check-ui.sh passed: 119 Rust UI tests, 31 JavaScript tests, native/Wasm builds, Clippy and format",
+    "logs": "Private /tmp/bokkie-authenticated-push on LV426; exact committed-candidate and CI attribution belongs to the pull request"
+  }
+}
