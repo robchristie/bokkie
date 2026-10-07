@@ -2,8 +2,8 @@
 
 - Status: active
 - Reorientation budget: 150
-- Next action: complete nginx regression and exact-candidate review; qualify the image before production
-- Landed pull requests: none
+- Next action: obtain the selected device/browser, enrol it and qualify the one authorised real reminder
+- Landed pull requests: [#56](https://github.com/robchristie/bokkie/pull/56)
 
 ## Outcome and authority
 
@@ -29,12 +29,13 @@ qualification → stopped backup and production update → selected-device enrol
 
 | Area | State / evidence | Next action |
 | --- | --- | --- |
-| Source | Started at `2dc07e14eec40259a51793b116f61a2901db526e`; branch `repair/authenticated-push`; unrelated `target-ui/` preserved in original checkout | Select smallest supported correction |
-| Production | Source `abfb861eddf00433a00c9977235a29088ae881b5`, image `sha256:c9042b73560b7cbba6b3413cb1ef557e2babc67c1aa35cbaf95a13b9290f2f73`; service active | Retain identities before update |
-| Configuration | No push/notification path in release; no discovered push JSON or enrolled push device/delivery; schema17 | Preserve any key found before generating |
-| Loading | Fresh Chromium151 probe: manifest credential setting fixes recognition; module worker omits auth (401); classic entry/import authenticated (200). Shared classic core selected, no policy change | Passed 36 nginx checks, including core-only activated update; prepare exact candidate |
+| Source | Repair merged as `98de662ecc950f221d63ea91a454c85f84cc2f6a`; independent source PASS and four CI checks passed; merged tree matches reviewed candidate | Post-merge CI passed; source/review/CI identities retained in the source pull request |
+| Production | Source `98de662ecc950f221d63ea91a454c85f84cc2f6a`, image `sha256:41e45a5a1f3d8d860986612d3c3703106142da70cdf17e4d993cbf7daba0301e`; active, restart verified, all 54 table rows/values preserved | [Deployment evidence](../../deployment-evidence/live-authenticated-push.md) |
+| Configuration | New offline VAPID file retained only at `/srv/stacks/bokkie/private/push.json`, UID/GID3000 mode0600; push enabled and survives restart; no enrolled device/delivery; schema17 | Keep the same key; await explicit device enrolment |
+| Loading | Fresh Chromium151 probe: manifest credential setting fixes recognition; module worker omits auth (401); classic entry/import authenticated (200). Shared classic core selected, no policy change | Passed 36 nginx checks and exact-image authenticated HTTPS manifest/worker/refresh; selected-browser acceptance remains open |
 | Device | Selection requested; no applicable explicit selection found in maintained evidence | Await operator choice |
-| Source verification | Canonical backend/UI passed; synthetic journey 131 checks and 17 opened desktop/narrow images; private `/tmp/bokkie-authenticated-push` evidence | Bind regression to committed candidate |
+| Source verification | Canonical backend/UI passed; synthetic journey 131 checks and 17 opened desktop/narrow images; private `/tmp/bokkie-authenticated-push` evidence | Exact candidate passed both journeys; independent review and candidate/post-merge CI passed |
+| Rollback and cleanup | Prior image/source/release and stopped state retained; marked synthetic containers, state and temporary profiles removed | Preserve live key/state; retain this active plan |
 | Live budget | Model calls 0/2; provider attempts 0; observed alerts 0 | Do not use budget during loading/setup |
 
 ## Calibration
