@@ -62,6 +62,23 @@ evidence. Notification configuration remained omitted.
   returned 401; wrong Host returned 421; the backend was unreachable through its
   bridge address. Wrong Origin, cross-site fetch context and missing/invalid
   mutation tokens rejected mutations with 403.
+- The same immutable image passed authenticated HTTP/persistence and four crash
+  cases on the marked synthetic Nostromo stack: runtime, edge, controller SIGKILL
+  and explicit restart. Each replaced both container identities, shared the new
+  namespace, preserved its synthetic obligation and rotated the session/token.
+  This used a transient user systemd unit; production boot dependencies were not
+  re-exercised.
+- Five exact-image browser captures were opened and judged on Nostromo using
+  disposable headless Chromium146.0.7680.164, a fresh browser context and synthetic
+  login. Settings and the project list rendered at 1440×900; the workspace editor,
+  hand-off list and return to Home rendered at 390×844, all at device scale one.
+  Registration fields and actions were readable and reachable, and all five body
+  layout audits had zero findings. Physical clicks and authenticated project,
+  hand-off and settings reads succeeded without a model. The selectable-text font
+  was served with the maintained Inter hash. The calibration hostname used one
+  process-local diagnostic DNS mapping to Nostromo with trusted TLS; these
+  captures make no normal-DNS claim. The synthetic stack deliberately had no
+  conversation profile, and Home correctly disclosed its unavailable runtime.
 
 The dedicated inspection Chrome profile challenged the new production tab for
 web login, so that attempt does not establish authenticated production UI
@@ -70,10 +87,14 @@ introduced. The [source browser qualification](../handoff-evidence/README.md#ver
 remains applicable to the unchanged packaged UI: 13 opened desktop/narrow images
 and the full synthetic save, copy, manual-opening, return, result-note and restart
 journey. Those fixtures do not establish a current production browser session.
+The exact-image synthetic stack above establishes useful browser pixels on the
+target host without exposing production conversations; production ingress,
+settings, account boundaries and persistence were checked separately. It does
+not claim authenticated visual inspection of the production account.
 
 Detailed private evidence is retained in `/tmp/bokkie-handoff-deployment` on LV426,
 including image build logs, synthetic qualification, backup hashes, runtime,
-restart and ingress receipts. The installed receipt is
+restart, ingress and crash-recovery receipts and the five opened captures. The installed receipt is
 `/srv/stacks/bokkie/deployment-abfb861.json` on Nostromo. The deployment's model
 budget and actual generation count were both **zero**.
 
