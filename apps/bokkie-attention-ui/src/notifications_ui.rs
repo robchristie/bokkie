@@ -101,7 +101,9 @@ fn show_state(
     }
     ui.add(egui::Label::new(&state.status).wrap());
     if !state.error.is_empty() {
-        ui.add(egui::Label::new(&state.error).wrap());
+        egui::CollapsingHeader::new("Notification diagnostic details").show(ui, |ui| {
+            ui.add(egui::Label::new(&state.error).wrap());
+        });
     }
     if !state.configured {
         ui.add(egui::Label::new("Push notifications are unavailable in this Bokkie service. Configure the notification transport before enabling a device.").wrap());

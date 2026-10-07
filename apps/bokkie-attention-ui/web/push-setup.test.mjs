@@ -20,7 +20,7 @@ function fixture({ active = false, ios = false, installed = true, configured = t
   } };
   const env = { storage: { getItem: k => storage.get(k), setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k) },
     navigator: { userAgent: ios ? 'iPhone' : 'Chromium', platform: 'Linux', serviceWorker: {
-      register: async () => registration, ready: Promise.resolve(registration),
+      register: async (path, options) => { calls.push(['register', path, options]); return registration; }, ready: Promise.resolve(registration),
     } }, Notification: notification, PushManager: {}, isSecureContext: true,
     matchMedia: () => ({ matches: installed }), randomUUID: () => `12345678-1234-4234-8234-${String(++commandNumber).padStart(12, '0')}`,
     location: { href: 'https://bokkie.example.test/ui/', origin: 'https://bokkie.example.test', search: '' },
@@ -184,4 +184,21 @@ test('failed storage deletion retains the exact request and does not claim a dis
   assert.match(f.controller.snapshot().status, /retained/);
   assert.equal(f.storage.get('bokkie-push-pending-v1'), saved);
   assert.equal(f.state.unsubscribes, 0);
+});
+
+
+test('worker loading failure retains server settings and exposes an actionable retry', async () => {
+  const f = fixture();
+  f.env.navigator.serviceWorker.register = async () => { throw Error('Script HTTP 401'); };
+  await f.controller.refresh();
+  const state = f.controller.snapshot();
+  assert.equal(state.configured, true);
+  assert.equal(state.ready, false);
+  assert.equal(state.can_enable, false);
+  assert.match(state.status, /Reopen Bokkie, sign in if asked/);
+  assert.equal(state.error, 'Script HTTP 401');
+  assert.equal(f.calls.some(([name]) => name === 'permission'), false);
+  f.env.navigator.serviceWorker.register = async () => f.registration;
+  await f.controller.refresh();
+  assert.equal(f.controller.snapshot().can_enable, true);
 });

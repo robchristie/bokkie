@@ -49,19 +49,28 @@ export function createPushSetup(env, repaint = () => {}) {
   async function refresh() {
     if (busy) return;
     busy = true; disableReview = null; pendingDiscardReview = null; update('Loading notification settings…');
+    let loadingWorker = false;
     try {
       setup = await request('/notifications/push');
       if (!setup || typeof setup.configured !== 'boolean' || !Number.isSafeInteger(setup.configuration_revision)) {
         throw Error('Bokkie returned invalid notification settings.');
       }
       if (supported()) {
-        registration = await env.navigator.serviceWorker.register('/ui/service-worker.js', { scope: '/ui/', type: 'module' });
+        loadingWorker = true;
+        registration = await env.navigator.serviceWorker.register('/ui/service-worker.js', { scope: '/ui/', type: 'classic', updateViaCache: 'none' });
         registration = await env.navigator.serviceWorker.ready;
         retryReceipts();
       }
       update(setup.device?.active ? `Bokkie reminders are assigned to ${setup.device.label}.`
         : 'Choose this browser or installed Bokkie to receive reminders.');
-    } catch (failure) { setup = null; update('Notification settings are unavailable.', String(failure.message ?? failure)); }
+    } catch (failure) {
+      if (!loadingWorker) setup = null;
+      registration = null;
+      update(loadingWorker
+        ? 'The notification worker could not load. Reopen Bokkie, sign in if asked, then refresh notification settings.'
+        : 'Notification settings could not load. Check your connection, sign in if asked, then refresh.',
+      String(failure.message ?? failure));
+    }
     finally { busy = false; repaint(); }
   }
   function snapshot() {
