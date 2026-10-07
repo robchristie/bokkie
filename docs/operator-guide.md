@@ -638,6 +638,15 @@ keeps the same Home, Tasks and conversations. iPhone/iPad require Add to Home
 Screen and permission inside that installed app; Android/desktop depend on the
 receiving browser and device settings. Installation alone does not enable alerts.
 
+The manifest requests same-origin credentials explicitly. The notification worker
+uses classic loading, with the same authenticated script URL and scope; Chromium
+module-worker script requests omit HTTP authentication credentials. Its shared
+script is checked on updates as well. Keep the manifest, worker and all imports
+behind the login boundary. A successful page fetch of a worker script does not
+prove registration: check the browser's recognised manifest and activated worker.
+If worker loading fails, reopen Bokkie, sign in if asked and refresh notification
+settings. Browser errors are under **Notification diagnostic details**.
+
 Create a new private configuration offline, as the runtime's authorised UID:
 
 ```sh

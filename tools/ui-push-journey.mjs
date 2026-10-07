@@ -24,7 +24,7 @@ const report = { source: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 
     'CDP injects decrypted JSON into the actual worker. Provider encryption and delivery require separate transport evidence.',
     'Notification click routing is invoked synthetically using actual notification data; no native OS tap or physical phone delivery is claimed.'] };
 for (const file of ['target/debug/bokkie-conversation-fixture', 'apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm',
-  'apps/bokkie-attention-ui/web/service-worker.js', 'apps/bokkie-attention-ui/web/push-worker.js', 'apps/bokkie-attention-ui/web/push-setup.js']) {
+  'apps/bokkie-attention-ui/web/service-worker.js', 'apps/bokkie-attention-ui/web/push-worker.js', 'apps/bokkie-attention-ui/web/push-worker-core.js', 'apps/bokkie-attention-ui/web/push-setup.js']) {
   report[file] = createHash('sha256').update(await readFile(file)).digest('hex');
 }
 let fixture, browser, displayServer, context, page, observer, cdp, origin, buffer = '', queued = [], pending = [], current;

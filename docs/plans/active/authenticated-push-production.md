@@ -2,7 +2,7 @@
 
 - Status: active
 - Reorientation budget: 150
-- Next action: prove authenticated classic worker import and update through nginx
+- Next action: complete nginx regression and exact-candidate review; qualify the image before production
 - Landed pull requests: none
 
 ## Outcome and authority
@@ -32,8 +32,9 @@ qualification → stopped backup and production update → selected-device enrol
 | Source | Started at `2dc07e14eec40259a51793b116f61a2901db526e`; branch `repair/authenticated-push`; unrelated `target-ui/` preserved in original checkout | Select smallest supported correction |
 | Production | Source `abfb861eddf00433a00c9977235a29088ae881b5`, image `sha256:c9042b73560b7cbba6b3413cb1ef557e2babc67c1aa35cbaf95a13b9290f2f73`; service active | Retain identities before update |
 | Configuration | No push/notification path in release; no discovered push JSON or enrolled push device/delivery; schema17 | Preserve any key found before generating |
-| Loading | Prior actual manifest/worker requests 401; credentialled page fetch 200 | Probe fresh contexts, module import and updates |
+| Loading | Fresh Chromium151 probe: manifest credential setting fixes recognition; module worker omits auth (401); classic entry/import authenticated (200). Shared classic core selected, no policy change | Passed 36 nginx checks, including core-only activated update; prepare exact candidate |
 | Device | Selection requested; no applicable explicit selection found in maintained evidence | Await operator choice |
+| Source verification | Canonical backend/UI passed; synthetic journey 131 checks and 17 opened desktop/narrow images; private `/tmp/bokkie-authenticated-push` evidence | Bind regression to committed candidate |
 | Live budget | Model calls 0/2; provider attempts 0; observed alerts 0 | Do not use budget during loading/setup |
 
 ## Calibration
