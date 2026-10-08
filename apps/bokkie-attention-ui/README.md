@@ -18,23 +18,23 @@ lifecycle actions.
 Build and run the native application against a disposable local service:
 
 ```sh
-cargo +1.97.1 build --locked -p bokkie-attention-ui --bin bokkie-attention-ui
+cargo +1.99.0 build --locked -p bokkie-attention-ui --bin bokkie-attention-ui
 BOKKIE_API_BASE=http://127.0.0.1:7744 \
-  cargo +1.97.1 run --locked -p bokkie-attention-ui
+  cargo +1.99.0 run --locked -p bokkie-attention-ui
 ```
 
 Build the browser module and serve the source assets on Bokkie's origin:
 
 ```sh
 tools/prepare-web-font.sh
-cargo +1.97.1 build --locked -p bokkie-attention-ui --lib \
+cargo +1.99.0 build --locked -p bokkie-attention-ui --lib \
   --target wasm32-unknown-unknown
 wasm-bindgen \
   --target web \
   --out-dir apps/bokkie-attention-ui/web/pkg \
   --out-name bokkie_attention_ui \
   target/wasm32-unknown-unknown/debug/bokkie_attention_ui.wasm
-cargo +1.97.1 run --locked -p bokkie -- \
+cargo +1.99.0 run --locked -p bokkie -- \
   --database /path/to/disposable.sqlite \
   serve \
   --bind 127.0.0.1:7744 \
@@ -281,15 +281,13 @@ loopback base (and rejects credentials, queries and fragments). Do not use
 either form with an operator database until you have separately assessed the
 requested lifecycle action.
 
-The backend and shared operator contract declare an MSRV of Rust 1.85 and the
-repository root pins exact Rust 1.85.0 for canonical backend checks. The
+The backend and shared operator contract retain an MSRV of Rust 1.85. The
 already-resolved Polyorama, egui and wgpu dependency graph requires newer Rust,
-so this application declares an app-scoped MSRV of Rust 1.97 and has a separate
-exact Rust 1.97.1 pin in
-[`rust-toolchain.toml`](rust-toolchain.toml), including Clippy, rustfmt and the
-Wasm target. Commands below remain explicit because they are run from the
-repository root, where Rustup would otherwise select the backend toolchain. The
-root toolchain is not claimed to compile the attention UI.
+so this application retains its app-scoped MSRV of Rust 1.97. Both the repository
+root and this application's [`rust-toolchain.toml`](rust-toolchain.toml) pin
+exact Rust 1.99.0 for current development/build checks. The scoped UI pin includes
+Clippy, rustfmt and the Wasm target. Commands remain explicit when run from the
+repository root, preserving the separate package and minimum compiler contracts.
 
 Run the focused, locked application checks from the repository root with:
 

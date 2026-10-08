@@ -1230,7 +1230,12 @@ mod tests {
             .unwrap()
             .task_id;
         let review = store
-            .managed_preview(&task, "push-test-session", &[profile.clone()], NOW)
+            .managed_preview(
+                &task,
+                "push-test-session",
+                std::slice::from_ref(&profile),
+                NOW,
+            )
             .unwrap();
         assert!(review.blockers.is_empty(), "{:?}", review.blockers);
         store

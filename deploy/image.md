@@ -23,9 +23,9 @@ version checks do not claim byte-for-byte image reproducibility. Retain the
 resulting immutable image ID and actual package versions with its qualification
 evidence.
 
-The stages keep the existing compiler boundary intact: the backend and
-synthetic persistence fixture build in release mode using Rust 1.85.0; the
-Polyorama browser library builds in release mode using Rust 1.97.1 and
+The separate backend and UI stages use exact Rust 1.99.0 from the digest-pinned
+Linux/amd64 bookworm builder. The backend and synthetic persistence fixture
+build in release mode; the Polyorama browser library builds in release mode with
 `wasm-bindgen-cli 0.2.127`. Both use the repository's shared `Cargo.lock` with
 `--locked`. Browser output is generated within the build and copied with the
 checked-in HTML, JavaScript and stylesheet to `/opt/ui`. The bundled Inter font

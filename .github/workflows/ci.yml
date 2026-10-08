@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      RUSTUP_TOOLCHAIN: 1.85.0
+      RUSTUP_TOOLCHAIN: 1.99.0
     steps:
       - name: Check out candidate
         # actions/checkout v7.0.1: official verified Node 24 release commit.
@@ -82,7 +82,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      RUSTUP_TOOLCHAIN: 1.97.1
+      RUSTUP_TOOLCHAIN: 1.99.0
     steps:
       - name: Check out candidate
         # actions/checkout v7.0.1: official verified Node 24 release commit.
