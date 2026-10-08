@@ -1,0 +1,8 @@
+{
+  "Memory": 4294967296,
+  "MemorySwap": 4294967296,
+  "CpuQuota": 200000,
+  "CpuPeriod": 100000,
+  "Binds": null,
+  "PortBindings": {}
+}

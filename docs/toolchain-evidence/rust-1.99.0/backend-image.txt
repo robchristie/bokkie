@@ -1,0 +1,1 @@
+sha256:796cc9a78fa9de9acdcc89deb6bcbe00c85e245b4467d751e5b1d97018241c23 {"org.opencontainers.image.revision":"3c0d679b8424ce69efa739cdd0c4b773314f4997","org.opencontainers.image.source":"https://github.com/rust-lang/docker-rust"}

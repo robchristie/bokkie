@@ -1,0 +1,10 @@
+rustc 1.99.0 (b940084d7 2026-09-28)
+binary: rustc
+commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+commit-date: 2026-09-28
+host: x86_64-unknown-linux-gnu
+release: 1.99.0
+LLVM version: 23.1.1
+wasm-bindgen 0.2.127
+27f0d23b8507bbce09d41dd014ff34dd07c1b27d4b5ca6165b38c0a8312f003d  /source/apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui_bg.wasm
+6be079e8f4d27a8d2ebb5ef68e9f5d145afc67281091b0cdfdd33c6be2ba0066  /source/apps/bokkie-attention-ui/web/pkg/bokkie_attention_ui.js

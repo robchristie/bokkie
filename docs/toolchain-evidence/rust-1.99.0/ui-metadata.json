@@ -1,0 +1,67 @@
+{
+  "buildx.build.provenance": {
+    "builder": {
+      "id": ""
+    },
+    "buildType": "https://mobyproject.org/buildkit@v1",
+    "materials": [
+      {
+        "uri": "pkg:docker/rust@1.99.0-bookworm?digest=sha256:b36c246742b4d323472588f789601be34eb4af053255e2af53969078ee8dcec7\u0026platform=linux%2Famd64",
+        "digest": {
+          "sha256": "b36c246742b4d323472588f789601be34eb4af053255e2af53969078ee8dcec7"
+        }
+      }
+    ],
+    "invocation": {
+      "configSource": {
+        "entryPoint": "Dockerfile"
+      },
+      "parameters": {
+        "frontend": "dockerfile.v0",
+        "args": {
+          "label:org.opencontainers.image.revision": "3c0d679b8424ce69efa739cdd0c4b773314f4997",
+          "target": "ui"
+        },
+        "locals": [
+          {
+            "name": "context"
+          },
+          {
+            "name": "dockerfile"
+          }
+        ],
+        "root": {
+          "configSource": {
+            "path": "Dockerfile"
+          },
+          "request": {
+            "args": {
+              "label:org.opencontainers.image.revision": "3c0d679b8424ce69efa739cdd0c4b773314f4997",
+              "target": "ui"
+            }
+          }
+        },
+        "compatibilityVersion": 30
+      },
+      "environment": {
+        "dockerfileVersion": "1.27.0",
+        "platform": "linux/amd64"
+      }
+    }
+  },
+  "buildx.build.ref": "bokkie-rust-199-b1/bokkie-rust-199-b10/4iynbueug2ej9byadiv6fkhe5",
+  "containerimage.descriptor": {
+    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+    "digest": "sha256:75fb09c4f79ec8a628cd5fd9ecbc883bec846241dc17e02d550aafd90e519836",
+    "size": 2781,
+    "annotations": {
+      "org.opencontainers.image.created": "2026-10-08T04:02:03Z"
+    },
+    "platform": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "containerimage.digest": "sha256:75fb09c4f79ec8a628cd5fd9ecbc883bec846241dc17e02d550aafd90e519836",
+  "image.name": "docker.io/library/bokkie-rust-199-b1:ui"
+}

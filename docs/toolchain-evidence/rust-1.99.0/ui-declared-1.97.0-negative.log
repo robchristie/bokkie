@@ -1,0 +1,9 @@
+error: rustc 1.97.0 is not supported by the following packages:
+  polyorama-core@0.1.6 requires rustc 1.97.1
+  polyorama-render-wgpu@0.1.6 requires rustc 1.97.1
+  polyorama-runtime@0.1.6 requires rustc 1.97.1
+  polyorama-ui-egui@0.1.6 requires rustc 1.97.1
+Either upgrade rustc or select compatible dependency versions with
+`cargo update <name>@<current-ver> --precise <compatible-ver>`
+where `<compatible-ver>` is the latest version supporting rustc 1.97.0
+

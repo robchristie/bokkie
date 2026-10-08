@@ -44,8 +44,8 @@ for the complete first-slice acceptance criteria and evidence.
 ## Development
 
 The backend and shared operator contract retain an MSRV of Rust 1.85; the
-attention UI retains its app-scoped MSRV of Rust 1.97 because its resolved
-Polyorama/egui/wgpu graph requires a newer compiler. Both development/build
+attention UI retains its app-scoped Rust 1.97 declaration. Its unchanged locked
+Polyorama graph has an effective compiler floor of 1.97.1. Both development/build
 boundaries pin exact Rust 1.99.0 in their respective `rust-toolchain.toml` files.
 The separate package boundaries and minimum compiler contracts remain intact.
 GitHub CI validates both locked boundaries on unprivileged, read-only runners
