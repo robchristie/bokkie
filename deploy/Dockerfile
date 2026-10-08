@@ -1,23 +1,23 @@
 # Build from a committed source archive with deploy/build.sh. No build secrets.
-FROM rust:1.85.0-bookworm@sha256:16a7f242108de02f10fe4a392991679bafa7694e59f5b40a54d5af1be9b40d03 AS backend
+FROM rust:1.99.0-bookworm@sha256:b36c246742b4d323472588f789601be34eb4af053255e2af53969078ee8dcec7 AS backend
 WORKDIR /source
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src/ src/
 COPY migrations/ migrations/
 COPY crates/ crates/
 COPY apps/ apps/
-RUN cargo +1.85.0 build --locked --release --bin bokkie --bin bokkie-conversation-fixture --bin bokkie-push-config
+RUN cargo +1.99.0 build --locked --release --bin bokkie --bin bokkie-conversation-fixture --bin bokkie-push-config
 
-FROM rust:1.85.0-bookworm@sha256:16a7f242108de02f10fe4a392991679bafa7694e59f5b40a54d5af1be9b40d03 AS ui
-RUN rustup toolchain install 1.97.1 --profile minimal --target wasm32-unknown-unknown \
-    && cargo +1.97.1 install --locked --version 0.2.127 wasm-bindgen-cli
+FROM rust:1.99.0-bookworm@sha256:b36c246742b4d323472588f789601be34eb4af053255e2af53969078ee8dcec7 AS ui
+RUN rustup target add --toolchain 1.99.0 wasm32-unknown-unknown \
+    && cargo +1.99.0 install --locked --version 0.2.127 wasm-bindgen-cli
 WORKDIR /source
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src/ src/
 COPY migrations/ migrations/
 COPY crates/ crates/
 COPY apps/ apps/
-RUN cargo +1.97.1 build --locked --release -p bokkie-attention-ui --lib --target wasm32-unknown-unknown \
+RUN cargo +1.99.0 build --locked --release -p bokkie-attention-ui --lib --target wasm32-unknown-unknown \
     && wasm-bindgen --target web --out-dir /source/apps/bokkie-attention-ui/web/pkg \
         --out-name bokkie_attention_ui \
         /source/target/wasm32-unknown-unknown/release/bokkie_attention_ui.wasm

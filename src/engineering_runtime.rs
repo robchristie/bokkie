@@ -1511,10 +1511,8 @@ impl EngineeringRuntime {
             }
             // Store checks receipts before fences. Do not re-inspect mutable files
             // before retrieving an already committed decision receipt.
-            match store.engineering_command(actor(execution), saved, now) {
-                Ok(receipt) => return Ok(json!(receipt)),
-                Err(error) => return Err(error.into()),
-            }
+            let receipt = store.engineering_command(actor(execution), saved, now)?;
+            return Ok(json!(receipt));
         }
         let observed: EngineeringPrecondition = read_json(&directory.join("observed.json"))?;
         if decision.expected != observed {

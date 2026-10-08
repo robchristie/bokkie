@@ -470,12 +470,18 @@ mod tests {
             .unwrap()
             .task_id;
         let preview = store
-            .managed_preview(&id, "session", &[profile.clone()], 100)
+            .managed_preview(&id, "session", std::slice::from_ref(&profile), 100)
             .unwrap();
         assert!(preview.blockers.is_empty(), "{:?}", preview.blockers);
         let command = Uuid::new_v4().to_string();
         let receipt = store
-            .managed_activate(&command, &preview, "session", &[profile.clone()], 100)
+            .managed_activate(
+                &command,
+                &preview,
+                "session",
+                std::slice::from_ref(&profile),
+                100,
+            )
             .unwrap();
         assert_eq!(
             store
@@ -647,7 +653,7 @@ mod tests {
             .unwrap()
             .unwrap();
         store
-            .managed_prepare_reminder_destination(&task, &[p.clone()], 133)
+            .managed_prepare_reminder_destination(&task, std::slice::from_ref(&p), 133)
             .unwrap();
         let review = store.managed_preview(&task, "session", &[p], 133).unwrap();
         assert_eq!(review.definition.destination, "Bokkie on Laptop");
@@ -775,7 +781,7 @@ mod tests {
             .unwrap()
             .task_id;
         let review = store
-            .managed_preview(&id, "session", &[profile.clone()], 100)
+            .managed_preview(&id, "session", std::slice::from_ref(&profile), 100)
             .unwrap();
         assert!(
             review
@@ -874,14 +880,14 @@ mod tests {
             )
             .unwrap();
         let review = store
-            .managed_preview(&task, "session", &[profile.clone()], 101)
+            .managed_preview(&task, "session", std::slice::from_ref(&profile), 101)
             .unwrap();
         let receipt = store
             .managed_activate(
                 "confirm-change",
                 &review,
                 "session",
-                &[profile.clone()],
+                std::slice::from_ref(&profile),
                 101,
             )
             .unwrap();
@@ -891,7 +897,7 @@ mod tests {
                     "confirm-change",
                     &review,
                     "session",
-                    &[profile.clone()],
+                    std::slice::from_ref(&profile),
                     101
                 )
                 .unwrap(),
@@ -903,7 +909,13 @@ mod tests {
         assert!(store.claim_due_reminders(200000, 30, 1).unwrap().is_empty());
         let rev = store.managed_detail(&task).unwrap().configuration_revision;
         let resumed = store
-            .managed_resume("resume-push", &task, rev, &[profile.clone()], 200000)
+            .managed_resume(
+                "resume-push",
+                &task,
+                rev,
+                std::slice::from_ref(&profile),
+                200000,
+            )
             .unwrap();
         assert_eq!(
             store
@@ -948,7 +960,7 @@ mod tests {
             .unwrap()
             .task_id;
         let review = store
-            .managed_preview(&id, "session", &[profile.clone()], 100)
+            .managed_preview(&id, "session", std::slice::from_ref(&profile), 100)
             .unwrap();
         store
             .disable_push(
@@ -970,13 +982,19 @@ mod tests {
         let setup = enrol(&mut store, "New phone");
         let profile = store.push_profile(&key).unwrap().unwrap();
         store
-            .managed_prepare_reminder_destination(&id, &[profile.clone()], 102)
+            .managed_prepare_reminder_destination(&id, std::slice::from_ref(&profile), 102)
             .unwrap();
         let review = store
-            .managed_preview(&id, "session", &[profile.clone()], 102)
+            .managed_preview(&id, "session", std::slice::from_ref(&profile), 102)
             .unwrap();
         let activated = store
-            .managed_activate("fresh-device", &review, "session", &[profile.clone()], 102)
+            .managed_activate(
+                "fresh-device",
+                &review,
+                "session",
+                std::slice::from_ref(&profile),
+                102,
+            )
             .unwrap();
         store
             .managed_pause("race-pause", &id, activated.configuration_revision, 103)

@@ -1,0 +1,130 @@
+{
+  "qualification_source": "3c0d679b8424ce69efa739cdd0c4b773314f4997",
+  "qualification_tree": "a1e74d22d23deb94d1db4f139258def66c743795",
+  "cargo_lock_sha256": "0597871ed920e9335f5f6de7fd43fc569227e8306de6ff851ebb3c3665ee5f54",
+  "build_jobs": 4,
+  "observations": {
+    "backend-99": {
+      "command": [
+        "tools/check.sh"
+      ],
+      "state": "success",
+      "command_returncode": 0,
+      "capture_complete": true,
+      "started_at": "2026-10-08T03:38:06.590152+00:00",
+      "finished_at": "2026-10-08T03:39:21.094387+00:00",
+      "log_bytes": 52612,
+      "output_sha256": "ab72cfad05898fe006a6a58048a67dcb3ea0f44273c80d4d1ab782817756b3ae"
+    },
+    "ui-99": {
+      "command": [
+        "tools/check-ui.sh"
+      ],
+      "state": "success",
+      "command_returncode": 0,
+      "capture_complete": true,
+      "started_at": "2026-10-08T03:38:34.824600+00:00",
+      "finished_at": "2026-10-08T03:39:51.515414+00:00",
+      "log_bytes": 27677,
+      "output_sha256": "af9fb76382ee5c6a8ef9664bb190c66aa80a0d5934197e57d55e261b079c8bff"
+    },
+    "backend-floor-1.85.0": {
+      "command": [
+        "cargo",
+        "+1.85.0",
+        "check",
+        "--all-targets",
+        "--all-features",
+        "--locked",
+        "-p",
+        "bokkie",
+        "-p",
+        "bokkie-operator-api"
+      ],
+      "state": "success",
+      "command_returncode": 0,
+      "capture_complete": true,
+      "started_at": "2026-10-08T03:40:32.113468+00:00",
+      "finished_at": "2026-10-08T03:40:46.774791+00:00",
+      "log_bytes": 6679,
+      "output_sha256": "2e50de323abe411b7db7f7fe6b0e954067cdf27aa1a0ec5fe5a1db8bacd1fc18"
+    },
+    "ui-retained-1.97.1-native": {
+      "command": [
+        "cargo",
+        "+1.97.1",
+        "check",
+        "--all-targets",
+        "--all-features",
+        "--locked",
+        "-p",
+        "bokkie-attention-ui"
+      ],
+      "state": "success",
+      "command_returncode": 0,
+      "capture_complete": true,
+      "started_at": "2026-10-08T03:40:33.272210+00:00",
+      "finished_at": "2026-10-08T03:41:03.639482+00:00",
+      "log_bytes": 8019,
+      "output_sha256": "9eec642266fac9eac76dea6ea7de7ef6cf7fabe9bced4c974403cbe8900a9b8e"
+    },
+    "ui-retained-1.97.1-wasm": {
+      "command": [
+        "cargo",
+        "+1.97.1",
+        "check",
+        "--locked",
+        "-p",
+        "bokkie-attention-ui",
+        "--lib",
+        "--target",
+        "wasm32-unknown-unknown"
+      ],
+      "state": "success",
+      "command_returncode": 0,
+      "capture_complete": true,
+      "started_at": "2026-10-08T03:42:17.422741+00:00",
+      "finished_at": "2026-10-08T03:42:38.495837+00:00",
+      "log_bytes": 5082,
+      "output_sha256": "960378b636aadec82d1c1ac2ca4edb6f601fffba2089b79dbb3eec0f0882c57e"
+    },
+    "ui-declared-1.97.0-negative": {
+      "command": [
+        "cargo",
+        "+1.97.0",
+        "check",
+        "--all-targets",
+        "--all-features",
+        "--locked",
+        "-p",
+        "bokkie-attention-ui"
+      ],
+      "state": "failure",
+      "command_returncode": 101,
+      "capture_complete": true,
+      "started_at": "2026-10-08T03:44:40.116771+00:00",
+      "finished_at": "2026-10-08T03:44:41.056876+00:00",
+      "log_bytes": 459,
+      "output_sha256": "95231e8efc0f8ce420547e5c31df6fd342eedac9e8bf5c92512e135b25d97b96"
+    },
+    "container-stages": {
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "nostromo",
+        "bash",
+        "/tmp/bokkie-rust-1.99.0-B1/qualify-containers.sh"
+      ],
+      "state": "success",
+      "command_returncode": 0,
+      "capture_complete": true,
+      "started_at": "2026-10-08T03:41:43.316636+00:00",
+      "finished_at": "2026-10-08T04:03:40.004688+00:00",
+      "log_bytes": 58924,
+      "output_sha256": "458a5de2026c6853a5b537c0ebef10713012d4b5f5e4918fbe28765518168512"
+    }
+  }
+}

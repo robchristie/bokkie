@@ -1,0 +1,521 @@
+toolchain contract passed: build 1.99.0; backend MSRV 1.85; UI MSRV 1.97
+✔ copy succeeds only after the browser clipboard promise resolves (3.506807ms)
+✔ clipboard denial retains the complete selectable brief and reports failure honestly (0.504111ms)
+✔ return navigation pins a canonical same-origin snapshot without touching retained edits (0.47648ms)
+✔ initial return links work once and malformed/external links fail closed (0.278572ms)
+✔ a settled pointer copy does not suppress a later keyboard copy (0.558454ms)
+✔ unavailable local storage is reported without discarding in-memory use (0.130366ms)
+✔ explicit enable requests permission synchronously before any asynchronous work (1.90254ms)
+✔ unconfigured service and uninstalled iOS never prompt for permission (0.280772ms)
+✔ another active device requires separate disabling review and exact confirmation (0.325914ms)
+✔ lost response retains subscription and exact persisted request for retry after reload (1.67647ms)
+✔ revoked browser permission is visible even while server device remains active (0.199088ms)
+✔ restart between reviewed setup and mutation fails closed without enrolment (0.258941ms)
+✔ task links reject external paths and can queue exact task without clearing a draft (0.459369ms)
+✔ trusted canvas gesture can stage permission without making a network request (0.248211ms)
+✔ published setup revision changes on enrolment and disable, and stays stable on reads (0.215ms)
+✔ stale revision-zero request needs reviewed local discard before a fresh revision-two enrolment (4.077042ms)
+✔ failed storage deletion retains the exact request and does not claim a discard (0.24322ms)
+✔ worker loading failure retains server settings and exposes an actionable retry (0.153276ms)
+✔ offline push is self-contained and displays before any Bokkie API request (1.503603ms)
+✔ receipt retry survives a new worker and obtains a fresh process token (0.399037ms)
+✔ expiry never displays and is reported separately from display (0.165067ms)
+✔ duplicate events and event races display one notification (0.175587ms)
+✔ storage failure preserves display and an immediate best-effort receipt (0.284052ms)
+✔ failed OS display never claims displayed (0.638757ms)
+✔ failed authenticated receipt has finite attempts and retries on activity (0.187888ms)
+✔ worker flush caps its receipt cohort (0.274222ms)
+✔ closed-page click opens only the exact same-origin task (0.959131ms)
+✔ existing page receives task context without navigation that would lose its composer (0.25276ms)
+✔ receipt states cannot regress from opened to displayed or expired (0.111414ms)
+✔ hostile deep links, injected URLs, mismatched identities and oversized payloads are rejected (0.297132ms)
+✔ valid Unicode title uses codepoints, and push identity cannot change under the same tag (0.137866ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 31
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 84.366668
+    Blocking waiting for file lock on build directory
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.229
+   Compiling log v0.4.34
+   Compiling libloading v0.8.9
+   Compiling proc-macro2 v1.0.107
+   Compiling dlib v0.5.3
+   Compiling linux-raw-sys v0.12.1
+   Compiling num-traits v0.2.19
+   Compiling quote v1.0.47
+   Compiling syn v3.0.4
+   Compiling syn v2.0.119
+   Compiling rustix v1.1.4
+   Compiling wayland-sys v0.31.11
+   Compiling foldhash v0.2.0
+   Compiling downcast-rs v1.2.1
+   Compiling scoped-tls v1.0.1
+   Compiling wayland-scanner v0.31.11
+   Compiling serde_derive v1.0.229
+   Compiling bytemuck_derive v1.12.0
+   Compiling bytemuck v1.25.2
+   Compiling thiserror-impl v2.0.20
+   Compiling zerocopy-derive v0.8.56
+   Compiling thiserror v2.0.20
+   Compiling serde v1.0.229
+   Compiling hashbrown v0.17.1
+   Compiling synstructure v0.13.2
+   Compiling smallvec v1.16.0
+   Compiling scopeguard v1.2.0
+   Compiling wayland-backend v0.3.17
+   Compiling equivalent v1.0.2
+   Compiling zerofrom-derive v0.1.7
+   Compiling lock_api v0.4.14
+   Compiling parking_lot_core v0.9.12
+   Compiling zerocopy v0.8.56
+   Compiling parking_lot v0.12.5
+   Compiling yoke-derive v0.8.2
+   Compiling wayland-client v0.31.15
+   Compiling zerofrom v0.1.8
+   Compiling tracing-attributes v0.1.31
+   Compiling stable_deref_trait v1.2.1
+   Compiling yoke v0.8.3
+   Compiling indexmap v2.14.1
+   Compiling wayland-protocols v0.32.13
+   Compiling polling v3.11.0
+   Compiling tracing v0.1.44
+   Compiling rustc-hash v1.1.0
+   Compiling raw-window-handle v0.6.2
+   Compiling slab v0.4.12
+   Compiling naga-types v30.0.1
+   Compiling zerovec-derive v0.11.6
+   Compiling simd-adler32 v0.3.10
+   Compiling bit-vec v0.9.1
+   Compiling unicode-width v0.2.2
+   Compiling profiling v1.0.18
+   Compiling codespan-reporting v0.13.1
+   Compiling zerovec v0.11.8
+   Compiling half v2.7.1
+   Compiling bit-set v0.10.0
+   Compiling displaydoc v0.2.7
+   Compiling polycool v0.4.0
+   Compiling spirv v0.4.0+sdk-1.4.341.0
+   Compiling static_assertions v1.1.0
+   Compiling allocator-api2 v0.2.21
+   Compiling adler2 v2.0.1
+   Compiling wgpu-types v30.0.1
+   Compiling hashbrown v0.16.1
+   Compiling kurbo v0.13.1
+   Compiling naga v30.0.1
+   Compiling ash v0.38.0+1.3.281
+   Compiling font-types v0.12.4
+   Compiling thiserror-impl v1.0.69
+   Compiling color v0.3.3
+   Compiling euclid v0.22.14
+   Compiling presser v0.3.1
+   Compiling linux-raw-sys v0.4.15
+   Compiling cursor-icon v1.2.0
+   Compiling linebender_resource_handle v0.1.1
+   Compiling xkeysym v0.2.1
+   Compiling xcursor v0.3.11
+   Compiling wayland-cursor v0.31.14
+   Compiling rustix v0.38.44
+   Compiling peniko v0.6.1
+   Compiling wayland-csd-frame v0.3.0
+   Compiling guillotiere v0.7.0
+   Compiling thiserror v1.0.69
+   Compiling read-fonts v0.41.0
+   Compiling wayland-protocols-wlr v0.3.12
+   Compiling crc32fast v1.5.1
+   Compiling getrandom v0.3.4
+   Compiling khronos-egl v6.0.0
+   Compiling wgpu-naga-bridge v30.0.1
+   Compiling miniz_oxide v0.9.1
+   Compiling gpu-allocator v0.28.0
+   Compiling ordered-float v5.5.0
+   Compiling memmap2 v0.9.11
+   Compiling renderdoc-sys v1.1.0
+   Compiling fearless_simd v0.4.1
+   Compiling glow v0.17.0
+   Compiling wgpu-hal v30.0.1
+   Compiling vello_common v0.1.0
+   Compiling flate2 v1.1.10
+   Compiling ahash v0.8.12
+   Compiling calloop v0.13.0
+   Compiling getrandom v0.4.3
+   Compiling tinystr v0.8.4
+   Compiling emath v0.36.1
+   Compiling gethostname v1.1.0
+   Compiling memchr v2.8.3
+   Compiling writeable v0.6.4
+   Compiling litemap v0.8.3
+   Compiling as-raw-xcb-connection v1.0.1
+   Compiling x11rb-protocol v0.13.2
+   Compiling icu_locale_core v2.3.0
+   Compiling serde_json v1.0.151
+   Compiling ecolor v0.36.1
+   Compiling uuid v1.26.0
+   Compiling calloop-wayland-source v0.3.0
+   Compiling wgpu-core-deps-windows-linux-android v30.0.1
+   Compiling vello_cpu v0.1.0
+   Compiling unicode-general-category v1.1.0
+   Compiling skrifa v0.44.0
+   Compiling harfrust v0.12.0
+   Compiling zerotrie v0.2.5
+   Compiling potential_utf v0.1.6
+   Compiling enumn v0.1.14
+   Compiling unicode-segmentation v1.13.3
+   Compiling epaint_default_fonts v0.36.1
+   Compiling either v1.18.0
+   Compiling utf8_iter v1.0.4
+   Compiling web-time v1.1.0
+   Compiling self_cell v1.3.0
+   Compiling nohash-hasher v0.2.0
+   Compiling epaint v0.36.1
+   Compiling x11rb v0.13.2
+   Compiling rustls-pki-types v1.15.1
+   Compiling icu_collections v2.3.0
+   Compiling itertools v0.15.0
+   Compiling accesskit v0.24.1
+   Compiling icu_provider v2.3.1
+   Compiling wgpu-core v30.0.1
+   Compiling smithay-client-toolkit v0.19.2
+   Compiling x11-dl v2.21.0
+   Compiling xkbcommon-dl v0.4.2
+   Compiling wayland-protocols-plasma v0.3.12
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling calloop v0.14.4
+   Compiling getrandom v0.2.17
+   Compiling dpi v0.1.2
+   Compiling pxfm v0.1.30
+   Compiling untrusted v0.9.0
+   Compiling smol_str v0.2.2
+   Compiling ring v0.17.14
+   Compiling wgpu v30.0.1
+   Compiling moxcms v0.8.1
+   Compiling winit v0.30.13
+   Compiling calloop-wayland-source v0.4.1
+   Compiling png v0.18.1
+   Compiling egui v0.36.1
+   Compiling icu_properties_data v2.3.0
+   Compiling icu_normalizer_data v2.3.0
+   Compiling crossbeam-utils v0.8.22
+   Compiling wayland-protocols-misc v0.3.12
+   Compiling wayland-protocols-experimental v20250721.0.1
+   Compiling twox-hash v2.1.4
+   Compiling rustc-hash v2.1.3
+   Compiling byteorder-lite v0.1.0
+   Compiling type-map v0.5.1
+   Compiling smithay-client-toolkit v0.20.0
+   Compiling image v0.25.10
+   Compiling http v1.5.0
+   Compiling lz4_flex v0.12.2
+   Compiling crossbeam-channel v0.5.16
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling httparse v1.10.1
+   Compiling rustls-webpki v0.103.15
+   Compiling polyorama-core v0.1.6 (https://github.com/robchristie/polyorama?rev=3c1c51f873de70162629a7fc4c17896f89bf7125#3c1c51f8)
+   Compiling subtle v2.6.1
+   Compiling base64 v0.23.1
+   Compiling ureq-proto v0.6.1
+   Compiling polyorama-runtime v0.1.6 (https://github.com/robchristie/polyorama?rev=3c1c51f873de70162629a7fc4c17896f89bf7125#3c1c51f8)
+   Compiling egui-wgpu v0.36.1
+   Compiling rustls v0.23.43
+   Compiling idna_adapter v1.2.2
+   Compiling arboard v3.6.1
+   Compiling smithay-clipboard v0.7.3
+   Compiling webpki-roots v1.0.9
+   Compiling utf8-zero v0.8.1
+   Compiling egui-winit v0.36.1
+   Compiling idna v1.1.0
+   Compiling polyorama-render-wgpu v0.1.6 (https://github.com/robchristie/polyorama?rev=3c1c51f873de70162629a7fc4c17896f89bf7125#3c1c51f8)
+   Compiling ureq v3.4.0
+   Compiling form_urlencoded v1.2.2
+   Compiling chrono v0.4.45
+   Compiling pollster v1.0.1
+   Compiling eframe v0.36.1
+   Compiling ehttp v0.7.1
+   Compiling chrono-tz v0.10.4
+   Compiling url v2.5.8
+   Compiling polyorama-ui-egui v0.1.6 (https://github.com/robchristie/polyorama?rev=3c1c51f873de70162629a7fc4c17896f89bf7125#3c1c51f8)
+   Compiling bokkie-operator-api v0.1.0 (/nvme/development/bokkie-worktrees/rust-1.99.0/crates/bokkie-operator-api)
+   Compiling bokkie-attention-ui v0.1.0 (/nvme/development/bokkie-worktrees/rust-1.99.0/apps/bokkie-attention-ui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.51s
+     Running unittests src/lib.rs (target/debug/deps/bokkie_attention_ui-5f6b802ea0a8fb08)
+
+running 119 tests
+test app::conversation_ui::tests::dates_follow_definition_timezone_including_daylight_saving ... ok
+test app::conversation_ui::tests::manual_adviser_choice_is_capability_checked_and_pinned_for_uncertain_retry ... ok
+test app::conversation_ui::tests::notification_revision_change_during_an_existing_read_waits_for_one_fresh_read ... ok
+test app::conversation_ui::tests::notification_revision_refreshes_capability_once_without_discarding_composer_or_history ... ok
+test app::conversation_ui::tests::rotation_discards_confirmation_but_retains_unacknowledged_turn ... ok
+test app::conversation_ui::tests::retained_turn_reconciles_only_its_durable_message ... ok
+test app::conversation_ui::tests::scheduled_dates_use_adelaide_daylight_and_standard_time ... ok
+test app::conversation_ui::tests::recurring_schedules_have_readable_common_patterns_and_honest_fallback ... ok
+test app::conversation_ui::tests::returning_to_same_conversation_rejects_its_previous_read_generation ... ok
+test app::conversation_ui::tests::history_switch_owns_new_read_and_ignores_delayed_previous_responses ... ok
+test app::conversation_ui::tests::global_navigation_preserves_conversation_context_and_unsent_message ... ok
+test app::handoff_ui::tests::ambiguous_destinations_require_selection_and_save_pins_the_exact_registration ... ok
+test app::conversation_ui::tests::stale_identity_revision_and_other_chat_cannot_replace_current_view ... ok
+test app::conversation_ui::tests::single_confirmation_requires_exact_current_backend_review ... ok
+test app::conversation_ui::tests::task_context_switch_reads_new_chat_before_selecting_requested_task ... ok
+test app::handoff_ui::tests::definite_conflict_retains_edits_but_uncertain_failure_locks_the_exact_envelope ... ok
+test app::handoff_ui::tests::home_reads_open_the_saved_revision_without_resurrecting_obsolete_model_text ... ok
+test app::handoff_ui::tests::settings_navigation_keeps_unsent_text_and_projects_do_not_depend_on_model_availability ... ok
+test app::handoff_ui::tests::native_copy_is_a_durable_request_and_never_a_verified_clipboard_success ... ok
+test app::handoff_ui::tests::out_of_order_reads_and_old_mutations_cannot_replace_current_edits_or_pending_receipts ... ok
+test app::notifications_ui::tests::push_acceptance_and_device_evidence_remain_distinct ... ok
+test app::handoff_ui::tests::project_conflict_requires_explicit_current_revision_adoption_and_retains_entered_fields ... ok
+test app::settings_ui::tests::adviser_enable_uses_advertised_defaults_and_expands_only_the_shared_budget ... ok
+test app::settings_ui::tests::adviser_defaults_never_invent_a_model_or_an_unadvertised_thinking_level ... ok
+test app::handoff_ui::tests::refresh_and_session_restart_keep_unsent_text_brief_edits_and_the_exact_pending_command ... ok
+test app::settings_ui::tests::conflict_and_definite_rejection_retain_entered_values_and_reload_is_deliberate ... ok
+test app::settings_ui::tests::settings_validation_checks_exact_capabilities_utf8_and_deployment_limits ... ok
+test app::settings_ui::tests::unavailable_saved_profile_can_be_repaired_only_with_live_supported_choices ... ok
+test app::tests::active_lease_expiry_is_a_projection_refresh_deadline ... ok
+test app::settings_ui::tests::settings_responses_are_fenced_by_read_generation_save_identity_and_session ... ok
+test app::handoff_ui::tests::delayed_result_note_responses_and_exact_retries_preserve_new_text_and_navigation ... ok
+test app::settings_ui::tests::uncertain_save_retains_exact_payload_through_refresh_and_session_restart ... ok
+test app::settings_ui::tests::uncertain_adviser_save_retains_the_complete_role_policy_and_shared_budget ... ok
+test app::tests::attention_search_matches_projected_reason_and_scheduling_stays_neutral ... ok
+test app::tests::confirmation_actions_have_unique_stable_application_targets ... ok
+test app::tests::cursor_gap_enters_same_session_full_recovery_with_retained_state_stale ... ok
+test app::tests::attention_navigation_leaves_home_and_home_returns_without_a_model_turn ... ok
+test app::tests::engineering_details_do_not_use_generic_simulated_or_no_action_copy ... ok
+test app::tests::engineering_failed_save_preserves_text_and_exact_replay_identity ... ok
+test app::tests::engineering_cancellation_opens_a_separate_confirmation_without_dispatch ... ok
+test app::tests::exception_language_covers_retry_and_verification_attention ... ok
+test app::tests::gardener_confirmation_renders_exact_source_bound_provenance ... ok
+test app::tests::lifecycle_actions_have_unique_stable_semantic_targets ... ok
+test app::tests::retry_and_cancel_consequences_are_backend_capability_driven ... ok
+test app::tests::polling_is_bounded_and_uses_the_earliest_durable_wake ... ok
+test app::tests::exact_gardener_decisions_route_to_affected_only_refresh ... ok
+test app::tests::evidence_properties_keep_source_paths_when_fields_are_added_or_labels_repeat ... ok
+test app::tests::detail_navigation_retains_collection_search_and_filter ... ok
+test app::settings_ui::tests::clipped_control_semantics_keep_only_the_visible_interaction_region ... ok
+test app::tests::topic_language_exposes_provenance_without_making_json_primary ... ok
+test appearance::tests::collection_metadata_and_meaningful_control_edges_keep_contrast_in_every_mode ... ok
+test appearance::tests::every_identity_validates_all_four_modes ... ok
+test model::tests::change_walk_drains_one_pinned_watermark_without_misses_or_duplicates ... ok
+test model::tests::change_walk_rejects_repeated_or_mismatched_continuations_and_marks_ambiguity ... ok
+test app::tests::session_rotation_clears_token_and_confirmation_then_bootstraps_a_rebuild ... ok
+test model::tests::empty_database_becomes_current_and_disabled_reasons_are_observable ... ok
+test model::tests::exact_gardener_confirmation_carries_immutable_identity_and_draft_survives_conflict ... ok
+test appearance::tests::shared_style_and_custom_tokens_resolve_identical_app_colours ... ok
+test model::tests::fixture_covers_all_lifecycle_states_and_empty_filtering ... ok
+test model::tests::generic_approval_confirmation_and_post_action_refresh_state_are_explicit ... ok
+test model::tests::global_watermark_and_action_state_revision_remain_independent ... ok
+test model::tests::later_proposal_generation_stales_an_open_confirmation ... ok
+test model::tests::page_assembly_rejects_duplicates_and_capture_or_watermark_mismatch ... ok
+test model::tests::expired_push_attention_keeps_fenced_resolution_and_blocks_resending ... ok
+test model::tests::process_session_change_invalidates_confirmation_and_retains_snapshot_stale ... ok
+test model::tests::settings_draft_is_revision_checked_and_session_changes_require_fresh_review ... ok
+test model::tests::snapshot_preserves_selection_and_backend_order ... ok
+test model::tests::snapshot_and_topic_pages_assemble_at_one_stable_capture_and_watermark ... ok
+test model::tests::stale_retained_state_disables_actions_without_dropping_data ... ok
+test model::tests::task_collection_uses_projected_relationships_and_preserves_attention_children ... ok
+test model::tests::transition_conflict_keeps_the_operator_draft_and_retained_snapshot ... ok
+test model::tests::uncertain_delivery_requires_a_current_separate_recovery_confirmation ... ok
+test model::tests::workspace_has_three_stable_valid_panes ... ok
+test transport::tests::conversation_mutations_require_session_and_preserve_exact_command_body ... ok
+test transport::tests::conversation_read_generation_is_not_sent_to_server ... ok
+test transport::tests::agent_settings_transport_preserves_save_payload_and_checks_response_session ... ok
+test transport::tests::endpoints_use_operator_reads_and_exact_lifecycle_paths ... ok
+test transport::tests::every_projection_response_requires_the_exact_bootstrap_identity ... ok
+test transport::tests::handoff_transport_pins_revision_and_exact_mutation_body_under_the_bootstrap_token ... ok
+test transport::tests::every_lifecycle_action_body_carries_the_reviewed_precondition ... ok
+test transport::tests::incompatible_bootstrap_and_restarted_snapshot_fail_closed ... ok
+test app::tests::settings_conflict_requires_explicit_current_review_and_preserves_operator_text ... ok
+test transport::tests::mutations_require_a_memory_only_session_and_submit_its_header ... ok
+test transport::tests::native_transport_accepts_only_literal_http_loopback_bases ... ok
+test transport::tests::projection_gap_and_invalid_cursor_are_recovery_failures ... ok
+test transport::tests::stale_token_error_is_classified_as_a_session_change ... ok
+test transport::tests::transition_conflict_is_classified_separately_from_transport_failure ... ok
+test transport::tests::task_settings_transport_carries_exact_revision_and_memory_only_token ... ok
+test ui_observation::tests::current_frame_snapshot_excludes_offscreen_nodes_and_audits_cleanly ... ok
+test app::tests::routine_decisions_do_not_use_failure_emphasis_or_absent_metadata ... ok
+test app::tests::reader_tail_is_observed_only_when_its_painted_rows_are_visible ... ok
+test app::tests::repeated_detail_actions_keep_domain_identity_when_reordered ... ok
+test model::tests::five_thousand_row_snapshot_applies_bounded_incremental_upserts_and_reorders ... ok
+test ui_observation::tests::failed_text_attempts_survive_offscreen_filtering ... ok
+test app::notifications_ui::tests::device_disable_has_separate_confirmation_and_stale_state_disables_actions ... ok
+test app::tests::action_area_keeps_relevant_stale_actions_with_visible_explanation ... ok
+test app::conversation_ui::tests::composer_retains_send_control_with_a_long_multiline_draft ... ok
+test app::settings_ui::tests::scroll_clipped_option_nodes_cannot_point_at_the_footer_beneath_them ... ok
+test app::notifications_ui::tests::unsupported_and_native_surfaces_do_not_offer_enrolment ... ok
+test app::tests::engineering_compose_controls_are_observable_at_desktop_and_narrow_widths ... ok
+test app::conversation_ui::tests::reminder_history_stays_within_a_narrow_details_column ... ok
+test app::tests::attention_rows_have_two_lines_and_visible_metadata_at_both_widths ... ok
+test app::conversation_ui::tests::long_candidates_messages_and_definition_fit_narrow_viewport ... ok
+test app::handoff_ui::tests::editor_has_a_visible_sticky_save_and_scroll_bounded_fields_at_desktop_and_phone_widths ... ok
+test app::tests::conversation_workspace_controls_are_visible_at_desktop_and_narrow_widths ... ok
+test app::tests::large_fixture_uses_a_bounded_materialised_range ... ok
+test app::tests::collection_row_identity_survives_reordering_and_narrow_layout ... ok
+test app::notifications_ui::tests::pending_discard_requires_review_and_stays_available_without_server_mutation_safety ... ok
+test app::tests::actual_evidence_reader_scrolls_to_long_tail_without_claiming_measurement ... ok
+test app::tests::expired_push_recovery_renders_resolution_and_disabled_resending ... ok
+test app::tests::confirmation_transition_observations_match_each_render_pass ... ok
+test app::conversation_ui::tests::long_transcript_and_error_keep_composer_inside_the_viewport ... ok
+test app::settings_ui::tests::enabled_adviser_controls_remain_readable_at_desktop_and_narrow_widths ... ok
+test app::tests::detail_presentation_identity_survives_desktop_and_narrow_navigation ... ok
+test app::tests::row_recipes_contain_painted_text_at_normal_and_enlarged_scales ... ok
+test app::conversation_ui::tests::adviser_activity_does_not_move_the_composer_or_lose_its_draft ... ok
+test app::settings_ui::tests::settings_controls_and_sticky_save_fit_desktop_and_narrow_viewports ... ok
+test app::tests::task_settings_editor_and_review_have_complete_semantics_at_both_widths ... ok
+test app::tests::physical_search_input_filters_collections_through_repeated_layout ... ok
+
+test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+
+     Running unittests src/main.rs (target/debug/deps/bokkie_attention_ui-9896571b1842c09c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Blocking waiting for file lock on build directory
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.04s
+   Compiling bokkie-attention-ui v0.1.0 (/nvme/development/bokkie-worktrees/rust-1.99.0/apps/bokkie-attention-ui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.75s
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling cfg-if v1.0.4
+   Compiling serde v1.0.229
+   Compiling once_cell v1.21.4
+   Compiling wasm-bindgen-shared v0.2.127
+   Compiling rustversion v1.0.23
+   Compiling syn v3.0.4
+   Compiling syn v2.0.119
+   Compiling bumpalo v3.20.3
+   Compiling unicode-ident v1.0.24
+   Compiling wasm-bindgen v0.2.127
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling num-traits v0.2.19
+   Compiling pin-project-lite v0.2.17
+   Compiling slab v0.4.12
+   Compiling futures-core v0.3.34
+   Compiling futures-task v0.3.34
+   Compiling futures-util v0.3.34
+   Compiling serde_derive v1.0.229
+   Compiling bytemuck_derive v1.12.0
+   Compiling wasm-bindgen-macro-support v0.2.127
+   Compiling bytemuck v1.25.2
+   Compiling log v0.4.34
+   Compiling cfg_aliases v0.2.2
+   Compiling thiserror v2.0.20
+   Compiling thiserror-impl v2.0.20
+   Compiling foldhash v0.2.0
+   Compiling arrayvec v0.7.8
+   Compiling version_check v0.9.5
+   Compiling hashbrown v0.17.1
+   Compiling bitflags v2.13.1
+   Compiling zerocopy v0.8.56
+   Compiling zerocopy-derive v0.8.56
+   Compiling parking_lot_core v0.9.12
+   Compiling smallvec v1.16.0
+   Compiling equivalent v1.0.2
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling indexmap v2.14.1
+   Compiling rustc-hash v1.1.0
+   Compiling parking_lot v0.12.5
+   Compiling slotmap v1.1.1
+   Compiling naga v30.0.1
+   Compiling naga-types v30.0.1
+   Compiling unicode-width v0.2.2
+   Compiling bit-vec v0.9.1
+   Compiling codespan-reporting v0.13.1
+   Compiling bit-set v0.10.0
+   Compiling static_assertions v1.1.0
+   Compiling wasm-bindgen-macro v0.2.127
+   Compiling profiling v1.0.18
+   Compiling raw-window-handle v0.6.2
+   Compiling polycool v0.4.0
+   Compiling wgpu-hal v30.0.1
+   Compiling zmij v1.0.23
+   Compiling kurbo v0.13.1
+   Compiling font-types v0.12.4
+   Compiling color v0.3.3
+   Compiling js-sys v0.3.104
+   Compiling euclid v0.22.14
+   Compiling litrs v1.0.0
+   Compiling serde_json v1.0.151
+   Compiling linebender_resource_handle v0.1.1
+   Compiling peniko v0.6.1
+   Compiling document-features v0.2.12
+   Compiling guillotiere v0.7.0
+   Compiling read-fonts v0.41.0
+   Compiling ahash v0.8.12
+   Compiling wgpu-core v30.0.1
+   Compiling itoa v1.0.18
+   Compiling half v2.7.1
+   Compiling simd-adler32 v0.3.10
+   Compiling memchr v2.8.3
+   Compiling unicode-general-category v1.1.0
+   Compiling fearless_simd v0.4.1
+   Compiling vello_common v0.1.0
+   Compiling emath v0.36.1
+   Compiling wgpu v30.0.1
+   Compiling crossbeam-utils v0.8.22
+   Compiling crc32fast v1.5.1
+   Compiling adler2 v2.0.1
+   Compiling web-sys v0.3.104
+   Compiling wasm-bindgen-futures v0.4.77
+   Compiling web-time v1.1.0
+   Compiling ecolor v0.36.1
+   Compiling skrifa v0.44.0
+   Compiling harfrust v0.12.0
+   Compiling vello_cpu v0.1.0
+   Compiling uuid v1.26.0
+   Compiling enumn v0.1.14
+   Compiling tracing-attributes v0.1.31
+   Compiling tracing-core v0.1.36
+   Compiling either v1.18.0
+   Compiling nohash-hasher v0.2.0
+   Compiling epaint_default_fonts v0.36.1
+   Compiling self_cell v1.3.0
+   Compiling unicode-segmentation v1.13.3
+   Compiling tracing v0.1.44
+   Compiling epaint v0.36.1
+   Compiling itertools v0.15.0
+   Compiling accesskit v0.24.1
+   Compiling miniz_oxide v0.9.1
+   Compiling rustc-hash v2.1.3
+   Compiling twox-hash v2.1.4
+   Compiling lz4_flex v0.12.2
+   Compiling type-map v0.5.1
+   Compiling flate2 v1.1.10
+   Compiling crossbeam-channel v0.5.16
+   Compiling polyorama-core v0.1.6 (https://github.com/robchristie/polyorama?rev=3c1c51f873de70162629a7fc4c17896f89bf7125#3c1c51f8)
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling siphasher v1.0.3
+   Compiling pxfm v0.1.30
+   Compiling polyorama-runtime v0.1.6 (https://github.com/robchristie/polyorama?rev=3c1c51f873de70162629a7fc4c17896f89bf7125#3c1c51f8)
+   Compiling phf_shared v0.12.1
+   Compiling png v0.18.1
+   Compiling moxcms v0.8.1
+   Compiling chrono-tz v0.10.4
+   Compiling byteorder-lite v0.1.0
+   Compiling phf v0.12.1
+   Compiling chrono v0.4.45
+   Compiling percent-encoding v2.3.2
+   Compiling serde-wasm-bindgen v0.6.5
+   Compiling bokkie-operator-api v0.1.0 (/nvme/development/bokkie-worktrees/rust-1.99.0/crates/bokkie-operator-api)
+   Compiling wgpu-types v30.0.1
+   Compiling glow v0.17.0
+   Compiling egui v0.36.1
+   Compiling image v0.25.10
+   Compiling ehttp v0.7.1
+   Compiling console_error_panic_hook v0.1.7
+   Compiling wgpu-naga-bridge v30.0.1
+   Compiling wgpu-core-deps-wasm v30.0.1
+   Compiling egui-wgpu v0.36.1
+   Compiling polyorama-render-wgpu v0.1.6 (https://github.com/robchristie/polyorama?rev=3c1c51f873de70162629a7fc4c17896f89bf7125#3c1c51f8)
+   Compiling polyorama-ui-egui v0.1.6 (https://github.com/robchristie/polyorama?rev=3c1c51f873de70162629a7fc4c17896f89bf7125#3c1c51f8)
+   Compiling eframe v0.36.1
+   Compiling bokkie-attention-ui v0.1.0 (/nvme/development/bokkie-worktrees/rust-1.99.0/apps/bokkie-attention-ui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 30.02s

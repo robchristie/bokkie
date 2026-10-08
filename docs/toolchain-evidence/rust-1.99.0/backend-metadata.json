@@ -1,0 +1,67 @@
+{
+  "buildx.build.provenance": {
+    "builder": {
+      "id": ""
+    },
+    "buildType": "https://mobyproject.org/buildkit@v1",
+    "materials": [
+      {
+        "uri": "pkg:docker/rust@1.99.0-bookworm?digest=sha256:b36c246742b4d323472588f789601be34eb4af053255e2af53969078ee8dcec7\u0026platform=linux%2Famd64",
+        "digest": {
+          "sha256": "b36c246742b4d323472588f789601be34eb4af053255e2af53969078ee8dcec7"
+        }
+      }
+    ],
+    "invocation": {
+      "configSource": {
+        "entryPoint": "Dockerfile"
+      },
+      "parameters": {
+        "frontend": "dockerfile.v0",
+        "args": {
+          "label:org.opencontainers.image.revision": "3c0d679b8424ce69efa739cdd0c4b773314f4997",
+          "target": "backend"
+        },
+        "locals": [
+          {
+            "name": "context"
+          },
+          {
+            "name": "dockerfile"
+          }
+        ],
+        "root": {
+          "configSource": {
+            "path": "Dockerfile"
+          },
+          "request": {
+            "args": {
+              "label:org.opencontainers.image.revision": "3c0d679b8424ce69efa739cdd0c4b773314f4997",
+              "target": "backend"
+            }
+          }
+        },
+        "compatibilityVersion": 30
+      },
+      "environment": {
+        "dockerfileVersion": "1.27.0",
+        "platform": "linux/amd64"
+      }
+    }
+  },
+  "buildx.build.ref": "bokkie-rust-199-b1/bokkie-rust-199-b10/qaw6shyumr8n4v81uj7hjc4vp",
+  "containerimage.descriptor": {
+    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+    "digest": "sha256:796cc9a78fa9de9acdcc89deb6bcbe00c85e245b4467d751e5b1d97018241c23",
+    "size": 2588,
+    "annotations": {
+      "org.opencontainers.image.created": "2026-10-08T03:52:41Z"
+    },
+    "platform": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "containerimage.digest": "sha256:796cc9a78fa9de9acdcc89deb6bcbe00c85e245b4467d751e5b1d97018241c23",
+  "image.name": "docker.io/library/bokkie-rust-199-b1:backend"
+}
