@@ -303,6 +303,15 @@ tools/check-ui.sh
 
 The script uses `--locked` for every dependency-resolving Cargo operation and
 checks formatting separately because `cargo fmt` has no lockfile mode.
+Its native tests use
+`cargo +1.99.0 nextest run --locked -p bokkie-attention-ui --all-targets --profile ui-ci`,
+followed by `cargo +1.99.0 test --locked -p bokkie-attention-ui --doc`.
+Install prebuilt Nextest 0.9.146 as described in the root
+[development instructions](../../README.md#development). The UI's separate
+JUnit report is `.bokkie/nextest/ui-ci/junit.xml`; the script removes a previous
+report before setup and CI retains fresh results even if tests fail. The UI
+profile continues the selected suite after failure, with no retries or hard
+test timeout and a five-second slow-test warning.
 
 Run deterministic UI qualification from the repository root with:
 
