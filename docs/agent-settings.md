@@ -9,6 +9,11 @@ is a role label: the current deployed catalogue advertises `gpt-6-astra`, rather
 than a model identifier called Astra. Disabled is the migration default. Navigation
 retains the current conversation, selected task and unsent message.
 
+**Memory** opens the [bounded recall editor](memory.md) for sourced preferences,
+task outcomes, decisions and observed operational knowledge. Inspect, correct or
+remove individual entries there. These entries stay separate from conversational
+role configuration and execution permissions.
+
 ## Effective configuration
 
 Migration 16 adds immutable numbered role configurations, one active pointer,

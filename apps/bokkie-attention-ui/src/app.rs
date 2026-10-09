@@ -7,6 +7,8 @@ mod notifications_ui;
 #[path = "handoff_ui.rs"]
 mod handoff_ui;
 
+#[path = "memory_ui.rs"]
+mod memory_ui;
 #[path = "settings_ui.rs"]
 mod settings_ui;
 
@@ -263,6 +265,7 @@ struct EngineeringDraft {
 pub struct AttentionApp {
     conversation: conversation_ui::ConversationState,
     agent_settings: settings_ui::AgentSettingsState,
+    memory: memory_ui::MemoryState,
     handoff: handoff_ui::HandoffState,
     engineering_draft: Option<EngineeringDraft>,
     engineering_saved_notice: bool,
@@ -287,6 +290,8 @@ pub struct AttentionApp {
     frame_number: u64,
     last_test_snapshot: TestSnapshot,
     test_observer: Option<Rc<RefCell<TestSnapshot>>>,
+    #[cfg(test)]
+    test_dispatch: Option<Vec<ApiRequest>>,
 }
 
 impl AttentionApp {
@@ -333,6 +338,7 @@ impl AttentionApp {
         let mut app = Self {
             conversation: conversation_ui::ConversationState::home(),
             agent_settings: settings_ui::AgentSettingsState::default(),
+            memory: memory_ui::MemoryState::default(),
             handoff: handoff_ui::HandoffState::default(),
             engineering_draft: None,
             engineering_saved_notice: false,
@@ -357,6 +363,8 @@ impl AttentionApp {
             frame_number: 0,
             last_test_snapshot: TestSnapshot::default(),
             test_observer,
+            #[cfg(test)]
+            test_dispatch: None,
         };
         app.restore_handoff_local_state();
         app.dispatch(ApiRequest::Bootstrap, &creation.egui_ctx);
@@ -499,6 +507,11 @@ impl AttentionApp {
             | ApiRequest::EngineeringCancel(_) => self.model.action_busy = true,
             _ => {}
         }
+        #[cfg(test)]
+        if let Some(requests) = &mut self.test_dispatch {
+            requests.push(request);
+            return;
+        }
         transport.send(
             request,
             self.session.as_ref(),
@@ -511,6 +524,10 @@ impl AttentionApp {
         while let Ok(message) = self.receiver.try_recv() {
             if handoff_ui::is_request(&message.request) {
                 self.handoff_response(message.request, message.result, context);
+                continue;
+            }
+            if memory_ui::is_request(&message.request) {
+                self.memory_response(message.request, message.result, context);
                 continue;
             }
             if settings_ui::is_request(&message.request) {
@@ -564,6 +581,7 @@ impl AttentionApp {
                     self.session = Some(session);
                     self.refresh_conversation(context);
                     self.refresh_agent_settings(false, context);
+                    self.refresh_open_memory(context);
                     self.refresh_handoff(context);
                     self.begin_full_rebuild(false, context);
                 }
@@ -763,7 +781,11 @@ impl AttentionApp {
 
     fn request_is_current(&self, request: &ApiRequest) -> bool {
         match request {
-            request if conversation_ui::is_request(request) || settings_ui::is_request(request) => {
+            request
+                if conversation_ui::is_request(request)
+                    || settings_ui::is_request(request)
+                    || memory_ui::is_request(request) =>
+            {
                 true
             }
             ApiRequest::Bootstrap
@@ -1111,6 +1133,7 @@ impl AttentionApp {
     fn restart_session(&mut self, message: &str, context: &egui::Context) {
         self.conversation.reset_session();
         self.agent_settings.reset_session();
+        self.memory.reset_session();
         self.handoff.reset_session();
         self.session = None;
         self.model.record_session_change(message);
@@ -5063,6 +5086,7 @@ mod tests {
         AttentionApp {
             conversation: conversation_ui::ConversationState::default(),
             agent_settings: settings_ui::AgentSettingsState::default(),
+            memory: memory_ui::MemoryState::default(),
             handoff: handoff_ui::HandoffState::default(),
             engineering_draft: None,
             engineering_saved_notice: false,
@@ -5087,6 +5111,7 @@ mod tests {
             frame_number: 0,
             last_test_snapshot: TestSnapshot::default(),
             test_observer: None,
+            test_dispatch: None,
         }
     }
 

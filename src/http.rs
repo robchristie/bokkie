@@ -235,6 +235,7 @@ fn router_state_core(state: ApiState) -> Router {
         .merge(crate::conversation_http::routes())
         .merge(crate::handoff_http::routes())
         .merge(crate::push_http::routes())
+        .merge(crate::memory_http::routes())
         .merge(crate::workspace_http::routes())
         .route(
             "/engineering/outcomes",

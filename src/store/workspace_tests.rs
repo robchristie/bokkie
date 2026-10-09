@@ -2,6 +2,105 @@ use super::*;
 use crate::workspace::WorkspaceHostProject;
 use tempfile::TempDir;
 
+#[test]
+fn memory_recalls_selected_accepted_outcome_and_preserves_corrected_removed_sources() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("memory-outcome.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    let (host, task) = setup(&mut store, false);
+    let d = dispatch(&mut store, &host, 1);
+    send(
+        &mut store,
+        &host,
+        event(&d, 1, stopped(Some(result()), false)),
+        2,
+    )
+    .unwrap();
+    assert!(
+        store
+            .memory_context(Some(&task), "outcome", 4096, 3)
+            .unwrap()
+            .is_empty()
+    );
+    send(
+        &mut store,
+        &host,
+        event(&d, 2, stopped(Some(result()), true)),
+        4,
+    )
+    .unwrap();
+    let history = store.managed_detail(&task).unwrap();
+    let run = store.workspace_run(&d.execution_id).unwrap();
+    assert!(
+        store
+            .memory_context(None, "unrelated", 4096, 5)
+            .unwrap()
+            .is_empty()
+    );
+    let recall = store
+        .memory_context(Some(&task), "what was accepted?", 4096, 6)
+        .unwrap();
+    assert_eq!(recall.len(), 1);
+    let original = &recall[0];
+    assert_eq!(original.kind, MemoryKind::TaskOutcome);
+    assert_eq!(original.provenance, MemoryProvenance::Inferred);
+    assert_eq!(
+        original.content.as_deref(),
+        Some("Correction reviewed and delivered")
+    );
+    assert_eq!(
+        original.sources[0].reference,
+        format!("workspace_execution:{}", d.execution_id)
+    );
+    let corrected = store
+        .memory_command(
+            &MemoryCommandRequest {
+                command_id: "correct-outcome".into(),
+                entry_id: Some(original.id.clone()),
+                expected_revision: original.revision,
+                mutation: MemoryMutation::Correct {
+                    content: "Reviewed source delivery; deployment was outside the task.".into(),
+                },
+            },
+            7,
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .memory_context(Some(&task), "outcome", 4096, 8)
+            .unwrap(),
+        vec![corrected.clone()]
+    );
+    store
+        .memory_command(
+            &MemoryCommandRequest {
+                command_id: "remove-outcome".into(),
+                entry_id: Some(corrected.id),
+                expected_revision: corrected.revision,
+                mutation: MemoryMutation::Remove,
+            },
+            9,
+        )
+        .unwrap();
+    assert!(
+        store
+            .memory_context(Some(&task), "outcome", 4096, 10)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(store.managed_detail(&task).unwrap(), history);
+    assert_eq!(store.workspace_run(&d.execution_id).unwrap(), run);
+    drop(store);
+    let mut store = Store::open_compatible(&path).unwrap();
+    assert!(
+        store
+            .memory_context(Some(&task), "outcome", 4096, 11)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(store.managed_detail(&task).unwrap(), history);
+}
+
 fn empty() -> WorkspaceExchangeRequest {
     WorkspaceExchangeRequest {
         events: vec![],
