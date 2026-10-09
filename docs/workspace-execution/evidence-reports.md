@@ -60,3 +60,23 @@ Migration21 is an explicit decode/rollback barrier. Definitions, report results
 and checkpoints use existing immutable JSON records, so the migration adds no
 new scheduler or projection table. Older schema20 binaries reject the state
 before attempting to decode these new contracts.
+
+## Actual entry calibration
+
+A real Home request created one task and pinned the read-only contract, selected
+Bokkie scope and finite profile limits. The first run stopped before source
+capture because the isolated view omitted the target of the existing public TLS
+trust-store symlink. A read-only mount of that target preserved TLS validation;
+supported no-model account routing then passed. The next run reached inference
+and retained an actionable missing-guidance question when its model tool helper
+was absent. It was explicitly cancelled; the outside owner proved all descendants
+reaped. Both original admissions and the question remain in task history. No
+report has yet been accepted. [Draft PR65](https://github.com/robchristie/bokkie/pull/65)
+owns the incomplete source package and remaining live qualification.
+
+The actual-account probes retain guidance hashes, public trust-asset digest,
+disabled/empty MCP inventories and negative root/reviewer write, TCP and Unix
+socket controls under `/tmp/bokkie-report-live/runtime/preflights/`. They start no
+model turn. Native model-tool readiness is a separate seam from direct
+`command/exec`; the live failure must be repaired and qualified before accepting
+the integration. Failed startup does not authorise replaying a launch marker.
