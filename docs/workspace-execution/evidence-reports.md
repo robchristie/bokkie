@@ -102,3 +102,22 @@ for both the root and all derived roles while preserving app-server account
 access, guidance, source mirrors and closed writes/network. Unknown schema fields
 or accepted configuration alone do not establish enforcement. Actual installed
 profile provenance and denial observations own this gate.
+
+## Actual named-child checkpoint
+
+At candidate `4035a9ebfbdba0979780d78f2f5dc6606038478a`, the real sixth
+definition replaced the fifth unadmitted occurrence. The named child correctly
+used Astra/high and its actual parent/creation order followed the seal, but its
+original turn policy inherited the parent's scratch-write grant. The independent
+read-only requirement stayed false; the owner stopped the execution with ECHILD
+cessation and retained its sources, seal, question and original policy record.
+The canonical digest schema was also absent from the selected main checkout.
+
+Decision: use one fully read-only report profile for the root and every child.
+The host already owns the bounded capture, checkpoint and seal writes. Supply a
+versioned immutable contract in the admitted mirror, with explicit canonical
+payloads and test vector. Prove actual native parent → named-child inheritance
+with the isolated scripted provider before another live inference run. This
+checkpoint qualifies the mechanism only; real substantive review, acceptance,
+result display and restart continuity remain required. Engineering profiles
+retain their separate contract.
