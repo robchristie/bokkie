@@ -2,8 +2,8 @@
 
 - Status: active
 - Reorientation budget: 180
-- Landed pull requests: [PR62](https://github.com/robchristie/bokkie/pull/62), real workspace delivery qualification change
-- Next action: qualify the compatible hosted observer environment, review and land PR63; then portfolio reports/decisions and memory
+- Landed pull requests: [PR62](https://github.com/robchristie/bokkie/pull/62), real task qualification; [PR63](https://github.com/robchristie/bokkie/pull/63), workspace connector
+- Next action: review and land bounded memory; qualify portfolio evidence reports and decision paths, then task batches/dependencies and recurrence
 
 ## Outcome and authority
 
@@ -41,15 +41,15 @@ starts modestly alongside useful execution. Refine packages from evidence.
 
 | Package | State | Acceptance remaining / next action |
 | --- | --- | --- |
-| Workspace execution | One visible conversational task delivered [PR62](https://github.com/robchristie/bokkie/pull/62), recovered its partial report and completed under an explicit future evidence-review definition; browser closure/restart preserved execution/results | Accepted real milestone; [qualification](../../workspace-execution/qualification.md); [PR63](https://github.com/robchristie/bokkie/pull/63) repairs independently found cancellation and host-observation defects; 452 backend tests, 71 host tests and 26 browser checks pass; final review/CI/landing remain |
-| Portfolio and decisions | Waiting for connector | Refine finite token-budget bounds from the recorded cache-inclusive stops; independent outcomes become distinct tasks; shared scope/dependencies retained; automatic pass continuation and actionable inconclusive question |
+| Workspace execution | Landed PR63 at `f7e4b9707f6df22e541cd22aab3d85bd08c8a079`; real task delivered PR62 and retained its result across interruption | Accepted; [qualification](../../workspace-execution/qualification.md); independent PASS, four candidate and four merge checks passed; source tree `9cb79ff6d60647c65bd03e9b4a12505f19a9e980` |
+| Portfolio and decisions | Evidence-report/checkpoint contract and host isolation in calibration | Refine finite future profile budgets; real retained-source report, automatic assessment continuation and actionable inconclusive question; then distinct tasks/shared context/dependencies |
 | Recurring workspace tasks | Waiting for connector | Real scheduled correction, interruption recovery, actual repository/worktree conflict ownership; pause future versus stop active |
 | Consolidation | Avoid duplication from first package | Replace gardener with recurrence, Pagefold with workspace execution, hand-offs with briefs and optional export; preserve history and admitted work |
 | Research | After workspace execution | Live search/read, linked relevance digest, retained findings prevent repeats; deterministic retry/effect tests |
 | Email observation | Integration preparation | Selected folders/queries and relevant changes; account selection and authorised read access remain unknown |
 | System observation / maintenance | Integration preparation | Server/OPNsense observations and explicitly permitted procedure definitions; targets/access and maintenance authority remain unknown |
 | Isolated browser tasks | Integration preparation | Bounded browser worker, common results, isolation and cancellation proof; target/browser decisions to resolve from evidence |
-| Memory | Alongside useful execution | Inspect/edit/remove explicit preferences, outcome/decision summaries and observed operational knowledge; demonstrate a retrieval need |
+| Memory | Implemented; canonical backend459/UI124 and 19-check browser journey pass | Independent review/CI/landing; bounded recall uses sourced preferences and selected accepted outcomes, with correction/removal suppression |
 
 ## Grounded baseline
 

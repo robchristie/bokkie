@@ -106,8 +106,8 @@ interrupt acknowledgement or missing broker is not cessation evidence.
 
 Migration18 appends workspace execution records and immutable event/answer/action
 receipts; migration19 adds immutable recovered reports without changing the
-original stopped result. Schema17 and schema18 binaries cannot open this source's
-schema19 state.
+original stopped result. Migration20 adds bounded memory. Schema17, schema18
+and schema19 binaries cannot open this source's schema20 state.
 Keep the prior stopped-state backup for any separately authorised deployment;
 rollback is a data operation and must account for later external effects.
 

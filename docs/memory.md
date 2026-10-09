@@ -59,5 +59,9 @@ The deterministic memory regressions cover CRUD, provenance, replay, stale
 revision rejection, validation, bounded retrieval and paging, restart, accepted
 outcome capture, correction/removal suppression and the unchanged task history.
 HTTP and UI tests cover the mutation-token boundary, exact request retention,
-service identity and the editor at desktop and narrow widths. Browser journey
-qualification remains a separate delivery observation.
+service identity and the editor at desktop and narrow widths. Browser qualification uses the actual UI and Store in a private controller,
+with no model call. The 19-check journey covers source/provenance, correction,
+removal and browser closure/controller restart at 1440×1000 and 390×844. Its
+committed-candidate attribution, opened captures and full report are retained
+under `/tmp/bokkie-task-memory-evidence/browser-ba48/` and the delivery receipt.
+It establishes these inputs, not production deployment or other devices.
