@@ -2,7 +2,7 @@
 
 Status: bounded queue-finalisation repair in the current evidence-report package.
 Canonical check log `/tmp/bokkie-workspace-probe/command-log-rroh4q6g/` records
-continuous-output finalisation hanging for454.537seconds before the owner stopped
+continuous-output finalisation hanging for 454.537 seconds before the owner stopped
 that exact test with a pidfd signal. The direct child and all descendants were
 observed absent; three remaining test threads waited on futexes. Existing
 source had bounded reader/writer notification channels, a time-limited drain,
