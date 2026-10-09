@@ -29,6 +29,11 @@ pub enum ApiRequest {
         generation: u64,
     },
     SaveAgentSettings(bokkie_operator_api::AgentSettingsSaveRequest),
+    Memory {
+        after: Option<String>,
+        generation: u64,
+    },
+    SaveMemory(bokkie_operator_api::MemoryCommandRequest),
     Projects {
         generation: u64,
     },
@@ -97,6 +102,8 @@ pub enum ApiRequest {
 pub enum ApiPayload {
     Bootstrap(ApiSession),
     AgentSettings(Box<bokkie_operator_api::AgentSettingsView>),
+    Memory(bokkie_operator_api::MemoryList),
+    MemorySaved(bokkie_operator_api::MemorySaved),
     Projects(bokkie_operator_api::ProjectList),
     Handoffs(bokkie_operator_api::HandoffList),
     Handoff(Box<bokkie_operator_api::HandoffView>),
@@ -262,6 +269,7 @@ impl Transport {
         let endpoint = self.endpoint(request);
         match request {
             ApiRequest::Bootstrap
+            | ApiRequest::Memory { .. }
             | ApiRequest::AgentSettings { .. }
             | ApiRequest::Projects { .. }
             | ApiRequest::Handoffs { .. }
@@ -277,6 +285,7 @@ impl Transport {
             | ApiRequest::SaveProject(_)
             | ApiRequest::SaveHandoff(_)
             | ApiRequest::HandoffActivity(_)
+            | ApiRequest::SaveMemory(_)
             | ApiRequest::SaveAgentSettings(_)
             | ApiRequest::ConversationTurn(_)
             | ApiRequest::ConversationSelect(_)
@@ -301,6 +310,9 @@ impl Transport {
                     }
                     ApiRequest::HandoffActivity(value) => {
                         serde_json::to_vec(value).expect("serialisable hand-off activity")
+                    }
+                    ApiRequest::SaveMemory(value) => {
+                        serde_json::to_vec(value).expect("serialisable memory")
                     }
                     ApiRequest::SaveAgentSettings(value) => {
                         serde_json::to_vec(value).expect("serialisable agent settings")
@@ -351,6 +363,11 @@ impl Transport {
 
     fn endpoint(&self, request: &ApiRequest) -> String {
         let path = match request {
+            ApiRequest::Memory { after, .. } => match after {
+                Some(after) => format!("/memory?after={}", encode_query_value(after)),
+                None => "/memory".into(),
+            },
+            ApiRequest::SaveMemory(_) => "/memory".into(),
             ApiRequest::AgentSettings { .. } | ApiRequest::SaveAgentSettings(_) => {
                 "/agent-settings".into()
             }
@@ -553,6 +570,16 @@ fn decode(
         };
     }
     match request {
+        ApiRequest::Memory { .. } => {
+            let value = decode_json::<bokkie_operator_api::MemoryList>(&response)?;
+            validate_response_identity(Some(&value.service), expected_session, "memory")?;
+            Ok(ApiPayload::Memory(value))
+        }
+        ApiRequest::SaveMemory(_) => {
+            let value = decode_json::<bokkie_operator_api::MemorySaved>(&response)?;
+            validate_response_identity(Some(&value.service), expected_session, "memory")?;
+            Ok(ApiPayload::MemorySaved(value))
+        }
         ApiRequest::AgentSettings { .. } | ApiRequest::SaveAgentSettings(_) => {
             let value = decode_json::<bokkie_operator_api::AgentSettingsView>(&response)?;
             validate_response_identity(Some(&value.service), expected_session, "agent settings")?;
@@ -890,6 +917,67 @@ mod tests {
                 .unwrap()
                 .contains(&"a".repeat(64))
         );
+    }
+
+    #[test]
+    fn memory_transport_keeps_command_and_revision_and_validates_read_identity() {
+        let transport = Transport::new("http://127.0.0.1:7744").unwrap();
+        let command = bokkie_operator_api::MemoryCommandRequest {
+            command_id: "exact-memory-command".into(),
+            entry_id: Some("workspace:execution".into()),
+            expected_revision: 4,
+            mutation: bokkie_operator_api::MemoryMutation::Correct {
+                content: "The corrected sourced summary".into(),
+            },
+        };
+        let request = ApiRequest::SaveMemory(command.clone());
+        assert!(transport.http_request(&request, None).is_err());
+        let current = session("current", &"a".repeat(64));
+        let http = transport.http_request(&request, Some(&current)).unwrap();
+        assert_eq!(http.url, "http://127.0.0.1:7744/memory");
+        assert_eq!(
+            serde_json::from_slice::<bokkie_operator_api::MemoryCommandRequest>(&http.body)
+                .unwrap(),
+            command
+        );
+        assert_eq!(
+            http.headers.get("X-Bokkie-Mutation-Token"),
+            Some("a".repeat(64).as_str())
+        );
+        assert!(
+            !String::from_utf8(http.body)
+                .unwrap()
+                .contains(&"a".repeat(64))
+        );
+        let read = ApiRequest::Memory {
+            after: Some("workspace:one/two".into()),
+            generation: 18,
+        };
+        assert_eq!(
+            transport.http_request(&read, None).unwrap().url,
+            "http://127.0.0.1:7744/memory?after=workspace%3Aone%2Ftwo"
+        );
+        let response = |identity| ehttp::Response {
+            url: "http://127.0.0.1:7744/memory".into(),
+            ok: true,
+            status: 200,
+            status_text: "OK".into(),
+            headers: ehttp::Headers::new(&[("Content-Type", "application/json")]),
+            bytes: serde_json::to_vec(&bokkie_operator_api::MemoryList {
+                service: service(identity),
+                entries: vec![],
+                next_after: None,
+            })
+            .unwrap(),
+        };
+        assert!(matches!(
+            decode(&read, response("current"), Some(&current)),
+            Ok(ApiPayload::Memory(_))
+        ));
+        assert!(matches!(
+            decode(&read, response("old"), Some(&current)),
+            Err(ApiFailure::SessionChanged(_))
+        ));
     }
 
     #[test]

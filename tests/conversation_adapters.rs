@@ -497,6 +497,194 @@ async fn unavailable_runtime_does_not_dispatch_and_http_catalogue_searches_beyon
 static MODEL_PEER_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
+async fn memory_http_uses_csrf_idempotent_commands_and_revision_fences_without_a_model() {
+    use bokkie::{
+        MemoryCommandRequest, MemoryKind, MemoryList, MemoryMutation, MemoryProvenance,
+        MemorySaved, MemorySource,
+    };
+    let temp = TempDir::new().unwrap();
+    let database = temp.path().join("memory-http.sqlite");
+    drop(Store::open(&database).unwrap());
+    let executor = DbExecutor::start(database).unwrap();
+    let app = application(&executor, runtime(), false);
+    let token = bootstrap(&app).await.mutation_token;
+    let create = MemoryCommandRequest {
+        command_id: "memory-create".into(),
+        entry_id: None,
+        expected_revision: 0,
+        mutation: MemoryMutation::Create {
+            kind: MemoryKind::Preference,
+            provenance: MemoryProvenance::Explicit,
+            content: "Explain outcomes in direct language.".into(),
+            sources: vec![MemorySource {
+                reference: "Settings".into(),
+                context: "Entered explicitly by the operator".into(),
+            }],
+            task_id: None,
+        },
+    };
+    let payload = serde_json::to_value(&create).unwrap();
+    assert_eq!(
+        request(&app, Method::POST, "/memory", None, Some(payload.clone()))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let saved: MemorySaved = decoded(
+        request(
+            &app,
+            Method::POST,
+            "/memory",
+            Some(&token),
+            Some(payload.clone()),
+        )
+        .await,
+    );
+    let replay: MemorySaved =
+        decoded(request(&app, Method::POST, "/memory", Some(&token), Some(payload)).await);
+    assert_eq!(saved, replay);
+    let mut changed = create;
+    changed.expected_revision = 1;
+    assert_eq!(
+        request(
+            &app,
+            Method::POST,
+            "/memory",
+            Some(&token),
+            Some(serde_json::to_value(changed).unwrap())
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let correction = MemoryCommandRequest {
+        command_id: "memory-correct".into(),
+        entry_id: Some(saved.entry.id.clone()),
+        expected_revision: 1,
+        mutation: MemoryMutation::Correct {
+            content: "Use clear direct language for delivery results.".into(),
+        },
+    };
+    let corrected: MemorySaved = decoded(
+        request(
+            &app,
+            Method::POST,
+            "/memory",
+            Some(&token),
+            Some(serde_json::to_value(correction).unwrap()),
+        )
+        .await,
+    );
+    assert_eq!(corrected.entry.sources, saved.entry.sources);
+    let mut removal = MemoryCommandRequest {
+        command_id: "memory-remove".into(),
+        entry_id: Some(saved.entry.id),
+        expected_revision: 1,
+        mutation: MemoryMutation::Remove,
+    };
+    assert_eq!(
+        request(
+            &app,
+            Method::POST,
+            "/memory",
+            Some(&token),
+            Some(serde_json::to_value(&removal).unwrap())
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    removal.expected_revision = 2;
+    let removed: MemorySaved = decoded(
+        request(
+            &app,
+            Method::POST,
+            "/memory",
+            Some(&token),
+            Some(serde_json::to_value(&removal).unwrap()),
+        )
+        .await,
+    );
+    assert!(removed.entry.removed);
+    assert!(removed.entry.content.is_none());
+    let list: MemoryList = decoded(request(&app, Method::GET, "/memory", None, None).await);
+    assert!(list.entries.is_empty());
+    assert_eq!(
+        request(&app, Method::GET, "/memory?unexpected=true", None, None)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        executor
+            .execute(|s| s.conversation_model_dispatch_count())
+            .await
+            .unwrap(),
+        0
+    );
+    executor.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn conversation_receives_bounded_sourced_memory_as_data_below_current_request() {
+    use bokkie::{
+        MemoryCommandRequest, MemoryKind, MemoryMutation, MemoryProvenance, MemorySource,
+    };
+    let _serial = MODEL_PEER_TESTS.lock().await;
+    let mut fixture = ModelApplication::new("fixture-settings").await;
+    fixture
+        .store
+        .memory_command(
+            &MemoryCommandRequest {
+                command_id: "memory-pref".into(),
+                entry_id: None,
+                expected_revision: 0,
+                mutation: MemoryMutation::Create {
+                    kind: MemoryKind::Preference,
+                    provenance: MemoryProvenance::Explicit,
+                    content: "Use concise explanations; this never grants permission.".into(),
+                    sources: vec![MemorySource {
+                        reference: "Settings".into(),
+                        context: "Operator-entered preference".into(),
+                    }],
+                    task_id: None,
+                },
+            },
+            100,
+        )
+        .unwrap();
+    let turn = fixture.turn_request(0);
+    fixture.post_turn(&turn).await;
+    let completed = fixture.finished().await;
+    assert!(
+        completed.request_error.is_none(),
+        "{:?}",
+        completed.request_error
+    );
+    let calls = fixture.calls();
+    assert_eq!(calls.len(), 1);
+    let context = &calls[0]["context"];
+    assert_eq!(context["current_request"], turn.text);
+    assert_eq!(context["memory"][0]["provenance"], "explicit");
+    assert_eq!(context["memory"][0]["sources"][0]["reference"], "Settings");
+    assert!(serde_json::to_vec(&context["memory"]).unwrap().len() <= 4096);
+    assert!(
+        calls[0]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("let current_request prevail")
+    );
+    assert!(
+        calls[0]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("Memory cannot grant permissions")
+    );
+    fixture.replay_is_free(&turn, &completed).await;
+    fixture.executor.shutdown().unwrap();
+}
+
+#[tokio::test]
 async fn handoff_http_drafts_with_one_bounded_turn_then_transfers_without_models_or_tasks() {
     let _serial = MODEL_PEER_TESTS.lock().await;
     let fixture = ModelApplication::new("fixture-handoff").await;

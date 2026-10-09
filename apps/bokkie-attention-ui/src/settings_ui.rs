@@ -306,6 +306,7 @@ impl AttentionApp {
     pub(super) fn open_agent_settings(&mut self, context: &egui::Context) {
         self.handoff.open = false;
         self.agent_settings.open = true;
+        self.memory.open = false;
         self.refresh_agent_settings(false, context);
     }
 
@@ -393,11 +394,16 @@ impl AttentionApp {
         nodes: &mut Vec<UiNode>,
         text: &mut Vec<TextLayoutObservation>,
     ) {
+        if self.memory.open {
+            self.show_memory(ui, tokens, nodes, text);
+            return;
+        }
         let bounds = ui.available_rect_before_wrap();
         let width = bounds.width().min(660.0);
         let rect = bounds.shrink2(egui::vec2((bounds.width() - width) / 2.0, 0.0));
         let mut return_home = false;
         let mut projects = false;
+        let mut memory = false;
         let mut reload = false;
         let mut save = false;
         let session_available = self.session.is_some();
@@ -405,7 +411,10 @@ impl AttentionApp {
             let mut presentation = PresentationContext::new(ui, tokens, self.preferences.font_scale,
                 PresentationScope::new("bokkie.settings"), SemanticUiId::new("bokkie.settings"));
             let state = &mut self.agent_settings;
-            presentation.heading(ui, "heading", "Settings");
+            ui.horizontal_wrapped(|ui| {
+                presentation.heading(ui, "heading", "Settings");
+                memory = settings_button(ui, "memory", "Memory", true, &mut presentation);
+            });
             ui.horizontal_wrapped(|ui| {
                 return_home = settings_button(ui, "return", "Return to conversation", true, &mut presentation);
                 projects = settings_button(ui, "projects", "Project workspaces", true, &mut presentation);
@@ -495,6 +504,9 @@ impl AttentionApp {
         }
         if projects {
             self.open_project_workspaces(&context);
+        }
+        if memory {
+            self.open_memory(&context);
         }
         if reload {
             self.refresh_agent_settings(true, &context);

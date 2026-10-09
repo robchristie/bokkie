@@ -33,8 +33,10 @@ The initial implementation is intentionally narrow:
   and
 - a loopback HTTP API with a delivered local Polyorama attention interface.
 
-General infrastructure actions, deployment and memory remain
-outside the delivered capability. Workspace delivery follows its reviewed task
+General infrastructure actions and deployment remain
+outside the delivered capability. [Bounded memory](docs/memory.md) retains sourced
+preferences and selected-task outcome recall, with direct correction and removal.
+Workspace delivery follows its reviewed task
 scope and the receiving workspace's authority. The specialised
 [bounded Pagefold profile](docs/pagefold-github-delivery.md) retains its separate
 advanced contract. The graphical interface was

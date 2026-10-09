@@ -26,6 +26,8 @@ pub mod handoffs;
 pub mod http;
 pub mod http_security;
 pub mod managed;
+pub mod memory;
+pub mod memory_http;
 pub mod migrations;
 pub mod notifications;
 pub mod operator;

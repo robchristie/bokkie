@@ -7,6 +7,8 @@ mod notifications_ui;
 #[path = "handoff_ui.rs"]
 mod handoff_ui;
 
+#[path = "memory_ui.rs"]
+mod memory_ui;
 #[path = "settings_ui.rs"]
 mod settings_ui;
 
@@ -263,6 +265,7 @@ struct EngineeringDraft {
 pub struct AttentionApp {
     conversation: conversation_ui::ConversationState,
     agent_settings: settings_ui::AgentSettingsState,
+    memory: memory_ui::MemoryState,
     handoff: handoff_ui::HandoffState,
     engineering_draft: Option<EngineeringDraft>,
     engineering_saved_notice: bool,
@@ -333,6 +336,7 @@ impl AttentionApp {
         let mut app = Self {
             conversation: conversation_ui::ConversationState::home(),
             agent_settings: settings_ui::AgentSettingsState::default(),
+            memory: memory_ui::MemoryState::default(),
             handoff: handoff_ui::HandoffState::default(),
             engineering_draft: None,
             engineering_saved_notice: false,
@@ -511,6 +515,10 @@ impl AttentionApp {
         while let Ok(message) = self.receiver.try_recv() {
             if handoff_ui::is_request(&message.request) {
                 self.handoff_response(message.request, message.result, context);
+                continue;
+            }
+            if memory_ui::is_request(&message.request) {
+                self.memory_response(message.request, message.result, context);
                 continue;
             }
             if settings_ui::is_request(&message.request) {
@@ -763,7 +771,11 @@ impl AttentionApp {
 
     fn request_is_current(&self, request: &ApiRequest) -> bool {
         match request {
-            request if conversation_ui::is_request(request) || settings_ui::is_request(request) => {
+            request
+                if conversation_ui::is_request(request)
+                    || settings_ui::is_request(request)
+                    || memory_ui::is_request(request) =>
+            {
                 true
             }
             ApiRequest::Bootstrap
@@ -1111,6 +1123,7 @@ impl AttentionApp {
     fn restart_session(&mut self, message: &str, context: &egui::Context) {
         self.conversation.reset_session();
         self.agent_settings.reset_session();
+        self.memory.reset_session();
         self.handoff.reset_session();
         self.session = None;
         self.model.record_session_change(message);
@@ -5063,6 +5076,7 @@ mod tests {
         AttentionApp {
             conversation: conversation_ui::ConversationState::default(),
             agent_settings: settings_ui::AgentSettingsState::default(),
+            memory: memory_ui::MemoryState::default(),
             handoff: handoff_ui::HandoffState::default(),
             engineering_draft: None,
             engineering_saved_notice: false,
