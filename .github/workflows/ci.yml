@@ -22,7 +22,12 @@ env:
 jobs:
   plan-governance:
     name: Plan governance
-    runs-on: ubuntu-24.04
+    # Noble's default AppArmor user-namespace policy denies Bubblewrap's
+    # loopback setup. Select a compatible hosted image without changing that
+    # host policy or sharing the observer's network namespace. Replace Jammy
+    # before its announced retirement on 17 April 2027:
+    # https://github.com/actions/runner-images/issues/14254
+    runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
       - name: Check out candidate
@@ -30,6 +35,35 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+
+      - name: Set up contract Python
+        # actions/setup-python v7.0.0: official verified immutable release.
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          # Preserve the contract runtime used on Noble; Jammy defaults to 3.10.
+          python-version: '3.12'
+
+      - name: Prepare confined host observer tests
+        # Install Jammy's signed security build with descriptor-based mounts.
+        # Host observer regressions must exercise the actual isolation boundary.
+        # A version number alone does not establish a backported capability.
+        # Keep this public repository on its authored GitHub-hosted route.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          python3 - <<'PY'
+          import subprocess
+          help_text = subprocess.run(['/usr/bin/bwrap', '--help'], check=True, capture_output=True, text=True).stdout
+          if '--ro-bind-fd' not in help_text:
+              raise SystemExit('Bubblewrap descriptor-based read-only mounts are required')
+          PY
+          # Exercise the actual minimal Git boundary before the full contract
+          # suite. A help flag alone cannot establish namespace/mount readiness;
+          # failed fixtures print bounded trusted-helper diagnostics.
+          PYTHONPATH=tools/workspace-runtime python3 -m unittest -v \
+            test_runtime.SafeGitEarlyTests.test_fsmonitor_command_is_never_executed_by_host_observation \
+            test_runtime.SafeGitEarlyTests.test_assume_unchanged_cannot_hide_dirty_tracked_source \
+            test_runtime.SafeGitEarlyTests.test_real_linked_worktree_has_the_same_clean_commit_identity
 
       - name: Test and lint repository contracts
         run: |

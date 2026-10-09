@@ -37,6 +37,9 @@ pub mod runner;
 pub mod runtime_trust;
 pub mod service;
 pub mod store;
+pub mod workspace;
+pub mod workspace_conversation;
+pub mod workspace_http;
 
 pub use bokkie_operator_api::*;
 pub use db_executor::{DbExecutor, DbExecutorError};

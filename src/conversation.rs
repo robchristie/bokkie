@@ -27,6 +27,10 @@ fn event(tx: &rusqlite::Transaction<'_>, id: &str, now: i64) -> Result<(), Store
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConversationOperation {
+    PrepareWorkspace {
+        project_query: String,
+        brief: Box<HandoffBrief>,
+    },
     PrepareHandoff {
         project_query: String,
         brief: Box<HandoffBrief>,
@@ -120,7 +124,7 @@ impl Store {
                 let status = if error.as_deref().is_some_and(|e| e.contains("timed out") || e.contains("timeout") || e.contains("time limit") || e.contains("conversation deadline exceeded")) { "timeout".into() } else { status };
                 Ok(ConversationAdviserOutcome { request_id,profile_revision,status,advice:bounded_field("advice"),error })
             }).transpose()?;
-            Ok(ConversationView{handoff_draft:store.conversation_handoff(id)?,service,id:id.into(),revision,selected_task_id,messages,candidates:decode(&candidates)?,review,task,busy,request_error,runtime_available,adviser_available:false,activity,adviser_outcome,notes_available,reminders_available:false,receipt:receipt.map(|r|decode(&r)).transpose()?})
+            Ok(ConversationView{handoff_draft:store.conversation_handoff(id)?,service,id:id.into(),revision,selected_task_id,messages,candidates:decode(&candidates)?,review,task,busy,request_error,runtime_available,adviser_available:false,activity,adviser_outcome,notes_available,workspace_available:false,reminders_available:false,receipt:receipt.map(|r|decode(&r)).transpose()?})
         })
     }
     /// Durable dispatch precedes model execution. Identical retries do not launch again.

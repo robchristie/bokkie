@@ -105,14 +105,15 @@ requested beside the composer or through an explicitly enabled, grounded
 conflicting-requirements policy. The conversation shows activity and the useful
 outcome through Bokkie, with a shared finite request budget.
 
-Development work should produce a concise hand-off to the selected project
-workspace: requested outcome, relevant context, constraints and a return link.
-The project workspace owns its Codex development workflow. Bokkie records the
-handoff and any supported returned status; it must not describe opening a link or
-preparing instructions as an accepted execution. Existing engineering supervision
-remains an advanced capability. The [workspace hand-off](project-handoffs.md)
-prepares a versioned brief with a qualified manual copy/open/paste route. This does
-not transplant rob-codex-workflow into Bokkie.
+Development work creates a visible [workspace task](workspace-tasks.md) with a
+concise brief, scope and checkable acceptance. The project workspace owns its
+Codex development workflow. Bokkie displays returned progress, questions and
+results through the common managed task, and direct editing proposes another
+version of that same definition. Preparing a brief or opening a link cannot
+establish execution acceptance. Existing engineering supervision remains an
+advanced capability, while [manual briefs](project-handoffs.md) remain optional
+exports with readable history. Workspace execution does not transplant
+rob-codex-workflow or a competing supervisor into Bokkie.
 
 ## Qualification
 

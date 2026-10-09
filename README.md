@@ -1,9 +1,20 @@
 # Bokkie
 
-Bokkie is a small, local-first obligation kernel for an agentic assistant. Its
-job is not to make an agent process immortal. Its job is to ensure that accepted
-work remains durably scheduled, safely retried, explicitly waiting, or visibly
-in need of human attention until it is completed or cancelled.
+Bokkie is a web assistant for describing work, keeping visible tasks and receiving
+results. Discuss an outcome on Home, review its scope and completion criteria,
+then follow its progress and questions in the same task. You can also edit the
+versioned definition directly. Admitted runs keep the configuration you reviewed.
+
+Workspace tasks enter an explicitly registered project workspace through a
+development-host worker. That workspace owns its normal planning, verification,
+independent review and delivery. Bokkie retains the task, execution reference,
+questions and result across browser closure and service restart. A stopped process
+or an agent's completion sentence does not establish acceptance.
+
+The durable obligation kernel keeps accepted work scheduled, leased, explicitly
+waiting or visibly in need of attention until it is completed or cancelled.
+See the [workspace task contract](docs/workspace-tasks.md) for setup, bounds and
+the distinction between source delivery and enabling a deployed connector.
 
 The initial implementation is intentionally narrow:
 
@@ -12,6 +23,8 @@ The initial implementation is intentionally narrow:
 - cron recurrence with named time zones;
 - persistent model-backed task drafting and exact reviewed definition changes;
 - an explicitly enabled deterministic local-note runner with in-app results;
+- explicitly configured workspace execution with authenticated host exchange,
+  immutable dispatch, retained ownership and attributable delivery results;
 - Bokkie Web Push reminders for one explicitly enrolled device, with durable
   delivery intent, expiry and recovery; existing email reminders remain compatible;
 - a deterministic fake runner for qualification;
@@ -21,8 +34,10 @@ The initial implementation is intentionally narrow:
 - a loopback HTTP API with a delivered local Polyorama attention interface.
 
 General infrastructure actions, deployment and memory remain
-outside the delivered capability. Automatic merge is available only through the
-explicit [bounded Pagefold profile](docs/pagefold-github-delivery.md). The graphical interface was
+outside the delivered capability. Workspace delivery follows its reviewed task
+scope and the receiving workspace's authority. The specialised
+[bounded Pagefold profile](docs/pagefold-github-delivery.md) retains its separate
+advanced contract. The graphical interface was
 outside the original obligation-kernel slice and subsequently landed as the
 local attention UI in [pull request #4](https://github.com/robchristie/bokkie/pull/4).
 The narrow gardener uses Codex only through isolated, network-off worktrees,
@@ -69,6 +84,12 @@ at version 0.9.146 before running checks. The repository requires at least that
 version and CI pins it exactly, verifies its checksum and disables source-build
 fallback. A missing or outdated Nextest fails the check rather than changing
 the test runner.
+
+Keep each worktree’s Cargo target directory separate when switching between
+different source trees. Reusing one mutable target directory across worktrees
+can retain a newer test binary for an older checkout. Record the candidate and
+artefact identity; keep running controller binaries in immutable copies outside
+the build target.
 
 The canonical script executes the repository-contract fixtures, current plan
 lint, exact toolchain contract, and these dependency-locked backend commands
@@ -163,8 +184,9 @@ separate, non-installed example and does not replace the kernel service.
 ## Conversational task management
 
 Open Bokkie’s **Home** to describe, find, refine, preview,
-activate, revise or pause/resume a managed task. The first executable capability
-creates durable local notes; research/email capabilities remain drafts with
+activate, revise or pause/resume a managed task. An explicitly configured host
+can execute workspace assignments; notes and reminders retain their existing
+adapters. Research/email capabilities remain drafts with
 explicit blockers. One private conversation profile and `--enable-local-notes`
 enable ordinary UI task setup without per-task files or restarts. **Settings**
 then edits the [persisted conversational role](docs/agent-settings.md), with
@@ -174,11 +196,10 @@ changes applying to new requests. See the
 
 ## Engineering supervision
 
-For ordinary development requests, use the [project workspace hand-off](docs/project-handoffs.md):
-register a destination in Settings, discuss the outcome, review and save a concise
-brief, then copy it into a fresh session in the existing Codex workspace. Saved
-revisions and operator-entered result notes stay readable through return links.
-This route prepares work without activating an engineering task.
+For ordinary development requests, use a [workspace task](docs/workspace-tasks.md):
+register its destination in Settings, configure the authenticated host connector,
+discuss the outcome and confirm its exact definition. The [manual brief route](docs/project-handoffs.md)
+remains available for optional transfer and existing saved history.
 
 The task-scoped engineering adapter extends the same Store lifecycle with durable
 outcome contracts, work packages, execution ownership, questions, submissions,

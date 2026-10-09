@@ -115,6 +115,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 conversation: None,
                 executor: database_executor.clone(),
                 runtime,
+                workspace: None,
                 engineering_intake: Some(Arc::new(EngineeringIntakeConfig {
                     deadline_seconds: 3_600,
                     contract_template: engineering_contract_template(),

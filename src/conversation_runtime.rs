@@ -143,7 +143,8 @@ impl ConversationProfile {
     }
 
     fn validate_tools(tools: &Value) -> Result<(), String> {
-        const NAMES: [&str; 6] = [
+        const NAMES: [&str; 7] = [
+            "bokkie_workspace_task",
             "bokkie_prepare_handoff",
             "bokkie_discuss",
             "bokkie_lookup",

@@ -24,7 +24,8 @@ MAX_MODELS = 128
 MODEL_PAGE_SIZE = 64
 MAX_MODEL_PAGES = 16
 QUALIFIED_VERSION = "0.160.0"
-TOOL_NAMES = frozenset(('bokkie_prepare_handoff', 'bokkie_discuss', 'bokkie_lookup', 'bokkie_save_draft',
+QUALIFIED_VERSIONS = frozenset((QUALIFIED_VERSION, "0.160.1"))
+TOOL_NAMES = frozenset(('bokkie_workspace_task', 'bokkie_prepare_handoff', 'bokkie_discuss', 'bokkie_lookup', 'bokkie_save_draft',
                         'bokkie_preview', 'bokkie_propose'))
 TOOL_NAMESPACE = 'bokkie'
 DISABLED = (
@@ -406,12 +407,15 @@ def run(request):
     try:
         initialized = peer.rpc('initialize', {'clientInfo': {'name': 'bokkie_conversation', 'version': '1'},
                                 'capabilities': {'experimentalApi': True}})
-        if initialized.get('userAgent', '').split(' ', 1)[0] != 'bokkie_conversation/' + QUALIFIED_VERSION:
+        agent_version = initialized.get('userAgent', '').split(' ', 1)[0]
+        installed_version = agent_version.removeprefix('bokkie_conversation/')
+        if agent_version != 'bokkie_conversation/' + installed_version or installed_version not in QUALIFIED_VERSIONS:
             raise ValueError('installed Codex version requires conversation containment qualification')
         peer.send({'method': 'initialized', 'params': {}})
         effective = peer.rpc('config/read', {'cwd': '/tmp/conversation', 'includeLayers': False})['config']
         verify_config(effective)
         catalogue = model_catalogue(peer)
+        catalogue['codex_version'] = installed_version
         if request.get('models'):
             return catalogue
         verify_model(catalogue, profile)
@@ -432,7 +436,7 @@ def run(request):
         verify_thread(started, profile)
         peer.thread = started['thread']['id']
         if request.get('preflight'):
-            return {'codex_version': QUALIFIED_VERSION, 'model': started['model'], 'effort': started['reasoningEffort'],
+            return {'codex_version': installed_version, 'model': started['model'], 'effort': started['reasoningEffort'],
                     'environments': [], 'ephemeral': True, 'approval_policy': 'never',
                     'sandbox': started['sandbox'], 'instruction_sources': [],
                     'offered_tools': sorted(names or []),

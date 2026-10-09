@@ -28,6 +28,8 @@ pub struct ManagedTaskDefinition {
     pub max_attempts: u32,
     pub max_output_chars: u32,
     pub destination: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<crate::WorkspaceTaskDefinition>,
 }
 impl ManagedTaskDefinition {
     pub fn reminder(
@@ -56,6 +58,7 @@ impl ManagedTaskDefinition {
             max_attempts: 3,
             max_output_chars: 8192,
             destination: "task_results".into(),
+            workspace: None,
         }
     }
 }
@@ -86,6 +89,8 @@ pub struct ManagedRun {
     pub timezone: String,
     #[serde(default)]
     pub delivery: Option<ManagedDelivery>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<crate::WorkspaceRun>,
 }
 fn default_run_timezone() -> String {
     "Australia/Adelaide".into()
@@ -147,6 +152,8 @@ pub struct ManagedCapabilityProfile {
     pub destination: String,
     pub max_attempts: u32,
     pub max_output_chars: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_policy: Option<crate::WorkspacePolicy>,
 }
 impl ManagedCapabilityProfile {
     pub fn web_push(id: &str, label: &str) -> Self {
@@ -164,6 +171,7 @@ impl ManagedCapabilityProfile {
             destination: destination.into(),
             max_attempts: 5,
             max_output_chars: 16384,
+            workspace_policy: None,
         }
     }
     pub fn local_note() -> Self {
@@ -175,6 +183,7 @@ impl ManagedCapabilityProfile {
             destination: "task_results".into(),
             max_attempts: 5,
             max_output_chars: 16384,
+            workspace_policy: None,
         }
     }
 }

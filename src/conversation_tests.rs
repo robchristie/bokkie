@@ -328,6 +328,7 @@ fn model_tools_only_advertise_operations_for_trusted_selection() {
     assert_eq!(
         operations(false, false),
         vec![
+            "bokkie_workspace_task",
             "bokkie_prepare_handoff",
             "bokkie_discuss",
             "bokkie_lookup",
@@ -336,7 +337,12 @@ fn model_tools_only_advertise_operations_for_trusted_selection() {
     );
     assert_eq!(
         operations(false, true),
-        vec!["bokkie_prepare_handoff", "bokkie_discuss", "bokkie_lookup"]
+        vec![
+            "bokkie_workspace_task",
+            "bokkie_prepare_handoff",
+            "bokkie_discuss",
+            "bokkie_lookup"
+        ]
     );
     assert!(operations(true, false).contains(&"bokkie_preview".to_owned()));
 }

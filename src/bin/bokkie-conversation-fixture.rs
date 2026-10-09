@@ -184,6 +184,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         executor: executor.clone(),
         runtime,
         engineering_intake: None,
+        workspace: None,
         conversation: Some(ConversationConfig {
             profile,
             notes_enabled: true,

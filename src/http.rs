@@ -38,6 +38,7 @@ pub struct ApiState {
     pub executor: DbExecutor,
     pub runtime: ApiRuntime,
     pub engineering_intake: Option<Arc<EngineeringIntakeConfig>>,
+    pub workspace: Option<Arc<crate::workspace::WorkspaceHostConfig>>,
     pub conversation: Option<crate::conversation_http::ConversationConfig>,
 }
 
@@ -203,6 +204,7 @@ fn router_core(executor: DbExecutor, runtime: ApiRuntime) -> Router {
         executor,
         runtime,
         engineering_intake: None,
+        workspace: None,
         conversation: None,
     })
 }
@@ -210,6 +212,7 @@ fn router_core(executor: DbExecutor, runtime: ApiRuntime) -> Router {
 /// Service-owned engineering configuration shares the existing loopback security boundary.
 pub fn router_with_state(state: ApiState, ui_dir: Option<PathBuf>) -> Router {
     let security = state.runtime.clone();
+    let host_state = state.clone();
     let mut router = router_state_core(state);
     if let Some(ui_dir) = ui_dir {
         router = router
@@ -219,7 +222,12 @@ pub fn router_with_state(state: ApiState, ui_dir: Option<PathBuf>) -> Router {
                 ServeDir::new(ui_dir).append_index_html_on_directories(true),
             );
     }
-    router.layer(middleware::from_fn_with_state(security, enforce))
+    router
+        .layer(middleware::from_fn_with_state(security, enforce))
+        .layer(middleware::from_fn_with_state(
+            host_state,
+            crate::workspace_http::authenticate,
+        ))
 }
 
 fn router_state_core(state: ApiState) -> Router {
@@ -227,6 +235,7 @@ fn router_state_core(state: ApiState) -> Router {
         .merge(crate::conversation_http::routes())
         .merge(crate::handoff_http::routes())
         .merge(crate::push_http::routes())
+        .merge(crate::workspace_http::routes())
         .route(
             "/engineering/outcomes",
             post(engineering_intake).get(engineering_list),
@@ -362,6 +371,7 @@ pub fn router_with_ui_executor(
             executor,
             runtime,
             engineering_intake: None,
+            workspace: None,
             conversation: None,
         },
         Some(ui_dir),
@@ -1488,6 +1498,7 @@ mod tests {
                 conversation: None,
                 executor,
                 runtime: test_runtime(),
+                workspace: None,
                 engineering_intake: Some(Arc::new(EngineeringIntakeConfig {
                     deadline_seconds: 3600,
                     contract_template: {
@@ -1530,6 +1541,7 @@ mod tests {
                 conversation: None,
                 executor: DbExecutor::start(database.clone()).unwrap(),
                 runtime: test_runtime(),
+                workspace: None,
                 engineering_intake: Some(Arc::new(EngineeringIntakeConfig {
                     deadline_seconds: 3600,
                     contract_template: changed_template,
@@ -2180,6 +2192,7 @@ mod tests {
             executor: DbExecutor::start(database).unwrap(),
             runtime: test_runtime(),
             engineering_intake: None,
+            workspace: None,
             conversation: None,
         };
         let without_ui = router_with_state(state.clone(), None);

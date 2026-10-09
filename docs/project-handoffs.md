@@ -1,6 +1,9 @@
 # Project workspace hand-offs
 
-Bokkie prepares a development brief for an existing project workspace. The
+Bokkie prepares an optional manual development brief for an existing project workspace. Ordinary
+development requests now use [workspace tasks](workspace-tasks.md) when their host
+connector is configured. Existing saved briefs and result notes remain readable.
+The
 receiving workspace owns execution, its guidance and its established development
 workflow. Hand-offs are separate from tasks, reminders and advanced engineering
 supervision. Registration, saved edits, reading, copying and opening instructions

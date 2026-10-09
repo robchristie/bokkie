@@ -2,6 +2,7 @@ mod engineering;
 pub(crate) mod managed;
 pub(crate) mod notifications;
 mod push;
+mod workspace;
 
 use std::{
     path::Path,
@@ -5003,6 +5004,7 @@ fn recover_expired_in_transaction(
     transaction: &Transaction<'_>,
     now: i64,
 ) -> Result<usize, StoreError> {
+    workspace::recover_reconciliation_wakes(transaction, now)?;
     let ids = {
         let mut statement = transaction.prepare(
             "SELECT id FROM obligations
@@ -5014,7 +5016,8 @@ fn recover_expired_in_transaction(
             .collect::<Result<Vec<_>, _>>()?
     };
     for id in &ids {
-        if !engineering::recover_expired(transaction, id, now)?
+        if !workspace::recover_expired(transaction, id, now)?
+            && !engineering::recover_expired(transaction, id, now)?
             && !notifications::recover_expired(transaction, id, now)?
         {
             apply_transition(transaction, Transition::LeaseExpired { id, now })?;
@@ -5484,6 +5487,95 @@ where
             )),
         )
     })
+}
+
+/// Specialised workspace transitions remain in the obligation lifecycle owner.
+enum WorkspaceTransition<'a> {
+    ReconciliationWake { at: i64 },
+    Attention { reason: &'a str, expired: bool },
+    Accepted { evidence: &'a str },
+    Cancelled { evidence: &'a str },
+}
+
+/// Workspace reconciliation never creates another execution or reopens a retired
+/// attempt. After lease loss, a bounded wake represents the same host's retained
+/// responsibility until another authenticated observation or visible attention.
+fn apply_workspace_transition(
+    tx: &Transaction<'_>,
+    id: &str,
+    transition: WorkspaceTransition<'_>,
+    now: i64,
+) -> Result<(), StoreError> {
+    let old = require_obligation(tx, id)?;
+    if old.state.is_terminal() {
+        return Err(StoreError::Conflict(
+            "workspace occurrence is terminal".into(),
+        ));
+    }
+    let (state, wake, reason, evidence, disposition, event) = match transition {
+        WorkspaceTransition::ReconciliationWake { at } => (
+            ObligationState::Pending,
+            Some(at),
+            None,
+            None,
+            None,
+            "workspace_lease_reconciled",
+        ),
+        WorkspaceTransition::Attention { reason, expired } => (
+            ObligationState::Attention,
+            None,
+            Some(reason),
+            None,
+            Some(FailureDisposition::NeedsReconciliation),
+            if expired {
+                "workspace_lease_expired"
+            } else {
+                "workspace_attention"
+            },
+        ),
+        WorkspaceTransition::Accepted { evidence } => (
+            ObligationState::Completed,
+            None,
+            None,
+            Some(evidence),
+            None,
+            "workspace_accepted",
+        ),
+        WorkspaceTransition::Cancelled { evidence } => (
+            ObligationState::Cancelled,
+            None,
+            Some("workspace cancellation reconciled"),
+            Some(evidence),
+            Some(FailureDisposition::Cancelled),
+            "workspace_cancelled",
+        ),
+    };
+    if old.state == ObligationState::Running {
+        tx.execute(
+            "UPDATE attempts SET completed_at=?3,outcome=?4,retryable=0,failure_disposition=?5,error=?6,evidence=?7
+             WHERE obligation_id=?1 AND lease_generation=?2 AND completed_at IS NULL",
+            params![id,old.lease_generation,now,
+                if matches!(transition,WorkspaceTransition::Attention { expired:true,.. }) { "lease_expired" }
+                else if state == ObligationState::Completed { "succeeded" } else { "failed" },
+                disposition.map(|d|d.to_string()),reason,evidence],
+        )?;
+    }
+    tx.execute(
+        "UPDATE obligations SET state=?2,next_wake_at=?3,lease_token=NULL,lease_expires_at=NULL,
+         last_error=?4,last_evidence=coalesce(?5,last_evidence),failure_disposition=?6,updated_at=?7 WHERE id=?1",
+        params![id,state.to_string(),wake,reason,evidence,disposition.map(|d|d.to_string()),now],
+    )?;
+    append_event(
+        tx,
+        id,
+        old.occurrence,
+        event,
+        now,
+        Some(old.state),
+        state,
+        json!({"reason":reason,"evidence":evidence,"next_wake_at":wake}),
+    )?;
+    Ok(())
 }
 
 /// Specialised supervision transitions remain in the obligation lifecycle owner.
@@ -6000,7 +6092,9 @@ mod tests {
                 (14, "0014_notification_delivery.sql".to_owned()),
                 (15, "0015_bokkie_push.sql".to_owned()),
                 (16, "0016_agent_settings.sql".to_owned()),
-                (17, "0017_workspace_handoffs.sql".to_owned())
+                (17, "0017_workspace_handoffs.sql".to_owned()),
+                (18, "0018_workspace_execution.sql".to_owned()),
+                (19, "0019_workspace_result_recovery.sql".to_owned())
             ]
         );
         drop(store);

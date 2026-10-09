@@ -151,6 +151,8 @@ for line in sys.stdin:
         self.assertEqual(broker.offered_tools([valid]), {'bokkie_lookup'})
         handoff = dict(valid, name='bokkie_prepare_handoff')
         self.assertEqual(broker.offered_tools([handoff]), {'bokkie_prepare_handoff'})
+        workspace = dict(valid, name='bokkie_workspace_task')
+        self.assertEqual(broker.offered_tools([workspace]), {'bokkie_workspace_task'})
         for specs in ([], [valid, valid], [dict(valid, type='namespace')],
                       [dict(valid, name='shell')], [dict(valid, deferLoading=True)],
                       [dict(valid, inputSchema={'type': 'string'})],
@@ -323,13 +325,20 @@ for line in sys.stdin:
                 dict(valid, description='x' * broker.MAX_MODEL_CATALOGUE_BYTES)]})))
 
     def test_unqualified_versions_fail_before_config_thread_or_model_requests(self):
-        for version in ('0.155.1', '0.160.1', '0.160.0-beta.1'):
+        for version in ('0.155.1', '0.160.2', '0.160.0-beta.1'):
             with self.subTest(version=version), \
                     patch.object(broker.Peer, 'send', autospec=True,
                                  side_effect=broker.Peer.send) as sent:
                 with self.assertRaisesRegex(ValueError, 'requires conversation containment qualification'):
                     self.run_peer(preflight=True, version=version)
                 self.assertEqual([call.args[1]['method'] for call in sent.call_args_list], ['initialize'])
+
+    def test_qualified_patch_version_is_attributed_without_model_dispatch(self):
+        for version in ('0.160.0', '0.160.1'):
+            with self.subTest(version=version):
+                result = self.run_peer(preflight=True, version=version)
+                self.assertEqual(result['codex_version'], version)
+                self.assertEqual(result['model_calls'], 0)
 
     def test_forbidden_tools_identity_and_output_fail_closed(self):
         for scenario in ('request', 'tool', 'identity', 'malformed', 'oversized', 'timeout'):
