@@ -3,8 +3,10 @@
 This development-host worker connects outward to Bokkie and runs an immutable
 assignment through its registered workspace. Bokkie owns the task definition,
 admission, lifecycle, questions and acceptance. The workspace owns planning,
-source changes, independent review, checks, CI and ordinary delivery. This route
-has no engineering supervisor and does not use desktop chat tools as an external
+source changes, independent review, checks, CI and ordinary delivery. A separately
+configured read-only report profile retains selected sources and a reviewed sealed
+assessment instead. This route has no engineering supervisor and does not use
+desktop chat tools as an external
 API. It installs no service or deployment.
 
 The [calibration record](../../docs/workspace-execution/calibration.md) separates
@@ -142,14 +144,14 @@ same configuration to reconnect detached brokers and replay their retained event
 Stopping the worker does not cancel the assignment. Cancellation is monotonic
 and remains unconfirmed until the cleanup owner proves cessation.
 
-`verify` acquires missing read-only delivery evidence for an already ceased job
+`verify` acquires missing read-only result evidence for an already ceased job
 and emits another observation of the identical result and cessation. It never
-starts another model turn. It is useful when completed delivery was retained with
-acceptance pending because review or CI evidence was temporarily unavailable.
+starts another model turn. It is useful when completed source delivery or an
+evidence report was retained with acceptance pending because proof was unavailable.
 The Bokkie Store decides whether this later verification permits acceptance.
 
-`recover-result` is an explicit import for a ceased execution which delivered
-attributable work but submitted no result. The untrusted proposal has exactly
+For engineering delivery, `recover-result` is an explicit import for a ceased
+execution which delivered attributable work but submitted no result. The untrusted proposal has exactly
 `execution_id`, `dispatch_digest`, `result` (the existing structured-result shape)
 and `criterion_mapping`. Mapping rows have exactly `id` and `evidence`, cover
 every original criterion once and exactly match that criterion's result evidence.
@@ -181,7 +183,7 @@ the original project still registered under its destination hostname. This
 fallback does not infer a route identity from the hostname; Bokkie independently
 authenticates and fences the original host's event.
 
-An explicitly reviewed future definition may set `review_retained_work` to
+An explicitly reviewed future engineering-delivery definition may set `review_retained_work` to
 `{"source":{"execution_id":"original-run","result_digest":"full-sha256"},"summary":"Reviewed summary","criteria":[...]}`.
 Its criterion results are the new pinned claims; the original partial report and
 its historical false criterion stay unchanged. Bokkie must first acknowledge the
@@ -293,8 +295,8 @@ do not prove inputs stayed immutable throughout a command. Independent review an
 required CI remain separate assurance. Historical observations retain their
 original provenance and are not silently relabelled as safe-Git samples.
 
-Structured results remain untrusted. Verification requires every criterion,
-allowlisted merged PR/candidate/tree identities, independent exact-head review,
+Structured results remain untrusted. Engineering-delivery verification requires
+every criterion, allowlisted merged PR/candidate/tree identities, independent exact-head review,
 attributable canonical command observations and successful required checks on
 both candidate and merge revisions. Verification uses bounded read-only GitHub
 queries, never model completion prose, and retains a failed verification alongside

@@ -3,7 +3,7 @@
 - Status: active
 - Reorientation budget: 180
 - Landed pull requests: [PR62](https://github.com/robchristie/bokkie/pull/62), real task qualification; [PR63](https://github.com/robchristie/bokkie/pull/63), workspace connector; [PR64](https://github.com/robchristie/bokkie/pull/64), bounded memory
-- Next action: qualify the actual-account report boundary and real sealed report; then portfolio decision paths, task batches/dependencies and recurrence
+- Next action: land qualified report source PR65; then integrate stable schema21 task batches, portfolio decision paths and recurrence
 
 ## Outcome and authority
 
@@ -42,7 +42,8 @@ starts modestly alongside useful execution. Refine packages from evidence.
 | Package | State | Acceptance remaining / next action |
 | --- | --- | --- |
 | Workspace execution | Landed PR63 at `f7e4b9707f6df22e541cd22aab3d85bd08c8a079`; real task delivered PR62 and retained its result across interruption | Accepted; [qualification](../../workspace-execution/qualification.md); independent PASS, four candidate and four merge checks passed; source tree `9cb79ff6d60647c65bd03e9b4a12505f19a9e980` |
-| Portfolio and decisions | [Draft PR65](https://github.com/robchristie/bokkie/pull/65): report/checkpoint contract and host isolation in calibration | 16-million hard future ceiling with smaller admitted profile budgets; no-model routing/socket/write/native-helper probes pass; three real source captures and sealed report retained, credential/env/native-handler probes pass; actual Astra/high reviewer inherited scratch writes and was rejected; qualify one fully read-only profile and admitted mirror contract before live acceptance; task batch473backend/125UI awaits stable schema21; then portfolio pass/question paths and recurrence |
+| Read-only evidence reports | [PR65](https://github.com/robchristie/bokkie/pull/65): real sealed report, named independent Astra/high PASS, same-result acceptance and browser/restart continuity qualified | [Report contract and qualification](../../workspace-execution/evidence-reports.md); actual root and all children use one fully read-only profile, admitted immutable digest contract and retained exact source bytes; 467 backend / 227 governance pass, unchanged UI 124 native / 31 Node evidence reused; independent source-review/CI landing gates remain; terminal identities belong in PR65's landing receipt |
+| Portfolio and decisions | Next outcome after the report seam lands | Automatic-pass and inconclusive/question paths across selected owners; preserve completed pilots/rollouts; prepared task batches/dependencies `46f926e` require stable schema21 integration and their own canonical/browser qualification; then recurrence |
 | Recurring workspace tasks | Timing/control candidate `64d6321` prepared on stable schema20; focused backend6/UI9 pass | Stable integration, canonical/browser proof; real scheduled correction/recovery and actual resource contention; independently verified no-change outcome |
 | Consolidation | Avoid duplication from first package | Replace gardener with recurrence, Pagefold with workspace execution, hand-offs with briefs and optional export; preserve history and admitted work |
 | Research | After evidence-report seam | Live search/read, linked relevance digest, retained findings prevent repeats; deterministic retry/effect tests |

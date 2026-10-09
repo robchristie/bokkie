@@ -11,6 +11,12 @@ independent review and delivery. Bokkie retains the task, execution reference,
 questions and result across browser closure and service restart. A stopped process
 or an agent's completion sentence does not establish acceptance.
 
+A workspace task can also request a finite read-only assessment of explicitly
+selected repositories. It retains exact captured source bytes and an independently
+reviewed, sealed evidence report in the task. Agree how missing evidence affects
+completion before starting; a completed assessment can truthfully report that its
+subject remains inconclusive. See the [report contract and qualification](docs/workspace-execution/evidence-reports.md).
+
 The durable obligation kernel keeps accepted work scheduled, leased, explicitly
 waiting or visibly in need of attention until it is completed or cancelled.
 See the [workspace task contract](docs/workspace-tasks.md) for setup, bounds and
@@ -25,6 +31,8 @@ The initial implementation is intentionally narrow:
 - an explicitly enabled deterministic local-note runner with in-app results;
 - explicitly configured workspace execution with authenticated host exchange,
   immutable dispatch, retained ownership and attributable delivery results;
+- read-only evidence reports with selected source capture, workspace checkpoints,
+  immutable report identities and independently verified review;
 - Bokkie Web Push reminders for one explicitly enrolled device, with durable
   delivery intent, expiry and recovery; existing email reminders remain compatible;
 - a deterministic fake runner for qualification;

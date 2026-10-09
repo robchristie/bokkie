@@ -1,123 +1,139 @@
-# Evidence report calibration
+# Read-only evidence reports
 
-Status: API, Store and host contract in calibration. The real selected-source
-report is sealed; its independent runtime review and acceptance remain unproved.
-This is the next portfolio package in the active plan.
+Status: the real selected-source report has passed independent review,
+same-execution acceptance, browser display and controller-restart continuity.
+[PR65](https://github.com/robchristie/bokkie/pull/65) owns source review and landing.
 
-Question: can a finite read-only portfolio assignment retain exact source bytes,
-project its own decisions and return an independently reviewed report without
-pretending that a merged code change occurred?
+The admitted definition selects `engineering_delivery` (the existing default) or
+`evidence_report`, with explicit selected repository identities. Reports permit
+only inspect/verify. Conversation and direct editing share the same versioned
+definition; later edits cannot redirect admitted work. The workspace owns the
+finite assessment and its checkpoint decisions. Checkpoints are nonterminal
+observations: they admit no new work and provide no campaign scheduler.
 
-Smallest probe: one actual GitHub qualification receipt, a sealed report and an
-independent completed child review bound to its report and source digests. Before
-any model turn, prove scratch-only writing, no product/Git writes, denied direct
-network and local control sockets, no escalation or child-policy broadening,
-structural GET-only source reads and immutable reviewer mirrors. Untrusted sources
-cannot alter those bounds. The host owns provenance; the workspace owns judgement.
+A report can complete while its subject remains inconclusive. Agree beforehand
+how evidence gaps affect the completion criteria. Subject evidence limits remain
+in the result; every exact admitted criterion must still be satisfied and
+evidenced. Unanswered questions, false or unsupported criteria, changed bytes,
+wrong-scope sources, unavailable policy proof and missing or blocking independent
+review remain unaccepted. Engineering delivery retains its separate requirements
+for empty limitations, reviewed merged source and required candidate/merge CI.
 
-The admitted definition selects `engineering_delivery` (existing default) or
-`evidence_report`, with explicit selected repository identities. Reports allow
-only inspect/verify. Conversation and direct editing share the same definition.
-A report can be complete while its subject remains inconclusive; the acceptance
-must agree what to do with that evidence gap before execution. Unanswered
-questions, changed report bytes, wrong-scope sources and missing independent
-review remain unaccepted. Checkpoints are nonterminal workspace observations;
-they admit no new work and are not a campaign scheduler.
-
-Canonical compact UTF-8 JSON sorts every object key. Source manifest identity
-hashes `{format: "evidence-source-manifest-v1", sources: [...]}`. Report identity
-hashes `{format: "evidence-report-v1", markdown, source_manifest_digest}`. Each
-source identifier binds its captured capsule and length; capture provenance binds
-the execution/admission and method. Seal before commissioning review. A revision
-creates a new identity and requires its own review, never replacing sealed bytes.
+## Source and report identities
 
 The trusted host accepts only typed selected-repository/exact-commit/path or
-selected-repository/comment-ID requests, constructs GETs and retains bounded
-bytes outside task-writable state. Comments retain observed content, author,
-creation/update and capture times; owner claims are distinguished from direct
-observations. No arbitrary endpoint, URL, method or command is accepted.
+selected-repository/comment-ID requests, constructs fixed GETs and retains bounded
+bytes outside task-writable state. It accepts no arbitrary endpoint, URL, method
+or command. Credentials stay in the original authorised host store. Comments
+retain observed body bytes, author, creation/update and capture times; owner
+claims are distinguished from direct observations. Repeating a selector reuses
+its first retained capture.
 
-Planned real qualification: assess the completed Nextest rollout's retained
-coverage/reporting proof, pilot the assessment method on Bokkie and continue
-through the other selected owners if it works. Separately assess what retained
-benefit measurements establish, asking when a required comparison is absent.
-Do not repeat the already completed tooling pilot, migration, checks, benchmarks
-or rollout. Portfolio owns the whole finite assignment and its checkpoint choices.
+Canonical compact UTF-8 JSON sorts every object key. Source identifiers hash
+complete versioned capsules, including bytes, length, provenance and metadata.
+The source manifest hashes `{format: "evidence-source-manifest-v1", sources: [...]}`;
+the report hashes `{format: "evidence-report-v1", markdown, source_manifest_digest}`.
+Source array order and exact Markdown remain unchanged. Every admission pins the
+versioned digest contract, mirrored at `/bokkie-evidence/contract.json`; the first
+seal binds its identity and completion time. Its Unicode/newline vector defines
+the encoding without a self-hash. Untrusted sources cannot replace this contract.
 
-Evidence owner: this record plus focused executable regressions and attributed
-private probe artefacts. Exit: no-model confinement/provenance falsification tests
-pass, followed by a real sealed report/review and both portfolio decision paths.
-Fixtures establish lifecycle rejection only; they do not prove live assessment.
+Seal before commissioning a separate named `evidence_reviewer`. Its completed
+final answer must bind `Verdict`, `Reviewed report` and `Reviewed sources` to the
+two exact digests. The host requires the actual parent, role, protected model and
+effort, post-seal creation/start receipts and completed turn. A repair creates a
+new report identity and requires its own review. The host recomputes captures,
+mirrors, manifest and report before accepting the result.
 
-Budget calibration retains total observed and cached input counts. The hard
-future ceiling is 16 million observed tokens; a profile/definition should choose
-a smaller finite allowance for its assignment. This raises no old admission
-or profile. Wall-clock, turn and context limits remain independent bounds.
-Tool replies should expose remaining budget so the workspace can seal useful
-partial work before cancellation. A larger ceiling is not proof of sufficiency;
-the actual representative report owns the next observation.
+## Qualified boundary
 
-Migration21 is an explicit decode/rollback barrier. Definitions, report results
-and checkpoints use existing immutable JSON records, so the migration adds no
-new scheduler or projection table. Older schema20 binaries reject the state
-before attempting to decode these new contracts.
+The supported runtime is Codex CLI 0.160.1 through its public App Server lifecycle.
+One fully read-only permission profile applies to the root and every child,
+including scratch. Only host-owned capture, seal and checkpoint tools perform
+bounded private writes. Task tools have restricted selected reads, no direct
+network or control sockets, no escalation, and disabled apps, MCP, web search,
+image, browser and computer tools. Role files retain model tuning independently
+of task definitions. The [runtime guide](../../tools/workspace-runtime/README.md#read-only-evidence-reports)
+owns setup and the complete mode/profile/output contract.
 
-## Actual entry calibration
+Before inference, actual root/reviewer contexts deny credential/configuration
+reads and aliases, ambient secrets, scratch/product/Git/mirror/`/tmp` writes,
+TCP and Unix sockets. Positive controls establish that denied targets exist.
+Account routing, public TLS assets and the native code-mode companion are
+separately qualified without a model turn. Original protected 0.160.1 policy
+metadata additionally attests each completed root/reviewer turn; unknown,
+conflicting or broader policy fails closed. Only the qualified read-only arg0
+shim directory may augment the declared readable roots. This ancillary check
+does not replace public lifecycle or final-answer evidence.
 
-A real Home request created one task and pinned the read-only contract, selected
-Bokkie scope and finite profile limits. The first run stopped before source
-capture because the isolated view omitted the target of the existing public TLS
-trust-store symlink. A read-only mount of that target preserved TLS validation;
-supported no-model account routing then passed. The next run reached inference
-and retained an actionable missing-guidance question when its model tool helper
-was absent. It was explicitly cancelled; the outside owner proved all descendants
-reaped. All original admissions and questions remain in task history. A third run
-exposed a trusted GET helper error after a complete HTTP body; the scoped EOF
-repair then captured the exact selected source. The fourth run captured all three
-sources and sealed a report, but its child inherited the root model and had no
-named reviewer role. Acceptance stayed false and cancellation retained an outside
-ECHILD cessation receipt. The native spawn omitted the role-selection argument;
-the effective named-role seam must be established before another admission.
-No report has yet been accepted. [Draft PR65](https://github.com/robchristie/bokkie/pull/65)
-owns the incomplete source package and remaining live qualification.
+Scripted-provider native-handler cohorts established the exec-wrapped command
+and patch boundary, actual named-child read-only inheritance, digest recomputation
+and outside ECHILD cessation with no OpenAI inference or source GETs. A harness
+phase omission remains recorded and was reconciled without a repeat spawn.
+These cohorts qualify concrete enforcement paths; they do not establish a live
+business assessment. Actual named children previously inherited a scratch-write
+parent grant despite narrower role settings, so the root now shares the fully
+read-only profile. Engineering profiles retain their existing writable contract.
 
-The actual-account probes retain guidance hashes, public trust-asset digest,
-disabled/empty MCP inventories and negative root/reviewer write, TCP and Unix
-socket controls under `/tmp/bokkie-report-live/runtime/preflights/`. They start no
-model turn. Native model-tool readiness is a separate seam from direct
-`command/exec`; the live failure must be repaired and qualified before accepting
-the integration. Failed startup does not authorise replaying a launch marker.
+## Representative actual assessment
 
-## Tool read boundary
+One real Home task assessed three selected public Bokkie sources: the exact
+PR63 [workspace contract](https://github.com/robchristie/bokkie/blob/f7e4b9707f6df22e541cd22aab3d85bd08c8a079/docs/workspace-tasks.md),
+[delivery receipt](https://github.com/robchristie/bokkie/pull/63#issuecomment-6084979375)
+and [qualification receipt](https://github.com/robchristie/bokkie/pull/63#issuecomment-6084767408). It read the actual
+workspace entry and product guidance, captured all three sources, sealed a linked
+assessment and commissioned an actual named Astra/high reviewer. The completed
+independent turn recomputed the canonical contract vector, source capsules and
+content/Git blob identities, manifest and report, then returned `PASS` bound to:
 
-The named-role registration repair has a zero-turn effective-config proof, but
-actual child attribution remains a live gate. Before the fifth definition
-dispatched, full mount inspection identified a separate confidentiality gap:
-legacy read-only/workspace-write policies could open the runtime account and
-configuration mounts. The actual root/reviewer probe retained only open-success
-booleans, with target-presence and harmless synthetic controls; it read and
-retained no credential contents or hashes. The next run is held before dispatch
-or inference. Explicit named permission profiles must establish restricted reads
-for both the root and all derived roles while preserving app-server account
-access, guidance, source mirrors and closed writes/network. Unknown schema fields
-or accepted configuration alone do not establish enforcement. Actual installed
-profile provenance and denial observations own this gate.
+- Report: `b5e4add0c6bf7f32ac1e4475fdffa39a8cc16d5537068e8e02763e5f7bf79993`
+- Source manifest: `a5187b5e20439ff658eebb9f10f352162fc2d3037699bb41131c0ec00407fe6c`
+- Digest contract: `8d27738168787b1a6c786e206778e475b65a134d51a0d9008f7ab7153d70d169`
 
-## Actual named-child checkpoint
+The actual root/child original policies matched the read-only profile and the
+outside owner proved descendant cessation. An inherited engineering predicate
+initially rejected the report's explicitly required subject evidence limits.
+The bounded correction preserved every report criterion and proof gate, then
+verified and accepted the same ceased immutable result without another model
+turn, source capture, seal, reviewer or execution. Focused regressions also retain
+rejection of false/unsupported criteria, missing review/policy, unanswered
+questions and engineering limitations.
 
-At candidate `4035a9ebfbdba0979780d78f2f5dc6606038478a`, the real sixth
-definition replaced the fifth unadmitted occurrence. The named child correctly
-used Astra/high and its actual parent/creation order followed the seal, but its
-original turn policy inherited the parent's scratch-write grant. The independent
-read-only requirement stayed false; the owner stopped the execution with ECHILD
-cessation and retained its sources, seal, question and original policy record.
-The canonical digest schema was also absent from the selected main checkout.
+The accepted journey at `c029ccabbbd3f3fd7feacabafa2961c850cdbd8b` retained
+one execution, one root turn, three captures, one seal and one reviewer. Actual
+model execution used `ca7ac5dc2cfb05ff35743b10eacea8183fa7a36d`; the acceptance
+correction used the same ceased result at the later committed head. Browser
+semantic text matched the complete report; opened report and source-footer images
+confirmed display. Closing the owned browser and restarting the controller changed
+its process/session while preserving the completed execution, result and event5.
+Fifteen original admission/result/contract/capture/mirror/seal/cessation files
+remained byte-identical. Cancelled historical questions exposed no Answer action.
+The private fixture and owned browser contexts were stopped after qualification.
 
-Decision: use one fully read-only report profile for the root and every child.
-The host already owns the bounded capture, checkpoint and seal writes. Supply a
-versioned immutable contract in the admitted mirror, with explicit canonical
-payloads and test vector. Prove actual native parent → named-child inheritance
-with the isolated scripted provider before another live inference run. This
-checkpoint qualifies the mechanism only; real substantive review, acceptance,
-result display and restart continuity remain required. Engineering profiles
-retain their separate contract.
+Private attributable receipts remain under `/tmp/bokkie-report-live/`; source
+checks and their attribution remain under `/tmp/bokkie-workspace-probe/`.
+The accepted receipt is `qualification-v7-accepted.json`, SHA-256
+`6c5639ca1c0aa4798b9e8cee91930427966fcdf30a1510109cfef5f33d88bbd2`.
+The earlier cancelled admissions, questions, sources and rejected policies remain
+in history. They establish repair context and rejected boundaries, not acceptance.
+
+The report distinguishes published receipt assertions from directly captured
+observations. It does not independently reproduce historical tests, CI, runtime
+containment or cleanup. Endpoint identity and comment timestamps do not prove
+uninterrupted immutability. Source readiness establishes no deployment or wider
+roadmap completion.
+
+## Remaining objective and compatibility
+
+This package qualifies a finite selected-repository report seam. Portfolio
+automatic-pass/question decisions, task batches/dependencies, recurrence,
+consolidation, research, email/system observation and isolated browser tasks
+remain in the [active plan](../plans/active/workspace-tasks.md). Existing completed
+pilots and rollouts must not be repeated to qualify those next outcomes.
+
+The 16-million-token future ceiling retains observed and cached input accounting;
+smaller admitted profile budgets, wall-clock, turn and context limits remain
+independent. It changes no earlier admission and proves no assignment's sufficiency.
+Migration21 is an explicit decode/rollback barrier using existing immutable JSON
+records. Older schema20 binaries reject the state before decoding new contracts.
+Source delivery enables no deployed connector, credentials or access policy.
