@@ -25,8 +25,7 @@ MAX_EVENT_MESSAGE = 256 * 1024
 
 
 def text(value, maximum):
-    # Store/Rust string bounds count UTF-8 bytes, including for report fields.
-    if (not isinstance(value,str) or not value.strip() or len(value.encode('utf-8'))>maximum or
+    if (not isinstance(value,str) or not value.strip() or len(value)>maximum or
             any(unicodedata.category(c)=='Cc' and c not in '\n\t' for c in value)):
         raise ValueError('empty, invalid or oversized text field')
 

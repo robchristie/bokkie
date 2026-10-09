@@ -22,7 +22,7 @@ REPORT_FORMAT = 'evidence-report-v1'
 MANIFEST_FORMAT = 'evidence-source-manifest-v1'
 MAX_SOURCE_BYTES = 256 * 1024
 MAX_SOURCES = 32
-MAX_REPORT_BYTES = 32768
+MAX_REPORT_CHARS = 32768
 HEX64 = re.compile(r'[0-9a-f]{64}')
 REPOSITORY = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
 
@@ -379,7 +379,7 @@ class EvidenceStore:
 
     def seal(self, markdown, source_ids):
         contract=self.contract()
-        text(markdown, MAX_REPORT_BYTES)
+        text(markdown, MAX_REPORT_CHARS)
         if (not isinstance(source_ids, list) or not 1 <= len(source_ids) <= MAX_SOURCES or
                 any(not isinstance(value,str) for value in source_ids) or len(set(source_ids)) != len(source_ids)):
             raise ValueError('report requires a distinct bounded captured source catalogue')

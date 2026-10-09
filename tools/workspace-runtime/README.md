@@ -373,8 +373,8 @@ finite request budget; the trusted helper has an overall deadline including DNS 
 response reads have a byte ceiling, each
 source is at most 256 KiB, and the profile caps aggregate retained content.
 Empty files and comments remain valid captured observations. Report and event
-text bounds count UTF-8 bytes, matching Store, so a host-sealed result cannot
-exceed the consumer's text limit through multibyte content.
+text bounds count Unicode characters, matching Store; existing serialised result
+and event byte limits remain independent and are checked before publication.
 
 The trusted source helper observes its original group leader without reaping
 (`WNOWAIT`), signals the still-owned group, then reaps. Missing ownership primitives

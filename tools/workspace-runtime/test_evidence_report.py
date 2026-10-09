@@ -249,13 +249,21 @@ class EvidenceReportTests(unittest.TestCase):
                 report=self.store.seal('Selected captured source is empty; no substantive evidence is claimed.',[captured['source']['id']])
                 self.assertTrue(verify(self.admission,self.result(report),self.records(report),root=self.root)['passed'])
 
-    def test_report_utf8_byte_limit_matches_store_before_sealing_or_submission(self):
+    def test_report_multibyte_character_bounds_preserve_separate_payload_limits(self):
         identity=self.captured()['source']['id']
-        report=self.store.seal('é'*16384,[identity])
-        result_bounds(self.result(report))
+        report=self.store.seal('é'*16385,[identity]);result=self.result(report)
+        result_bounds(result);self.assertLess(len(encoded(result)),65536)
+        self.assertTrue(verify(self.admission,result,self.records(report),root=self.root)['passed'])
+        character_max=self.store.seal('é'*32768,[identity]);result_bounds(self.result(character_max))
+        broker=Broker(self.root);broker.thread='root';sent=[];broker.send=sent.append
+        broker.request({'id':1,'method':'item/tool/call','params':{'threadId':'root','namespace':'bokkie_workspace',
+            'tool':'result','arguments':{'summary':'Oversized serialised result','criteria':result['criteria'],
+                'limitations':[],'report_id':character_max['digest']}}})
+        self.assertFalse(sent[-1]['result']['success']);self.assertIsNone(broker.result)
+        self.assertIn('submission bound',sent[-1]['result']['contentItems'][0]['text'])
         with self.assertRaisesRegex(ValueError,'oversized'):
-            self.store.seal('é'*16385,[identity])
-        changed=copy.deepcopy(report);changed['markdown']='é'*16385
+            self.store.seal('é'*32769,[identity])
+        changed=copy.deepcopy(report);changed['markdown']='é'*32769
         changed['digest']=digest({key:changed[key] for key in ('format','markdown','source_manifest_digest')})
         with self.assertRaisesRegex(ValueError,'oversized'):result_bounds(self.result(changed))
 

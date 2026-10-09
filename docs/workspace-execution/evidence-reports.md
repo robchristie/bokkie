@@ -30,7 +30,8 @@ claims are distinguished from direct observations. Repeating a selector reuses
 its first retained capture.
 
 Empty files/comments are valid observations, without implying substantive evidence.
-Text bounds count UTF-8 bytes consistently in the host and Store. The trusted
+Text bounds count Unicode characters consistently in the host and Store, with
+separate serialised byte limits. The trusted
 source helper holds its original group leader unreaped until signalling finishes,
 then reaps; unavailable or relinquished ownership never permits a numeric group
 signal. These boundaries have focused host and Store ingestion/replay regressions.
