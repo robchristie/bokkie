@@ -68,8 +68,28 @@ jobs:
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
           rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy rustfmt
 
+      - name: Install pinned Nextest binary
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-nextest@0.9.146
+          checksum: true
+          fallback: none
+
       - name: Test
-        run: cargo test --all-targets --locked
+        run: |
+          rm -f -- .bokkie/nextest/backend-ci/junit.xml
+          cargo nextest show-config version
+          cargo nextest run --all-targets --locked --profile backend-ci
+          cargo test --doc --locked
+
+      - name: Upload backend test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bokkie-backend-test-results
+          path: .bokkie/nextest/backend-ci/junit.xml
+          include-hidden-files: true
+          if-no-files-found: warn
 
       - name: Lint
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
@@ -96,8 +116,24 @@ jobs:
           rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy rustfmt
           rustup target add --toolchain "$RUSTUP_TOOLCHAIN" wasm32-unknown-unknown
 
+      - name: Install pinned Nextest binary
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-nextest@0.9.146
+          checksum: true
+          fallback: none
+
       - name: Test, lint and build native and Wasm contracts
         run: tools/check-ui.sh
+
+      - name: Upload UI test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bokkie-attention-ui-test-results
+          path: .bokkie/nextest/ui-ci/junit.xml
+          include-hidden-files: true
+          if-no-files-found: warn
 
   authenticated-web-shell:
     name: Authenticated manifest and worker

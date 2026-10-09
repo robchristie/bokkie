@@ -64,17 +64,38 @@ Run the canonical governance and backend check with:
 tools/check.sh
 ```
 
-It executes the plan-linter fixtures, current plan lint, exact toolchain
-contract, and these dependency-locked backend commands before formatting:
+Install the [prebuilt Nextest binary](https://nexte.st/docs/installation/pre-built-binaries/)
+at version 0.9.146 before running checks. The repository requires at least that
+version and CI pins it exactly, verifies its checksum and disables source-build
+fallback. A missing or outdated Nextest fails the check rather than changing
+the test runner.
+
+The canonical script executes the repository-contract fixtures, current plan
+lint, exact toolchain contract, and these dependency-locked backend commands
+before formatting:
 
 ```sh
-cargo test --all-targets --locked
+cargo nextest run --all-targets --locked --profile backend-ci
+cargo test --doc --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo fmt --all -- --check
 ```
 
 `cargo fmt` does not resolve dependencies and has no lockfile mode. When the UI
 or its shared API/toolchain boundary changes, also run `tools/check-ui.sh`.
+Backend tests retain Cargo's default member selection and default features;
+the UI check separately selects only `bokkie-attention-ui` with Rust 1.99.0.
+Nextest runs native test targets, while Cargo runs doctests separately for the
+same package boundary. Focused tests can use Nextest filters, for example
+`cargo nextest run --locked --all-targets -E 'test(store::)'`.
+
+The canonical checks write distinct JUnit reports to
+`.bokkie/nextest/backend-ci/junit.xml` and `.bokkie/nextest/ui-ci/junit.xml`.
+Each script clears its previous report before setup and keeps a fresh report
+when tests fail; CI uploads the corresponding report even on failure. The
+profiles continue the full selected suite after a failure, disable retries,
+and warn at five seconds without terminating slow tests. Existing Cargo target
+directory settings remain available and are not overridden by these scripts.
 
 The supplied systemd unit is an example artefact only. Installing or enabling
 it is deliberately outside repository verification and requires an explicit

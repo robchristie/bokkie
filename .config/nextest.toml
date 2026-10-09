@@ -1,0 +1,27 @@
+nextest-version = { required = "0.9.146", recommended = "0.9.146" }
+
+[store]
+dir = ".bokkie/nextest"
+
+[profile.default]
+slow-timeout = "5s"
+retries = 0
+
+[profile.ci]
+fail-fast = false
+
+[profile.backend-ci]
+inherits = "ci"
+
+[profile.backend-ci.junit]
+path = "junit.xml"
+report-name = "bokkie-backend-tests"
+report-skipped = "all"
+
+[profile.ui-ci]
+inherits = "ci"
+
+[profile.ui-ci.junit]
+path = "junit.xml"
+report-name = "bokkie-attention-ui-tests"
+report-skipped = "all"
