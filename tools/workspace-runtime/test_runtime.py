@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import shutil
 import subprocess
@@ -869,6 +870,41 @@ class RetainedReviewTests(unittest.TestCase):
 
 
 class SafeGitTransportTests(unittest.TestCase):
+    def test_native_parent_pidfd_does_not_require_libc_symbol(self):
+        import safe_git
+        descriptor=pidfd_open(os.getpid())
+        try:
+            with (patch('safe_git.os.pidfd_open',return_value=descriptor,create=True) as native,
+                  patch('safe_git.ctypes.CDLL',side_effect=AssertionError('libc must not be used'))):
+                self.assertEqual(safe_git.pidfd(os.getpid()),descriptor)
+                native.assert_called_once_with(os.getpid(),0)
+            self.assertFalse(os.get_inheritable(descriptor))
+            self.assertEqual(select.select([descriptor],[],[],0)[0],[])
+        finally:os.close(descriptor)
+
+    def test_native_pidfd_kernel_failure_remains_fail_closed(self):
+        import errno,safe_git
+        with (patch('safe_git.os.pidfd_open',side_effect=OSError(errno.ENOSYS,'fixture kernel unavailable'),create=True),
+              patch('safe_git.ctypes.CDLL',side_effect=AssertionError('no fallback after kernel failure'))):
+            with self.assertRaises(OSError) as failure:safe_git.pidfd(os.getpid())
+        self.assertEqual(failure.exception.errno,errno.ENOSYS)
+
+    def test_libc_pidfd_fallback_retains_descriptor_and_missing_symbol_fails_closed(self):
+        import errno,safe_git
+        descriptor=pidfd_open(os.getpid());calls=[]
+        def operation(pid,flags):calls.append((pid,flags));return descriptor
+        try:
+            with (patch('safe_git.os.pidfd_open',None,create=True),
+                  patch('safe_git.ctypes.CDLL',return_value=SimpleNamespace(pidfd_open=operation))):
+                self.assertEqual(safe_git.pidfd(os.getpid()),descriptor)
+            self.assertEqual(calls,[(os.getpid(),0)])
+            self.assertFalse(os.get_inheritable(descriptor))
+            self.assertEqual(select.select([descriptor],[],[],0)[0],[])
+        finally:os.close(descriptor)
+        with patch('safe_git.os.pidfd_open',None,create=True),patch('safe_git.ctypes.CDLL',return_value=object()):
+            with self.assertRaises(OSError) as failure:safe_git.pidfd(os.getpid())
+        self.assertEqual(failure.exception.errno,errno.ENOSYS)
+
     def test_failed_confined_helper_retains_bounded_diagnostic(self):
         import safe_git
         pipe=safe_git.Pipe(['/usr/bin/python3','-I','-c',

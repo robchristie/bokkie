@@ -157,4 +157,13 @@ GitHub-hosted Jammy image with pinned Python3.12, signed Bubblewrap, descriptor
 capability and actual confinement probes; other jobs retain their authored image.
 No host policy or observer isolation flag changed. The workflow records Jammy
 retirement on 17 April 2027. Two diagnostic regressions bring the host suite to
-68 tests. The final candidate and merge receipts own hosted readiness.
+71 tests after native/libc pidfd portability coverage. The final candidate and merge receipts own hosted readiness.
+
+Jammy also exposed a missing libc pidfd wrapper. The observer now uses the
+native Python kernel API when available and retains the libc path for builds
+without it, failing closed if neither exists. Both actual local interpreter
+paths passed. A shared Cargo target across different worktrees reused an
+inapplicable test binary; `/tmp/command-log-m7z1kmxf/` was invalidated. An
+isolated target produced the expected 452-test candidate suite at
+`/tmp/command-log-p_qf5bp4/`. Future checks use per-worktree targets and immutable
+controller copies, as documented in the development guide.

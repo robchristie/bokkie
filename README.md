@@ -85,6 +85,12 @@ version and CI pins it exactly, verifies its checksum and disables source-build
 fallback. A missing or outdated Nextest fails the check rather than changing
 the test runner.
 
+Keep each worktree’s Cargo target directory separate when switching between
+different source trees. Reusing one mutable target directory across worktrees
+can retain a newer test binary for an older checkout. Record the candidate and
+artefact identity; keep running controller binaries in immutable copies outside
+the build target.
+
 The canonical script executes the repository-contract fixtures, current plan
 lint, exact toolchain contract, and these dependency-locked backend commands
 before formatting:

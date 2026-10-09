@@ -1,5 +1,6 @@
 """Commit-derived source observations without candidate Git configuration/code."""
 import ctypes
+import errno
 import hashlib
 from functools import lru_cache
 import json
@@ -175,7 +176,14 @@ os.close(parent)
 
 
 def pidfd(pid):
-    libc=ctypes.CDLL(None,use_errno=True);operation=libc.pidfd_open
+    # CPython's native kernel API works on glibc releases without the exported
+    # wrapper. Preserve any native error as an unavailable monitoring boundary.
+    native=getattr(os,'pidfd_open',None)
+    if native is not None:return native(pid,0)
+    libc=ctypes.CDLL(None,use_errno=True)
+    operation=getattr(libc,'pidfd_open',None)
+    if operation is None:
+        raise OSError(errno.ENOSYS,'safe Git parent pidfd unavailable: no native or libc pidfd_open')
     operation.argtypes=[ctypes.c_int,ctypes.c_uint];operation.restype=ctypes.c_int
     descriptor=operation(pid,0)
     if descriptor<0:raise OSError(ctypes.get_errno(),'safe Git parent pidfd unavailable')
