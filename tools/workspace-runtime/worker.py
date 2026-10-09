@@ -190,6 +190,7 @@ def main():
             'admitted_at':int(time.time()),'deadline_at':int(time.time())+min(60,p['limits']['max_seconds']),'assignment':{
             'project':{'id':p['id'],'revision':p['revision'],'registration':{'host':p['host'],'workspace':p['workspace']}},
             'brief':{'outcome':'No-model runtime observation'},'criteria':[],'permitted_actions':[],
+            **({'result_contract':'evidence_report','repository_scope':p['source_read']['repositories']} if p.get('result_contract')=='evidence_report' else {}),
             'decision_rules':'No model turn','limits':{'max_seconds':min(60,p['limits']['max_seconds']),'max_turns':1,'max_tokens':1}}}
         root=config.admit(dispatch)
         with locked(root/'broker.lock',blocking=False):

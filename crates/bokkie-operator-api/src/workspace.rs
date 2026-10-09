@@ -11,8 +11,59 @@ pub struct WorkspaceTaskDefinition {
     pub permitted_actions: Vec<String>,
     pub decision_rules: String,
     pub limits: WorkspaceLimits,
+    #[serde(default, skip_serializing_if = "WorkspaceResultContract::is_delivery")]
+    pub result_contract: WorkspaceResultContract,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repository_scope: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_retained_work: Option<WorkspaceEvidenceReview>,
+}
+
+/// Acceptance is selected before admission. A read-only report does not claim
+/// an engineering delivery, and its conclusions may include evidence gaps.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceResultContract {
+    #[default]
+    EngineeringDelivery,
+    EvidenceReport,
+}
+impl WorkspaceResultContract {
+    pub fn is_delivery(&self) -> bool {
+        matches!(self, Self::EngineeringDelivery)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceReport {
+    pub format: String,
+    pub digest: String,
+    pub source_manifest_digest: String,
+    pub markdown: String,
+    pub sources: Vec<WorkspaceReportSource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceReportSource {
+    pub id: String,
+    pub url: String,
+    pub content_digest: String,
+    pub bytes: u64,
+    pub observed_at: i64,
+}
+
+/// Workspace-owned checkpoints project decisions; they cannot admit another
+/// execution or establish acceptance of this one.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceCheckpoint {
+    pub stage: String,
+    pub summary: String,
+    pub assessment: String,
+    pub evidence: Vec<String>,
+    pub next_action: String,
 }
 
 /// An explicit acceptance revision inspects one already ceased delivery. It
@@ -86,6 +137,9 @@ pub enum WorkspaceEvent {
     },
     Progress {
         summary: String,
+    },
+    Checkpoint {
+        checkpoint: WorkspaceCheckpoint,
     },
     Question {
         question: WorkspaceQuestion,
@@ -171,6 +225,8 @@ pub struct WorkspaceResult {
     pub criteria: Vec<WorkspaceCriterionResult>,
     pub deliveries: Vec<WorkspaceDelivery>,
     pub limitations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<WorkspaceReport>,
 }
 
 /// The authenticated host supplies observations acquired outside the agent turn.

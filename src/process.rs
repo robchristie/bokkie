@@ -724,16 +724,70 @@ impl SupervisedChild {
     }
 
     fn finish_readers(&mut self) -> Result<(), ProcessError> {
-        for handle in [
-            &mut self.stdin_writer,
-            &mut self.stdout_reader,
-            &mut self.stderr_reader,
-        ] {
-            if let Some(handle) = handle.take() {
-                handle.join().map_err(|_| ProcessError::IoWorkerPanicked)?;
+        // Workers send through bounded queues. Joining a sender before draining
+        // its queue can deadlock even after the child and its group have stopped.
+        // Drop also reaches this path with an idle stdin writer, so close its
+        // request channel before waiting for any worker to finish.
+        self.close_stdin();
+        let mut first_error = None;
+        loop {
+            // A completed stdin write can be queued when shutdown interrupts
+            // write_json. Drain notifications without reclassifying the already
+            // selected interruption because termination can cause BrokenPipe.
+            while self.writer_receiver.try_recv().is_ok() {}
+            for _ in 0..64 {
+                match self.receiver.try_recv() {
+                    Ok(event) => self.retain_shutdown_event(event, &mut first_error),
+                    Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => break,
+                }
+            }
+            for handle in [
+                &mut self.stdin_writer,
+                &mut self.stdout_reader,
+                &mut self.stderr_reader,
+            ] {
+                if handle.as_ref().is_some_and(JoinHandle::is_finished)
+                    && handle
+                        .take()
+                        .expect("finished worker is present")
+                        .join()
+                        .is_err()
+                {
+                    first_error.get_or_insert(ProcessError::IoWorkerPanicked);
+                }
+            }
+            if self.stdin_writer.is_none()
+                && self.stdout_reader.is_none()
+                && self.stderr_reader.is_none()
+            {
+                // A worker may have sent its final chunk immediately before the
+                // join. With all producers joined, these queues are now finite.
+                while let Ok(event) = self.receiver.try_recv() {
+                    self.retain_shutdown_event(event, &mut first_error);
+                }
+                while self.writer_receiver.try_recv().is_ok() {}
+                break;
+            }
+            if self.stdout_reader.is_none() && self.stderr_reader.is_none() {
+                let _ = self.writer_receiver.recv_timeout(self.limits.poll_interval);
+            } else {
+                match self.receiver.recv_timeout(self.limits.poll_interval) {
+                    Ok(event) => self.retain_shutdown_event(event, &mut first_error),
+                    Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {}
+                }
             }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn retain_shutdown_event(
+        &mut self,
+        event: ReaderEvent,
+        first_error: &mut Option<ProcessError>,
+    ) {
+        if let Err(error) = self.accept(event) {
+            first_error.get_or_insert(error);
+        }
     }
 
     fn evidence(&self) -> ProcessEvidence {
@@ -940,6 +994,146 @@ mod tests {
         let mut command = Command::new("sh");
         command.arg("-c").arg(script);
         command
+    }
+
+    fn shutdown_fixture(
+        receiver: Receiver<ReaderEvent>,
+        writer_receiver: Receiver<io::Result<()>>,
+    ) -> SupervisedChild {
+        let configured = limits();
+        SupervisedChild {
+            child: None,
+            stdin_sender: None,
+            writer_receiver,
+            stdin_writer: None,
+            receiver,
+            stdout_reader: None,
+            stderr_reader: None,
+            stdout: Capture::new(configured.stdout_bytes),
+            stderr: Capture::new(configured.stderr_bytes),
+            stdout_line: Vec::new(),
+            stdout_lines: VecDeque::new(),
+            stdout_closed: false,
+            stderr_closed: false,
+            deadline: Instant::now(),
+            next_heartbeat: Instant::now(),
+            heartbeat_interval: Duration::from_millis(5),
+            limits: configured,
+            cancellation: CancellationToken::new(),
+            risk: EffectRisk::None,
+            terminal: None,
+        }
+    }
+
+    #[test]
+    fn shutdown_drains_saturated_reader_and_writer_queues_before_joining() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let prefix = b"queued prefix\n".to_vec();
+        sender
+            .send(ReaderEvent::Chunk(Stream::Stdout, prefix.clone()))
+            .unwrap();
+        let (writer_sender, writer_receiver) = mpsc::sync_channel(1);
+        writer_sender.send(Ok(())).unwrap();
+        let mut child = shutdown_fixture(receiver, writer_receiver);
+        let stdout = b"stdout continuation\n".repeat(1024);
+        let stderr = b"stderr continuation\n".repeat(768);
+        child.stdout_reader = Some(spawn_reader(
+            io::Cursor::new(stdout.clone()),
+            Stream::Stdout,
+            sender.clone(),
+        ));
+        child.stderr_reader = Some(spawn_reader(
+            io::Cursor::new(stderr.clone()),
+            Stream::Stderr,
+            sender,
+        ));
+        child.stdin_writer = Some(thread::spawn(move || {
+            writer_sender
+                .send(Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "stdin closed during interruption",
+                )))
+                .unwrap();
+        }));
+        // Both queues are full before finalisation. The producers cannot finish
+        // their sends until finalisation receives, independently of scheduling.
+        child.finish_readers().unwrap();
+        assert!(child.stdin_writer.is_none());
+        assert!(child.stdout_reader.is_none());
+        assert!(child.stderr_reader.is_none());
+        assert!(child.stdout_closed && child.stderr_closed);
+        let evidence = child.evidence();
+        let stdout = [prefix, stdout].concat();
+        for (bytes, observed, limit) in [
+            (&stdout, &evidence.stdout, child.limits.stdout_bytes),
+            (&stderr, &evidence.stderr, child.limits.stderr_bytes),
+        ] {
+            assert_eq!(observed.total_bytes, bytes.len() as u64);
+            assert_eq!(observed.sha256, format!("{:x}", Sha256::digest(bytes)));
+            assert_eq!(observed.tail_bytes, bytes[bytes.len() - limit..]);
+            assert_eq!(observed.retained_bytes, limit);
+            assert!(observed.truncated);
+        }
+    }
+
+    #[test]
+    fn dropping_an_idle_session_closes_stdin_before_joining_its_writer() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(sender);
+        let (stdin_sender, stdin_receiver) = mpsc::sync_channel(1);
+        let (writer_sender, writer_receiver) = mpsc::sync_channel(1);
+        let writer_finished = Arc::new(AtomicBool::new(false));
+        let finished = writer_finished.clone();
+        let mut child = shutdown_fixture(receiver, writer_receiver);
+        child.stdin_sender = Some(stdin_sender);
+        child.stdin_writer = Some(thread::spawn(move || {
+            assert!(stdin_receiver.recv().is_err());
+            writer_sender.send(Ok(())).unwrap();
+            finished.store(true, Ordering::SeqCst);
+        }));
+        drop(child);
+        assert!(writer_finished.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn shutdown_retains_the_first_stream_error_after_draining_and_joining_workers() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender
+            .send(ReaderEvent::Error(io::Error::other(
+                "retained stream failure",
+            )))
+            .unwrap();
+        let (writer_sender, writer_receiver) = mpsc::sync_channel(1);
+        drop(writer_sender);
+        let mut child = shutdown_fixture(receiver, writer_receiver);
+        let stdout = b"remaining stdout\n".repeat(512);
+        let stderr = b"remaining stderr\n".repeat(512);
+        child.stdout_reader = Some(spawn_reader(
+            io::Cursor::new(stdout.clone()),
+            Stream::Stdout,
+            sender.clone(),
+        ));
+        child.stderr_reader = Some(spawn_reader(
+            io::Cursor::new(stderr.clone()),
+            Stream::Stderr,
+            sender,
+        ));
+        let error = child.finish_readers().unwrap_err();
+        assert!(
+            matches!(error, ProcessError::Io(error) if error.to_string() == "retained stream failure")
+        );
+        assert!(child.stdout_reader.is_none());
+        assert!(child.stderr_reader.is_none());
+        let evidence = child.evidence();
+        assert_eq!(
+            evidence.stdout.sha256,
+            format!("{:x}", Sha256::digest(&stdout))
+        );
+        assert_eq!(
+            evidence.stderr.sha256,
+            format!("{:x}", Sha256::digest(&stderr))
+        );
+        assert!(child.stdout_closed && child.stderr_closed);
     }
 
     #[test]

@@ -12,6 +12,15 @@ belongs in the registered portfolio workspace with its selected repositories,
 criteria and rollout scope agreed beforehand. Bokkie carries its progress and
 questions rather than creating another campaign supervisor.
 
+A reviewed definition can request source delivery or a finite read-only evidence
+assessment. An assessment names its selected repositories and agrees completion
+criteria, including how to handle missing evidence. The host retains exact source
+bytes; the workspace records its decisions and seals a linked report before
+independent review. A complete assessment may retain subject evidence limits or
+an inconclusive conclusion when its agreed criteria permit that outcome. Unmet
+criteria, unavailable proof or an unanswered question keep the task in attention.
+See the [evidence report contract](workspace-execution/evidence-reports.md).
+
 ## Configure the connector
 
 Keep the development account, credentials and repository access on the execution
@@ -34,8 +43,9 @@ See the [host runtime](../tools/workspace-runtime/README.md) for the concrete
 configuration, preflight and command interface.
 
 Review the allowed actions and bounds as an operator. The initial adapter supports
-ordinary workspace source delivery; a configured string cannot authorise
-deployment, publication or infrastructure changes. Task limits may narrow a
+ordinary workspace source delivery and selected read-only evidence reports;
+a configured string cannot authorise deployment, publication or infrastructure
+changes. Task limits may narrow a
 profile but cannot expand it. Model settings belong to role profiles. Observed
 token usage is a cancellation threshold with possible reporting overshoot;
 wall-clock deadlines remain finite and are pinned at Bokkie admission.
@@ -62,21 +72,23 @@ verification stays visible in attention; the host can verify that same retained
 result later without starting the agent again. Explicit cancellation can retire
 an already stopped, unaccepted run while retaining its partial outcome.
 
-Completion requires a structured result covering the admitted criteria, exact
-delivery revisions, independent review and required check evidence acquired by
-the host outside the model turn. A completion sentence, successful exit or
+Completion requires a structured result covering every admitted criterion and
+independent review evidence acquired by the host outside the model turn. Source
+delivery requires exact delivery revisions and required checks. An evidence
+report requires its immutable report, captured sources and matching independent
+completed review. A completion sentence, successful exit or
 notification outcome cannot satisfy these requirements. A missing result or
 verification observation does not authorise a replacement execution.
 
-If execution stops before submitting its report, the host can explicitly recover
-an evidence-backed report for that same execution. The recovery retains the
+For source delivery, if execution stops before submitting its report, the host can
+explicitly recover an evidence-backed report for that same execution. The recovery retains the
 original interruption and records its own source, time and evidence identities;
 it does not impersonate the missing agent submission or extend the run's budget.
 The task labels the report as recovered. Independent delivery verification still
 decides acceptance, and missing proof leaves the run in attention.
 
-An explicitly reviewed future definition can **Review retained work**. It names
-one earlier, ceased run of the same task and proposes completion evidence under
+An explicitly reviewed future source-delivery definition can **Review retained
+work**. It names one earlier, ceased run of the same task and proposes completion evidence under
 the new criteria. Close the earlier run explicitly before confirming this
 immediate occurrence. It checks the existing delivery without starting another
 coding session, and preserves the original unmet criteria and report. The host
@@ -107,7 +119,9 @@ interrupt acknowledgement or missing broker is not cessation evidence.
 Migration18 appends workspace execution records and immutable event/answer/action
 receipts; migration19 adds immutable recovered reports without changing the
 original stopped result. Migration20 adds bounded memory. Schema17, schema18
-and schema19 binaries cannot open this source's schema20 state.
+and schema19 binaries cannot open schema20 state. Migration21 is the decode
+and rollback barrier for evidence-report definitions/results and checkpoints;
+schema20 binaries cannot open this source's schema21 state.
 Keep the prior stopped-state backup for any separately authorised deployment;
 rollback is a data operation and must account for later external effects.
 

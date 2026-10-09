@@ -64,6 +64,10 @@ impl Editor {
                         field(ui,"Outcome",&mut definition.purpose,"bokkie.task-editor.outcome",true,nodes);
                         if let Some(workspace) = &mut definition.workspace {
                             ui.label(format!("Workspace: {} on {}",workspace.project.registration.name,workspace.project.registration.host));
+                            ui.label(if workspace.result_contract.is_delivery() {"Result: reviewed source delivery"} else {"Result: independently reviewed evidence report"});
+                            let mut repositories = workspace.repository_scope.join("\n");
+                            field(ui,"Selected repositories (owner/repository, one per line)",&mut repositories,"bokkie.task-editor.repositories",true,nodes);
+                            workspace.repository_scope = repositories.lines().filter(|line| !line.trim().is_empty()).map(str::to_owned).collect();
                             if let Some(review) = &mut workspace.review_retained_work {
                                 ui.strong("Review retained work");
                                 ui.add(egui::Label::new(format!("Use the retained report from execution {}. This occurrence verifies existing delivery evidence without starting workspace implementation.", review.source.execution_id)).wrap());
@@ -90,7 +94,7 @@ impl Editor {
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Observed token limit");
-                                ui.add(egui::DragValue::new(&mut workspace.limits.max_tokens).range(1..=2_000_000));
+                                ui.add(egui::DragValue::new(&mut workspace.limits.max_tokens).range(1..=16_000_000));
                             });
                             ui.small("Limits and actions cannot exceed the configured workspace profile. Changing the workspace requires a fresh conversation proposal.");
                         } else {

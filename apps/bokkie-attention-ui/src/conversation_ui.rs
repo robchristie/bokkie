@@ -1021,7 +1021,9 @@ fn conversation_panel(
                         for run in task.runs.iter().filter_map(|r|r.workspace.as_ref()) {
                             if let Some(question) = &run.question {
                                 ui.add(egui::Label::new(&question.prompt).wrap().selectable(true));
-                                if question.kind == "new_authority" {
+                                if run.cancellation_requested {
+                                    ui.small("Question retained in run history. Cancellation has been requested for this run.");
+                                } else if question.kind == "new_authority" {
                                     ui.small("This action needs a separately reviewed permission decision. An ordinary answer cannot expand the task's scope.");
                                 } else if button(ui,&format!("bokkie.workspace.answer.{}",run.execution_id),"Answer question",mutable,nodes) {
                                     *action = Some(ConversationUiAction::Run {run:Box::new(run.clone()),cancel:false});
@@ -1595,6 +1597,21 @@ fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
         });
     }
     if let Some(workspace) = &value.workspace {
+        ui.label(if workspace.result_contract.is_delivery() {
+            "Result: reviewed source delivery"
+        } else {
+            "Result: independently reviewed evidence report"
+        });
+        if !workspace.repository_scope.is_empty() {
+            ui.add(
+                egui::Label::new(format!(
+                    "Selected repositories: {}",
+                    workspace.repository_scope.join(", ")
+                ))
+                .wrap()
+                .selectable(true),
+            );
+        }
         ui.add(
             egui::Label::new(egui::RichText::new(&workspace.brief.outcome).heading())
                 .wrap()
@@ -1635,7 +1652,7 @@ fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
             ))
             .wrap(),
         );
-        ui.small("The workspace owns verification and reviewed delivery. Process completion alone cannot complete this task.");
+        ui.small("The workspace owns verification and independent review. Process completion alone cannot complete this task.");
     } else {
         ui.add(egui::Label::new(egui::RichText::new(&value.name).strong()).wrap());
         ui.add(egui::Label::new(&value.purpose).wrap().selectable(true));
@@ -1672,7 +1689,7 @@ fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
             "An occurrence saves its result first. Notification delivery is tracked separately.",
         );
     } else if value.workspace.is_some() {
-        ui.label("Results: in this task, with attributable delivery evidence");
+        ui.label("Results: in this task, with source and verification evidence");
     } else {
         ui.label(match value.destination.as_str() {
             "task_results" => "Results: In-app task results",
@@ -1856,6 +1873,13 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
                 if let Some(result) = &workspace.result {
                     if run.result.is_none() {ui.add(egui::Label::new(&result.summary).wrap().selectable(true));}
                     for delivery in &result.deliveries {ui.hyperlink_to(format!("Delivered change in {}",delivery.repository),&delivery.pull_request);}
+                    if let Some(report) = &result.report {
+                        ui.strong("Evidence report");
+                        let rendered = ui.add(egui::Label::new(&report.markdown).wrap().selectable(true));
+                        observe(rendered.rect,&format!("bokkie.workspace.report.{}",workspace.execution_id),&report.markdown,UiRole::Section,true,nodes);
+                        for (index, source) in report.sources.iter().enumerate() {ui.hyperlink_to(format!("Source {}: {}", index + 1, source.url),&source.url);}
+                        ui.small(format!("Report identity: {}",report.digest));
+                    }
                     egui::CollapsingHeader::new("Completion evidence").id_salt(("workspace-evidence", &workspace.execution_id)).show(ui, |ui| {
                         for criterion in &result.criteria {
                             ui.label(format!("{}: {}", criterion.id, if criterion.satisfied {"Satisfied"} else {"Unresolved"}));
@@ -1865,7 +1889,7 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
                     for limitation in &result.limitations {ui.add(egui::Label::new(format!("Limit: {limitation}")).wrap());}
                 }
                 if let Some(verification) = &workspace.verification {
-                    egui::CollapsingHeader::new(if verification.passed {"Delivery verification passed"} else {"Delivery verification pending"}).id_salt(("workspace-verification", &workspace.execution_id)).show(ui, |ui| {
+                    egui::CollapsingHeader::new(if verification.passed {"Result verification passed"} else {"Result verification pending"}).id_salt(("workspace-verification", &workspace.execution_id)).show(ui, |ui| {
                         for evidence in &verification.evidence {ui.add(egui::Label::new(evidence).wrap().selectable(true));}
                     });
                 }

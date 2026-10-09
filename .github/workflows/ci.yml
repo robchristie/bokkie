@@ -185,11 +185,14 @@ jobs:
           npx playwright install --with-deps chromium
 
       - name: Prepare immutable public fixture images
+        # Docker's verified public ECR images serve the same pinned manifests.
+        # Avoid Docker Hub's shared anonymous quota without adding credentials.
+        # Keep pulls sequential for ECR's anonymous request quota.
         run: |
-          docker pull nginx@sha256:e7257f1ef28ba17cf7c248cb8ccf6f0c6e0228ab9c315c152f9c203cd34cf6d1
-          docker pull node:22-bookworm-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732
-          echo "BOKKIE_AUTH_NGINX_IMAGE=$(docker image inspect --format '{{.Id}}' nginx@sha256:e7257f1ef28ba17cf7c248cb8ccf6f0c6e0228ab9c315c152f9c203cd34cf6d1)" >> "$GITHUB_ENV"
-          echo "BOKKIE_AUTH_RUNTIME_IMAGE=$(docker image inspect --format '{{.Id}}' node:22-bookworm-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732)" >> "$GITHUB_ENV"
+          docker pull public.ecr.aws/docker/library/nginx@sha256:e7257f1ef28ba17cf7c248cb8ccf6f0c6e0228ab9c315c152f9c203cd34cf6d1
+          docker pull public.ecr.aws/docker/library/node@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732
+          echo "BOKKIE_AUTH_NGINX_IMAGE=$(docker image inspect --format '{{.Id}}' public.ecr.aws/docker/library/nginx@sha256:e7257f1ef28ba17cf7c248cb8ccf6f0c6e0228ab9c315c152f9c203cd34cf6d1)" >> "$GITHUB_ENV"
+          echo "BOKKIE_AUTH_RUNTIME_IMAGE=$(docker image inspect --format '{{.Id}}' public.ecr.aws/docker/library/node@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732)" >> "$GITHUB_ENV"
 
       - name: Qualify fresh authentication and worker updates through nginx
         run: node tools/ui-authenticated-push.mjs

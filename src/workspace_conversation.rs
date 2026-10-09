@@ -56,6 +56,8 @@ pub fn definition(
     definition.max_attempts = 1;
     definition.workspace = Some(WorkspaceTaskDefinition {
         project,
+        result_contract: previous.map_or(Default::default(), |w| w.result_contract),
+        repository_scope: previous.map_or_else(Vec::new, |w| w.repository_scope.clone()),
         review_retained_work: previous.and_then(|w| w.review_retained_work.clone()),
         criteria:vec![WorkspaceCriterion {id:"outcome".into(),description:brief.acceptance.clone()}],
         brief,

@@ -30,6 +30,12 @@ pub enum ConversationOperation {
     PrepareWorkspace {
         project_query: String,
         brief: Box<HandoffBrief>,
+        #[serde(default)]
+        result_contract: Option<crate::WorkspaceResultContract>,
+        #[serde(default)]
+        repository_scope: Option<Vec<String>>,
+        #[serde(default)]
+        trigger: Option<crate::ManagedTrigger>,
     },
     PrepareHandoff {
         project_query: String,

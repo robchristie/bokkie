@@ -597,6 +597,9 @@ async fn run_turn(
         ConversationOperation::PrepareWorkspace {
             project_query,
             brief,
+            result_contract,
+            repository_scope,
+            trigger,
         } => {
             let projects = state.executor.execute(|s| s.workspace_projects()).await?;
             let base = view
@@ -604,8 +607,32 @@ async fn run_turn(
                 .as_ref()
                 .and_then(|t| t.candidate.as_ref().or(t.active.as_ref()))
                 .map(|r| &r.definition);
-            match crate::workspace_conversation::definition(&project_query, *brief, &projects, state.workspace.as_deref(), base)? {
-                Ok(definition) => ConversationOperation::SaveDefinition {definition, message:"Review the workspace, scope, acceptance and execution limits before starting.".into()},
+            match crate::workspace_conversation::definition(
+                &project_query,
+                *brief,
+                &projects,
+                state.workspace.as_deref(),
+                base,
+            )? {
+                Ok(mut definition) => {
+                    let assignment = definition
+                        .workspace
+                        .as_mut()
+                        .expect("resolved workspace assignment");
+                    if let Some(contract) = result_contract {
+                        assignment.result_contract = contract;
+                    }
+                    if let Some(scope) = repository_scope {
+                        assignment.repository_scope = scope;
+                    }
+                    if !assignment.result_contract.is_delivery() {
+                        assignment.permitted_actions = vec!["inspect".into(), "verify".into()];
+                    }
+                    if let Some(trigger) = trigger {
+                        definition.trigger = trigger;
+                    }
+                    ConversationOperation::SaveDefinition {definition, message:"Review the workspace, scope, acceptance and execution limits before starting.".into()}
+                }
                 Err(question) => return Ok(question),
             }
         }

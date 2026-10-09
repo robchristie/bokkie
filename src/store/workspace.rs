@@ -98,6 +98,32 @@ pub(super) fn validate_definition(def: &ManagedTaskDefinition) -> Result<(), Sto
     crate::handoffs::validate_registration(&assignment.project.registration)?;
     crate::handoffs::validate_brief(&assignment.brief)?;
     validate_limits(&assignment.limits)?;
+    if assignment.repository_scope.len() > 32
+        || assignment
+            .repository_scope
+            .iter()
+            .any(|r| !repository_name(r))
+        || assignment
+            .repository_scope
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != assignment.repository_scope.len()
+    {
+        return Err(invalid("select distinct bounded repository identities"));
+    }
+    if !assignment.result_contract.is_delivery()
+        && (assignment.repository_scope.is_empty()
+            || assignment.review_retained_work.is_some()
+            || assignment
+                .permitted_actions
+                .iter()
+                .any(|a| !matches!(a.as_str(), "inspect" | "verify")))
+    {
+        return Err(invalid(
+            "evidence reports require an explicit repository scope and only inspect/verify actions",
+        ));
+    }
     text(&assignment.decision_rules, 4096)?;
     if assignment.criteria.is_empty()
         || assignment.criteria.len() > 64
@@ -203,6 +229,7 @@ fn retained_review_result(
         ));
     }
     Ok(Some(WorkspaceResult {
+        report: None,
         summary: review.summary.clone(),
         criteria: review.criteria.clone(),
         deliveries: result.deliveries,
@@ -491,6 +518,43 @@ fn validate_result(result: &WorkspaceResult) -> Result<(), StoreError> {
         }
         list(&delivery.checks, 32, false)?;
     }
+    if let Some(report) = &result.report {
+        text(&report.markdown, 32768)?;
+        if report.format != "evidence-report-v1"
+            || report.sources.is_empty()
+            || report.sources.len() > 32
+            || report.digest.len() != 64
+            || !sha(&report.digest)
+            || report.source_manifest_digest
+                != canonical_digest(
+                    &serde_json::json!({"format":"evidence-source-manifest-v1","sources":report.sources}),
+                )?
+            || report.digest
+                != canonical_digest(
+                    &serde_json::json!({"format":report.format,"markdown":report.markdown,"source_manifest_digest":report.source_manifest_digest}),
+                )?
+        {
+            return Err(invalid(
+                "evidence report content and sources must match their bounded digests",
+            ));
+        }
+        let mut ids = BTreeSet::new();
+        for source in &report.sources {
+            text(&source.url, 2048)?;
+            if source.id.len() != 64
+                || !sha(&source.id)
+                || !ids.insert(&source.id)
+                || source.content_digest.len() != 64
+                || !sha(&source.content_digest)
+                || source.observed_at < 0
+                || source.bytes > 262_144
+            {
+                return Err(invalid(
+                    "evidence report sources require distinct retained identities",
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -549,6 +613,23 @@ fn validate_event(event: &WorkspaceEvent) -> Result<(), StoreError> {
             list(instruction_sources, 32, true)?;
         }
         WorkspaceEvent::Progress { summary } => text(summary, 4096)?,
+        WorkspaceEvent::Checkpoint { checkpoint } => {
+            text(&checkpoint.stage, 200)?;
+            text(&checkpoint.summary, 4096)?;
+            text(&checkpoint.next_action, 2048)?;
+            list(&checkpoint.evidence, 32, false)?;
+            if encode(checkpoint)?.len() > 16384 {
+                return Err(invalid(
+                    "workspace checkpoint exceeds its retained output budget",
+                ));
+            }
+            if !matches!(
+                checkpoint.assessment.as_str(),
+                "progress" | "passed" | "failed" | "inconclusive"
+            ) {
+                return Err(invalid("unsupported workspace checkpoint assessment"));
+            }
+        }
         WorkspaceEvent::Question { question } => {
             text(&question.id, 200)?;
             text(&question.prompt, 4096)?;
@@ -612,15 +693,33 @@ fn accepted(
     let (Some(result), Some(verification)) = (result, verification) else {
         return false;
     };
-    verification.passed
+    let complete = verification.passed
         && !verification.evidence.is_empty()
-        && result.limitations.is_empty()
         && result.criteria.len() == dispatch.assignment.criteria.len()
         && dispatch.assignment.criteria.iter().all(|wanted| {
             result.criteria.iter().any(|actual| {
                 actual.id == wanted.id && actual.satisfied && !actual.evidence.is_empty()
             })
-        })
+        });
+    if !complete {
+        return false;
+    }
+    if !dispatch.assignment.result_contract.is_delivery() {
+        // Subject evidence limits may be the completed assessment's findings.
+        // Exact admitted criteria and trusted verification still own acceptance.
+        return result.deliveries.is_empty()
+            && result.report.as_ref().is_some_and(|report| {
+                report.sources.iter().all(|source| {
+                    dispatch.assignment.repository_scope.iter().any(|repo| {
+                        source
+                            .url
+                            .starts_with(&format!("https://github.com/{repo}/"))
+                    })
+                })
+            });
+    }
+    result.limitations.is_empty()
+        && result.report.is_none()
         && !result.deliveries.is_empty()
         && result.deliveries.iter().all(|d| {
             sha(&d.reviewed_head)
@@ -637,6 +736,17 @@ fn accepted(
                 && d.pull_request
                     .strip_prefix(&format!("https://github.com/{}/pull/", d.repository))
                     .is_some_and(|number| number.parse::<u64>().is_ok_and(|n| n > 0))
+        })
+}
+
+fn repository_name(value: &str) -> bool {
+    value.len() <= 256
+        && value.split('/').count() == 2
+        && value.split('/').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
         })
 }
 
@@ -813,6 +923,7 @@ fn reconcile_event(
             WorkspaceEvent::Stopped { .. }
                 | WorkspaceEvent::Started { .. }
                 | WorkspaceEvent::Progress { .. }
+                | WorkspaceEvent::Checkpoint { .. }
                 | WorkspaceEvent::Question { .. }
                 | WorkspaceEvent::Attention { .. }
         )
@@ -844,6 +955,20 @@ fn reconcile_event(
             tx.execute(
                 "UPDATE workspace_executions SET progress=?2 WHERE execution_id=?1",
                 params![event.execution_id, summary],
+            )?;
+        }
+        WorkspaceEvent::Checkpoint { checkpoint } => {
+            let progress = format!(
+                "{} · {}\n{}\nEvidence: {}\nNext: {}",
+                checkpoint.stage,
+                checkpoint.assessment,
+                checkpoint.summary,
+                checkpoint.evidence.join("; "),
+                checkpoint.next_action
+            );
+            tx.execute(
+                "UPDATE workspace_executions SET progress=?2 WHERE execution_id=?1",
+                params![event.execution_id, progress],
             )?;
         }
         WorkspaceEvent::Question { question: new } => {
