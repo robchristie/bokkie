@@ -38,7 +38,7 @@ def strings(value,maximum,*,required=False):
 
 
 def result_bounds(value):
-    if not isinstance(value,dict) or set(value)!={'summary','criteria','deliveries','limitations'}:
+    if not isinstance(value,dict) or set(value) not in ({'summary','criteria','deliveries','limitations'}, {'summary','criteria','deliveries','limitations','report'}):
         raise ValueError('invalid structured result shape')
     text(value['summary'],16384);strings(value['limitations'],32)
     if not isinstance(value['criteria'],list) or len(value['criteria'])>64:
@@ -51,6 +51,8 @@ def result_bounds(value):
         if criterion['id'] in ids:
             raise ValueError('criterion identity repeated')
         ids.add(criterion['id'])
+    if value.get('report') is not None:
+        report_bounds(value['report'])
     if not isinstance(value['deliveries'],list) or len(value['deliveries'])>32:
         raise ValueError('delivery catalogue exceeds bounds')
     for delivery in value['deliveries']:
@@ -61,6 +63,40 @@ def result_bounds(value):
         strings(delivery['checks'],32)
 
 
+def report_bounds(report):
+    expected={'format','digest','source_manifest_digest','markdown','sources'}
+    if not isinstance(report,dict) or set(report)!=expected or report['format']!='evidence-report-v1':
+        raise ValueError('invalid evidence report shape')
+    text(report['markdown'],32768)
+    sources=report['sources']
+    if not isinstance(sources,list) or not 1<=len(sources)<=32:
+        raise ValueError('invalid evidence source catalogue')
+    ids=set()
+    for source in sources:
+        if not isinstance(source,dict) or set(source)!={'id','url','content_digest','bytes','observed_at'}:
+            raise ValueError('invalid evidence source shape')
+        for key in ('id','content_digest'):
+            if not isinstance(source[key],str) or not re.fullmatch(r'[0-9a-f]{64}',source[key]):
+                raise ValueError('invalid evidence source digest')
+        text(source['url'],2048)
+        if source['id'] in ids or type(source['bytes']) is not int or not 0<=source['bytes']<=256*1024 or type(source['observed_at']) is not int or source['observed_at']<=0:
+            raise ValueError('invalid or repeated evidence source identity')
+        ids.add(source['id'])
+    manifest={'format':'evidence-source-manifest-v1','sources':sources}
+    body={key:report[key] for key in ('format','markdown','source_manifest_digest')}
+    if report['source_manifest_digest']!=digest(manifest) or report['digest']!=digest(body):
+        raise ValueError('evidence report digests do not match content')
+
+
+def checkpoint_bounds(value):
+    if not isinstance(value,dict) or set(value)!={'stage','summary','assessment','evidence','next_action'}:
+        raise ValueError('invalid workspace checkpoint shape')
+    text(value['stage'],200);text(value['summary'],4096);text(value['next_action'],2048)
+    strings(value['evidence'],32)
+    if value['assessment'] not in ('progress','passed','failed','inconclusive') or len(encoded(value))>16384:
+        raise ValueError('invalid or oversized workspace checkpoint')
+
+
 def event_bounds(event):
     if len(encoded(event))>MAX_EVENT_MESSAGE:
         raise ValueError('workspace event exceeds Store bound')
@@ -68,6 +104,7 @@ def event_bounds(event):
     if kind=='started':
         text(event['runtime_id'],256);strings(event['instruction_sources'],32,required=True)
     elif kind=='progress':text(event['summary'],4096)
+    elif kind=='checkpoint':checkpoint_bounds(event['checkpoint'])
     elif kind=='attention':text(event['reason'],4096)
     elif kind=='question':
         q=event['question'];text(q['id'],200);text(q['prompt'],4096);strings(q['options'],16)
@@ -291,10 +328,30 @@ class Config:
             if not isinstance(actions,list) or not 1<=len(actions)<=32 or len(set(actions))!=len(actions):
                 raise ValueError('invalid host permitted action policy')
             for action in actions:text(action,200)
-            for key,maximum in [('max_seconds',86400),('max_turns',100),('max_tokens',2000000)]:
+            for key,maximum in [('max_seconds',86400),('max_turns',100),('max_tokens',16000000)]:
                 if type(p['limits'][key]) is not int or not 1<=p['limits'][key]<=maximum:
                     raise ValueError('invalid host execution ceiling')
-            resources = [canonical(r) for r in p['write_roots'] + p['git_common_dirs']]
+            contract=p.get('result_contract','engineering_delivery')
+            if contract not in ('engineering_delivery','evidence_report'):
+                raise ValueError('unsupported host result contract')
+            if contract=='evidence_report':
+                if (set(actions)-{'inspect','verify'} or p.get('network_access',False) is not False or
+                        p.get('readonly_mcp_servers',[]) or not p.get('reviewer')):
+                    raise ValueError('evidence reports require inspect/verify, no task network/MCP and an independent reviewer')
+                p['network_access']=False
+                p['read_roots']=[canonical(r) for r in p['read_roots']]
+                if not p['read_roots'] or len(p['read_roots'])>32:
+                    raise ValueError('evidence report requires bounded selected read mounts')
+                if p['workspace'] not in p['read_roots']:
+                    raise ValueError('evidence workspace must be an exact selected read mount')
+                p['git_common_dirs']=[canonical(r) for r in p['git_common_dirs']]
+                if any(not any(Path(git).is_relative_to(Path(r)) for r in p['read_roots']) for git in p['git_common_dirs']):
+                    raise ValueError('evidence Git storage must be covered by selected read mounts')
+                if p['write_roots']!=[p['scratch']]:
+                    raise ValueError('evidence report may write only its exact scratch directory')
+                resources=[canonical(p['scratch'])]
+            else:
+                resources = [canonical(r) for r in p['write_roots'] + p['git_common_dirs']]
             if not resources or len(resources) > 32 or len(resources) != len(set(resources)):
                 raise ValueError('invalid writable resource set')
             canonical(p['scratch'])
@@ -303,28 +360,39 @@ class Config:
             protected_paths=[str(self.root),str(self.registry),self.token_file,self.path]
             if self.edge_authorization_file is not None:
                 protected_paths.append(self.edge_authorization_file)
+            if contract=='evidence_report':
+                from evidence_report import source_profile
+                source_profile(p,protected_paths,resources)
+                if any(overlaps(protected,r) for protected in protected_paths+[str(codex_home)] for r in p['read_roots']):
+                    raise ValueError('evidence read mounts overlap protected host state or account configuration')
+                if any(overlaps(r,p['scratch']) for r in p['read_roots']):
+                    raise ValueError('scratch must not alias selected read-only source mounts')
             for protected in protected_paths:
                 if any(overlaps(protected, r) for r in resources):
                     raise ValueError('writable resources overlap protected host state')
             if p.get('reviewer'):
                 reviewer=p['reviewer']
                 reviewer_path=canonical(reviewer['config_file'],directory=False)
-                if (reviewer['role']!='exact_head_reviewer' or any(overlaps(reviewer_path,r) for r in resources) or
+                if (reviewer['role']!=('evidence_reviewer' if contract=='evidence_report' else 'exact_head_reviewer') or any(overlaps(reviewer_path,r) for r in resources) or
                         any(Path(reviewer_path).is_relative_to(Path(r)) for r in (str(self.root),str(self.registry)))):
                     raise ValueError('independent reviewer profile must be protected from task writes')
                 review_config=tomllib.loads(Path(reviewer_path).read_text())
                 if review_config.get('sandbox_mode')!='read-only' or review_config.get('approval_policy')!='never':
                     raise ValueError('independent reviewer requires read-only, non-escalating permissions')
+                if contract=='evidence_report' and (review_config.get('sandbox_read_only',{}).get('network_access',False) is not False or review_config.get('approvals_reviewer','user')!='user'):
+                    raise ValueError('evidence reviewer must have no task network or automatic approvals')
                 reviewer['sha256']=hashlib.sha256(Path(reviewer_path).read_bytes()).hexdigest()
+                if contract=='evidence_report' and any(not isinstance(review_config.get(key),str) or not review_config[key] for key in ('model','model_reasoning_effort')):
+                    raise ValueError('evidence reviewer requires explicit independent role tuning')
                 reviewer['model']=review_config.get('model')
                 reviewer['reasoning_effort']=review_config.get('model_reasoning_effort')
-            for repository in p['verification']['repositories']:
+            for repository in p.get('verification',{'repositories':[]})['repositories']:
                 checkout = canonical(repository['checkout'])
                 common = discover(checkout,p['git_common_dirs'],checkout)['common']
                 if canonical(common) not in p['git_common_dirs']:
                     raise ValueError('repository Git common directory is not reserved')
                 repository['git_common_dir'] = canonical(common)
-                if not repository['required_checks'] or not repository['canonical_commands']:
+                if contract=='engineering_delivery' and (not repository['required_checks'] or not repository['canonical_commands']):
                     raise ValueError('delivery must declare canonical commands and CI checks')
                 if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository['repository']):
                     raise ValueError('invalid GitHub repository identity')
@@ -349,8 +417,17 @@ class Config:
                 project['registration']['workspace'] != p['workspace'] or
                 dispatch['profile_revision'] != p['profile_revision']):
             raise ValueError('dispatch does not match the fixed project/profile allowlist')
+        contract=dispatch['assignment'].get('result_contract','engineering_delivery')
+        if contract!=p.get('result_contract','engineering_delivery'):
+            raise ValueError('dispatch result contract differs from the fixed host profile')
+        if contract=='evidence_report':
+            scope=dispatch['assignment'].get('repository_scope')
+            if (not isinstance(scope,list) or not scope or len(scope)>32 or len(set(scope))!=len(scope) or
+                    any(r not in p['source_read']['repositories'] for r in scope) or
+                    set(dispatch['assignment']['permitted_actions'])-{'inspect','verify'}):
+                raise ValueError('evidence report repository scope or actions exceed the fixed profile')
         limits = dispatch['assignment']['limits']
-        for key, maximum in [('max_seconds', 86400), ('max_turns', 100), ('max_tokens', 2000000)]:
+        for key, maximum in [('max_seconds', 86400), ('max_turns', 100), ('max_tokens', 16000000)]:
             if type(limits[key]) is not int or not 1 <= limits[key] <= min(maximum,p['limits'][key]):
                 raise ValueError('invalid finite execution limit')
         actions=dispatch['assignment']['permitted_actions']

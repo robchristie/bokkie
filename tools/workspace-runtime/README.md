@@ -311,3 +311,136 @@ The canonical governance wrapper includes this zero-model suite. Fake peers
 prove recovery/trust handling; the actual reaper test proves local descendant
 cleanup. These checks do not establish a real web-created task, live source
 delivery, runtime child-review attribution or a deployment.
+
+## Read-only evidence reports
+
+A separately admitted `evidence_report` profile returns an attributable report
+without an engineering delivery or PR. Its definition must select the contract,
+repository scope and completion criteria before admission. The default remains
+`engineering_delivery`, including its existing independent review, canonical
+checks and candidate/merge CI gates. Changing the report's assessed subject to
+inconclusive does not relax its own completion criteria. Unanswered questions
+remain for Bokkie's Store to resolve.
+
+For a report profile, set `result_contract` to `evidence_report`,
+`permitted_actions` to `inspect` and/or `verify`, `network_access` to `false`,
+`readonly_mcp_servers` to `[]` and `write_roots` to the one exact `scratch`
+directory. Select `read_roots` explicitly: the portfolio workspace, selected
+project workspaces and any source trees needed for local discovery. Do not select
+an ancestor containing private runtime, account configuration, the trusted source
+client's configuration or its working directory. Git storage remains read-only;
+list actual `git_common_dirs` when the selected workspaces use shared storage.
+Delivery-specific `verification.repositories` may be empty for a report.
+
+The additional protected source profile has this shape:
+
+```json
+{
+  "source_read": {
+    "gh": "/absolute/canonical/gh",
+    "config_dir": "/absolute/existing/private/gh-configuration",
+    "cwd": "/absolute/existing/protected/source-client-directory",
+    "repositories": ["owner/selected-repository"],
+    "max_requests": 32,
+    "max_bytes": 8388608,
+    "timeout_seconds": 20
+  },
+  "reviewer": {
+    "role": "evidence_reviewer",
+    "config_file": "/absolute/private/evidence_reviewer.toml"
+  }
+}
+```
+
+The source client uses the operator's explicitly selected existing GitHub account
+for source observation. It never changes authentication, rights, repository state
+or policy. Its configuration and cwd are outside candidate-writable paths and
+excluded from the task's read mounts. The host obtains an existing token with the
+fixed canonical `gh auth token --hostname github.com` invocation; the model never
+receives that token. Task requests cannot choose a URL, endpoint, HTTP method,
+command, host or credential. The host constructs a fixed GitHub REST GET with
+redirects and proxy forwarding disabled. Failed requests count against the
+finite request budget; the trusted helper has an overall deadline including DNS and process-group cleanup,
+response reads have a byte ceiling, each
+source is at most 256 KiB, and the profile caps aggregate retained content.
+
+`bokkie_workspace.capture_source` accepts only one of these typed selectors:
+
+```json
+{"source":{"kind":"repository_file","repository":"owner/selected-repository","commit":"0123456789abcdef0123456789abcdef01234567","path":"docs/receipt.md"}}
+{"source":{"kind":"issue_comment","repository":"owner/selected-repository","comment_id":123456789}}
+```
+
+A file must be a regular entry at the exact complete commit and unambiguous
+relative path, with a matching Git blob and retained byte length. Symlinks,
+submodules, directories, traversal and ambiguous encodings are rejected. Issue
+comments retain body bytes, author, creation/update times and capture time, so a
+mutable owner claim remains an observed claim. Other GitHub comment types are
+unsupported. Both the admitted repository scope and the trusted profile's
+allowlist must permit the repository. Repeating a selector reuses its first
+retained observation, including after broker reconstruction.
+
+Source identifiers hash the entire versioned capture capsule, including method,
+execution/admission provenance, selector, bytes, length, content digest and
+metadata. Capsules and sealed reports live in host-private state. Their
+`/bokkie-evidence` mirror is mounted read-only with no writable alias. Sealing
+uses the compact UTF-8 canonical JSON and versioned digest domains in the
+[evidence report contract](../../docs/workspace-execution/evidence-reports.md).
+Call `seal_report` with bounded markdown and distinct captured `source_ids`; its
+reply returns `report_id`, `source_manifest_digest` and the immutable mirror path.
+A repair creates another identity and needs another review.
+
+Derive a separately named `evidence_reviewer` role from the existing independent
+reviewer profile, retaining its flagship model, high effort and review instructions.
+Set `sandbox_mode = "read-only"`, `approval_policy = "never"`,
+`approvals_reviewer = "user"` and `[sandbox_read_only] network_access = false`.
+The worker derives closed task-local copies of every configured child role,
+retaining model, effort and instructions while disabling network, escalation,
+apps, web search, inherited MCP and plugins. No global role or account settings
+are edited. Commission the reviewer after sealing. It must inspect the mirror,
+recompute the sealed report and source-manifest identities, and return these
+three anchored fields in the same completed final-answer turn:
+
+```text
+Verdict: PASS
+Reviewed report: <64 lowercase SHA-256 characters>
+Reviewed sources: <64 lowercase SHA-256 characters>
+```
+
+The host requires runtime-reported child identity, root parent, admitted reviewer
+role, model and effort, plus completed materialised history. A root quotation,
+unfinished turn, earlier commissioned child, wrong digest or later `BLOCK` cannot
+qualify the report. `result` accepts only `summary`, `criteria`, `limitations` and
+one `report_id`; the host loads the real sealed payload rather than accepting
+model-authored digest/source fields. Trusted verification rechecks retained
+capsules, mirrors and canonical digests and returns the existing
+`WorkspaceVerification` shape, with `passed: false` when proof is missing.
+
+`checkpoint` takes `stage`, `summary`, `assessment`, `evidence` and `next_action`.
+Assessment is `progress`, `passed`, `failed` or `inconclusive`; the complete
+checkpoint is at most 16 KiB. Only the assignment root may call task tools.
+Checkpoints are nonterminal projections of workspace decisions: they create no
+campaign scheduler or new execution. Generic CI waiting is unavailable in report
+mode. Every task-tool reply shows cache-inclusive observed tokens, cached input,
+remaining tokens and remaining wall time. New profile/definition limits may select
+up to 16 million tokens; previously saved admissions retain their exact limits.
+
+Before any model turn, the worker qualifies its actual root and reviewer command
+sandboxes. The root has scratch-only `workspaceWrite`, no task network and
+`never`/`user` approvals; the reviewer has literal `readOnly` with the same network
+and approval bounds. A shallow read-only mount view preserves the actual workspace
+entry and every existing top-level source path without copying sources or adding
+metadata to the workspace. Private empty control slots let Codex prepare nested
+sandboxes; the runtime records this view and the loaded instruction hashes.
+Conventional control roots are masked. A fresh private `/tmp` supports sandbox
+construction, while actual task commands must prove `/tmp` writes are denied.
+SSH, DBus, Docker and display forwarding and inherited GitHub token variables
+are removed.
+
+The no-model preflight requires successful scratch writing by the root, denied
+scratch writing by the reviewer, denied product/Git/mirror/`/tmp` writes, and denied
+TCP, masked Unix-socket and visible scratch Unix-socket connections. Host-side
+positive controls prove those sockets are reachable before testing denial. A
+failed or unsupported probe blocks the model turn; reported configuration alone
+never establishes confinement. Inference network access by the enclosing
+app-server remains separate from the task-tool sandbox.

@@ -219,13 +219,15 @@ def verify_prerequisites(admission,result,records,*,query=github,deadline=None):
     try:
         observe_delivery(admission,result,records,bounded_query(admission,query,deadline),evidence)
         return {'prerequisites_verified':True,'evidence':evidence}
-    except (ValueError,RuntimeError,KeyError,TypeError,subprocess.TimeoutExpired) as error:
+    except (ValueError,RuntimeError,KeyError,TypeError,OSError,subprocess.TimeoutExpired) as error:
         return {'prerequisites_verified':False,'evidence':evidence+[str(error)[:1024]]}
 
 
-def verify(admission, result, records, *, query=github, deadline=None):
+def verify(admission, result, records, *, query=github, deadline=None, root=None):
     evidence=[]
     try:
+        if admission['dispatch']['assignment'].get('result_contract','engineering_delivery')=='evidence_report':
+            return {'passed':True,'evidence':verify_report(admission,result,records,root)}
         if result is None or any(c['satisfied'] is not True for c in result['criteria']):
             raise ValueError('Result does not satisfy every completion criterion')
         if result['limitations']:
@@ -239,7 +241,88 @@ def verify(admission, result, records, *, query=github, deadline=None):
         if len(encoded(evidence))>32768:
             raise ValueError('verification evidence exceeds bound')
         return {'passed':True,'evidence':evidence}
-    except (ValueError,RuntimeError,KeyError,TypeError,subprocess.TimeoutExpired) as error:
+    except (ValueError,RuntimeError,KeyError,TypeError,OSError,subprocess.TimeoutExpired) as error:
         # Retain the delivered result and the observations already acquired.
         # Missing proof never restarts the underlying workspace assignment.
         return {'passed':False,'evidence':evidence+[str(error)[:1024]]}
+
+
+def report_review_observation(records, root_thread, report, sealed_index, configured):
+    """Only actual post-seal reviewer descendants' completed final turns qualify."""
+    if (configured.get('role') != 'evidence_reviewer' or not configured.get('model') or
+            not configured.get('reasoning_effort')):
+        return None
+    children = {}
+    snapshots = {}
+    for index, record in enumerate(records):
+        value = record['value']
+        if record['kind'] == 'protocol_event':
+            params = value.get('params', {})
+            item = params.get('item', {})
+            if (params.get('threadId') == root_thread and item.get('type') == 'subAgentActivity' and
+                    item.get('agentThreadId') and item['agentThreadId'] != root_thread):
+                children.setdefault(item['agentThreadId'],index)
+        elif record['kind'] == 'child_thread_read':
+            thread = value.get('thread', {})
+            if (value.get('include_turns') is True and thread.get('id') == value.get('child_id') and
+                    thread.get('parentThreadId') == root_thread and thread.get('agentRole') == configured['role'] and
+                    thread.get('model') == configured['model'] and
+                    thread.get('reasoningEffort') == configured['reasoning_effort']):
+                snapshots[thread['id']] = thread
+    latest = {}
+    for child, first_index in children.items():
+        if first_index<=sealed_index:continue
+        for turn in snapshots.get(child, {}).get('turns', []):
+            if turn.get('status') != 'completed' or not turn.get('id'):
+                continue
+            answers = [item.get('text', '') for item in turn.get('items', []) if
+                       item.get('type') == 'agentMessage' and item.get('phase') == 'final_answer']
+            if len(answers) != 1:
+                continue
+            answer = answers[0]
+            report_id = review_value(answer, 'Reviewed report:', r'([0-9a-f]{64})|`([0-9a-f]{64})`')
+            sources_id = review_value(answer, 'Reviewed sources:', r'([0-9a-f]{64})|`([0-9a-f]{64})`')
+            if report_id == report['digest'] and sources_id == report['source_manifest_digest']:
+                latest[child] = (turn['id'], review_verdict(answer))
+    if any(verdict != 'PASS' for _, verdict in latest.values()):
+        raise ValueError('Independent completed child blocks the sealed report')
+    if latest:
+        child, (turn, _) = next(iter(latest.items()))
+        return 'Observed independent completed evidence reviewer '+child+' turn '+turn
+    return None
+
+
+def verify_report(admission, result, records, root):
+    from evidence_report import EvidenceStore
+    result_bounds(result)
+    assignment = admission['dispatch']['assignment']
+    wanted = {criterion['id'] for criterion in assignment['criteria']}
+    if (result['deliveries'] or result.get('report') is None or
+            len(result['criteria']) != len(wanted) or {c['id'] for c in result['criteria']} != wanted or
+            any(c['satisfied'] is not True or not c['evidence'] for c in result['criteria']) or result['limitations']):
+        raise ValueError('Evidence report does not satisfy the admitted completion criteria')
+    if root is None:
+        raise ValueError('Host-owned sealed evidence store is unavailable')
+    if not records:
+        raise ValueError('Report has no attributable host observations')
+    policy = next((r['value'] for r in records if r['kind'] == 'evidence_policy_qualified'), None)
+    from common import read
+    if policy is None or read(Path(root)/'evidence-policy.json') != policy or policy.get('model_calls') != 0:
+        raise ValueError('No attributable no-model report policy qualification')
+    report = EvidenceStore(root, admission, create=False).report(result['report']['digest'])
+    if report != result['report']:
+        raise ValueError('Submitted report differs from the immutable host seal')
+    sealed_index = next((index for index, record in enumerate(records) if
+                         record['kind'] == 'evidence_report_sealed' and record['value'].get('digest') == report['digest'] and
+                         record['value'].get('source_manifest_digest') == report['source_manifest_digest']), None)
+    if sealed_index is None:
+        raise ValueError('Sealed report has no runtime seal observation')
+    thread = next((r['value']['thread_id'] for r in records if r['kind'] == 'thread_identity'), None)
+    configured = next((r['value'] for r in records if r['kind'] == 'reviewer_profile'), {})
+    if configured != admission['project_profile'].get('reviewer'):
+        raise ValueError('Independent reviewer does not match admitted profile')
+    observation = report_review_observation(records, thread, report, sealed_index, configured)
+    if observation is None:
+        raise ValueError('No independent completed child review of both sealed report and sources')
+    return ['Host recomputed sealed report '+report['digest'],
+            'Host recomputed captured source manifest '+report['source_manifest_digest'], observation]
