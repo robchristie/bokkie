@@ -83,6 +83,19 @@ request identities when local storage is available. Transcripts and saved histor
 are read from Bokkie, not cached locally. Native state is retained while the app
 is running, including service restart.
 
+### Receiving workspace
+
+In the receiving session, read the workspace's `AGENTS.md` and `workspace.toml`.
+Use its local checkout bindings (such as `workspace.local.toml`) to resolve the
+actual affected product checkout or worktree, then read and follow that product's
+own guidance before making changes.
+
+For Bokkie, follow its [agent guidance](../AGENTS.md) and
+[development instructions](../README.md#development). From the resolved product
+root, run [tools/check.sh](../tools/check.sh). Also run
+[tools/check-ui.sh](../tools/check-ui.sh) when Bokkie's UI, shared API contract,
+toolchain boundary or CI surface is affected.
+
 ## Revisions and status
 
 Migration17 adds immutable model drafts, saved snapshots, action/result records
