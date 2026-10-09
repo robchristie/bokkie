@@ -120,7 +120,7 @@ def mounts(admission, profile, codex_home, root):
         if name not in present:command+=['--dir',str(workspace/name)]
     command+=['--remount-ro',str(workspace)]
     command += ['--bind', str(Path(root)/'agent-state'), str(codex_home)]
-    for name in ('config.toml', 'auth.json', 'instructions.md', 'rules', 'skills'):
+    for name in ('config.toml', 'auth.json', 'AGENTS.md', 'instructions.md', 'rules', 'skills'):
         path = codex_home/name
         if path.exists():
             command += ['--ro-bind', str(path), str(path)]
