@@ -45,6 +45,13 @@ jobs:
           if '--ro-bind-fd' not in help_text:
               raise SystemExit('Bubblewrap descriptor-based read-only mounts are required')
           PY
+          # Exercise the actual minimal Git boundary before the full contract
+          # suite. A help flag alone cannot establish namespace/mount readiness;
+          # failed fixtures print bounded trusted-helper diagnostics.
+          PYTHONPATH=tools/workspace-runtime python3 -m unittest -v \
+            test_runtime.SafeGitEarlyTests.test_fsmonitor_command_is_never_executed_by_host_observation \
+            test_runtime.SafeGitEarlyTests.test_assume_unchanged_cannot_hide_dirty_tracked_source \
+            test_runtime.SafeGitEarlyTests.test_real_linked_worktree_has_the_same_clean_commit_identity
 
       - name: Test and lint repository contracts
         run: |

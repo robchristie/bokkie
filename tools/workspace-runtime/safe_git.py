@@ -21,6 +21,7 @@ MAX_FILES=32768
 MAX_FILE_BYTES=64*1024*1024
 MAX_TOTAL_BYTES=512*1024*1024
 MAX_SECONDS=20
+MAX_DIAGNOSTIC=4096
 GIT='/usr/bin/git'
 
 
@@ -183,13 +184,31 @@ def pidfd(pid):
 
 class Pipe:
     def __init__(self,command,environment,fds,deadline):
-        self.deadline=deadline;self.buffer=b'';parent=pidfd(os.getpid())
+        self.deadline=deadline;self.buffer=b'';self.diagnostic=b'';parent=pidfd(os.getpid())
         try:
             self.child=subprocess.Popen([sys.executable,'-I','-c',_SUPERVISOR,str(parent),json.dumps(fds),json.dumps(command)],
                 env=environment,pass_fds=(parent,*fds),stdin=subprocess.PIPE,stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,start_new_session=True)
+                stderr=subprocess.PIPE,start_new_session=True)
         finally:os.close(parent)
         os.set_blocking(self.child.stdin.fileno(),False);os.set_blocking(self.child.stdout.fileno(),False)
+        os.set_blocking(self.child.stderr.fileno(),False)
+
+    def drain_diagnostic(self):
+        while True:
+            try:value=os.read(self.child.stderr.fileno(),MAX_DIAGNOSTIC+1)
+            except BlockingIOError:break
+            if not value:break
+            self.diagnostic+=value
+            if len(self.diagnostic)>MAX_DIAGNOSTIC:
+                self.diagnostic=self.diagnostic[:MAX_DIAGNOSTIC]
+                raise self.failure('safe Git helper diagnostic exceeds bound')
+
+    def failure(self,message):
+        # The helper has a fresh environment and only trusted executable/library
+        # mounts plus private Git data. Retain bounded diagnostics from that
+        # boundary; never dump inherited host environment or candidate config.
+        detail=self.diagnostic.decode('utf-8',errors='replace').strip()
+        return ValueError(message+(' (helper stderr: '+json.dumps(detail)+')' if detail else ''))
 
     def send(self,value):
         remaining=memoryview(value)
@@ -197,9 +216,12 @@ class Pipe:
             self.check()
             try:remaining=remaining[os.write(self.child.stdin.fileno(),remaining):]
             except BlockingIOError:select.select([],[self.child.stdin.fileno()],[],.05)
+            except BrokenPipeError:
+                self.drain_diagnostic();raise self.failure('safe Git observation transport ended')
 
     def check(self):
         if time.monotonic()>=self.deadline:raise TimeoutError('safe Git observation deadline exhausted')
+        self.drain_diagnostic()
 
     def take(self,count=None,delimiter=None):
         while True:
@@ -209,15 +231,18 @@ class Pipe:
             if count is not None and len(self.buffer)>=count:
                 result,self.buffer=self.buffer[:count],self.buffer[count:];return result
             if len(self.buffer)>MAX_OBJECT+4096:raise ValueError('safe Git output exceeds bound')
-            if not select.select([self.child.stdout],[],[],.05)[0]:continue
+            ready=select.select([self.child.stdout,self.child.stderr],[],[],.05)[0]
+            if self.child.stderr in ready:self.drain_diagnostic()
+            if self.child.stdout not in ready:continue
             value=os.read(self.child.stdout.fileno(),65536)
-            if not value:raise ValueError('safe Git observation transport ended')
+            if not value:
+                self.drain_diagnostic();raise self.failure('safe Git observation transport ended')
             self.buffer+=value
 
     def close(self):
         if self.child.poll() is None:self.child.terminate()
         self.child.wait(timeout=5)
-        self.child.stdin.close();self.child.stdout.close()
+        self.child.stdin.close();self.child.stdout.close();self.child.stderr.close()
 
 
 class Objects:

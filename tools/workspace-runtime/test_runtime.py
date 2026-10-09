@@ -868,6 +868,29 @@ class RetainedReviewTests(unittest.TestCase):
         self.assertEqual(read(self.review_root/'cessation.json')['kind'],'not_started')
 
 
+class SafeGitTransportTests(unittest.TestCase):
+    def test_failed_confined_helper_retains_bounded_diagnostic(self):
+        import safe_git
+        pipe=safe_git.Pipe(['/usr/bin/python3','-I','-c',
+            'import sys;sys.stderr.write("fixture namespace setup failure\\n");sys.exit(1)'],
+            {'PATH':'/usr/bin:/bin','LANG':'C'},[],time.monotonic()+3)
+        try:
+            with self.assertRaisesRegex(ValueError,'helper stderr:.*fixture namespace setup failure'):
+                pipe.take(delimiter=b'\n')
+        finally:pipe.close()
+
+    def test_helper_diagnostic_overflow_fails_without_pipe_backpressure(self):
+        import safe_git
+        pipe=safe_git.Pipe(['/usr/bin/python3','-I','-c',
+            'import sys;sys.stderr.write("X"*65536);sys.stderr.flush()'],
+            {'PATH':'/usr/bin:/bin','LANG':'C'},[],time.monotonic()+3)
+        try:
+            with self.assertRaisesRegex(ValueError,'diagnostic exceeds bound'):
+                pipe.take(delimiter=b'\n')
+            self.assertEqual(len(pipe.diagnostic),safe_git.MAX_DIAGNOSTIC)
+        finally:pipe.close()
+
+
 class SafeGitEarlyTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
@@ -896,20 +919,20 @@ class SafeGitEarlyTests(unittest.TestCase):
         helper=self.base/'fsmonitor';helper.write_text('#!/bin/sh\ncat '+str(sentinel)+' > '+str(marker)+'\n')
         helper.chmod(0o700);self.git('config','core.fsmonitor',str(helper))
         observation=self.observe()
-        self.assertTrue(observation['available']);self.assertTrue(observation['clean'])
+        self.assertTrue(observation['available'],observation);self.assertTrue(observation['clean'])
         self.assertFalse(marker.exists())
 
     def test_assume_unchanged_cannot_hide_dirty_tracked_source(self):
         self.git('update-index','--assume-unchanged','source.txt')
         (self.repo/'source.txt').write_text('changed while index flag claims unchanged\n')
         observation=self.observe()
-        self.assertTrue(observation['available']);self.assertFalse(observation['clean'])
+        self.assertTrue(observation['available'],observation);self.assertFalse(observation['clean'])
 
     def test_real_linked_worktree_has_the_same_clean_commit_identity(self):
         linked=self.base/'linked';self.git('worktree','add','--quiet','-b','fixture-linked',str(linked))
         self.profile['write_roots'].append(str(linked))
         observation=self.observe(linked)
-        self.assertTrue(observation['available']);self.assertTrue(observation['clean'])
+        self.assertTrue(observation['available'],observation);self.assertTrue(observation['clean'])
         self.assertEqual(observation['head'],self.git('rev-parse','HEAD'))
         self.assertEqual(observation['tree'],self.git('rev-parse','HEAD^{tree}'))
 
