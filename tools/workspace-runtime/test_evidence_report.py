@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from broker import Broker, tools, cli_component, STARTUP_STDERR_BYTES
 from common import Config, atomic, checkpoint_bounds, digest, encoded, read, result_bounds
 from evidence_report import EvidenceStore, NoRedirect, bounded_process, captured_content, endpoint, github_get, _github_get, selector
-from evidence_policy import derived_roles, environment, mounts, policy, closed_mcp_inventory
+from evidence_policy import derived_roles, environment, mounts, policy, closed_mcp_inventory, routing_proof, public_ca_paths
 from verification import verify
 
 
@@ -282,6 +282,7 @@ class EvidenceReportTests(unittest.TestCase):
             scratch=base/'scratch';scratch.mkdir();root=base/'job';root.mkdir()
             (root/'agent-state').mkdir();(root/'evidence-mirror').mkdir()
             home=base/'codex';home.mkdir()
+            trust_asset=base/'public-ca.pem';trust_asset.write_text('disposable public trust asset')
             selected=self.profile|{'workspace':str(workspace),'scratch':str(scratch),'read_roots':[str(workspace)]}
             admission={'bwrap':shutil.which('bwrap'),'codex':'/usr/bin/python3'}
             with tempfile.TemporaryDirectory() as control_root,socket.socket(socket.AF_UNIX) as control:
@@ -299,11 +300,13 @@ try:
 except OSError:values['masked_socket']=False
 print(json.dumps(values,sort_keys=True))
 """
-                writes={'scratch':str(scratch/'probe'),'product':str(workspace/'probe'),'mirror':'/bokkie-evidence/probe'}
-                command=mounts(admission,selected,home,root)+['--chdir',str(workspace),'--','/usr/bin/python3','-c',code,json.dumps(writes),address]
+                writes={'scratch':str(scratch/'probe'),'product':str(workspace/'probe'),'mirror':'/bokkie-evidence/probe','trust_asset':str(trust_asset)}
+                with patch('evidence_policy.public_ca_paths',return_value=[str(trust_asset)]):
+                    command=mounts(admission,selected,home,root)+['--chdir',str(workspace),'--','/usr/bin/python3','-c',code,json.dumps(writes),address]
                 result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
                 self.assertEqual(result.returncode,0,result.stderr.decode())
-                self.assertEqual(json.loads(result.stdout),{'scratch':True,'product':False,'mirror':False,'masked_socket':False})
+                self.assertEqual(json.loads(result.stdout),{'scratch':True,'product':False,'mirror':False,'trust_asset':False,'masked_socket':False})
+                self.assertEqual(trust_asset.read_text(),'disposable public trust asset')
 
     def test_cli_override_components_preserve_existing_mcp_and_plugin_identity(self):
         path,home,codex,value=self.host_config()
@@ -320,6 +323,33 @@ print(json.dumps(values,sort_keys=True))
         self.assertFalse(any('mcp_servers."' in override or 'plugins."' in override for override in overrides))
         for invalid in ('component.with.dot','"quoted"','component\nname'):
             with self.subTest(invalid=invalid),self.assertRaises(ValueError):cli_component(invalid)
+
+    def test_no_model_routing_proof_rejects_unbound_origins_without_retaining_account_values(self):
+        account={'account':{'type':'chatgpt','email':'synthetic-private-email'},'workspaceRouting':{
+            'backendOrigin':'https://backend.example','chatgptAccountId':'synthetic-private-account',
+            'accountRoutingOverride':'NO_CONSTRAINT'}}
+        proof=routing_proof(account)
+        self.assertTrue(proof['workspace_routing_verified']);self.assertEqual(proof['model_calls'],0)
+        self.assertNotIn('synthetic-private',json.dumps(proof));self.assertNotIn('backend.example',json.dumps(proof))
+        for mutation in ({'backendOrigin':'http://backend.example'},{'backendOrigin':'https://user:password@backend.example'},
+            {'backendOrigin':'https://backend.example/path'},{'backendOrigin':'https://backend.example?query'},
+            {'chatgptAccountId':''},{'accountRoutingOverride':'unknown'}):
+            invalid=copy.deepcopy(account);invalid['workspaceRouting'].update(mutation)
+            with self.subTest(mutation=mutation),self.assertRaises(ValueError):routing_proof(invalid)
+        with self.assertRaises(ValueError):routing_proof(account|{'workspaceRouting':None})
+        with self.assertRaises(ValueError):routing_proof({'account':None})
+        self.assertFalse(routing_proof({'account':{'type':'apiKey'}})['workspace_routing_applicable'])
+
+    def test_resolved_platform_ca_files_are_explicit_readonly_assets(self):
+        admission={'bwrap':shutil.which('bwrap') or '/usr/bin/true','codex':'/usr/bin/python3'}
+        home=self.base/'codex';home.mkdir()
+        command=mounts(admission,self.profile,home,self.root)
+        for path in public_ca_paths():
+            self.assertEqual(str(Path(path).resolve()),path)
+            self.assertTrue(Path(path).is_file())
+            self.assertTrue(any(command[index:index+3]==['--ro-bind',path,path] for index in range(len(command))))
+        self.assertNotIn(['--ro-bind','/etc','/etc'],[command[index:index+3] for index in range(len(command))])
+        self.assertNotIn(['--ro-bind',str(Path.home()),str(Path.home())],[command[index:index+3] for index in range(len(command))])
 
     def test_mcp_inventory_requires_explicitly_disabled_empty_complete_servers(self):
         entry={'runtimeStatus':'disabled','tools':{},'resources':[],'resourceTemplates':[],'serverCapabilities':None}

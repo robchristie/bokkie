@@ -7,6 +7,7 @@ import socket
 import tempfile
 import time
 import tomllib
+from urllib.parse import urlsplit
 from common import atomic
 
 MIRROR = '/bokkie-evidence'
@@ -81,6 +82,26 @@ def derived_roles(root, codex_home, inherited, profile):
     return overrides, identities
 
 
+def routing_proof(value):
+    if not isinstance(value,dict) or not isinstance(value.get('account'),dict):
+        raise ValueError('No-model account discovery has no usable account')
+    account_type=value['account'].get('type')
+    if account_type=='chatgpt':
+        routing=value.get('workspaceRouting')
+        if not isinstance(routing,dict):
+            raise ValueError('No-model ChatGPT workspace routing is unavailable')
+        origin=urlsplit(routing.get('backendOrigin',''))
+        if (origin.scheme!='https' or not origin.hostname or origin.username or origin.password or
+                origin.path not in ('','/') or origin.query or origin.fragment or
+                not isinstance(routing.get('chatgptAccountId'),str) or not routing['chatgptAccountId'] or
+                routing.get('accountRoutingOverride') not in ('NO_CONSTRAINT','us','us_cr')):
+            raise ValueError('No-model ChatGPT workspace routing is invalid')
+        return {'account_type':'chatgpt','workspace_routing_verified':True,'model_calls':0}
+    if account_type=='apiKey':
+        return {'account_type':'apiKey','workspace_routing_verified':False,'workspace_routing_applicable':False,'model_calls':0}
+    raise ValueError('No-model account discovery returned an unsupported account')
+
+
 def closed_mcp_inventory(inventory):
     if (not isinstance(inventory,dict) or inventory.get('nextCursor') is not None or
             not isinstance(inventory.get('data'),list) or len(inventory['data'])>100):
@@ -95,6 +116,21 @@ def closed_mcp_inventory(inventory):
     return {'inherited_mcp_servers':len(facts),'servers':facts,'additional_page':False}
 
 
+def public_ca_paths():
+    # Preserve the existing platform trust store, including distro symlinks
+    # which resolve outside /etc/ssl. Never mount a broad /etc or home tree.
+    selected=[]
+    for name in ('/etc/ssl/cert.pem','/etc/ssl/certs/ca-certificates.crt','/etc/pki/tls/certs/ca-bundle.crt'):
+        path=Path(name)
+        if not path.exists():continue
+        resolved=path.resolve(strict=True)
+        if not resolved.is_file() or not any(resolved.is_relative_to(Path(root)) for root in
+                ('/etc/ssl','/etc/ca-certificates','/etc/pki','/usr/share')):
+            raise ValueError('unsupported platform public certificate store')
+        if str(resolved) not in selected:selected.append(str(resolved))
+    return selected
+
+
 def mounts(admission, profile, codex_home, root):
     """Start from an empty filesystem so unselected home socket aliases disappear."""
     command = [admission['bwrap'], '--die-with-parent', '--unshare-pid', '--new-session',
@@ -104,6 +140,8 @@ def mounts(admission, profile, codex_home, root):
                  '/etc/passwd', '/etc/group', '/etc/nsswitch.conf', '/etc/ld.so.cache'):
         if Path(path).exists():
             command += ['--ro-bind', path, path]
+    for path in public_ca_paths():
+        command+=['--ro-bind',path,path]
     executable = str(Path(admission['codex']).resolve())
     command += ['--ro-bind', executable, executable]
     # A JS Codex launcher needs the installed package and its Node environment.
@@ -168,7 +206,8 @@ def mount_view(profile, deadline=None):
     return {'format':'evidence-readonly-mount-view-v1','workspace_entry':profile['workspace'],
             'read_roots':profile['read_roots'],'entries':entries,
             'empty_control_slots':[name for name in CONTROL_SLOTS if not (workspace/name).exists()],
-            'source_copy':False,'source_mutation':False}
+            'source_copy':False,'source_mutation':False,
+            'public_tls_assets':[{'path':path,'sha256':hashlib.sha256(Path(path).read_bytes()).hexdigest()} for path in public_ca_paths()]}
 
 
 def qualify(broker):

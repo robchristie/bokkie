@@ -444,3 +444,21 @@ positive controls prove those sockets are reachable before testing denial. A
 failed or unsupported probe blocks the model turn; reported configuration alone
 never establishes confinement. Inference network access by the enclosing
 app-server remains separate from the task-tool sandbox.
+
+Before preparing a report turn, the host also calls the supported `account/read`
+with `refreshToken: false`. A ChatGPT account must return valid workspace routing
+through an HTTPS backend origin and the selected account binding; API-key accounts
+do not use that routing contract. The retained proof records only account type,
+applicability and verification, without account IDs, email, backend values or
+credentials. This metadata discovery makes no model turn and is separate from
+source GETs. A missing route blocks inference even when the command sandbox
+preflight passes.
+
+The enclosing inference client retains the existing platform TLS trust store.
+The report boundary mounts resolved public CA bundle files individually read-only,
+including symlink targets outside `/etc/ssl`, and records their content digests.
+It changes no trust policy and never disables TLS verification. The missing Arch
+trust-bundle target previously allowed the command preflight to pass while
+ChatGPT routing failed before any task tool; the routing probe now exercises that
+previously unobserved preparation step. Task network and socket denial remain
+required after the trust assets are mounted.

@@ -685,6 +685,10 @@ class Broker:
             if '/0.160.1 ' not in initial['userAgent']:
                 raise ValueError('Workspace runtime requires qualified Codex 0.160.1')
             self.send({'method':'initialized','params':{}})
+            if self.report_mode:
+                from evidence_policy import routing_proof
+                account=self.rpc('account/read',{'refreshToken':False})
+                self.journal.record('evidence_workspace_routing',routing_proof(account))
             config=self.rpc('config/read',{'cwd':self.profile['workspace'],'includeLayers':False})['config']
             role=self.profile.get('role',{})
             if (role.get('model',config['model'])!=config['model'] or
