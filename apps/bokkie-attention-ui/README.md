@@ -283,13 +283,17 @@ requested lifecycle action.
 
 The backend and shared operator contract retain an MSRV of Rust 1.85. The
 already-resolved Polyorama, egui and wgpu dependency graph requires newer Rust,
-so this application retains its app-scoped Rust 1.97 declaration. The unchanged
+so this application retains its app-scoped Rust 1.97 declaration. The
 locked Polyorama revision requires 1.97.1, which is the qualified effective floor;
 1.97.0 cannot compile that graph. Both the repository root and this application's
 [`rust-toolchain.toml`](rust-toolchain.toml) pin
 exact Rust 1.99.0 for current development/build checks. The scoped UI pin includes
 Clippy, rustfmt and the Wasm target. Commands remain explicit when run from the
 repository root, preserving the separate package and minimum compiler contracts.
+
+The Polyorama framework crates are pinned to revision
+`90c1d0baba78a0c68a488943f858763a36762cf2` (8 October 2026) in the
+application manifest and repository lockfile.
 
 Run the focused, locked application checks from the repository root with:
 
