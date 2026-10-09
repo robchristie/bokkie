@@ -87,3 +87,18 @@ socket controls under `/tmp/bokkie-report-live/runtime/preflights/`. They start 
 model turn. Native model-tool readiness is a separate seam from direct
 `command/exec`; the live failure must be repaired and qualified before accepting
 the integration. Failed startup does not authorise replaying a launch marker.
+
+## Tool read boundary
+
+The named-role registration repair has a zero-turn effective-config proof, but
+actual child attribution remains a live gate. Before the fifth definition
+dispatched, full mount inspection identified a separate confidentiality gap:
+legacy read-only/workspace-write policies could open the runtime account and
+configuration mounts. The actual root/reviewer probe retained only open-success
+booleans, with target-presence and harmless synthetic controls; it read and
+retained no credential contents or hashes. The next run is held before dispatch
+or inference. Explicit named permission profiles must establish restricted reads
+for both the root and all derived roles while preserving app-server account
+access, guidance, source mirrors and closed writes/network. Unknown schema fields
+or accepted configuration alone do not establish enforcement. Actual installed
+profile provenance and denial observations own this gate.
