@@ -1021,7 +1021,9 @@ fn conversation_panel(
                         for run in task.runs.iter().filter_map(|r|r.workspace.as_ref()) {
                             if let Some(question) = &run.question {
                                 ui.add(egui::Label::new(&question.prompt).wrap().selectable(true));
-                                if question.kind == "new_authority" {
+                                if run.cancellation_requested {
+                                    ui.small("Question retained in run history. Cancellation has been requested for this run.");
+                                } else if question.kind == "new_authority" {
                                     ui.small("This action needs a separately reviewed permission decision. An ordinary answer cannot expand the task's scope.");
                                 } else if button(ui,&format!("bokkie.workspace.answer.{}",run.execution_id),"Answer question",mutable,nodes) {
                                     *action = Some(ConversationUiAction::Run {run:Box::new(run.clone()),cancel:false});
