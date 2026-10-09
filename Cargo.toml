@@ -8,7 +8,7 @@ publish = false
 
 [workspace]
 members = ["apps/bokkie-attention-ui", "crates/bokkie-operator-api"]
-resolver = "2"
+resolver = "3"
 
 [dependencies]
 axum = "0.8.4"

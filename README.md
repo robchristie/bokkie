@@ -52,6 +52,12 @@ GitHub CI validates both locked boundaries on unprivileged, read-only runners
 without secrets. UI commands and the scoped toolchain are documented in the
 [attention UI README](apps/bokkie-attention-ui/README.md).
 
+The workspace explicitly selects Cargo resolver 3 to favour dependency versions
+compatible with declared `rust-version` values, including the separate backend
+and UI floors. Existing lockfile versions remain preferred. This selection
+policy does not guarantee compatibility across mixed floors; retain the locked
+backend and UI checks when updating dependencies.
+
 Run the canonical governance and backend check with:
 
 ```sh
