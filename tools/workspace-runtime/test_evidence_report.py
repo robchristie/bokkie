@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from broker import Broker, tools, cli_component, STARTUP_STDERR_BYTES
 from common import Config, atomic, checkpoint_bounds, digest, encoded, read, result_bounds
 from evidence_report import EvidenceStore, NoRedirect, bounded_process, captured_content, endpoint, github_get, _github_get, selector
-from evidence_policy import derived_roles, environment, mounts, policy, closed_mcp_inventory, routing_proof, public_ca_paths
+from evidence_policy import derived_roles, environment, mounts, policy, closed_mcp_inventory, routing_proof, public_ca_paths, code_mode_host_path, companion_readiness
 from verification import verify
 
 
@@ -323,6 +323,35 @@ print(json.dumps(values,sort_keys=True))
         self.assertFalse(any('mcp_servers."' in override or 'plugins."' in override for override in overrides))
         for invalid in ('component.with.dot','"quoted"','component\nname'):
             with self.subTest(invalid=invalid),self.assertRaises(ValueError):cli_component(invalid)
+
+    def test_native_codex_companion_is_required_and_mounted_individually_readonly(self):
+        package=self.base/'native-package';package.mkdir();native=package/'codex';native.write_text('fixture native executable');native.chmod(0o700)
+        with self.assertRaisesRegex(ValueError,'companion'):code_mode_host_path(native)
+        companion=package/'codex-code-mode-host';companion.write_text('fixture companion executable');companion.chmod(0o700)
+        self.assertEqual(code_mode_host_path(native),str(companion))
+        home=self.base/'codex-home';home.mkdir()
+        command=mounts({'bwrap':shutil.which('bwrap') or '/usr/bin/true','codex':str(native)},self.profile,home,self.root)
+        self.assertTrue(any(command[index:index+3]==['--ro-bind',str(companion),str(companion)] for index in range(len(command))))
+        self.assertFalse(any(command[index:index+3]==['--ro-bind',str(package),str(package)] for index in range(len(command))))
+        companion.unlink();companion.symlink_to(native)
+        with self.assertRaisesRegex(ValueError,'unsupported'):code_mode_host_path(native)
+
+    def test_companion_probe_requires_success_under_both_closed_policies(self):
+        native=self.base/'codex';native.write_text('fixture native')
+        companion=self.base/'codex-code-mode-host';companion.write_text('fixture companion');companion.chmod(0o700)
+        broker=Broker(self.root);broker.admission['codex']=str(native)
+        observed={'protocol_version':1,'session_ready':True,'execution_completed':True,'enabled_tools':0,'model_calls':0}
+        calls=[]
+        def rpc(method,params):
+            calls.append((method,params));return {'exitCode':0,'stdout':json.dumps(observed),'stderr':''}
+        broker.rpc=rpc;proofs=companion_readiness(broker)
+        self.assertEqual(len(proofs),2);self.assertTrue(proofs[1]['reviewer'])
+        self.assertEqual(calls[0][1]['sandboxPolicy'],policy(self.profile))
+        self.assertEqual(calls[1][1]['sandboxPolicy'],policy(self.profile,True))
+        self.assertEqual(calls[0][1]['command'][-1],str(companion))
+        self.assertIn("'enabled_tools':[]",calls[0][1]['command'][2])
+        broker.rpc=lambda *_:{'exitCode':1,'stdout':'','stderr':'synthetic failure'}
+        with self.assertRaisesRegex(ValueError,'execution failed'):companion_readiness(broker)
 
     def test_no_model_routing_proof_rejects_unbound_origins_without_retaining_account_values(self):
         account={'account':{'type':'chatgpt','email':'synthetic-private-email'},'workspaceRouting':{

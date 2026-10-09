@@ -131,6 +131,81 @@ def public_ca_paths():
     return selected
 
 
+def code_mode_host_path(codex):
+    native=Path(codex).resolve(strict=True)
+    if native.name!='codex':
+        return None  # Synthetic filesystem fixtures and the separate JS layout.
+    companion=native.with_name('codex-code-mode-host')
+    if companion.is_symlink() or not companion.is_file() or not os.access(companion,os.X_OK):
+        raise ValueError('qualified native Codex code-mode companion is missing or unsupported')
+    return str(companion)
+
+
+def companion_readiness(broker):
+    companion=code_mode_host_path(broker.admission['codex'])
+    if companion is None:
+        raise ValueError('report companion readiness requires the qualified native Codex layout')
+    code='''import json,os,select,struct,subprocess,sys,time
+binary=sys.argv[1];deadline=time.monotonic()+5
+process=subprocess.Popen([binary,'--listen','stdio://'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+def exact(count):
+ raw=bytearray()
+ while len(raw)<count:
+  remaining=deadline-time.monotonic()
+  if remaining<=0 or not select.select([process.stdout],[],[],remaining)[0]:raise ValueError('companion readiness timed out')
+  chunk=os.read(process.stdout.fileno(),count-len(raw))
+  if not chunk:raise ValueError('companion readiness ended early')
+  raw.extend(chunk)
+ return bytes(raw)
+def receive():
+ size=struct.unpack('<I',exact(4))[0]
+ if size>4096:raise ValueError('companion readiness frame exceeds bound')
+ return json.loads(exact(size))
+def rpc(value):
+ raw=json.dumps(value,separators=(',',':')).encode()
+ process.stdin.write(struct.pack('<I',len(raw))+raw);process.stdin.flush()
+ return receive()
+try:
+ ready=rpc({'type':'connection/hello','supportedVersions':[1],'requiredCapabilities':[],'optionalCapabilities':[]})
+ if ready!={'type':'connection/ready','selectedVersion':1,'capabilities':[]}:raise ValueError('unsupported companion readiness protocol')
+ opened=rpc({'type':'operation/request','id':1,'request':{'method':'session/open','sessionId':'bokkie-readiness'}})
+ if opened.get('type')!='operation/response' or opened.get('id')!=1 or opened.get('result',{}).get('value')!={'type':'session/ready','sessionId':'bokkie-readiness'} or opened['result'].get('status')!='ok':raise ValueError('companion session not ready')
+ started=rpc({'type':'operation/request','id':2,'request':{'method':'session/execute','sessionId':'bokkie-readiness','request':{
+  'tool_call_id':'bokkie-readiness','enabled_tools':[],
+  'source':'const probe = 1 + 1; if (probe !== 2) throw new Error("readiness failed");',
+  'yield_time_ms':1000,'max_output_tokens':128}}})
+ if started.get('type')!='operation/response' or started.get('id')!=2 or started.get('result',{}).get('status')!='ok' or started['result'].get('value',{}).get('type')!='execution/started':raise ValueError('companion execution did not start')
+ finished=receive()
+ if finished.get('type')!='execute/initialResponse' or finished.get('id')!=2 or finished.get('result',{}).get('status')!='ok':raise ValueError('companion execution response is invalid')
+ result=finished['result']['value']['Result']
+ if 'error_text' not in result or result['error_text'] is not None or result.get('content_items')!=[] or result.get('cell_id')!=started['result']['value'].get('cellId'):raise ValueError('companion execution failed')
+ process.stdin.close();process.wait(timeout=max(.01,deadline-time.monotonic()))
+ if process.returncode!=0:raise ValueError('companion readiness failed on shutdown')
+ print(json.dumps({'protocol_version':1,'session_ready':True,'execution_completed':True,'enabled_tools':0,'model_calls':0}))
+finally:
+ if process.poll() is None:process.kill()
+ process.wait()
+'''
+    proofs=[]
+    for reviewer in (False,True):
+        response=broker.rpc('command/exec',{'command':['/usr/bin/python3','-c',code,companion],
+            'cwd':broker.profile['workspace'],'timeoutMs':6000,'outputBytesCap':4096,
+            'sandboxPolicy':policy(broker.profile,reviewer)})
+        if response.get('exitCode')!=0:
+            raise ValueError('no-model code-mode companion execution failed')
+        observed=json.loads(response['stdout'])
+        wanted={'protocol_version':1,'session_ready':True,'execution_completed':True,'enabled_tools':0,'model_calls':0}
+        if observed!=wanted:raise ValueError('no-model code-mode companion readiness is unverified')
+        proofs.append({'reviewer':reviewer,**observed})
+    fingerprint=hashlib.sha256()
+    with Path(companion).open('rb') as stream:
+        while chunk:=stream.read(65536):
+            if time.time()>=broker.admission['deadline']:raise ValueError('companion identity observation deadline exhausted')
+            fingerprint.update(chunk)
+    broker.journal.record('evidence_companion_readiness',{'path':companion,'sha256':fingerprint.hexdigest(),'proofs':proofs})
+    return proofs
+
+
 def mounts(admission, profile, codex_home, root):
     """Start from an empty filesystem so unselected home socket aliases disappear."""
     command = [admission['bwrap'], '--die-with-parent', '--unshare-pid', '--new-session',
@@ -144,6 +219,8 @@ def mounts(admission, profile, codex_home, root):
         command+=['--ro-bind',path,path]
     executable = str(Path(admission['codex']).resolve())
     command += ['--ro-bind', executable, executable]
+    companion=code_mode_host_path(admission['codex'])
+    if companion is not None:command+=['--ro-bind',companion,companion]
     # A JS Codex launcher needs the installed package and its Node environment.
     if executable.endswith('/bin/codex.js'):
         package = Path(executable).parent.parent
@@ -213,6 +290,7 @@ def mount_view(profile, deadline=None):
 def qualify(broker):
     """No turn is started until the actual command sandbox rejects alternate effects."""
     profile = broker.profile
+    readiness=companion_readiness(broker)
     scratch = Path(profile['scratch'])
     marker = 'bokkie-policy-'+broker.generation
     scratch_file = scratch/marker
@@ -275,7 +353,7 @@ print(json.dumps(result,sort_keys=True))
             if product_file.exists() or Path(git_file).exists():
                 raise ValueError('report policy probe unexpectedly wrote a selected source')
     value = {'model_calls': 0, 'controls': {'host_unix_connected': True, 'host_visible_unix_connected':True, 'host_tcp_connected': True},
-             'observations': observations, 'derived_roles': broker.evidence_roles,
+             'observations': observations, 'derived_roles': broker.evidence_roles, 'companion_readiness':readiness,
              'approval_policy': 'never', 'approvals_reviewer': 'user',
              'apps': False, 'web_search': 'disabled', 'inherited_mcp': False}
     atomic(broker.root/'evidence-policy.json', value, immutable=True)

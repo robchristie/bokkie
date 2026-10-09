@@ -462,3 +462,18 @@ trust-bundle target previously allowed the command preflight to pass while
 ChatGPT routing failed before any task tool; the routing probe now exercises that
 previously unobserved preparation step. Task network and socket denial remain
 required after the trust assets are mounted.
+
+The qualified native package also supplies `bin/codex-code-mode-host` beside
+`bin/codex`. Native shell tooling needs this companion even when the caller uses
+the direct task-tool namespace. Report boundaries mount the existing companion
+file individually read-only; an absent, non-executable or symlinked companion
+blocks readiness. No package or home directory is added as a broad native mount.
+
+The no-model preflight exercises the companion's version-1 framed stdio protocol
+through `connection/hello`, `session/open` and `session/execute`, then checks the
+completed arithmetic assertion response. The fixed source has `enabled_tools: []`
+and invokes no delegates or model. The exchange runs under both the root and
+reviewer command policies, and the runtime retains its result and the companion's
+SHA-256 identity. Existing task write, network and socket denials are checked
+after this asset is mounted. A direct shell command preflight alone did not
+previously exercise this native tool-runtime dependency.
