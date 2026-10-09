@@ -1687,7 +1687,7 @@ fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
             "An occurrence saves its result first. Notification delivery is tracked separately.",
         );
     } else if value.workspace.is_some() {
-        ui.label("Results: in this task, with attributable delivery evidence");
+        ui.label("Results: in this task, with source and verification evidence");
     } else {
         ui.label(match value.destination.as_str() {
             "task_results" => "Results: In-app task results",
@@ -1875,7 +1875,7 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
                         ui.strong("Evidence report");
                         let rendered = ui.add(egui::Label::new(&report.markdown).wrap().selectable(true));
                         observe(rendered.rect,&format!("bokkie.workspace.report.{}",workspace.execution_id),&report.markdown,UiRole::Section,true,nodes);
-                        for source in &report.sources {ui.hyperlink_to(format!("Source {}", &source.id[..8.min(source.id.len())]),&source.url);}
+                        for (index, source) in report.sources.iter().enumerate() {ui.hyperlink_to(format!("Source {}: {}", index + 1, source.url),&source.url);}
                         ui.small(format!("Report identity: {}",report.digest));
                     }
                     egui::CollapsingHeader::new("Completion evidence").id_salt(("workspace-evidence", &workspace.execution_id)).show(ui, |ui| {
@@ -1887,7 +1887,7 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
                     for limitation in &result.limitations {ui.add(egui::Label::new(format!("Limit: {limitation}")).wrap());}
                 }
                 if let Some(verification) = &workspace.verification {
-                    egui::CollapsingHeader::new(if verification.passed {"Delivery verification passed"} else {"Delivery verification pending"}).id_salt(("workspace-verification", &workspace.execution_id)).show(ui, |ui| {
+                    egui::CollapsingHeader::new(if verification.passed {"Result verification passed"} else {"Result verification pending"}).id_salt(("workspace-verification", &workspace.execution_id)).show(ui, |ui| {
                         for evidence in &verification.evidence {ui.add(egui::Label::new(evidence).wrap().selectable(true));}
                     });
                 }
