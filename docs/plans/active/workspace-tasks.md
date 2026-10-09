@@ -2,8 +2,8 @@
 
 - Status: active
 - Reorientation budget: 180
-- Landed pull requests: [PR62](https://github.com/robchristie/bokkie/pull/62), real task qualification; [PR63](https://github.com/robchristie/bokkie/pull/63), workspace connector
-- Next action: review and land bounded memory; qualify portfolio evidence reports and decision paths, then task batches/dependencies and recurrence
+- Landed pull requests: [PR62](https://github.com/robchristie/bokkie/pull/62), real task qualification; [PR63](https://github.com/robchristie/bokkie/pull/63), workspace connector; [PR64](https://github.com/robchristie/bokkie/pull/64), bounded memory
+- Next action: qualify the actual-account report boundary and real sealed report; then portfolio decision paths, task batches/dependencies and recurrence
 
 ## Outcome and authority
 
@@ -42,14 +42,14 @@ starts modestly alongside useful execution. Refine packages from evidence.
 | Package | State | Acceptance remaining / next action |
 | --- | --- | --- |
 | Workspace execution | Landed PR63 at `f7e4b9707f6df22e541cd22aab3d85bd08c8a079`; real task delivered PR62 and retained its result across interruption | Accepted; [qualification](../../workspace-execution/qualification.md); independent PASS, four candidate and four merge checks passed; source tree `9cb79ff6d60647c65bd03e9b4a12505f19a9e980` |
-| Portfolio and decisions | Evidence-report/checkpoint contract and host isolation in calibration | Refine finite future profile budgets; real retained-source report, automatic assessment continuation and actionable inconclusive question; then distinct tasks/shared context/dependencies |
-| Recurring workspace tasks | Waiting for connector | Real scheduled correction, interruption recovery, actual repository/worktree conflict ownership; pause future versus stop active |
+| Portfolio and decisions | Evidence-report/checkpoint contract and host isolation in calibration | 16-million hard future ceiling with smaller admitted profile budgets; no-model source/socket/write probes pass; actual-account startup and real retained-source report, automatic assessment continuation and actionable inconclusive question; then distinct tasks/shared context/dependencies |
+| Recurring workspace tasks | After portfolio task model | Real scheduled correction, interruption recovery, actual repository/worktree conflict ownership; pause future versus stop active |
 | Consolidation | Avoid duplication from first package | Replace gardener with recurrence, Pagefold with workspace execution, hand-offs with briefs and optional export; preserve history and admitted work |
-| Research | After workspace execution | Live search/read, linked relevance digest, retained findings prevent repeats; deterministic retry/effect tests |
+| Research | After evidence-report seam | Live search/read, linked relevance digest, retained findings prevent repeats; deterministic retry/effect tests |
 | Email observation | Integration preparation | Selected folders/queries and relevant changes; account selection and authorised read access remain unknown |
 | System observation / maintenance | Integration preparation | Server/OPNsense observations and explicitly permitted procedure definitions; targets/access and maintenance authority remain unknown |
 | Isolated browser tasks | Integration preparation | Bounded browser worker, common results, isolation and cancellation proof; target/browser decisions to resolve from evidence |
-| Memory | Implemented; canonical backend459/UI124 and 19-check browser journey pass | Independent review/CI/landing; bounded recall uses sourced preferences and selected accepted outcomes, with correction/removal suppression |
+| Memory | Landed PR64 at `0f10eb67b0eb6ef5491df35026702f448e062a8c`; backend459/UI124 and 24-check browser fault journey pass | Accepted foundation; independent PASS and four candidate/merge checks; bounded sourced recall preserves corrections/removal and task history |
 
 ## Grounded baseline
 
@@ -128,3 +128,13 @@ override current instructions or change runtime policy.
 - Keep package evidence and exact landed identities linked here at phase boundaries.
   The full objective remains active until every outcome is proved or a genuine
   missing access/target/authority boundary remains visible with a concrete next action.
+
+## Related reliability finding
+
+Canonical qualification exposed a legacy process finalisation deadlock after
+continuous output: bounded sender queues were joined after receiving stopped.
+The scoped repair drains both queues while joining finished workers and retains
+all capture evidence. Independent host containment remains the workspace writer
+ownership boundary. Keep one separate follow-up for leader-exit/Drop numeric
+PGID ownership and escaped descendants; queue drainage alone does not discharge
+that concern. See [process shutdown qualification](../../workspace-execution/process-shutdown.md).
