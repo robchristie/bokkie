@@ -372,6 +372,15 @@ redirects and proxy forwarding disabled. Failed requests count against the
 finite request budget; the trusted helper has an overall deadline including DNS and process-group cleanup,
 response reads have a byte ceiling, each
 source is at most 256 KiB, and the profile caps aggregate retained content.
+Empty files and comments remain valid captured observations. Report and event
+text bounds count UTF-8 bytes, matching Store, so a host-sealed result cannot
+exceed the consumer's text limit through multibyte content.
+
+The trusted source helper observes its original group leader without reaping
+(`WNOWAIT`), signals the still-owned group, then reaps. Missing ownership primitives
+or an incompatible child-signal disposition block launch; a lost/reaped identity
+is never signalled. This helper's tested ownership is separate from the legacy
+process adapter follow-up in the [shutdown record](../../docs/workspace-execution/process-shutdown.md).
 
 `bokkie_workspace.capture_source` accepts only one of these typed selectors:
 

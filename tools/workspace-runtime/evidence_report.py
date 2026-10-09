@@ -22,7 +22,7 @@ REPORT_FORMAT = 'evidence-report-v1'
 MANIFEST_FORMAT = 'evidence-source-manifest-v1'
 MAX_SOURCE_BYTES = 256 * 1024
 MAX_SOURCES = 32
-MAX_REPORT_CHARS = 32768
+MAX_REPORT_BYTES = 32768
 HEX64 = re.compile(r'[0-9a-f]{64}')
 REPOSITORY = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
 
@@ -115,6 +115,10 @@ class NoRedirect(HTTPRedirectHandler):
 
 def bounded_process(command, cwd, env, deadline, maximum, *, own_group=True):
     """Drain under a byte/deadline limit rather than bounding after communicate."""
+    if own_group and (not callable(getattr(os, 'waitid', None)) or
+            any(not hasattr(os, name) for name in ('P_PID', 'WEXITED', 'WNOHANG', 'WNOWAIT', 'CLD_EXITED')) or
+            not hasattr(signal, 'SIGCHLD') or signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL):
+        raise ValueError('trusted source helper requires unreaped child ownership')
     process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=own_group)
     output = bytearray()
@@ -132,7 +136,8 @@ def bounded_process(command, cwd, env, deadline, maximum, *, own_group=True):
                         raise ValueError('trusted source helper response exceeds bound')
                     if not chunk:
                         poll.unregister(key.fileobj)
-        try:status=process.wait(timeout=max(.01, deadline-time.monotonic()))
+        try:
+            status = unreaped_status(process, deadline) if own_group else process.wait(timeout=max(.01, deadline-time.monotonic()))
         except subprocess.TimeoutExpired:
             raise ValueError('trusted source helper timed out') from None
         if status:
@@ -140,12 +145,46 @@ def bounded_process(command, cwd, env, deadline, maximum, *, own_group=True):
         return bytes(output)
     finally:
         if own_group:
-            try:os.killpg(process.pid,signal.SIGKILL)
-            except ProcessLookupError:pass
+            owned = signal_owned_group(process)
         elif process.poll() is None:
             process.kill()
-        process.wait()
-        process.stdout.close()
+        try:
+            process.wait()
+        finally:
+            process.stdout.close()
+        if own_group and not owned:
+            raise ValueError('trusted source helper group ownership is unavailable')
+
+
+def unreaped_status(process, deadline):
+    # The original leader remains an unreaped child until group cleanup. Its
+    # PID/PGID therefore cannot be reused by an unrelated host process group.
+    while True:
+        try:
+            exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            raise ValueError('trusted source helper group ownership is unavailable') from None
+        if exited is not None:
+            return 0 if exited.si_code == os.CLD_EXITED and exited.si_status == 0 else 1
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError('trusted source helper timed out')
+        time.sleep(min(.01, remaining))
+
+
+def signal_owned_group(process):
+    # Never signal a stored numeric PGID after ownership has been relinquished.
+    if process.returncode is not None:
+        return False
+    try:
+        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        return False
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    return True
 
 
 def _github_get(policy, selected, deadline):
@@ -340,7 +379,7 @@ class EvidenceStore:
 
     def seal(self, markdown, source_ids):
         contract=self.contract()
-        text(markdown, MAX_REPORT_CHARS)
+        text(markdown, MAX_REPORT_BYTES)
         if (not isinstance(source_ids, list) or not 1 <= len(source_ids) <= MAX_SOURCES or
                 any(not isinstance(value,str) for value in source_ids) or len(set(source_ids)) != len(source_ids)):
             raise ValueError('report requires a distinct bounded captured source catalogue')

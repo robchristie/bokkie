@@ -547,7 +547,7 @@ fn validate_result(result: &WorkspaceResult) -> Result<(), StoreError> {
                 || source.content_digest.len() != 64
                 || !sha(&source.content_digest)
                 || source.observed_at < 0
-                || !(1..=262_144).contains(&source.bytes)
+                || source.bytes > 262_144
             {
                 return Err(invalid(
                     "evidence report sources require distinct retained identities",

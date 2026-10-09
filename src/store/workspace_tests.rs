@@ -2401,6 +2401,66 @@ fn report_subject_limits_cannot_replace_missing_criteria_or_verification() {
 }
 
 #[test]
+fn empty_report_source_stop_and_replay_do_not_obstruct_the_next_dispatch() {
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, id) = report_setup(&mut store);
+    let d = dispatch(&mut store, &host, 1);
+    let mut retained = report_result();
+    let report = retained.report.as_mut().unwrap();
+    report.markdown =
+        "Selected captured source is empty; no substantive evidence is claimed.".into();
+    report.sources[0].bytes = 0;
+    report.sources[0].content_digest = format!("{:x}", sha2::Sha256::digest([]));
+    report.source_manifest_digest = canonical_digest(
+        &serde_json::json!({"format":"evidence-source-manifest-v1","sources":report.sources}),
+    )
+    .unwrap();
+    report.digest = canonical_digest(
+        &serde_json::json!({"format":report.format,"markdown":report.markdown,"source_manifest_digest":report.source_manifest_digest}),
+    ).unwrap();
+    let stop = event(&d, 1, stopped(Some(retained.clone()), true));
+    let accepted = send(&mut store, &host, stop.clone(), 2).unwrap();
+    assert_eq!(accepted.acknowledgements[0].sequence, 1);
+    assert_eq!(
+        store.get(&d.obligation_id).unwrap().unwrap().state,
+        ObligationState::Completed
+    );
+    let through = store.change_page(0, None, 100).unwrap().through;
+    let replay = send(&mut store, &host, stop.clone(), 3).unwrap();
+    assert_eq!(replay.acknowledgements[0].sequence, 1);
+    assert_eq!(store.change_page(0, None, 100).unwrap().through, through);
+    assert_eq!(
+        store.workspace_run(&d.execution_id).unwrap().result,
+        Some(retained)
+    );
+
+    let mut next = store
+        .managed_detail(&id)
+        .unwrap()
+        .active
+        .unwrap()
+        .definition;
+    next.name = "Assess another selected source".into();
+    let next_id = store
+        .managed_create(&Uuid::new_v4().to_string(), &next, 4)
+        .unwrap()
+        .task_id;
+    let profile = host.projects[0].capability_profile(&host.name);
+    let preview = store
+        .managed_preview(&next_id, "next", std::slice::from_ref(&profile), 4)
+        .unwrap();
+    assert!(preview.blockers.is_empty());
+    store
+        .managed_activate(&Uuid::new_v4().to_string(), &preview, "next", &[profile], 4)
+        .unwrap();
+    let exchange = send(&mut store, &host, stop, 5).unwrap();
+    assert_eq!(exchange.acknowledgements[0].sequence, 1);
+    assert_eq!(exchange.dispatches.len(), 1);
+    assert_eq!(exchange.dispatches[0].task_id, next_id);
+    assert_eq!(store.attempts(&d.obligation_id).unwrap().len(), 1);
+}
+
+#[test]
 fn report_content_tampering_and_wrong_scope_cannot_complete() {
     let mut store = Store::open_in_memory().unwrap();
     let (host, _) = report_setup(&mut store);

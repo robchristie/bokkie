@@ -18,7 +18,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parent))
 from broker import Broker, tools, cli_component, STARTUP_STDERR_BYTES
 from common import Config, atomic, checkpoint_bounds, digest, encoded, read, result_bounds
-from evidence_report import EvidenceStore, NoRedirect, bounded_process, captured_content, endpoint, github_get, _github_get, selector, digest_contract
+from evidence_report import EvidenceStore, NoRedirect, bounded_process, captured_content, endpoint, github_get, _github_get, selector, digest_contract, signal_owned_group
 from evidence_policy import derived_roles, environment, mounts, policy, closed_mcp_inventory, routing_proof, public_ca_paths, code_mode_host_path, companion_readiness, reviewer_selection_proof, permission_profiles, prepare_task_config, profile_proof, file_feature_proof, turn_policy_proof, retain_turn_policy, FILE_READ_FEATURES, ROOT_PERMISSIONS, REVIEW_PERMISSIONS
 from verification import verify
 
@@ -235,6 +235,29 @@ class EvidenceReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'byte budget'):self.captured()
         with self.assertRaisesRegex(ValueError,'exceed bound'):
             captured_content(self.selected,self.response(b'x'*(256*1024+1)))
+
+    def test_empty_file_and_comment_sources_seal_and_verify_without_invented_content(self):
+        comment={'kind':'issue_comment','repository':'owner/repo','comment_id':17}
+        response={'id':17,'html_url':'https://github.com/owner/repo/pull/3#issuecomment-17',
+            'issue_url':'https://api.github.com/repos/owner/repo/issues/3','body':'',
+            'user':{'login':'receipt-author'},'created_at':'2026-10-09T00:00:00Z','updated_at':'2026-10-09T00:00:00Z'}
+        for selected,value in ((self.selected,self.response(b'')),(comment,response)):
+            with self.subTest(kind=selected['kind']):
+                captured=self.store.capture(selected,query=lambda *_:value)
+                self.assertEqual(captured['content'],'');self.assertEqual(captured['source']['bytes'],0)
+                self.assertEqual(captured['source']['content_digest'],hashlib.sha256(b'').hexdigest())
+                report=self.store.seal('Selected captured source is empty; no substantive evidence is claimed.',[captured['source']['id']])
+                self.assertTrue(verify(self.admission,self.result(report),self.records(report),root=self.root)['passed'])
+
+    def test_report_utf8_byte_limit_matches_store_before_sealing_or_submission(self):
+        identity=self.captured()['source']['id']
+        report=self.store.seal('é'*16384,[identity])
+        result_bounds(self.result(report))
+        with self.assertRaisesRegex(ValueError,'oversized'):
+            self.store.seal('é'*16385,[identity])
+        changed=copy.deepcopy(report);changed['markdown']='é'*16385
+        changed['digest']=digest({key:changed[key] for key in ('format','markdown','source_manifest_digest')})
+        with self.assertRaisesRegex(ValueError,'oversized'):result_bounds(self.result(changed))
 
     def test_seal_domains_and_repairs_create_distinct_immutable_report_identities(self):
         report=self.sealed()
@@ -641,6 +664,34 @@ print(json.dumps(values,sort_keys=True))
         with self.assertRaisesRegex(ValueError,'timed out'):
             bounded_process(command,str(self.base),environment,began+.1,128)
         self.assertLess(time.monotonic()-began,2)
+
+    @unittest.skipUnless(hasattr(os,'WNOWAIT'), 'requires unreaped child observation')
+    def test_source_group_normal_completion_signals_owned_leader_before_reaping(self):
+        events=[];real_signal=os.killpg;real_wait=subprocess.Popen.wait
+        def signal_group(pid,number):
+            exited=os.waitid(os.P_PID,pid,os.WEXITED|os.WNOHANG|os.WNOWAIT)
+            self.assertIsNotNone(exited);self.assertEqual(exited.si_pid,pid)
+            self.assertEqual(exited.si_code,os.CLD_EXITED);self.assertEqual(exited.si_status,0)
+            events.append(('signal',pid));return real_signal(pid,number)
+        def reap(process,*args,**kwargs):
+            events.append(('reap',process.pid));return real_wait(process,*args,**kwargs)
+        with patch('evidence_report.os.killpg',side_effect=signal_group),patch('evidence_report.subprocess.Popen.wait',new=reap):
+            raw=bounded_process(['/usr/bin/python3','-c',"print('complete')"],str(self.base),{'PATH':'/usr/bin:/bin'},time.monotonic()+2,128)
+        self.assertEqual(raw,b'complete\n');self.assertEqual([kind for kind,_ in events],['signal','reap'])
+        self.assertEqual(events[0][1],events[1][1])
+
+    def test_source_group_lost_or_reaped_identity_is_never_signalled(self):
+        with patch('evidence_report.os.killpg') as signal_group:
+            self.assertFalse(signal_owned_group(SimpleNamespace(pid=12345,returncode=0)))
+            with patch('evidence_report.os.waitid',side_effect=ChildProcessError):
+                self.assertFalse(signal_owned_group(SimpleNamespace(pid=12345,returncode=None)))
+            signal_group.assert_not_called()
+
+    def test_source_group_unsupported_ownership_fails_before_process_start(self):
+        with patch('evidence_report.os.waitid',None),patch('evidence_report.subprocess.Popen') as start:
+            with self.assertRaisesRegex(ValueError,'unreaped child ownership'):
+                bounded_process(['/usr/bin/true'],str(self.base),{},time.monotonic()+2,128)
+            start.assert_not_called()
 
     def test_trusted_source_helper_bounds_whole_dns_get_process_without_secret_arguments(self):
         with patch('evidence_report.bounded_process',return_value=encoded(self.response())) as process:
