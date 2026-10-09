@@ -43,7 +43,7 @@ starts modestly alongside useful execution. Refine packages from evidence.
 | --- | --- | --- |
 | Workspace execution | Landed PR63 at `f7e4b9707f6df22e541cd22aab3d85bd08c8a079`; real task delivered PR62 and retained its result across interruption | Accepted; [qualification](../../workspace-execution/qualification.md); independent PASS, four candidate and four merge checks passed; source tree `9cb79ff6d60647c65bd03e9b4a12505f19a9e980` |
 | Portfolio and decisions | [Draft PR65](https://github.com/robchristie/bokkie/pull/65): report/checkpoint contract and host isolation in calibration | 16-million hard future ceiling with smaller admitted profile budgets; no-model routing/socket/write/native-helper probes pass; three real source captures and sealed report retained, named role registration repaired; credential/config read denial and actual reviewer acceptance remain unproved; fifth definition held before dispatch; task batch473backend/125UI awaits stable schema21; then portfolio pass/question paths and recurrence |
-| Recurring workspace tasks | After portfolio task model | Real scheduled correction, interruption recovery, actual repository/worktree conflict ownership; pause future versus stop active |
+| Recurring workspace tasks | Timing/control candidate `64d6321` prepared on stable schema20; focused backend6/UI9 pass | Stable integration, canonical/browser proof; real scheduled correction/recovery and actual resource contention; independently verified no-change outcome |
 | Consolidation | Avoid duplication from first package | Replace gardener with recurrence, Pagefold with workspace execution, hand-offs with briefs and optional export; preserve history and admitted work |
 | Research | After evidence-report seam | Live search/read, linked relevance digest, retained findings prevent repeats; deterministic retry/effect tests |
 | Email observation | Integration preparation | Selected folders/queries and relevant changes; account selection and authorised read access remain unknown |
@@ -137,4 +137,5 @@ The scoped repair drains both queues while joining finished workers and retains
 all capture evidence. Independent host containment remains the workspace writer
 ownership boundary. Keep one separate follow-up for leader-exit/Drop numeric
 PGID ownership and escaped descendants; queue drainage alone does not discharge
-that concern. See [process shutdown qualification](../../workspace-execution/process-shutdown.md).
+that concern. Local candidate `8aebfc0` has20 focused Linux ownership tests;
+stable queue-fix integration, canonical qualification and review remain. See [process shutdown qualification](../../workspace-execution/process-shutdown.md).
