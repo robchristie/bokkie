@@ -16,10 +16,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parent))
-from broker import Broker, tools
+from broker import Broker, tools, cli_component, STARTUP_STDERR_BYTES
 from common import Config, atomic, checkpoint_bounds, digest, encoded, read, result_bounds
 from evidence_report import EvidenceStore, NoRedirect, bounded_process, captured_content, endpoint, github_get, _github_get, selector
-from evidence_policy import derived_roles, environment, mounts, policy
+from evidence_policy import derived_roles, environment, mounts, policy, closed_mcp_inventory
 from verification import verify
 
 
@@ -258,7 +258,7 @@ class EvidenceReportTests(unittest.TestCase):
 
     def test_child_profiles_cannot_retain_inherited_network_apps_mcp_or_escalation(self):
         home=self.base/'codex';home.mkdir();agents=home/'agents';agents.mkdir()
-        raw='model="review-model"\nmodel_reasoning_effort="high"\ndeveloper_instructions="Keep judgement independent"\nsandbox_mode="danger-full-access"\napproval_policy="on-request"\nweb_search="live"\n'
+        raw='model="review-model"\nmodel_reasoning_effort="high"\ndeveloper_instructions="Keep judgement independent"\nsandbox_mode="danger-full-access"\napproval_policy="on-request"\nweb_search="live"\n[mcp_servers.role_only]\ncommand="/usr/bin/true"\n'
         profile=agents/'danger.toml';profile.write_text(raw)
         self.profile['reviewer']['config_file']=str(profile)
         overrides,identities=derived_roles(self.root,home,{'mcp_servers':{'inherited':{}},'plugins':{'plugin@market':{}}},self.profile)
@@ -268,7 +268,7 @@ class EvidenceReportTests(unittest.TestCase):
             self.assertEqual(parsed['model'],'review-model');self.assertEqual(parsed['model_reasoning_effort'],'high')
             self.assertEqual(parsed['sandbox_mode'],'read-only');self.assertEqual(parsed['approval_policy'],'never')
             self.assertFalse(parsed['sandbox_read_only']['network_access']);self.assertEqual(parsed['web_search'],'disabled')
-            self.assertFalse(parsed['features']['apps']);self.assertFalse(parsed['mcp_servers']['inherited']['enabled'])
+            self.assertFalse(parsed['features']['apps']);self.assertNotIn('mcp_servers',parsed)
             self.assertFalse(parsed['plugins']['plugin@market']['enabled'])
             self.assertIn('agents.'+name+'.config_file',overrides)
         self.assertEqual(len(identities),2)
@@ -304,6 +304,49 @@ print(json.dumps(values,sort_keys=True))
                 result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
                 self.assertEqual(result.returncode,0,result.stderr.decode())
                 self.assertEqual(json.loads(result.stdout),{'scratch':True,'product':False,'mirror':False,'masked_socket':False})
+
+    def test_cli_override_components_preserve_existing_mcp_and_plugin_identity(self):
+        path,home,codex,value=self.host_config()
+        with (codex/'config.toml').open('a') as stream:
+            stream.write('[mcp_servers.fixture]\ncommand="/usr/bin/true"\n[plugins."fixture@market"]\nenabled=true\n')
+        with patch('common.Path.home',return_value=home),patch.dict(os.environ,{'CODEX_HOME':str(codex)}):
+            configured=Config(path)
+            self.admission.update(project_profile=configured.projects['project'],codex=value['codex'],bwrap=value['bwrap'])
+            atomic(self.root/'admission.json',self.admission)
+            command=Broker(self.root).command()
+        overrides=[command[index+1] for index,item in enumerate(command) if item=='-c']
+        self.assertIn('mcp_servers.fixture.enabled=false',overrides)
+        self.assertIn('plugins.fixture@market.enabled=false',overrides)
+        self.assertFalse(any('mcp_servers."' in override or 'plugins."' in override for override in overrides))
+        for invalid in ('component.with.dot','"quoted"','component\nname'):
+            with self.subTest(invalid=invalid),self.assertRaises(ValueError):cli_component(invalid)
+
+    def test_mcp_inventory_requires_explicitly_disabled_empty_complete_servers(self):
+        entry={'runtimeStatus':'disabled','tools':{},'resources':[],'resourceTemplates':[],'serverCapabilities':None}
+        proof=closed_mcp_inventory({'data':[entry],'nextCursor':None})
+        self.assertEqual(proof['inherited_mcp_servers'],1)
+        for mutation in ({'runtimeStatus':'connected'},{'runtimeStatus':None},{'tools':{'tool':{}}},
+                         {'resources':[{}]},{'resourceTemplates':[{}]},{'serverCapabilities':{}}):
+            with self.subTest(mutation=mutation),self.assertRaises(ValueError):
+                closed_mcp_inventory({'data':[entry|mutation],'nextCursor':None})
+        with self.assertRaises(ValueError):closed_mcp_inventory({'data':[entry],'nextCursor':'next'})
+        with self.assertRaises(ValueError):closed_mcp_inventory({'data':[{'runtimeStatus':'disabled'}],'nextCursor':None})
+
+    def test_startup_stderr_is_bounded_private_and_safe_diagnostic_has_no_raw_values(self):
+        broker=Broker(self.root)
+        startup=b'Error: invalid transport\nin `mcp_servers.fixture`\nsynthetic-private-value\n'+b'x'*STARTUP_STDERR_BYTES
+        later=b'synthetic-runtime-private-value'
+        broker.observe_stderr(startup);broker.initialised=True;broker.observe_stderr(later);broker.retain_stderr()
+        path=self.root/'startup-stderr.private';diagnostic=read(self.root/'stderr-diagnostic.json')
+        self.assertEqual(path.stat().st_mode&0o777,0o600)
+        self.assertEqual(path.read_bytes(),startup[:STARTUP_STDERR_BYTES])
+        self.assertEqual(diagnostic['bytes'],len(startup)+len(later))
+        self.assertEqual(diagnostic['sha256'],hashlib.sha256(startup+later).hexdigest())
+        self.assertEqual(diagnostic['startup']['category'],'inherited_mcp_transport')
+        self.assertFalse(diagnostic['startup']['capture_complete'])
+        self.assertNotIn('synthetic-private-value',json.dumps(diagnostic))
+        self.assertNotIn('synthetic-runtime-private-value',json.dumps(diagnostic))
+        self.assertNotIn('mcp_servers.fixture',json.dumps(diagnostic))
 
     def test_forwarding_and_account_source_credentials_are_removed_from_task_environment(self):
         with patch.dict(os.environ,{'SSH_AUTH_SOCK':'/tmp/ssh','DBUS_SESSION_BUS_ADDRESS':'unix:path=/run/bus','DOCKER_HOST':'unix:///tmp/docker','GH_TOKEN':'secret'}):

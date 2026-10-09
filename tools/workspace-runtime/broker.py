@@ -23,6 +23,33 @@ from check_wait import (facts as check_facts,validate_request as check_request,
                         POLL_SECONDS,MAX_READS,OUTPUT_BYTES)
 
 NAMESPACE='bokkie_workspace'
+STARTUP_STDERR_BYTES=16384
+
+
+def cli_component(name):
+    # CLI override keys are split on dots; TOML quotes become literal name
+    # characters in the installed CLI. Reject ambiguous components instead.
+    if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9_@/-]+',name):
+        raise ValueError('unsupported inherited configuration component')
+    return name
+
+
+def startup_diagnostic(raw):
+    """Return safe categories; raw trusted startup output stays private."""
+    if b'invalid transport' in raw and b'mcp_servers' in raw:
+        category='inherited_mcp_transport'
+    elif b'bwrap:' in raw:
+        category='filesystem_boundary_startup'
+    elif b'Error loading config' in raw or b'error loading config' in raw:
+        category='configuration_load'
+    elif b'error:' in raw.lower():
+        category='runtime_startup'
+    else:
+        category='unclassified_startup'
+    causes=[value for value in ('Read-only file system','No such file or directory','Permission denied',
+                               'Operation not permitted','unknown variant','invalid type','missing field',
+                               'unexpected argument','failed to parse','invalid transport') if value.encode() in raw]
+    return {'category':category,'causes':causes}
 
 
 def tool(name, description, properties, required):
@@ -115,6 +142,9 @@ class Broker:
         self.cached_tokens={}
         self.stderr_hash=hashlib.sha256()
         self.stderr_bytes=0
+        self.startup_stderr=bytearray()
+        self.startup_stderr_bytes=0
+        self.initialised=False
         self.reserved=False
         self.stopping=False
 
@@ -144,9 +174,9 @@ class Broker:
             roles,self.evidence_roles=derived_roles(self.root,codex_home,inherited,p)
             overrides.update(roles)
             for name in inherited.get('plugins',{}):
-                overrides['plugins.'+json.dumps(name)+'.enabled']=False
+                overrides['plugins.'+cli_component(name)+'.enabled']=False
             for name in inherited.get('mcp_servers',{}):
-                overrides['mcp_servers.'+json.dumps(name)+'.enabled']=False
+                overrides['mcp_servers.'+cli_component(name)+'.enabled']=False
             reviewer=p['reviewer']
             if hashlib.sha256(Path(reviewer['config_file']).read_bytes()).hexdigest()!=reviewer['sha256']:
                 raise ValueError('independent reviewer profile changed after admission')
@@ -254,14 +284,46 @@ class Broker:
             chunk=os.read(key.fd,65536)
             if key.fileobj is self.owner.stderr:
                 if chunk:
-                    self.stderr_bytes+=len(chunk)
-                    self.stderr_hash.update(chunk)
+                    self.observe_stderr(chunk)
                 else:
                     self.selector.unregister(key.fileobj)
                 continue
             if not chunk:
                 raise EOFError('App-server connection lost; launch is not replayed')
             self.consume_stdout(chunk)
+
+    def observe_stderr(self,chunk):
+        self.stderr_bytes+=len(chunk)
+        self.stderr_hash.update(chunk)
+        if not self.initialised:
+            self.startup_stderr_bytes+=len(chunk)
+            self.startup_stderr.extend(chunk[:max(0,STARTUP_STDERR_BYTES-len(self.startup_stderr))])
+
+    def drain_stderr(self):
+        if self.owner is None or self.owner.stderr is None:return
+        try:
+            descriptor=self.owner.stderr.fileno()
+            os.set_blocking(descriptor,False)
+            while True:
+                try:chunk=os.read(descriptor,65536)
+                except BlockingIOError:break
+                if not chunk:break
+                self.observe_stderr(chunk)
+        except (OSError,ValueError):
+            pass
+
+    def retain_stderr(self):
+        value={'bytes':self.stderr_bytes,'sha256':self.stderr_hash.hexdigest()}
+        if self.startup_stderr:
+            path=self.root/'startup-stderr.private'
+            descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+            with os.fdopen(descriptor,'wb') as stream:
+                stream.write(self.startup_stderr);stream.flush();os.fsync(stream.fileno())
+            value['startup']={**startup_diagnostic(self.startup_stderr),
+                'observed_bytes':self.startup_stderr_bytes,'retained_bytes':len(self.startup_stderr),
+                'capture_complete':self.startup_stderr_bytes<=STARTUP_STDERR_BYTES,
+                'private_path':path.name}
+        atomic(self.root/'stderr-diagnostic.json',value)
 
     def oversized_helper(self,raw):
         match=re.match(rb'^\s*\{\s*(?:"jsonrpc"\s*:\s*"[^"]*"\s*,\s*)?"id"\s*:\s*(\d+)\s*,',raw[:256])
@@ -619,6 +681,7 @@ class Broker:
             os.set_blocking(self.owner.stdin.fileno(),False)
             initial=self.rpc('initialize',{'clientInfo':{'name':'bokkie_workspace','title':'Bokkie workspace execution','version':'1'},
                          'capabilities':{'experimentalApi':True}})
+            self.initialised=True
             if '/0.160.1 ' not in initial['userAgent']:
                 raise ValueError('Workspace runtime requires qualified Codex 0.160.1')
             self.send({'method':'initialized','params':{}})
@@ -659,9 +722,9 @@ class Broker:
             self.journal.event({'kind':'started','runtime_id':self.thread,'instruction_sources':sources})
             if self.report_mode:
                 inventory=self.rpc('mcpServerStatus/list',{'threadId':self.thread,'limit':100})
-                if inventory.get('data') or inventory.get('nextCursor') is not None:
-                    raise ValueError('effective report exposes inherited MCP servers')
-                self.journal.record('evidence_tool_inventory',{'inherited_mcp_servers':0,'web_search':'disabled','apps_enabled':False})
+                from evidence_policy import closed_mcp_inventory
+                inventory_proof=closed_mcp_inventory(inventory)
+                self.journal.record('evidence_tool_inventory',{**inventory_proof,'web_search':'disabled','apps_enabled':False})
                 from evidence_policy import qualify
                 qualify(self)
             if preflight:
@@ -700,8 +763,9 @@ class Broker:
                 atomic(self.root/'cessation.json',{'generation':self.generation,
                        'boundary_id':self.journal.execution_id+':'+self.generation,'kind':'not_started',
                        'evidence':'This broker spawned no cleanup owner or payload'},immutable=True)
+            self.drain_stderr()
             self.selector.close()
-            atomic(self.root/'stderr-diagnostic.json',{'bytes':self.stderr_bytes,'sha256':self.stderr_hash.hexdigest()})
+            self.retain_stderr()
             stopped(self.root,reason)
 
 

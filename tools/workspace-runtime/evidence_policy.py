@@ -58,8 +58,9 @@ def derived_roles(root, codex_home, inherited, profile):
         safe.update(sandbox_mode='read-only', approval_policy='never', approvals_reviewer='user', web_search='disabled')
         raw = '\n'.join(key+' = '+json.dumps(val, ensure_ascii=False) for key, val in safe.items())+'\n'
         raw += '\n[sandbox_read_only]\nnetwork_access = false\n\n[features]\napps = false\n'
-        for server in inherited.get('mcp_servers', {}):
-            raw += '\n[mcp_servers.'+json.dumps(server)+']\nenabled = false\n'
+        # Drop role-local MCP configuration. The root's inherited servers are
+        # already disabled; transport-free role tables are invalid standalone
+        # configuration in the qualified CLI and may make the role unavailable.
         for plugin in inherited.get('plugins', {}):
             raw += '\n[plugins.'+json.dumps(plugin)+']\nenabled = false\n'
         target = directory/(name+'.toml')
@@ -78,6 +79,20 @@ def derived_roles(root, codex_home, inherited, profile):
                            'sandbox': policy(profile, reviewer=True), 'approval_policy': 'never',
                            'approvals_reviewer': 'user'})
     return overrides, identities
+
+
+def closed_mcp_inventory(inventory):
+    if (not isinstance(inventory,dict) or inventory.get('nextCursor') is not None or
+            not isinstance(inventory.get('data'),list) or len(inventory['data'])>100):
+        raise ValueError('effective report MCP inventory is incomplete')
+    facts=[]
+    for entry in inventory['data']:
+        if (not isinstance(entry,dict) or 'serverCapabilities' not in entry or entry.get('runtimeStatus')!='disabled' or
+                entry.get('tools')!={} or entry.get('resources')!=[] or entry.get('resourceTemplates')!=[] or
+                entry.get('serverCapabilities') is not None):
+            raise ValueError('effective report exposes inherited MCP servers')
+        facts.append({'runtime_status':'disabled','tools':0,'resources':0,'resource_templates':0})
+    return {'inherited_mcp_servers':len(facts),'servers':facts,'additional_page':False}
 
 
 def mounts(admission, profile, codex_home, root):
