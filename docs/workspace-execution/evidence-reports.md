@@ -1,7 +1,8 @@
 # Evidence report calibration
 
-Status: provisional API and Store contract; host implementation and real
-qualification remain. This is the next portfolio package in the active plan.
+Status: API, Store and host contract in calibration. The real selected-source
+report is sealed; its independent runtime review and acceptance remain unproved.
+This is the next portfolio package in the active plan.
 
 Question: can a finite read-only portfolio assignment retain exact source bytes,
 project its own decisions and return an independently reviewed report without
@@ -70,8 +71,14 @@ trust-store symlink. A read-only mount of that target preserved TLS validation;
 supported no-model account routing then passed. The next run reached inference
 and retained an actionable missing-guidance question when its model tool helper
 was absent. It was explicitly cancelled; the outside owner proved all descendants
-reaped. Both original admissions and the question remain in task history. No
-report has yet been accepted. [Draft PR65](https://github.com/robchristie/bokkie/pull/65)
+reaped. All original admissions and questions remain in task history. A third run
+exposed a trusted GET helper error after a complete HTTP body; the scoped EOF
+repair then captured the exact selected source. The fourth run captured all three
+sources and sealed a report, but its child inherited the root model and had no
+named reviewer role. Acceptance stayed false and cancellation retained an outside
+ECHILD cessation receipt. The native spawn omitted the role-selection argument;
+the effective named-role seam must be established before another admission.
+No report has yet been accepted. [Draft PR65](https://github.com/robchristie/bokkie/pull/65)
 owns the incomplete source package and remaining live qualification.
 
 The actual-account probes retain guidance hashes, public trust-asset digest,
