@@ -20,6 +20,12 @@ class PreflightTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        locks = tempfile.TemporaryDirectory()
+        self.addCleanup(locks.cleanup)
+        self.locks = Path(locks.name) / 'locks'
+        patched = patch.object(p.broker, 'workspace_lock_root', return_value=self.locks)
+        patched.start()
+        self.addCleanup(patched.stop)
         self.workspace = self.root / 'workspace'
         self.workspace.mkdir()
         (self.workspace / 'source.txt').write_text('initial source')
