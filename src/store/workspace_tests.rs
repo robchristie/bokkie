@@ -1289,37 +1289,38 @@ fn cancellation_is_monotonic_and_terminal_only_after_verified_cessation() {
     let mut changed = cancel.clone();
     changed.expected_event_sequence = 1;
     assert!(store.workspace_run_action(&changed, 3).is_err());
-    assert!(
-        send(
-            &mut store,
-            &host,
-            event(
-                &d,
-                1,
-                WorkspaceEvent::Progress {
-                    summary: "Still writing".into()
-                }
-            ),
-            3
-        )
-        .is_err()
+    let progress = event(
+        &d,
+        1,
+        WorkspaceEvent::Progress {
+            summary: "Still writing".into(),
+        },
+    );
+    let response = send(&mut store, &host, progress.clone(), 3).unwrap();
+    assert_eq!(response.acknowledgements[0].sequence, 1);
+    assert!(response.controls[0].cancel);
+    assert_eq!(
+        store.workspace_run(&d.execution_id).unwrap().status,
+        "cancelling"
     );
     let mut invalid_stop = stopped(None, false);
     if let WorkspaceEvent::Stopped { cessation, .. } = &mut invalid_stop {
         cessation.kind = "process_exited".into();
     }
-    assert!(send(&mut store, &host, event(&d, 1, invalid_stop), 4).is_err());
+    assert!(send(&mut store, &host, event(&d, 2, invalid_stop), 4).is_err());
     assert_eq!(
         store.get(&d.obligation_id).unwrap().unwrap().state,
         ObligationState::Attention
     );
-    let stop = event(&d, 1, stopped(Some(result()), true));
+    let stop = event(&d, 2, stopped(Some(result()), true));
     send(&mut store, &host, stop.clone(), 4).unwrap();
     send(&mut store, &host, stop, 5).unwrap();
     assert_eq!(
         store.get(&d.obligation_id).unwrap().unwrap().state,
         ObligationState::Cancelled
     );
+    let retained:String=store.connection.query_row("SELECT event_json FROM workspace_execution_events WHERE execution_id=?1 AND sequence=1",[&d.execution_id],|row|row.get(0)).unwrap();
+    assert_eq!(decode::<WorkspaceEvent>(&retained).unwrap(), progress.event);
     assert!(
         store
             .workspace_exchange(&host, &empty(), 5)
@@ -1327,6 +1328,279 @@ fn cancellation_is_monotonic_and_terminal_only_after_verified_cessation() {
             .dispatches
             .is_empty()
     );
+}
+
+#[test]
+fn cancellation_acknowledges_the_immutable_queued_journal_before_later_cessation() {
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, _) = setup(&mut store, false);
+    let d = dispatch(&mut store, &host, 1);
+    send(
+        &mut store,
+        &host,
+        event(
+            &d,
+            1,
+            WorkspaceEvent::Started {
+                runtime_id: "owned-runtime".into(),
+                instruction_sources: vec!["AGENTS.md".into()],
+            },
+        ),
+        2,
+    )
+    .unwrap();
+    // These observations already exist in the host journal before the operator
+    // cancels at the last acknowledged cursor. Their payloads cannot be replaced.
+    let queued = vec![
+        event(
+            &d,
+            2,
+            WorkspaceEvent::Progress {
+                summary: "A retained turn is finishing".into(),
+            },
+        ),
+        event(
+            &d,
+            3,
+            WorkspaceEvent::Question {
+                question: WorkspaceQuestion {
+                    id: "queued-question".into(),
+                    kind: "missing_information".into(),
+                    prompt: "Which bounded source should I inspect?".into(),
+                    options: vec![],
+                },
+            },
+        ),
+        event(
+            &d,
+            4,
+            WorkspaceEvent::Started {
+                runtime_id: "owned-runtime".into(),
+                instruction_sources: vec!["AGENTS.md".into()],
+            },
+        ),
+        event(
+            &d,
+            5,
+            WorkspaceEvent::Question {
+                question: WorkspaceQuestion {
+                    id: "queued-question".into(),
+                    kind: "new_authority".into(),
+                    prompt: "A late question requests wider scope".into(),
+                    options: vec![],
+                },
+            },
+        ),
+        event(
+            &d,
+            6,
+            WorkspaceEvent::Attention {
+                reason: "A late runtime observation needs reconciliation".into(),
+            },
+        ),
+    ];
+    store
+        .workspace_run_action(&action(&d, 1, None, true), 3)
+        .unwrap();
+    let mut expected = store.workspace_run(&d.execution_id).unwrap();
+    let responsibility = store.get(&d.obligation_id).unwrap();
+    let attempt = store.attempts(&d.obligation_id).unwrap();
+    let batch = WorkspaceExchangeRequest {
+        events: queued.clone(),
+        heartbeats: vec![d.execution_id.clone()],
+    };
+    let response = store.workspace_exchange(&host, &batch, 4).unwrap();
+    assert_eq!(
+        response
+            .acknowledgements
+            .iter()
+            .map(|ack| ack.sequence)
+            .collect::<Vec<_>>(),
+        vec![2, 3, 4, 5, 6]
+    );
+    assert_eq!(response.controls.len(), 1);
+    assert!(response.controls[0].cancel);
+    assert!(response.controls[0].answers.is_empty());
+    expected.last_event_sequence = 6;
+    assert_eq!(store.workspace_run(&d.execution_id).unwrap(), expected);
+    assert_eq!(store.get(&d.obligation_id).unwrap(), responsibility);
+    assert_eq!(store.attempts(&d.obligation_id).unwrap(), attempt);
+    let questions: i64 = store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM workspace_execution_questions WHERE execution_id=?1",
+            [&d.execution_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(questions, 0);
+    assert!(
+        store
+            .workspace_run_action(
+                &action(
+                    &d,
+                    6,
+                    Some(WorkspaceAnswer {
+                        question_id: "queued-question".into(),
+                        text: "A wider scope is forbidden".into()
+                    }),
+                    false
+                ),
+                4
+            )
+            .is_err()
+    );
+    for observation in &queued {
+        let retained:String=store.connection.query_row("SELECT event_json FROM workspace_execution_events WHERE execution_id=?1 AND sequence=?2",params![d.execution_id,observation.sequence],|row|row.get(0)).unwrap();
+        assert_eq!(
+            decode::<WorkspaceEvent>(&retained).unwrap(),
+            observation.event
+        );
+    }
+    let through = store.change_page(0, None, 100).unwrap().through;
+    store.workspace_exchange(&host, &batch, 5).unwrap();
+    assert_eq!(store.change_page(0, None, 100).unwrap().through, through);
+    let mut conflict = queued[0].clone();
+    conflict.event = WorkspaceEvent::Progress {
+        summary: "Changed immutable journal payload".into(),
+    };
+    assert!(send(&mut store, &host, conflict, 5).is_err());
+    assert_eq!(store.workspace_run(&d.execution_id).unwrap(), expected);
+    let stop = event(&d, 7, stopped(Some(result()), true));
+    send(&mut store, &host, stop.clone(), 6).unwrap();
+    assert_eq!(
+        store.get(&d.obligation_id).unwrap().unwrap().state,
+        ObligationState::Cancelled
+    );
+    assert_eq!(
+        store.workspace_run(&d.execution_id).unwrap().result,
+        Some(result())
+    );
+    assert_eq!(store.attempts(&d.obligation_id).unwrap(), attempt);
+    let accepted: i64 = store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM managed_results WHERE obligation_id=?1",
+            [&d.obligation_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(accepted, 0);
+    let mut replay = queued;
+    replay.push(stop);
+    let through = store.change_page(0, None, 100).unwrap().through;
+    let response = store
+        .workspace_exchange(
+            &host,
+            &WorkspaceExchangeRequest {
+                events: replay,
+                heartbeats: vec![],
+            },
+            7,
+        )
+        .unwrap();
+    assert_eq!(response.acknowledgements.len(), 6);
+    assert!(response.controls.is_empty());
+    assert!(response.dispatches.is_empty());
+    assert_eq!(store.change_page(0, None, 100).unwrap().through, through);
+}
+
+#[test]
+fn cancellation_records_duplicate_question_ids_without_reopening_question_responsibility() {
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, _) = setup(&mut store, false);
+    let d = dispatch(&mut store, &host, 1);
+    let original = WorkspaceQuestion {
+        id: "existing-question".into(),
+        kind: "missing_information".into(),
+        prompt: "Which source needs inspection?".into(),
+        options: vec![],
+    };
+    send(
+        &mut store,
+        &host,
+        event(
+            &d,
+            1,
+            WorkspaceEvent::Question {
+                question: original.clone(),
+            },
+        ),
+        2,
+    )
+    .unwrap();
+    store
+        .workspace_run_action(&action(&d, 1, None, true), 3)
+        .unwrap();
+    let queued = vec![
+        event(
+            &d,
+            2,
+            WorkspaceEvent::Question {
+                question: original.clone(),
+            },
+        ),
+        event(
+            &d,
+            3,
+            WorkspaceEvent::Question {
+                question: WorkspaceQuestion {
+                    id: original.id.clone(),
+                    kind: "new_authority".into(),
+                    prompt: "Late replacement must not grant authority".into(),
+                    options: vec![],
+                },
+            },
+        ),
+    ];
+    let response = store
+        .workspace_exchange(
+            &host,
+            &WorkspaceExchangeRequest {
+                events: queued,
+                heartbeats: vec![],
+            },
+            4,
+        )
+        .unwrap();
+    assert_eq!(response.acknowledgements.len(), 2);
+    assert!(response.controls[0].cancel);
+    let run = store.workspace_run(&d.execution_id).unwrap();
+    assert_eq!(run.status, "cancelling");
+    assert_eq!(run.question, Some(original.clone()));
+    let retained:String=store.connection.query_row("SELECT question_json FROM workspace_execution_questions WHERE execution_id=?1 AND question_id=?2",params![d.execution_id,original.id],|row|row.get(0)).unwrap();
+    assert_eq!(decode::<WorkspaceQuestion>(&retained).unwrap(), original);
+    let count: i64 = store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM workspace_execution_questions WHERE execution_id=?1",
+            [&d.execution_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+    assert!(
+        store
+            .workspace_run_action(
+                &action(
+                    &d,
+                    3,
+                    Some(WorkspaceAnswer {
+                        question_id: "existing-question".into(),
+                        text: "This cannot resolve new authority".into()
+                    }),
+                    false
+                ),
+                4
+            )
+            .is_err()
+    );
+    send(&mut store, &host, event(&d, 4, stopped(None, false)), 5).unwrap();
+    assert_eq!(
+        store.get(&d.obligation_id).unwrap().unwrap().state,
+        ObligationState::Cancelled
+    );
+    assert_eq!(store.attempts(&d.obligation_id).unwrap().len(), 1);
 }
 
 #[test]

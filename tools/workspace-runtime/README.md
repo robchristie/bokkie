@@ -264,6 +264,35 @@ gaps or changed receipts fail closed. Answers are immutable by question identity
 and retained before delivery. There are at most 128 retained jobs per configured
 runtime root; capacity exhaustion remains an explicit operational condition.
 
+Trusted source observations use `safe-git-v1`. Repository entry/common-directory,
+HEAD and loose/packed references are bounded data, not Git commands in a mutable
+checkout. Object reads and ignore matching use a private Git directory, fixed
+trusted Git, a minimal environment and a network-off minimal Bubblewrap namespace.
+Only trusted executable/libraries, read-only object storage and private observation
+scratch are exposed; account directories, credentials and the host runtime are
+absent. FD-consuming `--ro-bind-fd` support is required and checked as a capability,
+without inferring it from a version string. Missing support yields unavailable
+evidence; there is no shell or uncontained fallback.
+
+Exact canonical commands receive full raw worktree samples. Commit/tree objects
+are independently hash-verified; tracked bytes, Git executable modes and symlink
+target text are compared through no-follow descriptors. The task index, fsmonitor,
+clean/process filters and repository/global/system configuration cannot determine
+cleanliness or execute observer code. Ignore matching uses only verified committed
+`.gitignore` files, via [Git's no-index protocol](https://git-scm.com/docs/git-check-ignore);
+mutable `.git/info/exclude`, global excludes and edited ignore files do not hide
+unexpected source. Other command observations are metadata-only and cannot claim
+a clean candidate.
+
+The current observer supports classic SHA-1 main/registered linked worktrees and
+raw checkouts. Reftable, alternates, submodule entries, aliased metadata and changing
+or oversized inputs remain unavailable. Bounds are 32,768 entries, depth 64,
+8 MiB per object, 64 MiB per tracked file, 512 MiB aggregate bytes and a 20-second
+acquisition deadline. Samples establish identity at the observed endpoints; they
+do not prove inputs stayed immutable throughout a command. Independent review and
+required CI remain separate assurance. Historical observations retain their
+original provenance and are not silently relabelled as safe-Git samples.
+
 Structured results remain untrusted. Verification requires every criterion,
 allowlisted merged PR/candidate/tree identities, independent exact-head review,
 attributable canonical command observations and successful required checks on

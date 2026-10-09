@@ -16,7 +16,8 @@ import tomllib
 import uuid
 from common import (Journal, Reservations, atomic, canonical, digest, encoded,
                     locked, read, pidfd_open, result_bounds, event_bounds, MAX_MESSAGE)
-from verification import verify
+from verification import verify,shell_payload
+from safe_git import observe as safe_observe
 from recovery import effective_result
 from check_wait import (facts as check_facts,validate_request as check_request,
                         POLL_SECONDS,MAX_READS,OUTPUT_BYTES)
@@ -54,24 +55,14 @@ def tools():
                       ['summary','criteria','deliveries','limitations'])]}]
 
 
-def source_observation(profile,cwd):
+def source_observation(profile,cwd,private_root=None,bwrap='/usr/bin/bwrap',*,full=False):
     try:
         canonical(cwd)
-        if not any(Path(cwd).is_relative_to(Path(root)) for root in profile['write_roots']):
-            return {'available':False,'reason':'command cwd is outside declared product roots'}
-        def git(*args):
-            value=subprocess.check_output(['git','--no-lazy-fetch','-C',cwd,*args],
-                  stderr=subprocess.DEVNULL,timeout=5,env=dict(os.environ,GIT_OPTIONAL_LOCKS='0'))
-            if len(value)>MAX_MESSAGE:
-                raise ValueError('source observation exceeds bound')
-            return value.decode().strip()
-        common=git('rev-parse','--path-format=absolute','--git-common-dir')
-        repository=next(r for r in profile['verification']['repositories'] if r['git_common_dir']==common)
-        return {'available':True,'cwd':cwd,'repository':repository['repository'],
-                'head':git('rev-parse','HEAD'),'tree':git('rev-parse','HEAD^{tree}'),
-                'clean':not git('status','--porcelain=v1','--untracked-files=all')}
-    except (OSError,ValueError,StopIteration,subprocess.SubprocessError):
-        return {'available':False,'reason':'source identity unavailable'}
+        if private_root is None:raise ValueError('protected observation storage is required')
+        return safe_observe(profile,cwd,str(private_root),bwrap,full=full)
+    except (OSError,ValueError,StopIteration,subprocess.SubprocessError) as error:
+        return {'available':False,'reason':'source identity unavailable','error_type':type(error).__name__,
+                'detail':str(error)[:512] if isinstance(error,ValueError) else 'source filesystem or trusted helper unavailable'}
 
 
 class Broker:
@@ -404,8 +395,11 @@ class Broker:
                 if len(self.contexts)>self.profile.get('max_contexts',4):
                     raise RuntimeError('Observed context budget exhausted')
             if item.get('type')=='commandExecution':
+                canonical_commands={command for repository in self.profile['verification']['repositories']
+                                    for command in repository['canonical_commands']}
                 self.journal.record('command_observation',{'phase':'started' if method=='item/started' else 'completed',
-                    'item':item,'source':source_observation(self.profile,item.get('cwd',''))})
+                    'item':item,'source':source_observation(self.profile,item.get('cwd',''),self.root,self.admission['bwrap'],
+                        full=shell_payload(item.get('command','')) in canonical_commands)})
             if method=='turn/started':
                 self.root_turns.add((p['threadId'],p['turn']['id']))
                 if len(self.root_turns)>self.dispatch['assignment']['limits']['max_turns']:

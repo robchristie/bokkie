@@ -120,3 +120,25 @@ Remaining proof: connector independent review/CI/landing. Canonical backend
 and UI checks passed; their commands and complete logs are attributed above.
 Source readiness does not establish that the Nostromo deployment has enabled
 workspace execution. The full objective remains active in its maintained plan.
+
+## Independent review repairs
+
+The first connector candidate `e89e3f16f6c0c1eb37f44420a7570ef70fcaf4d8`
+received BLOCK for two concrete paths: cancellation rejected valid immutable
+queued observations before returning controls, and trusted host-side Git status
+could execute repository-controlled helpers outside the task boundary. The same
+[PR63](https://github.com/robchristie/bokkie/pull/63) owns repair and requalification.
+
+Queued observations after cancellation are now audit-only, preserving their
+sequence while neither reopening work nor creating actionable questions. The
+browser regression adds queued progress followed by higher-sequence cessation.
+Source observation now resolves administrative metadata as bounded data and
+compares the raw filesystem with verified commit-tree objects, independently of
+repository configuration and the writable index. A minimal network-disabled
+observer isolates fixed Git plumbing with descriptor-based read-only mounts.
+The 14 security cases passed, including real malicious hook/filter helpers,
+index tricks, mutable ignores, path races, corrupt objects and unsupported
+FD binding. Full host coverage now comprises 66 zero-model tests; evidence is
+`/tmp/bokkie-workspace-probe/command-log-11m89xgz/output.log`. Historic source observations retain their original
+provenance; they must not be described as evidence of the repaired observer.
+The completed task and its delivered source remain preserved.

@@ -104,8 +104,10 @@ try{
   await mutation('/conversations/select',{command_id:randomUUID(),conversation_id:view.id,expected_revision:view.revision,task_id:task});
   await page.goto(origin+'/ui/?task='+encodeURIComponent(task));await ready();await page.waitForTimeout(600);
   await click('bokkie.workspace.stop.'+execution);await click('bokkie.workspace.run-confirm');
-  const cancelling=await host();check(cancelling.controls.some(c=>c.cancel),'Cancellation intent reaches retained execution');
-  await host([{execution_id:execution,sequence:4,event:{kind:'stopped',cessation:{boundary_id:'synthetic-boundary',kind:'not_started',evidence:'Closed peer started no process'},result:null,verification:null,reason:'Synthetic cancellation reconciled'}}]);
+  const queuedProgress={execution_id:execution,sequence:4,event:{kind:'progress',summary:'Progress already queued before the stop request'}};
+  const cancelling=await host([queuedProgress]);check(cancelling.controls.some(c=>c.cancel),'Cancellation intent reaches retained execution despite queued progress');
+  check(cancelling.acknowledgements.some(a=>a.execution_id===execution&&a.sequence===4),'Queued immutable progress is acknowledged without reopening cancellation');
+  await host([{execution_id:execution,sequence:5,event:{kind:'stopped',cessation:{boundary_id:'synthetic-boundary',kind:'not_started',evidence:'Closed peer started no process'},result:null,verification:null,reason:'Synthetic cancellation reconciled'}}]);
   view=await waitView(view.id,v=>v.task?.runs[0].state==='cancelled');
   check(view.task.runs.length===1,'Cancellation does not create another immediate job');
   await rendered('bokkie.workspace.run-heading.'+execution,'Cancelled');

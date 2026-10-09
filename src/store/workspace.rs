@@ -810,7 +810,11 @@ fn reconcile_event(
     if e.cancel
         && !matches!(
             event.event,
-            WorkspaceEvent::Stopped { .. } | WorkspaceEvent::Attention { .. }
+            WorkspaceEvent::Stopped { .. }
+                | WorkspaceEvent::Started { .. }
+                | WorkspaceEvent::Progress { .. }
+                | WorkspaceEvent::Question { .. }
+                | WorkspaceEvent::Attention { .. }
         )
     {
         return Err(conflict(
@@ -818,7 +822,12 @@ fn reconcile_event(
         ));
     }
     let id = &e.dispatch.obligation_id;
+    // The host may have durably queued observations before it receives the
+    // cancellation control. Acknowledge their original sequence and payload so
+    // cessation can follow, while cancellation retains all responsibility.
+    let audit_only = e.cancel && !matches!(event.event, WorkspaceEvent::Stopped { .. });
     match &event.event {
+        _ if audit_only => {}
         WorkspaceEvent::Started { .. } => {
             if e.dispatch.assignment.review_retained_work.is_some() {
                 return Err(conflict(
@@ -931,7 +940,7 @@ fn reconcile_event(
                 ));
             }
             tx.execute("INSERT INTO workspace_execution_recoveries(execution_id,event_sequence,result_json,provenance_json,recorded_at) VALUES (?1,?2,?3,?4,?5)",
-                params![event.execution_id,event.sequence,encode(result)?,encode(provenance)?,now])?;
+            params![event.execution_id,event.sequence,encode(result)?,encode(provenance)?,now])?;
             reconcile_stopped(
                 tx,
                 &e,

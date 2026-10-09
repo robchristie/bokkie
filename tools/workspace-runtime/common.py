@@ -9,12 +9,12 @@ import json
 import os
 from pathlib import Path
 import re
-import subprocess
 import stat
 import time
 import tomllib
 import unicodedata
 from urllib.parse import urlsplit
+from safe_git import discover
 
 MAX_MESSAGE = 2 * 1024 * 1024
 MAX_EVENTS = 4096
@@ -320,8 +320,7 @@ class Config:
                 reviewer['reasoning_effort']=review_config.get('model_reasoning_effort')
             for repository in p['verification']['repositories']:
                 checkout = canonical(repository['checkout'])
-                common = subprocess.check_output(['git', '-C', checkout, 'rev-parse',
-                         '--path-format=absolute', '--git-common-dir'], text=True).strip()
+                common = discover(checkout,p['git_common_dirs'],checkout)['common']
                 if canonical(common) not in p['git_common_dirs']:
                     raise ValueError('repository Git common directory is not reserved')
                 repository['git_common_dir'] = canonical(common)

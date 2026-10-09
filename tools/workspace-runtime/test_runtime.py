@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -865,6 +866,160 @@ class RetainedReviewTests(unittest.TestCase):
         self.assertEqual(self.queries,[])
         self.assertTrue(read(self.review_root/'cancel.json')['cancel'])
         self.assertEqual(read(self.review_root/'cessation.json')['kind'],'not_started')
+
+
+class SafeGitEarlyTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.base=Path(self.temp.name).resolve();self.repo=self.base/'repo';self.repo.mkdir()
+        self.private=self.base/'private';self.private.mkdir(mode=0o700)
+        self.environment={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','GIT_CONFIG_NOSYSTEM':'1',
+                          'GIT_CONFIG_GLOBAL':'/dev/null','GIT_CONFIG_SYSTEM':'/dev/null','GIT_TERMINAL_PROMPT':'0'}
+        self.git('init','--quiet')
+        (self.repo/'source.txt').write_text('committed source\n')
+        (self.repo/'.gitignore').write_text('/generated/\n')
+        self.git('add','source.txt','.gitignore')
+        self.git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--quiet','-m','Fixture source')
+        self.common=str((self.repo/'.git').resolve())
+        self.profile={'write_roots':[str(self.repo)],'git_common_dirs':[self.common],
+            'verification':{'repositories':[{'repository':'fixture/repo','checkout':str(self.repo),'git_common_dir':self.common}]}}
+
+    def git(self,*args,cwd=None):
+        return subprocess.check_output(['/usr/bin/git','-C',str(cwd or self.repo),*args],env=self.environment,
+            stderr=subprocess.PIPE,timeout=5).decode().strip()
+
+    def observe(self,cwd=None):
+        return source_observation(self.profile,str(cwd or self.repo),self.private,full=True)
+
+    def test_fsmonitor_command_is_never_executed_by_host_observation(self):
+        marker=self.base/'marker';sentinel=self.base/'host-sentinel';sentinel.write_text('private fixture data')
+        helper=self.base/'fsmonitor';helper.write_text('#!/bin/sh\ncat '+str(sentinel)+' > '+str(marker)+'\n')
+        helper.chmod(0o700);self.git('config','core.fsmonitor',str(helper))
+        observation=self.observe()
+        self.assertTrue(observation['available']);self.assertTrue(observation['clean'])
+        self.assertFalse(marker.exists())
+
+    def test_assume_unchanged_cannot_hide_dirty_tracked_source(self):
+        self.git('update-index','--assume-unchanged','source.txt')
+        (self.repo/'source.txt').write_text('changed while index flag claims unchanged\n')
+        observation=self.observe()
+        self.assertTrue(observation['available']);self.assertFalse(observation['clean'])
+
+    def test_real_linked_worktree_has_the_same_clean_commit_identity(self):
+        linked=self.base/'linked';self.git('worktree','add','--quiet','-b','fixture-linked',str(linked))
+        self.profile['write_roots'].append(str(linked))
+        observation=self.observe(linked)
+        self.assertTrue(observation['available']);self.assertTrue(observation['clean'])
+        self.assertEqual(observation['head'],self.git('rev-parse','HEAD'))
+        self.assertEqual(observation['tree'],self.git('rev-parse','HEAD^{tree}'))
+
+    def commit_fixture(self,*paths):
+        self.git('add',*paths)
+        self.git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--quiet','-m','Fixture policy')
+
+    def test_clean_and_process_filters_never_execute_or_hide_changed_bytes(self):
+        (self.repo/'.gitattributes').write_text('source.txt filter=malicious\n')
+        self.commit_fixture('.gitattributes')
+        marker=self.base/'filter-marker';sentinel=self.base/'filter-sentinel';sentinel.write_text('private fixture')
+        helper=self.base/'filter';helper.write_text('#!/bin/sh\ncat '+str(sentinel)+' > '+str(marker)+'\nprintf "committed source\\n"\n')
+        helper.chmod(0o700)
+        self.git('config','filter.malicious.clean',str(helper))
+        self.git('config','filter.malicious.process',str(helper))
+        self.git('config','filter.malicious.required','true')
+        (self.repo/'source.txt').write_text('different raw source\n')
+        observation=self.observe()
+        self.assertTrue(observation['available']);self.assertFalse(observation['clean']);self.assertFalse(marker.exists())
+
+    def test_skip_worktree_and_poisoned_index_do_not_change_raw_tree_evidence(self):
+        self.git('update-index','--skip-worktree','source.txt')
+        (self.repo/'source.txt').write_text('dirty despite skip-worktree\n')
+        self.assertFalse(self.observe()['clean'])
+        (self.repo/'source.txt').write_text('committed source\n')
+        # The task index is neither executed nor used as the candidate identity.
+        (self.repo/'.git/index').write_bytes(b'not a Git index')
+        self.assertTrue(self.observe()['clean'])
+
+    def test_only_verified_committed_ignore_policy_hides_generated_output(self):
+        generated=self.repo/'generated';generated.mkdir();(generated/'large-output').write_text('generated bytes')
+        self.assertTrue(self.observe()['clean'])
+        (self.repo/'unexpected-source.rs').write_text('unexpected source')
+        (self.repo/'.git/info/exclude').write_text('*\n')
+        global_ignore=self.base/'global-ignore';global_ignore.write_text('*\n')
+        self.git('config','core.excludesFile',str(global_ignore))
+        (self.repo/'.gitignore').write_text('*\n')
+        self.assertFalse(self.observe()['clean'])
+        (self.repo/'.gitignore').write_text('/generated/\n')
+        self.assertFalse(self.observe()['clean'])
+
+    def test_config_includes_and_inherited_git_overrides_are_not_consumed(self):
+        marker=self.base/'include-marker';sentinel=self.base/'include-sentinel';sentinel.write_text('private fixture')
+        helper=self.base/'included-hook';helper.write_text('#!/bin/sh\ncat '+str(sentinel)+' > '+str(marker)+'\n');helper.chmod(0o700)
+        included=self.base/'included-config';included.write_text('[core]\nfsmonitor = '+str(helper)+'\n')
+        self.git('config','include.path',str(included))
+        with patch.dict(os.environ,{'GIT_CONFIG_GLOBAL':str(included),'GIT_CONFIG_COUNT':'1',
+                    'GIT_CONFIG_KEY_0':'core.fsmonitor','GIT_CONFIG_VALUE_0':str(helper),'GIT_DIR':str(self.base/'not-repo')}):
+            observation=self.observe()
+        self.assertTrue(observation['clean']);self.assertFalse(marker.exists())
+
+    def test_packed_reference_is_resolved_as_data_and_aliased_head_is_unavailable(self):
+        self.git('pack-refs','--all')
+        self.assertTrue(self.observe()['clean'])
+        sentinel=self.base/'head-sentinel';sentinel.write_text('not a source reference')
+        head=self.repo/'.git/HEAD';head.unlink();head.symlink_to(sentinel)
+        self.assertFalse(self.observe()['available'])
+
+    def test_alternates_reftable_and_unregistered_backlinks_fail_closed(self):
+        alternate=self.repo/'.git/objects/info/alternates';alternate.write_text(str(self.base)+'\n')
+        self.assertFalse(self.observe()['available']);alternate.unlink()
+        reftable=self.repo/'.git/reftable';reftable.mkdir()
+        self.assertFalse(self.observe()['available']);reftable.rmdir()
+        linked=self.base/'linked';self.git('worktree','add','--quiet','-b','fixture-bad-link',str(linked))
+        self.profile['write_roots'].append(str(linked))
+        gitdir=Path((linked/'.git').read_text().strip()[8:]);(gitdir/'gitdir').write_text(str(self.repo/'.git')+'\n')
+        self.assertFalse(self.observe(linked)['available'])
+
+    def test_symlink_target_text_is_compared_without_following_host_sentinel(self):
+        sentinel=self.base/'symlink-sentinel';sentinel.write_text('private fixture bytes')
+        link=self.repo/'link';link.symlink_to(sentinel)
+        self.commit_fixture('link')
+        self.assertTrue(self.observe()['clean'])
+        link.unlink();link.symlink_to(self.base/'different-target')
+        self.assertFalse(self.observe()['clean'])
+
+    def test_source_path_replacement_and_limits_never_publish_partial_clean_proof(self):
+        import safe_git
+        original=safe_git.os.read;done=False
+        def change_during_read(descriptor,count):
+            nonlocal done
+            target=os.readlink('/proc/self/fd/'+str(descriptor))
+            if target==str(self.repo/'source.txt') and not done:
+                done=True;(self.repo/'source.txt').write_text('mutated during read\n')
+            return original(descriptor,count)
+        with patch('safe_git.os.read',side_effect=change_during_read):
+            self.assertFalse(self.observe()['available'])
+        with patch('safe_git.MAX_FILES',0):self.assertFalse(self.observe()['available'])
+        with patch('safe_git.MAX_SECONDS',0):self.assertFalse(self.observe()['available'])
+
+    def test_truncated_or_identity_mismatched_object_is_unavailable(self):
+        import zlib
+        tree=self.git('rev-parse','HEAD^{tree}')
+        path=self.repo/'.git/objects'/tree[:2]/tree[2:]
+        path.chmod(0o600)
+        path.write_bytes(zlib.compress(b'tree 0\0'))
+        self.assertFalse(self.observe()['available'])
+
+    def test_metadata_tier_never_claims_clean_and_leaves_fsmonitor_unexecuted(self):
+        (self.repo/'source.txt').write_text('dirty')
+        observation=source_observation(self.profile,str(self.repo),self.private,full=False)
+        self.assertTrue(observation['available']);self.assertIsNone(observation['clean'])
+        self.assertEqual(observation['capture'],'verified_metadata')
+
+    def test_unsupported_fd_binding_reports_unavailable_without_clean_evidence(self):
+        helper=self.base/'unsupported-bwrap';helper.write_text('#!/bin/sh\nprintf "usage: fixture bubblewrap\\n"\n')
+        helper.chmod(0o700)
+        observation=source_observation(self.profile,str(self.repo),self.private,str(helper),full=True)
+        self.assertFalse(observation['available']);self.assertNotIn('clean',observation)
+        self.assertIn('FD-consuming',observation['detail'])
 
 
 if __name__=='__main__':
