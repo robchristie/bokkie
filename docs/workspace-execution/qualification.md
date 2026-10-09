@@ -17,9 +17,9 @@ The Store has 25 deterministic workspace/recovery/review regressions plus 2
 configuration regressions. They cover replay/conflict and bounded host admission, pinned
 definitions, cross-host and sequential events, questions/answers, lease loss, deadline/cancellation, retained unaccepted results and later verification,
 current recurring schedule and generic-lane exclusion. The canonical backend
-run passed 440 tests, with 2 established ignored qualification tests, plus Python
+run passed 450 tests, with 2 established ignored qualification tests, plus Python
 governance, doctests, Clippy and formatting. Retained local command attribution:
-`/tmp/command-log-3kymo7uv/outcome.json` and its complete output log.
+`/tmp/command-log-mk1szepb/outcome.json` and its complete output log.
 
 The host suite passed 52 zero-model tests, including actual subreaper cleanup,
 immutable dispatch, uncertainty retention, overlapping resources, redirect
@@ -35,7 +35,7 @@ resulting Wasm artefact and separately recorded backend binary digest.
 ## Browser journey
 
 `tools/ui-workspace-journey.mjs` runs the production UI/router with closed model
-and host peers. It passed 24 checks: visible task/review, one dispatch after a
+and host peers. It passed 25 checks: visible task/review, one dispatch after a
 lost acknowledgement, sequential event/question replay, direct editing of the
 same versioned definition, retained original admission, one durable answer,
 browser closure/controller restart, stop intent and cancellation without
@@ -43,7 +43,7 @@ another immediate job. Its mode is explicitly synthetic.
 
 Chromium 151.0.7922.34 used the project's existing Linux/Vulkan WebGPU harness,
 with 1440×1000 desktop and 390×844 narrow viewports. Captures and full report
-remain at `/tmp/bokkie-workspace-probe/ui-accepted/`. Initial captures exposed
+remain at `/tmp/bokkie-workspace-probe/ui-final/`. Initial captures exposed
 a clipped editor action; the save action now sits outside the scrolling fields.
 Later captures wait for rendered state rather than only an API response.
 Opened pixels establish the stated layouts, not other devices or graphics APIs.
@@ -116,6 +116,7 @@ Captures and observations remain in `/tmp/bokkie-workspace-live/`:
 A further controller restart plus host exchange preserved the same completed
 execution, result and three-entry history with no replacement job.
 
-Remaining proof: connector canonical checks and independent review/CI/landing.
+Remaining proof: connector independent review/CI/landing. Canonical backend
+and UI checks passed; their commands and complete logs are attributed above.
 Source readiness does not establish that the Nostromo deployment has enabled
 workspace execution. The full objective remains active in its maintained plan.
