@@ -27,6 +27,30 @@ HEX64 = re.compile(r'[0-9a-f]{64}')
 REPOSITORY = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
 
 
+def digest_contract():
+    """Versioned, self-hash-free instructions for independently recomputing seals."""
+    vector={'format':REPORT_FORMAT,'markdown':'Observed café.\n','source_manifest_digest':'0'*64}
+    return {'format':'evidence-digest-contract-v1',
+        'canonical_json':{'encoding':'UTF-8','object_keys':'sort lexicographically by Unicode code point',
+            'separators':[',',':'],'ensure_ascii':False,'allow_nan':False,'trailing_newline':False,
+            'escaping':'JSON quote, backslash and control-character escaping; non-ASCII characters remain UTF-8; forward slash is not escaped',
+            'reference':'json.dumps(payload,ensure_ascii=False,allow_nan=False,sort_keys=True,separators=(",",":")).encode("utf-8")'},
+        'algorithm':'SHA-256; 64 lowercase hexadecimal characters',
+        'payloads':{
+            'source_id':{'format':SOURCE_FORMAT,'object':'the complete retained sources/<id>.json capsule; no id field is added',
+                'fields':['format','method','execution_id','dispatch_digest','admission_digest','selector','url','observed_at','metadata','bytes','content_digest','content_base64'],
+                'content_digest':'SHA-256 of base64-decoded raw content bytes, without decoding or normalisation',
+                'metadata':'Retain all metadata, including comment author, created_at and updated_at; observed_at is capture time'},
+            'source_manifest_digest':{'format':MANIFEST_FORMAT,'fields':['format','sources'],
+                'source_fields':['id','url','content_digest','bytes','observed_at'],
+                'sources_order':'Preserve the sealed report sources array exactly; do not sort it'},
+            'report_digest':{'format':REPORT_FORMAT,'fields':['format','markdown','source_manifest_digest'],
+                'excluded_fields':['digest','sources'],
+                'markdown':'Exact accepted string; no trimming, line-ending conversion, Unicode normalisation or final newline insertion'}},
+        'test_vector':{'payload':vector,'canonical_utf8':encoded(vector).decode('utf-8'),
+            'sha256':'dad5b5a12887893e2015d49f545024458d407343f42ef9976b1085325d6ef350'}}
+
+
 def selector(value, repositories):
     if not isinstance(value, dict) or value.get('repository') not in repositories:
         raise ValueError('source repository is outside the selected trusted scope')
@@ -238,14 +262,26 @@ class EvidenceStore:
         self.mirror = self.root / 'evidence-mirror'
         if not create:
             return
+        if admission.get('evidence_contract_digest')!=digest(digest_contract()):
+            raise ValueError('report admission does not pin the versioned digest contract')
         for path in (self.store, self.mirror):
             path.mkdir(mode=0o700, exist_ok=True)
         for name in ('captures', 'selectors', 'reports', 'seals'):
             (self.store/name).mkdir(mode=0o700, exist_ok=True)
         (self.mirror/'sources').mkdir(mode=0o700, exist_ok=True)
         (self.mirror/'reports').mkdir(mode=0o700, exist_ok=True)
+        for path in (self.store/'contract.json',self.mirror/'contract.json'):
+            atomic(path,digest_contract(),immutable=True);path.chmod(0o400)
+
+    def contract(self):
+        wanted=digest_contract()
+        if (self.admission.get('evidence_contract_digest')!=digest(wanted) or
+                read(self.store/'contract.json')!=wanted or read(self.mirror/'contract.json')!=wanted):
+            raise ValueError('immutable digest contract differs from admission or read-only mirror')
+        return {'path':'/bokkie-evidence/contract.json','digest':digest(wanted),'format':wanted['format']}
 
     def capture(self, request, *, query=github_get):
+        self.contract()
         selected = selector(request, self.repositories)
         key = digest(selected)
         with locked(self.store/'capture.lock'):
@@ -281,6 +317,7 @@ class EvidenceStore:
             return self.source(identity)
 
     def source(self, identity):
+        self.contract()
         if not isinstance(identity, str) or not HEX64.fullmatch(identity):
             raise ValueError('invalid retained source identity')
         capsule = read(self.store/'captures'/(identity+'.json'))
@@ -302,6 +339,7 @@ class EvidenceStore:
                 'mirror': '/bokkie-evidence/sources/'+identity+'.json'}
 
     def seal(self, markdown, source_ids):
+        contract=self.contract()
         text(markdown, MAX_REPORT_CHARS)
         if (not isinstance(source_ids, list) or not 1 <= len(source_ids) <= MAX_SOURCES or
                 any(not isinstance(value,str) for value in source_ids) or len(set(source_ids)) != len(source_ids)):
@@ -315,7 +353,8 @@ class EvidenceStore:
         provenance=self.store/'seals'/(report['digest']+'.json')
         if not provenance.exists():
             atomic(provenance,{'format':'evidence-report-seal-v1','report_digest':report['digest'],
-                'source_manifest_digest':report['source_manifest_digest'],'completed_at':int(time.time())},immutable=True)
+                'source_manifest_digest':report['source_manifest_digest'],'completed_at':int(time.time()),
+                'contract_digest':contract['digest']},immutable=True)
         self.seal_provenance(report['digest'])
         return report
 
@@ -324,14 +363,16 @@ class EvidenceStore:
             raise ValueError('invalid sealed report identity')
         value=read(self.store/'seals'/(identity+'.json'))
         report=read(self.store/'reports'/(identity+'.json'))
-        if (not isinstance(value,dict) or set(value)!={'format','report_digest','source_manifest_digest','completed_at'} or
+        if (not isinstance(value,dict) or set(value)!={'format','report_digest','source_manifest_digest','completed_at','contract_digest'} or
                 value['format']!='evidence-report-seal-v1' or value['report_digest']!=identity or
                 value['source_manifest_digest']!=report['source_manifest_digest'] or
+                value['contract_digest']!=self.contract()['digest'] or
                 type(value['completed_at']) is not int or value['completed_at']<=0):
             raise ValueError('report seal has no valid immutable completion provenance')
         return value
 
     def report(self, identity):
+        self.contract()
         if not isinstance(identity, str) or not HEX64.fullmatch(identity):
             raise ValueError('invalid sealed report identity')
         report = read(self.store/'reports'/(identity+'.json'))

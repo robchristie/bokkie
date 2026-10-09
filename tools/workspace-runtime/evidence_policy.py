@@ -18,8 +18,7 @@ FORWARDING = ('SSH_AUTH_SOCK', 'SSH_AGENT_PID', 'DBUS_SESSION_BUS_ADDRESS',
               'GH_TOKEN','GITHUB_TOKEN','GH_ENTERPRISE_TOKEN','GITHUB_ENTERPRISE_TOKEN',
               'HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy')
 MASKS = ('/run', '/var/run', '/tmp', '/var/tmp')
-ROOT_PERMISSIONS='bokkie_report_root'
-REVIEW_PERMISSIONS='bokkie_report_reviewer'
+ROOT_PERMISSIONS=REVIEW_PERMISSIONS='bokkie_report_readonly'
 FILE_READ_FEATURES=('view_image','image_generation','computer_use','browser_use','browser_use_external','browser_use_full_cdp_access','in_app_browser')
 RUNTIME_ENV=('PATH','HOME','LANG','LC_ALL','TERM','SSL_CERT_FILE','SSL_CERT_DIR','CODEX_HOME',
              'CODEX_CI','CODEX_MANAGED_BY_NPM','CODEX_MANAGED_PACKAGE_ROOT','CODEX_REMOTE_PAYLOAD',
@@ -34,10 +33,7 @@ def environment(scratch):
 
 
 def policy(profile, reviewer=False):
-    if reviewer:
-        return {'type': 'readOnly', 'networkAccess': False}
-    return {'type': 'workspaceWrite', 'writableRoots': [profile['scratch']], 'networkAccess': False,
-            'excludeSlashTmp': True, 'excludeTmpdirEnvVar': True}
+    return {'type': 'readOnly', 'networkAccess': False}
 
 
 def command_policy(profile,reviewer=False):
@@ -63,10 +59,9 @@ def permission_profiles(admission,profile,home):
     if companion is not None:reads[companion]='read'
     for path in public_ca_paths():reads[path]='read'
     # Never inherit unrestricted filesystem access from the account's profile.
-    root=dict(reads);root[profile['scratch']]='write'
-    review=dict(reads);review[profile['scratch']]='read'
-    return {ROOT_PERMISSIONS:{'description':'Selected report reads and scratch-only writes','filesystem':root,'network':{'enabled':False}},
-            REVIEW_PERMISSIONS:{'description':'Selected immutable report reads','filesystem':review,'network':{'enabled':False}}}
+    reads[profile['scratch']]='read'
+    return {ROOT_PERMISSIONS:{'description':'Selected immutable report reads for root and every child',
+                              'filesystem':reads,'network':{'enabled':False}}}
 
 
 def prepare_task_config(root,inherited,profiles,home,scratch):
@@ -148,15 +143,8 @@ def turn_policy_proof(context, profiles, home, reviewer=False, *, root_sandbox=N
         raise ValueError('actual report turn broadens or changes declared readable roots')
     sandbox=context.get('sandbox_policy')
     expected={'type':'read-only'}
-    if not reviewer:
-        if (not isinstance(root_sandbox,dict) or
-                set(root_sandbox)!={'type','writableRoots','networkAccess','excludeTmpdirEnvVar','excludeSlashTmp'} or
-                root_sandbox['type']!='workspaceWrite' or root_sandbox['networkAccess'] is not False or
-                root_sandbox['writableRoots']!=[key for key,access in profiles[name]['filesystem'].items() if access=='write'] or
-                type(root_sandbox['excludeTmpdirEnvVar']) is not bool or root_sandbox['excludeSlashTmp'] is not True):
-            raise ValueError('actual report root compatibility projection is unavailable or broadens writes')
-        expected={'type':'workspace-write','writable_roots':root_sandbox['writableRoots'],'network_access':False,
-                  'exclude_tmpdir_env_var':root_sandbox['excludeTmpdirEnvVar'],'exclude_slash_tmp':True}
+    if not reviewer and root_sandbox!={'type':'readOnly','networkAccess':False}:
+        raise ValueError('actual report root compatibility projection is unavailable or broadens writes')
     if sandbox!=expected:raise ValueError('actual report turn compatibility policy conflicts with restricted profile')
     return {'profile':name,'profiles_sha256':digest(profiles),'runtime_read_exceptions':exceptions}
 
@@ -615,7 +603,7 @@ print(json.dumps(result,sort_keys=True))
                 if value.get('exitCode') != 0:
                     raise ValueError('no-model report policy command did not execute')
                 observed = json.loads(value['stdout'])
-                wanted = {'scratch': not reviewer, 'product': False, 'git': False, 'mirror': False,
+                wanted = {'scratch': False, 'product': False, 'git': False, 'mirror': False,
                           'tmp':False, 'unix': False, 'visible_unix':False, 'tcp': False, 'forwarding': False}
                 if observed != wanted:
                     raise ValueError('no-model evidence policy failed: '+json.dumps(observed, sort_keys=True))

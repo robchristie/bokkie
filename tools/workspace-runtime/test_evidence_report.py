@@ -18,7 +18,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parent))
 from broker import Broker, tools, cli_component, STARTUP_STDERR_BYTES
 from common import Config, atomic, checkpoint_bounds, digest, encoded, read, result_bounds
-from evidence_report import EvidenceStore, NoRedirect, bounded_process, captured_content, endpoint, github_get, _github_get, selector
+from evidence_report import EvidenceStore, NoRedirect, bounded_process, captured_content, endpoint, github_get, _github_get, selector, digest_contract
 from evidence_policy import derived_roles, environment, mounts, policy, closed_mcp_inventory, routing_proof, public_ca_paths, code_mode_host_path, companion_readiness, reviewer_selection_proof, permission_profiles, prepare_task_config, profile_proof, file_feature_proof, turn_policy_proof, retain_turn_policy, FILE_READ_FEATURES, ROOT_PERMISSIONS, REVIEW_PERMISSIONS
 from verification import verify
 
@@ -45,7 +45,7 @@ class EvidenceReportTests(unittest.TestCase):
             'limits':self.profile['limits']}}
         self.admission = {'dispatch':self.dispatch,'dispatch_digest':digest(self.dispatch),
             'project_profile':self.profile,'deadline':time.time()+60,'registry':str(self.base/'registry'),
-            'codex':str(Path('/usr/bin/true').resolve())}
+            'codex':str(Path('/usr/bin/true').resolve()),'evidence_contract_digest':digest(digest_contract())}
         atomic(self.root/'admission.json',self.admission)
         self.store = EvidenceStore(self.root,self.admission)
         self.selected = {'kind':'repository_file','repository':'owner/repo','commit':'a'*40,'path':'docs/receipt.md'}
@@ -77,8 +77,7 @@ class EvidenceReportTests(unittest.TestCase):
         context={'turn_id':turn_id,'root_turn_id':turn_id,'approval_policy':'never','approvals_reviewer':'user',
             'permission_profile':{'type':'managed','file_system':{'type':'restricted','entries':entries},'network':'restricted'},
             'file_system_sandbox_policy':{'kind':'restricted','entries':entries},
-            'sandbox_policy':{'type':'read-only'} if reviewer else {'type':'workspace-write','writable_roots':[str(self.scratch)],
-                'network_access':False,'exclude_tmpdir_env_var':True,'exclude_slash_tmp':True},
+            'sandbox_policy':{'type':'read-only'},
             'model':'review-model' if reviewer else 'implementation-model','effort':'high' if reviewer else 'medium'}
         metadata={'id':thread_id,'cli_version':'0.160.1'}
         if reviewer:metadata.update(parent_thread_id='root',agent_role='evidence_reviewer',
@@ -87,8 +86,7 @@ class EvidenceReportTests(unittest.TestCase):
         path.write_text(json.dumps({'type':'session_meta','payload':metadata})+'\n'+json.dumps({'type':'turn_context','payload':context})+'\n')
         thread={'id':thread_id,'path':str(home/'sessions'/path.name),'parentThreadId':'root' if reviewer else None,
             'agentRole':'evidence_reviewer' if reviewer else None,'model':context['model'],'reasoningEffort':context['effort'],
-            'sandbox':{'type':'workspaceWrite','writableRoots':[str(self.scratch)],'networkAccess':False,
-                       'excludeTmpdirEnvVar':True,'excludeSlashTmp':True}}
+            'sandbox':{'type':'readOnly','networkAccess':False}}
         return {'kind':'report_turn_policy','value':retain_turn_policy(self.root,thread,turn_id,profiles,home,reviewer)}
 
     def records(self, report):
@@ -101,8 +99,7 @@ class EvidenceReportTests(unittest.TestCase):
             {'kind':'reviewer_profile','value':self.profile['reviewer']},
             {'kind':'thread_identity','value':{'thread_id':'root','settings':{'model':'implementation-model',
                 'reasoningEffort':'medium','activePermissionProfile':{'id':ROOT_PERMISSIONS,'extends':None},
-                'sandbox':{'type':'workspaceWrite','writableRoots':[str(self.scratch)],'networkAccess':False,
-                    'excludeTmpdirEnvVar':True,'excludeSlashTmp':True}}}},
+                'sandbox':{'type':'readOnly','networkAccess':False}}}},
             {'kind':'evidence_report_sealed','value':{'digest':report['digest'],'source_manifest_digest':report['source_manifest_digest'],'completed_at':completed_at}},
             {'kind':'protocol_event','value':{'method':'item/started','params':{'threadId':'root','startedAtMs':(completed_at+1)*1000,'item':{'type':'subAgentActivity','kind':'started','agentThreadId':'review-child'}}}},
             {'kind':'protocol_event','value':{'method':'turn/completed','params':{'threadId':'root','turn':{'id':'root-turn','status':'completed'}}}},
@@ -150,6 +147,7 @@ class EvidenceReportTests(unittest.TestCase):
                         admitted_at=int(time.time()),deadline_at=int(time.time())+60)
         dispatch['assignment'].update(project={'id':'project','revision':1,'registration':{'host':'dev','workspace':str(self.workspace)}},permitted_actions=['inspect'])
         original=configured.admit(dispatch);saved=read(original/'admission.json')
+        self.assertEqual(saved['evidence_contract_digest'],digest(digest_contract()))
         configured.projects['project']['limits']['max_tokens']=16000000
         self.assertEqual(read(configured.admit(dispatch)/'admission.json'),saved)
         for mutation in ({'result_contract':'engineering_delivery'}, {'repository_scope':['other/repo']}, {'permitted_actions':['ordinary_code_delivery']}):
@@ -164,6 +162,33 @@ class EvidenceReportTests(unittest.TestCase):
         for mutation in mutations:
             with self.subTest(mutation=mutation),self.assertRaises(ValueError):
                 selector(self.selected|mutation,['owner/repo'])
+
+    def test_digest_contract_is_admission_pinned_immutable_and_bound_to_first_seal(self):
+        contract=digest_contract();expected='dad5b5a12887893e2015d49f545024458d407343f42ef9976b1085325d6ef350'
+        self.assertEqual(contract['test_vector']['sha256'],expected)
+        self.assertEqual(digest(contract['test_vector']['payload']),expected)
+        self.assertEqual(encoded(contract['test_vector']['payload']).decode(),contract['test_vector']['canonical_utf8'])
+        self.assertIn('café',contract['test_vector']['canonical_utf8']);self.assertFalse(contract['test_vector']['canonical_utf8'].endswith('\n'))
+        self.assertEqual(read(self.store.mirror/'contract.json'),contract)
+        report=self.sealed();provenance=self.store.seal_provenance(report['digest'])
+        self.assertEqual(provenance['contract_digest'],self.admission['evidence_contract_digest'])
+        self.store.seal(report['markdown'],[report['sources'][0]['id']])
+        self.assertEqual(provenance,self.store.seal_provenance(report['digest']))
+        records=self.records(report)
+        invalid=self.admission|{'evidence_contract_digest':'0'*64}
+        with self.assertRaisesRegex(ValueError,'admission'):EvidenceStore(self.base/'invalid',invalid)
+        mirror=self.store.mirror/'contract.json';mirror.chmod(0o600);atomic(mirror,contract|{'algorithm':'untrusted alternative'})
+        calls=[]
+        with self.assertRaisesRegex(ValueError,'contract'):self.store.capture(self.selected,query=lambda *_:calls.append(True))
+        self.assertEqual(calls,[])
+        self.assertFalse(verify(self.admission,self.result(report),records,root=self.root)['passed'])
+        atomic(mirror,contract);mirror.chmod(0o400)
+
+    def test_untrusted_source_content_cannot_replace_digest_contract(self):
+        before=self.store.contract()
+        self.store.capture(self.selected,query=lambda *_:self.response(b'{"format":"untrusted-contract"}'))
+        self.assertEqual(self.store.contract(),before)
+        self.assertEqual(read(self.store.mirror/'contract.json'),digest_contract())
 
     def test_repository_content_requires_regular_selected_entry_and_exact_blob(self):
         for mutation in ({'type':'symlink'}, {'type':'dir'}, {'encoding':'none'}, {'path':'other.md'},
@@ -331,16 +356,17 @@ class EvidenceReportTests(unittest.TestCase):
             if change!='different-projection':context['file_system_sandbox_policy']['entries']=copy.deepcopy(entries)
             with self.subTest(change=change),self.assertRaises(ValueError):turn_policy_proof(context,profiles,home,True)
 
-    def test_root_turn_projection_binds_supported_metadata_with_scratch_tmpdir(self):
+    def test_root_turn_projection_must_remain_readonly_with_every_child(self):
         home=self.base/'codex-home';profiles=permission_profiles(self.admission,self.profile,home)
         record=self.policy_record('root','root-turn',profiles,home)
         context=copy.deepcopy(record['value']['context']);projection=copy.deepcopy(record['value']['root_sandbox'])
-        projection['excludeTmpdirEnvVar']=False;context['sandbox_policy']['exclude_tmpdir_env_var']=False
         self.assertEqual(turn_policy_proof(context,profiles,home,root_sandbox=projection)['profile'],ROOT_PERMISSIONS)
         with self.assertRaises(ValueError):turn_policy_proof(context,profiles,home)
-        with self.assertRaises(ValueError):turn_policy_proof(context,profiles,home,root_sandbox=record['value']['root_sandbox'])
-        projection['writableRoots'].append(str(self.workspace))
+        projection={'type':'workspaceWrite','writableRoots':[str(self.scratch)],'networkAccess':False,
+            'excludeTmpdirEnvVar':False,'excludeSlashTmp':True}
         with self.assertRaises(ValueError):turn_policy_proof(context,profiles,home,root_sandbox=projection)
+        context['sandbox_policy']={'type':'workspace-write','writable_roots':[str(self.scratch)],'network_access':False}
+        with self.assertRaises(ValueError):turn_policy_proof(context,profiles,home,True)
 
     def test_report_submission_uses_only_host_seal_and_root_checkpoint_is_nonterminal(self):
         report=self.sealed();broker=Broker(self.root);broker.thread='root';sent=[];broker.send=sent.append
@@ -455,8 +481,8 @@ print(json.dumps(values,sort_keys=True))
             calls.append((method,params));return {'exitCode':0,'stdout':json.dumps(observed),'stderr':''}
         broker.rpc=rpc;proofs=companion_readiness(broker)
         self.assertEqual(len(proofs),2);self.assertTrue(proofs[1]['reviewer'])
-        self.assertEqual(calls[0][1]['permissionProfile'],'bokkie_report_root')
-        self.assertEqual(calls[1][1]['permissionProfile'],'bokkie_report_reviewer')
+        self.assertEqual(calls[0][1]['permissionProfile'],ROOT_PERMISSIONS)
+        self.assertEqual(calls[1][1]['permissionProfile'],ROOT_PERMISSIONS)
         self.assertEqual(calls[0][1]['command'][-1],str(companion))
         self.assertIn("'enabled_tools':[]",calls[0][1]['command'][2])
         broker.rpc=lambda *_:{'exitCode':1,'stdout':'','stderr':'synthetic failure'}
@@ -490,6 +516,8 @@ print(json.dumps(values,sort_keys=True))
         broker.request({'id':1,'method':'item/tool/call','params':{'threadId':'root','namespace':'bokkie_workspace',
             'tool':'seal_report','arguments':{'markdown':report['markdown'],'source_ids':[source['id'] for source in report['sources']]}}})
         reply=json.loads(sent[-1]['result']['contentItems'][0]['text'])
+        self.assertEqual(reply['digest_contract']['path'],'/bokkie-evidence/contract.json')
+        self.assertEqual(reply['digest_contract']['digest'],self.admission['evidence_contract_digest'])
         self.assertEqual(reply['review']['agent_type'],'evidence_reviewer')
         self.assertEqual(reply['review']['fork_turns'],'none')
         self.assertNotEqual(reply['review']['task_name'],reply['review']['agent_type'])
@@ -510,7 +538,7 @@ print(json.dumps(values,sort_keys=True))
         self.assertNotIn('SYNTHETIC_SECRET',generated['shell_environment_policy']['set'])
         self.assertNotIn(str(home/'auth.json'),profiles[ROOT_PERMISSIONS]['filesystem'])
         self.assertNotIn(str(home/'config.toml'),profiles[ROOT_PERMISSIONS]['filesystem'])
-        self.assertEqual(profiles[ROOT_PERMISSIONS]['filesystem'][str(self.scratch)],'write')
+        self.assertEqual(profiles[ROOT_PERMISSIONS]['filesystem'][str(self.scratch)],'read')
         self.assertEqual(profiles[REVIEW_PERMISSIONS]['filesystem'][str(self.scratch)],'read')
         self.assertEqual(profiles[ROOT_PERMISSIONS]['filesystem']['/tmp'],'read')
         effective=copy.deepcopy(generated)

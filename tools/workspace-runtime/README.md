@@ -392,7 +392,7 @@ A repair creates another identity and needs another review.
 
 Derive a separately named `evidence_reviewer` role from the existing independent
 reviewer profile, retaining its flagship model, high effort and review instructions.
-The worker selects its private `bokkie_report_reviewer` permission profile,
+The worker selects its private `bokkie_report_readonly` permission profile,
 `approval_policy = "never"` and `approvals_reviewer = "user"`.
 The worker derives closed task-local copies of every configured child role,
 retaining model, effort and instructions while disabling network, escalation,
@@ -426,9 +426,10 @@ remaining tokens and remaining wall time. New profile/definition limits may sele
 up to 16 million tokens; previously saved admissions retain their exact limits.
 
 Before any model turn, the worker qualifies its actual root and reviewer command
-sandboxes. Named `bokkie_report_root` and `bokkie_report_reviewer` profiles allow
-only selected readable roots, with scratch writing restricted to the root,
-task network disabled and `never`/`user` approvals. Explicit thread/turn
+sandboxes. One named `bokkie_report_readonly` profile allows only selected readable
+roots, denies native scratch writes for the root and every child, disables task
+network and uses `never`/`user` approvals. The host-owned capture, seal and checkpoint
+tools retain their bounded private writes. Explicit thread/turn
 `permissions` and command `permissionProfile` selectors use these supported
 installed interfaces. The compatibility `workspaceWrite`/`readOnly` projection
 does not establish confidentiality. A shallow read-only mount view preserves the actual workspace
@@ -443,18 +444,18 @@ inherit no ambient environment and receive only fixed public tool variables.
 
 Account authentication remains read-only in its approved store for the enclosing
 inference client. A task-private configuration snapshot replaces legacy sandbox
-selectors from the account configuration with the two closed named profiles;
+selectors from the account configuration with the one closed named profile;
 global configuration and credentials remain untouched. Effective configuration,
 registered reviewer tuning and private configuration digests are checked before
-inference. Both task profiles must deny opening account authentication,
+inference. Both root and reviewer command contexts must deny opening account authentication,
 configuration and private runtime files, a synthetic secret, scratch/proc aliases
 to authentication, and an injected synthetic secret environment variable.
 Host open/close controls establish that the protected files exist; actual
 authentication bytes and hashes are neither read nor retained by these probes.
 Exact personal/workspace guidance, scratch and immutable mirror reads must work.
 
-The no-model preflight requires successful scratch writing by the root, denied
-scratch writing by the reviewer, denied product/Git/mirror/`/tmp` writes, and denied
+The no-model preflight requires denied scratch writing by the root and reviewer,
+denied product/Git/mirror/`/tmp` writes, and denied
 TCP, masked Unix-socket and visible scratch Unix-socket connections. Host-side
 positive controls prove those sockets are reachable before testing denial. A
 failed or unsupported probe blocks the model turn; reported configuration alone
@@ -462,18 +463,29 @@ never establishes confinement. Inference network access by the enclosing
 app-server remains separate from the task-tool sandbox.
 
 Known installed feature inventory must attest that native image, browser and
-computer tools are disabled. A bounded installed-0.160.1 synthetic-home cohort
-also exercised the emitted native tool catalogue and patch handler through a
-local scripted Responses provider: eight scripted requests, zero OpenAI inference,
-account or source requests. Its native `functions.exec` catalogue omitted
-context-free operator `fs/readFile` and `thread/shellCommand` APIs. Protected-file
-update/move and out-of-scope creation failed under both profiles; root scratch
-patching succeeded and reviewer scratch patching failed. An outer-boundary
-positive control could open the protected synthetic file, but no sentinel reached
-tool replies or subsequent mock requests. This qualifies the native enforcement
-path for this runtime and policy; it is separate from live-report acceptance and
-is not repeated for every reviewer. Unknown runtime/tool paths remain unavailable
-proof rather than inheriting assurance from shell probes.
+computer tools are disabled. The installed-0.160.1 synthetic-home native-handler
+cohort established that `functions.exec` omits context-free operator `fs/readFile`
+and `thread/shellCommand`, and that protected patch reads/moves and out-of-scope
+creation are denied without sentinel leakage. A subsequent bounded cohort used
+the same local scripted Responses route to spawn an actual named Astra/high child:
+seven scripted requests, zero OpenAI inference, account or source GETs. Original
+parent/child policy records both matched the one fully read-only profile. Native
+parent and child commands denied scratch/product/Git writes, read guidance,
+contract and mirror, and recomputed capsule/manifest/report identities. The child
+completed and the trusted outside subreaper observed `waitpid ECHILD`. The harness
+omitted the synthetic final message's phase and retained that construction
+failure; reconciliation uses the actual completed child turn and original policy
+records, with no report-review verdict claimed or repeat spawn. These cohorts
+qualify concrete native enforcement paths and remain separate from live-report
+acceptance; they are not prescribed for every review. Unknown runtime/tool paths
+remain unavailable proof rather than inheriting assurance from shell probes.
+
+The fully read-only root is deliberate: actual 0.160.1 named children inherited
+their parent's filesystem permission profile despite a narrower role-file
+`default_permissions`. The verifier rejected that actual scratch-writable reviewer.
+Starting the parent under the same read-only profile makes inherited child policy
+safe, while protected named role files continue to own model and effort. Ordinary
+engineering delivery keeps its existing writable workspace policy and checks.
 
 Each completed actual root/reviewer turn additionally requires original protected
 0.160.1 `session_meta` and `turn_context` records. This version-specific ancillary
@@ -484,6 +496,19 @@ directory may augment declared roots. The task cannot edit these records, and
 verification rereads them; absent, conflicting or broadened policy fails closed.
 Supported app-server events and `thread/read` still own lifecycle and final-answer
 evidence. A model statement cannot establish its own policy.
+
+Every new report admission pins the digest of an immutable
+`evidence-digest-contract-v1` object before external effects. The host retains it
+in private evidence state and at `/bokkie-evidence/contract.json`, and binds its
+identity into first-seal provenance. Developer and seal-tool guidance point both
+agents to this versioned object; a product checkout need not contain the report
+schema. It defines sorted compact UTF-8 JSON, separators and escaping, no trailing
+newline, exact report and manifest payload fields, preserved source array order,
+complete source-capsule hashing versus raw decoded content hashing, and exact
+Markdown without hidden normalisation. Its fixed Unicode/newline vector exercises
+the encoding. The contract contains no self-hash; admission and seal bind its
+externally computed digest. A changed contract or mirror blocks source effects
+and report verification. Untrusted source bytes cannot replace it.
 
 Before preparing a report turn, the host also calls the supported `account/read`
 with `refreshToken: false`. A ChatGPT account must return valid workspace routing

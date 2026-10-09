@@ -442,13 +442,17 @@ class Config:
         (root / 'requests').mkdir(mode=0o700)
         (root / 'answers').mkdir(mode=0o700)
         (root / 'agent-state').mkdir(mode=0o700)
+        report_contract={}
+        if contract=='evidence_report':
+            from evidence_report import digest_contract
+            report_contract={'evidence_contract_digest':digest(digest_contract())}
         atomic(root / 'admission.json', {'dispatch':dispatch, 'dispatch_digest':digest(dispatch),
                'project_profile':p, 'admitted_at':dispatch['admitted_at'], 'deadline':dispatch['deadline_at'],
                'codex':self.value['codex'], 'bwrap':self.value['bwrap'],
                'runtime_root':str(self.root), 'registry':str(self.registry),
                'host_id':self.value['host_id'],
                'token_file':self.token_file, 'config_file':self.path,
-               'edge_authorization_file':self.value.get('edge_authorization_file')}, immutable=True)
+               'edge_authorization_file':self.value.get('edge_authorization_file'),**report_contract}, immutable=True)
         return root
 
 
