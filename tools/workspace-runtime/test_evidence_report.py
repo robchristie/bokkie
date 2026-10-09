@@ -70,16 +70,17 @@ class EvidenceReportTests(unittest.TestCase):
                 'deliveries':[],'limitations':[],'report':report}
 
     def records(self, report):
+        completed_at=self.store.seal_provenance(report['digest'])['completed_at']
         qualification = {'model_calls':0,'observations':[]}
         atomic(self.root/'evidence-policy.json',qualification)
         return [
             {'kind':'evidence_policy_qualified','value':qualification},
             {'kind':'reviewer_profile','value':self.profile['reviewer']},
             {'kind':'thread_identity','value':{'thread_id':'root'}},
-            {'kind':'evidence_report_sealed','value':{'digest':report['digest'],'source_manifest_digest':report['source_manifest_digest']}},
-            {'kind':'protocol_event','value':{'method':'item/completed','params':{'threadId':'root','item':{'type':'subAgentActivity','agentThreadId':'review-child'}}}},
+            {'kind':'evidence_report_sealed','value':{'digest':report['digest'],'source_manifest_digest':report['source_manifest_digest'],'completed_at':completed_at}},
+            {'kind':'protocol_event','value':{'method':'item/started','params':{'threadId':'root','startedAtMs':(completed_at+1)*1000,'item':{'type':'subAgentActivity','kind':'started','agentThreadId':'review-child'}}}},
             {'kind':'child_thread_read','value':{'child_id':'review-child','include_turns':True,'thread':{
-                'id':'review-child','parentThreadId':'root','agentRole':'evidence_reviewer','model':'review-model',
+                'id':'review-child','createdAt':completed_at+1,'parentThreadId':'root','agentRole':'evidence_reviewer','model':'review-model',
                 'reasoningEffort':'high','turns':[{'id':'review-turn','status':'completed','items':[
                     {'type':'agentMessage','phase':'final_answer','text':'Verdict: PASS\nReviewed report: '+report['digest']+'\nReviewed sources: '+report['source_manifest_digest']}]}]}}}]
 
@@ -193,6 +194,29 @@ class EvidenceReportTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.store.seal('x',[report['sources'][0]['id']]*2)
         with self.assertRaises(ValueError):self.store.seal('x',['f'*64])
 
+    def test_report_reseal_preserves_original_immutable_completion_second(self):
+        source=self.captured()['source']['id']
+        with patch('evidence_report.time.time',return_value=1000.4):report=self.store.seal('Bound report.',[source])
+        original=self.store.seal_provenance(report['digest'])
+        with patch('evidence_report.time.time',return_value=2000.7):self.store.seal('Bound report.',[source])
+        self.assertEqual(self.store.seal_provenance(report['digest']),original)
+        self.assertEqual(original['completed_at'],1000)
+        self.assertEqual(original['report_digest'],report['digest'])
+        self.assertEqual(original['source_manifest_digest'],report['source_manifest_digest'])
+
+    def test_seal_reply_wait_is_bounded_cancellable_and_consumes_no_inference(self):
+        broker=Broker(self.root);clock=[1000.8]
+        broker.admission['deadline']=1100
+        def advance(seconds):clock[0]+=seconds
+        with patch('broker.time.time',side_effect=lambda:clock[0]),patch('broker.time.monotonic',side_effect=lambda:clock[0]),patch('broker.time.sleep',side_effect=advance):
+            broker.wait_review_window(1000)
+        self.assertAlmostEqual(clock[0],1001)
+        atomic(self.root/'cancel.json',{'cancel':True})
+        with self.assertRaises(InterruptedError):broker.wait_review_window(1000)
+        (self.root/'cancel.json').unlink()
+        with patch('broker.time.time',return_value=999.0),self.assertRaisesRegex(ValueError,'bounded window'):broker.wait_review_window(1000)
+        self.assertEqual(broker.tokens,{})
+
     def test_report_capsule_and_mirror_tampering_never_qualify(self):
         report=self.sealed();records=self.records(report)
         self.assertTrue(verify(self.admission,self.result(report),records,root=self.root)['passed'])
@@ -206,7 +230,7 @@ class EvidenceReportTests(unittest.TestCase):
     def test_independent_completed_post_seal_child_is_required_for_both_digests(self):
         report=self.sealed();baseline=self.records(report)
         self.assertTrue(verify(self.admission,self.result(report),baseline,root=self.root)['passed'])
-        changes=['parent','role','model','effort','unfinished','root','wrong-report','wrong-sources','quoted','duplicate','pre-seal','no-profile','no-policy','no-root']
+        changes=['parent','role','model','effort','unfinished','root','wrong-report','wrong-sources','quoted','duplicate','pre-seal','no-profile','no-policy','no-root','late-old-child','same-second','no-creation','no-start-time','wrong-start-kind','wrong-seal-time']
         for change in changes:
             records=copy.deepcopy(baseline);thread=records[-1]['value']['thread'];turn=thread['turns'][0];item=turn['items'][0]
             if change=='parent':thread['parentThreadId']='other'
@@ -222,6 +246,12 @@ class EvidenceReportTests(unittest.TestCase):
             elif change=='pre-seal':records.insert(0,copy.deepcopy(records[4]))
             elif change=='no-profile':records.pop(1)
             elif change=='no-policy':records.pop(0)
+            elif change=='late-old-child':thread['createdAt']=records[3]['value']['completed_at']-1
+            elif change=='same-second':thread['createdAt']=records[3]['value']['completed_at']
+            elif change=='no-creation':thread.pop('createdAt')
+            elif change=='no-start-time':records[4]['value']['params'].pop('startedAtMs')
+            elif change=='wrong-start-kind':records[4]['value']['params']['item']['kind']='interacted'
+            elif change=='wrong-seal-time':records[3]['value']['completed_at']+=1
             with self.subTest(change=change):
                 self.assertFalse(verify(self.admission,self.result(report),records,root=None if change=='no-root' else self.root)['passed'])
 

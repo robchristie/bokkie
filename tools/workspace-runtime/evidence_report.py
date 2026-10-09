@@ -240,7 +240,7 @@ class EvidenceStore:
             return
         for path in (self.store, self.mirror):
             path.mkdir(mode=0o700, exist_ok=True)
-        for name in ('captures', 'selectors', 'reports'):
+        for name in ('captures', 'selectors', 'reports', 'seals'):
             (self.store/name).mkdir(mode=0o700, exist_ok=True)
         (self.mirror/'sources').mkdir(mode=0o700, exist_ok=True)
         (self.mirror/'reports').mkdir(mode=0o700, exist_ok=True)
@@ -312,7 +312,24 @@ class EvidenceStore:
         report = {**body, 'digest': digest(body), 'sources': sources}
         atomic(self.store/'reports'/(report['digest']+'.json'), report, immutable=True)
         atomic(self.mirror/'reports'/(report['digest']+'.json'), report, immutable=True)
+        provenance=self.store/'seals'/(report['digest']+'.json')
+        if not provenance.exists():
+            atomic(provenance,{'format':'evidence-report-seal-v1','report_digest':report['digest'],
+                'source_manifest_digest':report['source_manifest_digest'],'completed_at':int(time.time())},immutable=True)
+        self.seal_provenance(report['digest'])
         return report
+
+    def seal_provenance(self, identity):
+        if not isinstance(identity,str) or not HEX64.fullmatch(identity):
+            raise ValueError('invalid sealed report identity')
+        value=read(self.store/'seals'/(identity+'.json'))
+        report=read(self.store/'reports'/(identity+'.json'))
+        if (not isinstance(value,dict) or set(value)!={'format','report_digest','source_manifest_digest','completed_at'} or
+                value['format']!='evidence-report-seal-v1' or value['report_digest']!=identity or
+                value['source_manifest_digest']!=report['source_manifest_digest'] or
+                type(value['completed_at']) is not int or value['completed_at']<=0):
+            raise ValueError('report seal has no valid immutable completion provenance')
+        return value
 
     def report(self, identity):
         if not isinstance(identity, str) or not HEX64.fullmatch(identity):

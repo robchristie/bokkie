@@ -247,12 +247,13 @@ def verify(admission, result, records, *, query=github, deadline=None, root=None
         return {'passed':False,'evidence':evidence+[str(error)[:1024]]}
 
 
-def report_review_observation(records, root_thread, report, sealed_index, configured):
+def report_review_observation(records, root_thread, report, sealed_index, completed_at, configured):
     """Only actual post-seal reviewer descendants' completed final turns qualify."""
     if (configured.get('role') != 'evidence_reviewer' or not configured.get('model') or
             not configured.get('reasoning_effort')):
         return None
     children = {}
+    starts = {}
     snapshots = {}
     for index, record in enumerate(records):
         value = record['value']
@@ -262,6 +263,8 @@ def report_review_observation(records, root_thread, report, sealed_index, config
             if (params.get('threadId') == root_thread and item.get('type') == 'subAgentActivity' and
                     item.get('agentThreadId') and item['agentThreadId'] != root_thread):
                 children.setdefault(item['agentThreadId'],index)
+                if value.get('method')=='item/started' and item.get('kind')=='started':
+                    starts.setdefault(item['agentThreadId'],(index,params.get('startedAtMs')))
         elif record['kind'] == 'child_thread_read':
             thread = value.get('thread', {})
             if (value.get('include_turns') is True and thread.get('id') == value.get('child_id') and
@@ -272,7 +275,13 @@ def report_review_observation(records, root_thread, report, sealed_index, config
     latest = {}
     for child, first_index in children.items():
         if first_index<=sealed_index:continue
-        for turn in snapshots.get(child, {}).get('turns', []):
+        started=starts.get(child)
+        thread=snapshots.get(child,{})
+        created_at=thread.get('createdAt')
+        if (started is None or started[0]<=sealed_index or type(started[1]) is not int or
+                started[1]<(completed_at+1)*1000 or type(created_at) is not int or created_at<=completed_at):
+            continue
+        for turn in thread.get('turns', []):
             if turn.get('status') != 'completed' or not turn.get('id'):
                 continue
             answers = [item.get('text', '') for item in turn.get('items', []) if
@@ -309,19 +318,22 @@ def verify_report(admission, result, records, root):
     from common import read
     if policy is None or read(Path(root)/'evidence-policy.json') != policy or policy.get('model_calls') != 0:
         raise ValueError('No attributable no-model report policy qualification')
-    report = EvidenceStore(root, admission, create=False).report(result['report']['digest'])
+    store=EvidenceStore(root,admission,create=False)
+    report = store.report(result['report']['digest'])
+    provenance=store.seal_provenance(report['digest'])
     if report != result['report']:
         raise ValueError('Submitted report differs from the immutable host seal')
     sealed_index = next((index for index, record in enumerate(records) if
                          record['kind'] == 'evidence_report_sealed' and record['value'].get('digest') == report['digest'] and
-                         record['value'].get('source_manifest_digest') == report['source_manifest_digest']), None)
+                         record['value'].get('source_manifest_digest') == report['source_manifest_digest'] and
+                         record['value'].get('completed_at')==provenance['completed_at']), None)
     if sealed_index is None:
         raise ValueError('Sealed report has no runtime seal observation')
     thread = next((r['value']['thread_id'] for r in records if r['kind'] == 'thread_identity'), None)
     configured = next((r['value'] for r in records if r['kind'] == 'reviewer_profile'), {})
     if configured != admission['project_profile'].get('reviewer'):
         raise ValueError('Independent reviewer does not match admitted profile')
-    observation = report_review_observation(records, thread, report, sealed_index, configured)
+    observation = report_review_observation(records, thread, report, sealed_index, provenance['completed_at'], configured)
     if observation is None:
         raise ValueError('No independent completed child review of both sealed report and sources')
     return ['Host recomputed sealed report '+report['digest'],

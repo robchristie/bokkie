@@ -587,7 +587,10 @@ class Broker:
             try:
                 if set(args)!={'markdown','source_ids'}:raise ValueError('seal requires markdown and captured source IDs')
                 report=self.evidence.seal(args['markdown'],args['source_ids'])
-                self.journal.record('evidence_report_sealed',{'digest':report['digest'],'source_manifest_digest':report['source_manifest_digest']})
+                provenance=self.evidence.seal_provenance(report['digest'])
+                self.journal.record('evidence_report_sealed',{'digest':report['digest'],
+                    'source_manifest_digest':report['source_manifest_digest'],'completed_at':provenance['completed_at']})
+                self.wait_review_window(provenance['completed_at'])
                 self.reply(key,request,{'report_id':report['digest'],'source_manifest_digest':report['source_manifest_digest'],
                     'mirror':'/bokkie-evidence/reports/'+report['digest']+'.json',
                     'review':'Commission an independent evidence_reviewer child after this seal; bind its final verdict to both digests.'})
@@ -632,6 +635,23 @@ class Broker:
             self.reply(key,request,{'retained':True,'acceptance':'pending trusted delivery verification'})
         else:
             self.reply(key,request,{'error':'Unoffered task tool'},success=False)
+
+    def wait_review_window(self,completed_at):
+        # Thread creation is reported in whole seconds. Hold only the tool reply
+        # until the next second, without another model turn or campaign wake-up.
+        ready_at=completed_at+1
+        end=time.monotonic()+1
+        while True:
+            if self.stopping or (self.root/'cancel.json').exists():
+                raise InterruptedError('Cancellation requested before the review window')
+            now=time.time()
+            if now>=self.admission['deadline']:
+                raise TimeoutError('Admitted deadline exhausted before the review window')
+            remaining=ready_at-now
+            if remaining<=0:return
+            if remaining>1 or time.monotonic()>=end:
+                raise ValueError('Seal review clock is outside its bounded window')
+            time.sleep(min(.02,remaining))
 
     def deliver_answers(self):
         for key,request in list(self.pending.items()):

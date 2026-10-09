@@ -477,3 +477,16 @@ reviewer command policies, and the runtime retains its result and the companion'
 SHA-256 identity. Existing task write, network and socket denials are checked
 after this asset is mounted. A direct shell command preflight alone did not
 previously exercise this native tool-runtime dependency.
+
+Each newly sealed report also retains a host-private immutable completion record
+bound to its report and source-manifest digests. Re-sealing identical bytes reuses
+that original record. The host holds the seal tool reply only until the next
+whole second, within the existing cancellation/deadline bounds and without
+inference. This gives a subsequently commissioned child an unambiguous creation
+time in the installed protocol's whole-second `Thread.createdAt` field.
+
+Report verification requires the actual reviewer's `createdAt` to be strictly
+after that original seal-completion second, plus its root's observed started-kind
+`item/started` identity and lifecycle timestamp. Missing or same-second creation
+proof remains unavailable. A delayed activity receipt for an older child cannot
+qualify as post-seal commissioning; receipt ordering alone is insufficient.
