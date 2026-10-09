@@ -490,3 +490,21 @@ after that original seal-completion second, plus its root's observed started-kin
 `item/started` identity and lifecycle timestamp. Missing or same-second creation
 proof remains unavailable. A delayed activity receipt for an older child cannot
 qualify as post-seal commissioning; receipt ordering alone is insufficient.
+
+Select the reviewer with the native `spawn_agent` parameter
+`agent_type = "evidence_reviewer"` and `fork_turns = "none"`. `task_name` labels the
+child; it does not select a role. Leave model and effort unset in that spawn so
+the protected role file supplies its exact tuning. A child with an inherited
+model or missing role remains unverified even if its task label says reviewer.
+
+Closed derived roles now live in the private Codex overlay's standard `agents/`
+directory for native custom-agent discovery. The host also registers each role's
+config-file path and selection description explicitly. Before inference,
+`config/read` must return the configured reviewer entry with the expected path
+and description; its derived file must match the protected digest, model, effort,
+instructions and closed permissions. Missing or changed registration blocks the
+turn. Current [subagent guidance](https://learn.chatgpt.com/docs/agent-configuration/subagents)
+documents standalone agent-file discovery; the
+[configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+documents role config-file and description registration. A no-model effective
+configuration proof does not replace actual child-role attribution.

@@ -36,7 +36,7 @@ def policy(profile, reviewer=False):
 def derived_roles(root, codex_home, inherited, profile):
     """All configured children inherit a closed policy; named tuning is retained."""
     root = Path(root)
-    directory = root/'agent-state'/'evidence-roles'
+    directory = root/'agent-state'/'agents'
     directory.mkdir(mode=0o700, exist_ok=True)
     selected = {}
     agents_dir = codex_home/'agents'
@@ -74,12 +74,43 @@ def derived_roles(root, codex_home, inherited, profile):
         parsed = tomllib.loads(raw)
         if parsed['sandbox_mode'] != 'read-only' or parsed['sandbox_read_only']['network_access'] is not False:
             raise ValueError('derived child policy is not closed')
-        overrides['agents.'+name+'.config_file'] = str(codex_home/'evidence-roles'/target.name)
-        identities.append({'role': name, 'sha256': hashlib.sha256(raw.encode()).hexdigest(),
+        description=safe.get('description')
+        if not isinstance(description,str) or not description.strip():
+            raise ValueError('derived named role requires selection guidance')
+        overrides['agents.'+name+'.config_file'] = str(codex_home/'agents'/target.name)
+        overrides['agents.'+name+'.description'] = description
+        identities.append({'role': name, 'config_file':str(codex_home/'agents'/target.name),
+                           'description':description, 'sha256': hashlib.sha256(raw.encode()).hexdigest(),
                            'model': safe.get('model'), 'effort': safe.get('model_reasoning_effort'),
                            'sandbox': policy(profile, reviewer=True), 'approval_policy': 'never',
                            'approvals_reviewer': 'user'})
     return overrides, identities
+
+
+def reviewer_selection_proof(config, profile, root, identities):
+    reviewer=profile['reviewer'];name=reviewer['role']
+    registered=config.get('agents')
+    if not isinstance(registered,dict) or registered.get('enabled') is False:
+        raise ValueError('effective named reviewer catalogue is unavailable')
+    entry=registered.get(name)
+    selected=next((value for value in identities if value['role']==name),None)
+    if (not isinstance(entry,dict) or selected is None or
+            entry.get('config_file')!=selected['config_file'] or
+            entry.get('description')!=selected['description'] or not entry['description'].strip()):
+        raise ValueError('effective named reviewer registration is unavailable or changed')
+    path=Path(root)/'agent-state'/'agents'/(name+'.toml')
+    raw=path.read_bytes();value=tomllib.loads(raw.decode())
+    if (hashlib.sha256(raw).hexdigest()!=selected['sha256'] or value.get('name')!=name or
+            value.get('description')!=selected['description'] or
+            not isinstance(value.get('developer_instructions'),str) or not value['developer_instructions'].strip() or
+            value.get('model')!=reviewer['model'] or value.get('model_reasoning_effort')!=reviewer['reasoning_effort'] or
+            value.get('sandbox_mode')!='read-only' or value.get('approval_policy')!='never' or
+            value.get('approvals_reviewer')!='user' or value.get('sandbox_read_only',{}).get('network_access') is not False or
+            value.get('web_search')!='disabled' or value.get('features',{}).get('apps') is not False):
+        raise ValueError('named reviewer layer differs from its protected tuning or policy')
+    return {'role':name,'config_file':selected['config_file'],'sha256':selected['sha256'],
+            'model':reviewer['model'],'reasoning_effort':reviewer['reasoning_effort'],
+            'registered_description':True,'standard_agent_discovery':True,'model_calls':0}
 
 
 def routing_proof(value):

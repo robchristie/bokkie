@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from broker import Broker, tools, cli_component, STARTUP_STDERR_BYTES
 from common import Config, atomic, checkpoint_bounds, digest, encoded, read, result_bounds
 from evidence_report import EvidenceStore, NoRedirect, bounded_process, captured_content, endpoint, github_get, _github_get, selector
-from evidence_policy import derived_roles, environment, mounts, policy, closed_mcp_inventory, routing_proof, public_ca_paths, code_mode_host_path, companion_readiness
+from evidence_policy import derived_roles, environment, mounts, policy, closed_mcp_inventory, routing_proof, public_ca_paths, code_mode_host_path, companion_readiness, reviewer_selection_proof
 from verification import verify
 
 
@@ -89,7 +89,7 @@ class EvidenceReportTests(unittest.TestCase):
         (codex/'config.toml').write_text('model="implementation-model"\nmodel_reasoning_effort="xhigh"\n')
         trusted=self.base/'trusted';trusted.mkdir();gh_config=trusted/'gh-config';gh_config.mkdir()
         cwd=trusted/'source-client';cwd.mkdir();reviewer=trusted/'reviewer.toml'
-        reviewer.write_text('model="review-model"\nmodel_reasoning_effort="high"\nsandbox_mode="read-only"\napproval_policy="never"\napprovals_reviewer="user"\n[sandbox_read_only]\nnetwork_access=false\n')
+        reviewer.write_text('name="evidence_reviewer"\ndescription="Independent sealed report reviewer"\ndeveloper_instructions="Inspect immutable report and source bytes"\nmodel="review-model"\nmodel_reasoning_effort="high"\nsandbox_mode="read-only"\napproval_policy="never"\napprovals_reviewer="user"\n[sandbox_read_only]\nnetwork_access=false\n')
         token=self.base/'token';token.write_text('0'*64);token.chmod(0o600)
         profile=copy.deepcopy(self.profile)
         profile['source_read'].update(gh=str(Path('/usr/bin/true').resolve()),config_dir=str(gh_config),cwd=str(cwd))
@@ -288,13 +288,13 @@ class EvidenceReportTests(unittest.TestCase):
 
     def test_child_profiles_cannot_retain_inherited_network_apps_mcp_or_escalation(self):
         home=self.base/'codex';home.mkdir();agents=home/'agents';agents.mkdir()
-        raw='model="review-model"\nmodel_reasoning_effort="high"\ndeveloper_instructions="Keep judgement independent"\nsandbox_mode="danger-full-access"\napproval_policy="on-request"\nweb_search="live"\n[mcp_servers.role_only]\ncommand="/usr/bin/true"\n'
+        raw='description="Independent evidence reader"\nmodel="review-model"\nmodel_reasoning_effort="high"\ndeveloper_instructions="Keep judgement independent"\nsandbox_mode="danger-full-access"\napproval_policy="on-request"\nweb_search="live"\n[mcp_servers.role_only]\ncommand="/usr/bin/true"\n'
         profile=agents/'danger.toml';profile.write_text(raw)
         self.profile['reviewer']['config_file']=str(profile)
         overrides,identities=derived_roles(self.root,home,{'mcp_servers':{'inherited':{}},'plugins':{'plugin@market':{}}},self.profile)
         self.assertEqual(profile.read_text(),raw)
         for name in ('danger','evidence_reviewer'):
-            parsed=tomllib.loads((self.root/'agent-state'/'evidence-roles'/(name+'.toml')).read_text())
+            parsed=tomllib.loads((self.root/'agent-state'/'agents'/(name+'.toml')).read_text())
             self.assertEqual(parsed['model'],'review-model');self.assertEqual(parsed['model_reasoning_effort'],'high')
             self.assertEqual(parsed['sandbox_mode'],'read-only');self.assertEqual(parsed['approval_policy'],'never')
             self.assertFalse(parsed['sandbox_read_only']['network_access']);self.assertEqual(parsed['web_search'],'disabled')
@@ -382,6 +382,39 @@ print(json.dumps(values,sort_keys=True))
         self.assertIn("'enabled_tools':[]",calls[0][1]['command'][2])
         broker.rpc=lambda *_:{'exitCode':1,'stdout':'','stderr':'synthetic failure'}
         with self.assertRaisesRegex(ValueError,'execution failed'):companion_readiness(broker)
+
+    def test_named_reviewer_requires_effective_registration_and_protected_layer(self):
+        path,home,codex,value=self.host_config()
+        with patch('common.Path.home',return_value=home),patch.dict(os.environ,{'CODEX_HOME':str(codex)}):configured=Config(path)
+        profile=configured.projects['project']
+        overrides,identities=derived_roles(self.root,codex,{},profile)
+        selected=next(item for item in identities if item['role']=='evidence_reviewer')
+        entry={'config_file':selected['config_file'],'description':selected['description']}
+        effective={'agents':{'enabled':True,'evidence_reviewer':entry}}
+        proof=reviewer_selection_proof(effective,profile,self.root,identities)
+        self.assertEqual(proof['model'],'review-model');self.assertEqual(proof['reasoning_effort'],'high')
+        self.assertEqual(proof['sha256'],selected['sha256'])
+        self.assertIn('agents.evidence_reviewer.description',overrides)
+        self.assertTrue(selected['config_file'].endswith('/agents/evidence_reviewer.toml'))
+        for invalid in ({'agents':{'enabled':False,'evidence_reviewer':entry}},
+                        {'agents':{'evidence_reviewer':entry|{'description':None}}},
+                        {'agents':{'evidence_reviewer':entry|{'config_file':'/different/role.toml'}}},
+                        {'agents':{}}):
+            with self.subTest(invalid=invalid),self.assertRaises(ValueError):reviewer_selection_proof(invalid,profile,self.root,identities)
+        derived=self.root/'agent-state'/'agents'/'evidence_reviewer.toml'
+        derived.chmod(0o600);derived.write_text(derived.read_text().replace('review-model','inherited-default'))
+        with self.assertRaisesRegex(ValueError,'protected tuning'):reviewer_selection_proof(effective,profile,self.root,identities)
+
+    def test_seal_reply_selects_agent_type_and_leaves_model_tuning_in_role(self):
+        report=self.sealed();broker=Broker(self.root);broker.thread='root';sent=[];broker.send=sent.append
+        broker.wait_review_window=lambda _:None
+        broker.request({'id':1,'method':'item/tool/call','params':{'threadId':'root','namespace':'bokkie_workspace',
+            'tool':'seal_report','arguments':{'markdown':report['markdown'],'source_ids':[source['id'] for source in report['sources']]}}})
+        reply=json.loads(sent[-1]['result']['contentItems'][0]['text'])
+        self.assertEqual(reply['review']['agent_type'],'evidence_reviewer')
+        self.assertEqual(reply['review']['fork_turns'],'none')
+        self.assertNotEqual(reply['review']['task_name'],reply['review']['agent_type'])
+        self.assertNotIn('model',reply['review']);self.assertNotIn('reasoning_effort',reply['review'])
 
     def test_no_model_routing_proof_rejects_unbound_origins_without_retaining_account_values(self):
         account={'account':{'type':'chatgpt','email':'synthetic-private-email'},'workspaceRouting':{
