@@ -55,3 +55,8 @@ or profile. Wall-clock, turn and context limits remain independent bounds.
 Tool replies should expose remaining budget so the workspace can seal useful
 partial work before cancellation. A larger ceiling is not proof of sufficiency;
 the actual representative report owns the next observation.
+
+Migration21 is an explicit decode/rollback barrier. Definitions, report results
+and checkpoints use existing immutable JSON records, so the migration adds no
+new scheduler or projection table. Older schema20 binaries reject the state
+before attempting to decode these new contracts.

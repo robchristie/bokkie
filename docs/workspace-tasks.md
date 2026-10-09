@@ -107,7 +107,9 @@ interrupt acknowledgement or missing broker is not cessation evidence.
 Migration18 appends workspace execution records and immutable event/answer/action
 receipts; migration19 adds immutable recovered reports without changing the
 original stopped result. Migration20 adds bounded memory. Schema17, schema18
-and schema19 binaries cannot open this source's schema20 state.
+and schema19 binaries cannot open schema20 state. Migration21 is the decode
+and rollback barrier for evidence-report definitions/results and checkpoints;
+schema20 binaries cannot open this source's schema21 state.
 Keep the prior stopped-state backup for any separately authorised deployment;
 rollback is a data operation and must account for later external effects.
 
