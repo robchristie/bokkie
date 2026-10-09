@@ -86,6 +86,9 @@ pub fn tools_with_adviser(managed_selected: bool, legacy_selected: bool, automat
     }
     let mut workspace_tool = result[0].clone();
     workspace_tool["name"] = json!("bokkie_workspace_task");
+    workspace_tool["inputSchema"]["properties"]["result_contract"] = json!({"type":"string","enum":["engineering_delivery","evidence_report"],"description":"Select ordinary reviewed source delivery or an independently reviewed read-only evidence report. A report can truthfully conclude an agreed assessment is inconclusive."});
+    workspace_tool["inputSchema"]["properties"]["repository_scope"] = json!({"type":"array","maxItems":32,"items":{"type":"string"},"description":"Explicit owner/repository identities selected by the operator. Required for evidence reports; do not invent or widen scope."});
+    workspace_tool["inputSchema"]["properties"]["trigger"] = trigger;
     workspace_tool["description"] = json!(
         "Create or revise a visible workspace task when asked to implement work in a selected project. Supply its explicit project phrase, outcome, relevant context, scope/constraints and checkable acceptance. The receiving workspace owns its normal planning, verification, independent review and delivery. Bokkie saves the same versioned definition used by direct editing and prepares a review; it does not execute until the operator confirms. Routine decisions proceed inside the reviewed scope; missing information, inconclusive evidence or new authority require a question. For a finite cross-project pilot/assessment/rollout use the registered portfolio workspace and retain the whole agreed assignment. Use bokkie_prepare_handoff only when an optional manual brief/export is explicitly requested. Never invent destinations or permissions."
     );
@@ -104,6 +107,19 @@ struct ToolProposal {
 struct HandoffProposal {
     project_query: String,
     brief: bokkie_operator_api::HandoffBrief,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceProposal {
+    project_query: String,
+    brief: bokkie_operator_api::HandoffBrief,
+    #[serde(default)]
+    result_contract: Option<bokkie_operator_api::WorkspaceResultContract>,
+    #[serde(default)]
+    repository_scope: Option<Vec<String>>,
+    #[serde(default)]
+    trigger: Option<ManagedTrigger>,
 }
 
 #[derive(Deserialize)]
@@ -208,7 +224,26 @@ pub fn operation_with_adviser(
         ));
     }
     match proposal.tool.as_str() {
-        "bokkie_prepare_handoff" | "bokkie_workspace_task" => {
+        "bokkie_workspace_task" => {
+            let draft: WorkspaceProposal = decode(proposal.arguments)?;
+            crate::handoffs::validate_brief(&draft.brief)?;
+            if draft.project_query.trim().is_empty()
+                || draft.project_query.len() > 160
+                || draft.project_query.contains('\0')
+            {
+                return Err(StoreError::Invalid(
+                    "Supply a bounded explicit project query".into(),
+                ));
+            }
+            Ok(ConversationOperation::PrepareWorkspace {
+                project_query: draft.project_query,
+                brief: Box::new(draft.brief),
+                result_contract: draft.result_contract,
+                repository_scope: draft.repository_scope,
+                trigger: draft.trigger,
+            })
+        }
+        "bokkie_prepare_handoff" => {
             let draft: HandoffProposal = decode(proposal.arguments)?;
             crate::handoffs::validate_brief(&draft.brief)?;
             if draft.project_query.trim().is_empty()
@@ -219,17 +254,10 @@ pub fn operation_with_adviser(
                     "Supply a bounded explicit project query".into(),
                 ));
             }
-            if proposal.tool == "bokkie_workspace_task" {
-                Ok(ConversationOperation::PrepareWorkspace {
-                    project_query: draft.project_query,
-                    brief: Box::new(draft.brief),
-                })
-            } else {
-                Ok(ConversationOperation::PrepareHandoff {
-                    project_query: draft.project_query,
-                    brief: Box::new(draft.brief),
-                })
-            }
+            Ok(ConversationOperation::PrepareHandoff {
+                project_query: draft.project_query,
+                brief: Box::new(draft.brief),
+            })
         }
         "bokkie_discuss" => {
             let Discussion {

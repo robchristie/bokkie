@@ -156,6 +156,8 @@ fn setup(store: &mut Store, recurring: bool) -> (WorkspaceHost, String) {
         };
     }
     def.workspace = Some(WorkspaceTaskDefinition {
+        result_contract: Default::default(),
+        repository_scope: vec![],
         project,
         brief: HandoffBrief {
             outcome: "Make a small correction".into(),
@@ -224,6 +226,7 @@ fn send(
 }
 fn result() -> WorkspaceResult {
     WorkspaceResult {
+        report: None,
         summary: "Correction reviewed and delivered".into(),
         criteria: vec![WorkspaceCriterionResult {
             id: "delivery".into(),
@@ -2209,5 +2212,199 @@ fn workspace_binding_excludes_all_generic_and_note_result_paths() {
         store
             .retry_attention_if_current(&d.obligation_id, &precondition, 92)
             .is_err()
+    );
+}
+
+fn report_setup(store: &mut Store) -> (WorkspaceHost, String) {
+    let (mut host, id) = setup(store, false);
+    host.projects[0].profile_revision.push_str("/reports");
+    host.projects[0].permitted_actions = vec!["inspect".into(), "verify".into()];
+    let state = store.managed_detail(&id).unwrap();
+    let mut definition = state.active.unwrap().definition;
+    definition.profile_revision = host.projects[0].profile_revision.clone();
+    let assignment = definition.workspace.as_mut().unwrap();
+    assignment.result_contract = WorkspaceResultContract::EvidenceReport;
+    assignment.repository_scope = vec!["robchristie/bokkie".into()];
+    assignment.permitted_actions = host.projects[0].permitted_actions.clone();
+    assignment.brief.constraints =
+        "Inspect retained qualification evidence; no source changes or new measurements".into();
+    store
+        .managed_revise(
+            &Uuid::new_v4().to_string(),
+            &id,
+            state.configuration_revision,
+            &definition,
+            1,
+        )
+        .unwrap();
+    let profile = host.projects[0].capability_profile(&host.name);
+    let preview = store
+        .managed_preview(&id, "report", std::slice::from_ref(&profile), 1)
+        .unwrap();
+    assert!(preview.blockers.is_empty(), "{:?}", preview.blockers);
+    store
+        .managed_activate(
+            &Uuid::new_v4().to_string(),
+            &preview,
+            "report",
+            &[profile],
+            1,
+        )
+        .unwrap();
+    (host, id)
+}
+fn report_result() -> WorkspaceResult {
+    let mut result = result();
+    result.deliveries.clear();
+    result.summary =
+        "Evidence assessment completed; performance benefit remains inconclusive".into();
+    let sources = vec![WorkspaceReportSource {
+        id: "d".repeat(64),
+        url: "https://github.com/robchristie/bokkie/pull/61#issuecomment-6076168099".into(),
+        content_digest: "e".repeat(64),
+        observed_at: 1,
+        bytes: 100,
+    }];
+    let source_manifest_digest = canonical_digest(
+        &serde_json::json!({"format":"evidence-source-manifest-v1","sources":sources}),
+    )
+    .unwrap();
+    let markdown="Coverage and report retention have attributable receipts. Comparable performance measurements are absent; no speedup is claimed.".to_owned();
+    let digest = canonical_digest(
+        &serde_json::json!({"format":"evidence-report-v1","markdown":markdown,"source_manifest_digest":source_manifest_digest}),
+    )
+    .unwrap();
+    result.report = Some(WorkspaceReport {
+        format: "evidence-report-v1".into(),
+        digest,
+        source_manifest_digest,
+        markdown,
+        sources,
+    });
+    result
+}
+
+#[test]
+fn report_acceptance_is_distinct_from_the_assessed_subject_outcome() {
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, id) = report_setup(&mut store);
+    let d = dispatch(&mut store, &host, 1);
+    let checkpoint = event(
+        &d,
+        1,
+        WorkspaceEvent::Checkpoint {
+            checkpoint: WorkspaceCheckpoint {
+                stage: "Assessment method pilot".into(),
+                summary: "The retained receipt establishes coverage and reporting".into(),
+                assessment: "passed".into(),
+                evidence: vec!["retained source identity".into()],
+                next_action: "Continue assessment across the selected owners".into(),
+            },
+        },
+    );
+    send(&mut store, &host, checkpoint.clone(), 2).unwrap();
+    send(&mut store, &host, checkpoint, 2).unwrap();
+    assert_ne!(
+        store.get(&d.obligation_id).unwrap().unwrap().state,
+        ObligationState::Completed
+    );
+    assert!(
+        store.managed_detail(&id).unwrap().runs[0]
+            .workspace
+            .as_ref()
+            .unwrap()
+            .progress
+            .contains("Continue assessment")
+    );
+    send(
+        &mut store,
+        &host,
+        event(&d, 2, stopped(Some(report_result()), true)),
+        3,
+    )
+    .unwrap();
+    assert_eq!(
+        store.get(&d.obligation_id).unwrap().unwrap().state,
+        ObligationState::Completed
+    );
+    assert!(
+        store.managed_detail(&id).unwrap().runs[0]
+            .workspace
+            .as_ref()
+            .unwrap()
+            .result
+            .as_ref()
+            .unwrap()
+            .deliveries
+            .is_empty()
+    );
+}
+
+#[test]
+fn report_content_tampering_and_wrong_scope_cannot_complete() {
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, _) = report_setup(&mut store);
+    let d = dispatch(&mut store, &host, 1);
+    let mut changed = report_result();
+    changed
+        .report
+        .as_mut()
+        .unwrap()
+        .markdown
+        .push_str(" invented benefit");
+    assert!(
+        send(
+            &mut store,
+            &host,
+            event(&d, 1, stopped(Some(changed), true)),
+            2
+        )
+        .is_err()
+    );
+    let mut wrong = report_result();
+    let report = wrong.report.as_mut().unwrap();
+    report.sources[0].url = "https://github.com/other/project/pull/1".into();
+    report.source_manifest_digest = canonical_digest(
+        &serde_json::json!({"format":"evidence-source-manifest-v1","sources":report.sources}),
+    )
+    .unwrap();
+    report.digest=canonical_digest(&serde_json::json!({"format":report.format,"markdown":report.markdown,"source_manifest_digest":report.source_manifest_digest})).unwrap();
+    send(
+        &mut store,
+        &host,
+        event(&d, 1, stopped(Some(wrong), true)),
+        2,
+    )
+    .unwrap();
+    assert_eq!(
+        store.get(&d.obligation_id).unwrap().unwrap().state,
+        ObligationState::Attention
+    );
+}
+
+#[test]
+fn a_report_question_survives_cessation_and_prevents_acceptance() {
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, id) = report_setup(&mut store);
+    let d = dispatch(&mut store, &host, 1);
+    send(&mut store,&host,event(&d,1,WorkspaceEvent::Question{question:WorkspaceQuestion{id:"missing-comparison".into(),kind:"inconclusive".into(),prompt:"Comparable timing evidence is missing. Finish with this evidence gap or supply an existing measurement receipt?".into(),options:vec!["Finish with the gap".into(),"Use an existing receipt".into()]}}),2).unwrap();
+    send(
+        &mut store,
+        &host,
+        event(&d, 2, stopped(Some(report_result()), true)),
+        3,
+    )
+    .unwrap();
+    assert_eq!(
+        store.get(&d.obligation_id).unwrap().unwrap().state,
+        ObligationState::Attention
+    );
+    assert!(
+        store.managed_detail(&id).unwrap().runs[0]
+            .workspace
+            .as_ref()
+            .unwrap()
+            .question
+            .is_some()
     );
 }
