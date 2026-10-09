@@ -1,70 +1,121 @@
 # Workspace task qualification
 
-Status: source and representative UI prepared; real workspace delivery remains
-unproved. The [active plan](../plans/active/workspace-tasks.md) retains the whole
+Status: one real conversational workspace task completed with attributable
+delivery, explicit report recovery and restart preservation. Connector review
+and landing remain. The [active plan](../plans/active/workspace-tasks.md) retains the whole
 objective. This record must not be read as deployed capability.
 
 ## Mechanism and deterministic coverage
 
-The [calibration](calibration.md) selected supported Codex0.160.1 local stdio,
+The [calibration](calibration.md) selected supported Codex 0.160.1 local stdio,
 an outward host worker and a separately owned subreaper. Actual entry guidance,
 ordinary tools, progress/question/result exchange and detached-descendant
 cessation were observed. The source adapter preserves these boundaries without
 the specialised engineering supervisor.
 
-The Store has15 deterministic workspace regressions plus2 configuration
-regressions. They cover replay/conflict and bounded host admission, pinned
-definitions, cross-host and sequential events, questions/answers, lease loss,+deadline/cancellation, retained unaccepted results and later verification,
+The Store has 25 deterministic workspace/recovery/review regressions plus 2
+configuration regressions. They cover replay/conflict and bounded host admission, pinned
+definitions, cross-host and sequential events, questions/answers, lease loss, deadline/cancellation, retained unaccepted results and later verification,
 current recurring schedule and generic-lane exclusion. The canonical backend
-run passed440 tests, with2 established ignored qualification tests, plus Python
+run passed 440 tests, with 2 established ignored qualification tests, plus Python
 governance, doctests, Clippy and formatting. Retained local command attribution:
 `/tmp/command-log-3kymo7uv/outcome.json` and its complete output log.
 
-The host suite passed21 zero-model tests, including actual subreaper cleanup,
+The host suite passed 52 zero-model tests, including actual subreaper cleanup,
 immutable dispatch, uncertainty retention, overlapping resources, redirect
 rejection, profile bounds and isolated existing-edge authentication. Retained
-local attribution: `/tmp/bokkie-workspace-probe/command-log-aizs0l75/outcome.json`.
+local attribution: `/tmp/bokkie-workspace-probe/command-log-nndgbnl_/outcome.json`.
 These tests do not establish live source delivery.
 
-The UI canonical check passed119 native tests and its web/module tests,
+The UI canonical check passed 119 native tests and its web/module tests,
 doctests, Clippy, native/Wasm builds and formatting. Retained local attribution:
-`/tmp/command-log-w1ftunv7/outcome.json`. The later browser journey uses the
+`/tmp/command-log-z6zfd7p_/outcome.json`. The later browser journey uses the
 resulting Wasm artefact and separately recorded backend binary digest.
 
 ## Browser journey
 
 `tools/ui-workspace-journey.mjs` runs the production UI/router with closed model
-and host peers. It passed24 checks: visible task/review, one dispatch after a
+and host peers. It passed 24 checks: visible task/review, one dispatch after a
 lost acknowledgement, sequential event/question replay, direct editing of the
 same versioned definition, retained original admission, one durable answer,
 browser closure/controller restart, stop intent and cancellation without
 another immediate job. Its mode is explicitly synthetic.
 
-Chromium151.0.7922.34 used the project's existing Linux/Vulkan WebGPU harness,
-with1440×1000 desktop and390×844 narrow viewports. Captures and full report
+Chromium 151.0.7922.34 used the project's existing Linux/Vulkan WebGPU harness,
+with 1440×1000 desktop and 390×844 narrow viewports. Captures and full report
 remain at `/tmp/bokkie-workspace-probe/ui-accepted/`. Initial captures exposed
 a clipped editor action; the save action now sits outside the scrolling fields.
 Later captures wait for rendered state rather than only an API response.
 Opened pixels establish the stated layouts, not other devices or graphics APIs.
 
-## Real assignment prepared
+## Real assignment and delivery
 
-Use the actual Bokkie workspace entry and a separate product worktree to add a
-concise receiving-workspace guidance section to `docs/project-handoffs.md`.
-It must explain entry-map routing, selecting the affected product checkout and
-its canonical checks without changing manual history or claiming deployment.
-The public product's normal independent review, four authored CI checks,
-squash merge and post-merge CI own delivery acceptance.
+A request typed into the actual Home interface created one visible task. Its
+review confirmation admitted real work through `/nvme/development/bokkie-workspace`
+and the affected product guidance, with a separate product worktree. The task
+added receiving-workspace guidance and repaired two legacy preflight tests to
+use private fixture locks while preserving their mutual-exclusion assertion.
+No production deployment or credential/access-policy change occurred.
 
-The private fixture binds an exact destination/profile and declared product,
-worktree, shared Git and scratch resources. No-model preflight passed with
-actual workspace guidance and the currently configured Astra/xhigh primary;
-the independent reviewer preserves its existing Astra/high read-only profile.
-Credentials stay in their existing development-host store. Temporary controller
-state and host authentication are fixture-owned; no production host or access
-policy is changed.
+[PR62](https://github.com/robchristie/bokkie/pull/62) delivered candidate
+`1dd3d6251cb51b9879690960fbd8824e993a6db1`, independently reviewed at that exact
+head by the configured Astra/high read-only child. Its actual parent/role/model,
+completed turn and Markdown PASS report are retained in the host journal;
+[public review receipt](https://github.com/robchristie/bokkie/pull/62#issuecomment-6079571910).
+The clean candidate's exact `tools/check.sh` succeeded. All four authored public
+checks passed on the [candidate](https://github.com/robchristie/bokkie/actions/runs/37920745710)
+and [merge revision](https://github.com/robchristie/bokkie/actions/runs/37921283069).
+Squash merge `6f65119686b30a38cd36d2ecc8d4fa056469936a` preserves the reviewed tree
+`bf5cb7db477066ae8c440c602d32c3e85ccd0de9`.
 
-Remaining proof: conversational web request and confirmation, actual host start,
-progress and source delivery, browser closure/controller restart with the same
-execution, attributable result and verified cessation. Preserve completed work
-if independent evidence is missing; acquire it without repeating the task.
+Task `task-57481370-11fd-40f3-b795-567db8a67ebd` retains two runs. The first
+stopped at its declared budget before qualification finished. An explicitly
+reviewed future definition continued the retained PR, with the isolated fixture
+repair and supported reviewer history. The second execution
+`86e42f39-48f3-44e5-8f3b-1fc1fdfb1fc9` delivered the change and reached its observed
+token threshold before submitting a structured result. Both trusted outside
+subreapers recorded descendant cessation. Bokkie shows attention, not success.
+The merged source is preserved; remaining evidence is reconciled without another
+workspace execution.
+
+The browser closed after confirmation. Bokkie was stopped and restarted during
+the second execution; the host continued and the same execution reappeared with
+no replacement admission. Private observation: `/tmp/bokkie-workspace-live/restart-observation.json`.
+The bounded `wait_for_checks` helper waited for candidate and merge CI without
+model inference. Root and reviewer history remain attributable under the actual
+Codex 0.160.1 integration.
+
+The fixture binds exact destination/profile revisions and declared product,
+worktree, shared Git and scratch resources. Temporary controller/host credentials
+are fixture-owned, with existing account state retained on the development host.
+An initial mutable controller binary was overwritten by the child task's shared
+target-directory build; the restart fixture now uses an immutable binary copy.
+This was a qualification-harness correction, not evidence of controller recovery.
+
+## Accepted retained work
+
+Explicit host recovery imported one immutable report with provenance and the
+original false criterion. The source execution was explicitly closed. A newly
+reviewed immediate definition permitted recovered evidence and pinned that
+exact earlier report; the old admission and unmet result-tool condition remained
+unchanged. The fixture registered a distinct inspect/verify profile rather than
+inferring those actions from its earlier ordinary-delivery action.
+
+Definition4 admitted execution `2bf69742-2651-4aad-b01c-7ce3461f6409`. Its host
+review read the original attributed command/reviewer records and rechecked actual
+candidate/merge CI. It created no coding launch marker, protocol journal or writer
+reservation. Store accepted the verified report and marked the same visible task
+completed. There are three run entries, two explicitly cancelled and one accepted;
+the delivered source change was not repeated.
+
+The recovered report and completed result were opened at desktop 1440×1000 and
+narrow 390×844. The narrow task view opened independently of the original chat.
+Captures and observations remain in `/tmp/bokkie-workspace-live/`:
+`partial-report-observation.json`, `accepted-review-observation.json`,
+`accepted-browser-observation.json` and `accepted-restart-observation.json`.
+A further controller restart plus host exchange preserved the same completed
+execution, result and three-entry history with no replacement job.
+
+Remaining proof: connector canonical checks and independent review/CI/landing.
+Source readiness does not establish that the Nostromo deployment has enabled
+workspace execution. The full objective remains active in its maintained plan.

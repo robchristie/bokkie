@@ -85,7 +85,8 @@ try{
     {execution_id:execution,sequence:3,event:{kind:'question',question:{id:'which-section',kind:'missing_information',prompt:'Which section should receive the correction?',options:['Existing operator guide','Contributor guide']}}},
   ];
   await host(events,[execution]);const replay=await host(events,[execution]);check(replay.acknowledgements.some(a=>a.execution_id===execution&&a.sequence===3),'Events replay without duplicate questions');
-  await page.reload();await ready();await page.waitForTimeout(700);
+  await rendered('bokkie.workspace.answer.'+execution);
+  check(true,'Unadmitted workspace occurrence receives host progress without a browser refresh');
   await capture('desktop-question');
   await click('bokkie.workspace.answer.'+execution);await input('bokkie.workspace.answer-text','Existing operator guide');await click('bokkie.workspace.run-confirm');
   const answered=await host([], [execution]);check(answered.controls.some(c=>c.execution_id===execution&&c.answers.length===1),'One durable answer available to host');

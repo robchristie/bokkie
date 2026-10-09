@@ -194,9 +194,16 @@ impl ConversationState {
             self.pending = None;
         }
         let workspace_active = view.task.as_ref().is_some_and(|t| {
-            t.runs
-                .iter()
-                .any(|r| r.workspace.as_ref().is_some_and(|w| !w.cessation_verified))
+            let workspace_definition = t
+                .active
+                .as_ref()
+                .is_some_and(|r| r.definition.workspace.is_some());
+            t.runs.iter().any(|r| match &r.workspace {
+                Some(workspace) => !workspace.cessation_verified || workspace.status == "attention",
+                None => {
+                    workspace_definition && !matches!(r.state.as_str(), "completed" | "cancelled")
+                }
+            })
         });
         self.poll_at =
             (view.busy || workspace_active).then(|| Instant::now() + Duration::from_secs(2));
@@ -1550,6 +1557,10 @@ fn task_status(status: &str) -> &str {
         "completed" => "Completed",
         "pending" => "Scheduled",
         "running" => "Running",
+        "dispatching" => "Waiting for the execution host",
+        "waiting" => "Waiting for your answer",
+        "cancelling" => "Stopping",
+        "stopped" => "Stopped",
         "attention" => "Needs your input",
         "awaiting_approval" => "Awaiting review",
         "retry_scheduled" => "Retry scheduled",
@@ -1558,6 +1569,31 @@ fn task_status(status: &str) -> &str {
     }
 }
 fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
+    let retained_review = value
+        .workspace
+        .as_ref()
+        .and_then(|w| w.review_retained_work.as_ref());
+    if let Some(review) = retained_review {
+        ui.strong("Review retained work");
+        ui.add(egui::Label::new(format!("Verify existing delivery from execution {} against this revision's completion criteria. This occurrence starts no workspace implementation.", review.source.execution_id)).wrap());
+        ui.add(egui::Label::new(&review.summary).wrap().selectable(true));
+        egui::CollapsingHeader::new("Proposed completion evidence").show(ui, |ui| {
+            for criterion in &review.criteria {
+                ui.label(format!(
+                    "{}: {}",
+                    criterion.id,
+                    if criterion.satisfied {
+                        "Proposed as satisfied"
+                    } else {
+                        "Unresolved"
+                    }
+                ));
+                for evidence in &criterion.evidence {
+                    ui.add(egui::Label::new(evidence).wrap().selectable(true));
+                }
+            }
+        });
+    }
     if let Some(workspace) = &value.workspace {
         ui.add(
             egui::Label::new(egui::RichText::new(&workspace.brief.outcome).heading())
@@ -1620,6 +1656,9 @@ fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
     ui.label(match value.capability.as_str() {
         "reminder" => "Reminder: save this text and send a notification when due",
         "local_note" => "Capability: Local note",
+        "workspace" if retained_review.is_some() => {
+            "Workspace task: review retained delivery evidence"
+        }
         "workspace" => "Workspace task: execute the reviewed assignment",
         _ => "This task requires a capability that is unavailable.",
     });
@@ -1647,6 +1686,9 @@ fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
             }
             "store_local_result" => "Save the supplied text as a local result",
             "send_notification" => "Send the reminder to the reviewed destination",
+            "workspace_execution" if retained_review.is_some() => {
+                "Verify retained delivery evidence through this workspace host"
+            }
             "workspace_execution" => "Run the agreed assignment through this workspace",
             _ => "This task requests an effect that is unavailable.",
         });
@@ -1803,13 +1845,29 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
             ui.add(egui::Label::new(local_time_in_zone(run.scheduled_at, &run.timezone)).wrap());
             ui.small(format!("Definition revision {}", run.definition_revision));
             if let Some(workspace) = &run.workspace {
-                ui.add(egui::Label::new(format!("Workspace: {}",workspace.status)).wrap());
+                ui.add(egui::Label::new(format!("Workspace: {}",task_status(&workspace.status))).wrap());
                 ui.add(egui::Label::new(&workspace.progress).wrap().selectable(true));
+                if let Some(recovery) = &workspace.recovery {
+                    let label = format!("Report recovered from retained delivery evidence on {}. The original execution stopped before submitting its report; its history and limits are preserved.", local_time_in_zone(recovery.recovered_at, &run.timezone));
+                    let response = ui.add(egui::Label::new(&label).wrap());
+                    observe(response.rect, &format!("bokkie.workspace.recovery.{}", workspace.execution_id), &label, UiRole::Section, true, nodes);
+                }
                 if workspace.cancellation_requested && !workspace.cessation_verified {ui.label("Stop requested; waiting for the host to account for this execution and its descendants.");}
                 if let Some(result) = &workspace.result {
                     if run.result.is_none() {ui.add(egui::Label::new(&result.summary).wrap().selectable(true));}
                     for delivery in &result.deliveries {ui.hyperlink_to(format!("Delivered change in {}",delivery.repository),&delivery.pull_request);}
+                    egui::CollapsingHeader::new("Completion evidence").id_salt(("workspace-evidence", &workspace.execution_id)).show(ui, |ui| {
+                        for criterion in &result.criteria {
+                            ui.label(format!("{}: {}", criterion.id, if criterion.satisfied {"Satisfied"} else {"Unresolved"}));
+                            for evidence in &criterion.evidence {ui.add(egui::Label::new(evidence).wrap().selectable(true));}
+                        }
+                    });
                     for limitation in &result.limitations {ui.add(egui::Label::new(format!("Limit: {limitation}")).wrap());}
+                }
+                if let Some(verification) = &workspace.verification {
+                    egui::CollapsingHeader::new(if verification.passed {"Delivery verification passed"} else {"Delivery verification pending"}).id_salt(("workspace-verification", &workspace.execution_id)).show(ui, |ui| {
+                        for evidence in &verification.evidence {ui.add(egui::Label::new(evidence).wrap().selectable(true));}
+                    });
                 }
             }
             if let Some(result) = &run.result {

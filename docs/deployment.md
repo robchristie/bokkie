@@ -202,7 +202,7 @@ failures or arbitrary recipients. Existing relay acceptance and suppressed DSNs
 do not supply an end-to-end delivery receipt.
 
 Migration14 introduced durable notification intents and migration15 added Web
-Push state. This source requires schema18. Older binaries must not be started
+Push state. This source requires schema19. Older binaries must not be started
 against the upgraded database.
 Retain the stopped-service state backup, old manifest and immutable image before
 an authorised update. Disabling notification configuration stops new reminder

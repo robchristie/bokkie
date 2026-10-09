@@ -592,6 +592,11 @@ impl Store {
         {
             reasons.push(error.to_string());
         }
+        if let Err(error) =
+            super::workspace::validate_retained_review(&self.connection, id, definition)
+        {
+            reasons.push(error.to_string());
+        }
         if state.candidate.is_none() {
             reasons.push("No proposed revision to activate".into());
         }
@@ -633,6 +638,10 @@ impl Store {
             .ok_or_else(|| conflict("task has no active definition"))?;
         let retained = retained_admission(&tx, id)?;
         let mut reasons = resume_blockers(&active.definition, profiles, now, retained.is_some());
+        if let Err(error) = super::workspace::validate_retained_review(&tx, id, &active.definition)
+        {
+            reasons.push(error.to_string());
+        }
         if state.status != ManagedTaskStatus::Paused {
             reasons.push("Only paused tasks can be resumed".into());
         }
@@ -1055,6 +1064,15 @@ fn definition_changes(
             if old.limits != new.limits {
                 workspace_changes.push(format!("Execution limits: {} seconds / {} turns / {} observed tokens → {} seconds / {} turns / {} observed tokens",old.limits.max_seconds,old.limits.max_turns,old.limits.max_tokens,new.limits.max_seconds,new.limits.max_turns,new.limits.max_tokens));
             }
+            match (&old.review_retained_work,&new.review_retained_work) {
+                (None,Some(review))=>workspace_changes.push(format!("Review retained work from execution {} under the new completion criteria; no workspace implementation will run",review.source.execution_id)),
+                (Some(_),None)=>workspace_changes.push("Resume workspace execution for future work".into()),
+                (Some(before),Some(after)) if before!=after=>workspace_changes.push(format!("Retained evidence review binding or completion mapping changed for execution {}",after.source.execution_id)),
+                _=>{},
+            }
+            if new.review_retained_work.is_some() && old.criteria != new.criteria {
+                workspace_changes.push("Completion criteria for retained evidence review changed; review the revised criteria and explicit evidence mapping".into());
+            }
         }
         (None, Some(new)) => workspace_changes.push(format!(
             "Configure workspace execution for {} on {}",
@@ -1119,6 +1137,7 @@ pub(crate) fn activate_in_transaction(
     }
     let reasons = blockers(&candidate.definition, profiles, now);
     super::workspace::validate_current_project(tx, &candidate.definition)?;
+    super::workspace::validate_retained_review(tx, &state.id, &candidate.definition)?;
     super::push::validate_destination(tx, &candidate.definition)?;
     if !reviewed.blockers.is_empty() || !reasons.is_empty() {
         return Err(conflict(&format!(
@@ -1177,6 +1196,7 @@ pub(crate) fn resume_in_transaction(
         .active
         .ok_or_else(|| conflict("task has no active definition"))?;
     let retained = retained_admission(tx, id)?.is_some();
+    super::workspace::validate_retained_review(tx, id, &active.definition)?;
     super::push::validate_destination(tx, &active.definition)?;
     let reasons = resume_blockers(&active.definition, profiles, now, retained);
     if !reasons.is_empty() {

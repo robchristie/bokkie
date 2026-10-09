@@ -11,6 +11,25 @@ pub struct WorkspaceTaskDefinition {
     pub permitted_actions: Vec<String>,
     pub decision_rules: String,
     pub limits: WorkspaceLimits,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_retained_work: Option<WorkspaceEvidenceReview>,
+}
+
+/// An explicit acceptance revision inspects one already ceased delivery. It
+/// cannot launch workspace implementation or change the original report.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceEvidenceReview {
+    pub source: WorkspaceEvidenceSource,
+    pub summary: String,
+    pub criteria: Vec<WorkspaceCriterionResult>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceEvidenceSource {
+    pub execution_id: String,
+    pub result_digest: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -80,6 +99,33 @@ pub enum WorkspaceEvent {
         verification: Option<WorkspaceVerification>,
         reason: String,
     },
+    RecoveredResult {
+        result: WorkspaceResult,
+        provenance: WorkspaceRecoveryProvenance,
+        verification: Option<WorkspaceVerification>,
+    },
+}
+
+/// A trusted host reconstructs delivery evidence after the original boundary
+/// stopped. Digests bind retained sources without inventing a runtime receipt.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceRecoveryProvenance {
+    pub origin: String,
+    pub algorithm: String,
+    pub recovered_at: i64,
+    pub dispatch_digest: String,
+    pub admission_digest: String,
+    pub result_digest: String,
+    pub cessation: WorkspaceCessation,
+    pub sources: Vec<WorkspaceRecoverySource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceRecoverySource {
+    pub kind: String,
+    pub sha256: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -177,6 +223,10 @@ pub struct WorkspaceRun {
     pub progress: String,
     pub question: Option<WorkspaceQuestion>,
     pub result: Option<WorkspaceResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<WorkspaceRecoveryProvenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<WorkspaceVerification>,
     pub cessation_verified: bool,
     pub cancellation_requested: bool,
     pub last_event_sequence: i64,

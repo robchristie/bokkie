@@ -108,6 +108,70 @@ and read-only instructions, with escalation disabled. No new reviewer model turn
 was dispatched by calibration. The real task must still establish observed
 runtime parent/role/final-answer/completed-turn attribution.
 
+## First real task and bounded repairs
+
+The first real workspace execution, `143fbb9f-2086-4124-8c37-aef01c615b2b`,
+stopped with trusted cessation on its declared one-million-token observation
+limit: the root reported 807,295 tokens and its child 218,031. Its documentation
+candidate `c6583386be4aad340c54e23024182ad8ca027d71` and
+[draft PR 62](https://github.com/robchristie/bokkie/pull/62) were preserved.
+All four public CI checks passed, but the local canonical check exposed a legacy
+fixture which attempted to use the real protected workspace-lock registry. No
+structured result was submitted, and no acceptance was established. The next
+assignment must declare any minimal related fixture repair and its finite budget
+before admission; the stopped job is not resumed or silently enlarged.
+
+That actual root stream reported `subAgentActivity` identifiers/path/kind without
+the child's `thread/started` metadata or final-answer items. Root prose and task
+paths therefore cannot qualify independent review. The runtime now reads actual
+child metadata/history through the owning app-server and retains separately
+labelled `child_thread_read` responses. The protected reviewer role, actual parent
+link and completed turn's final answer remain required.
+
+Zero-model same-server reads observed these precise limits in CLI `0.160.1`:
+ephemeral metadata reads work, but `includeTurns: true` is rejected for ephemeral
+threads. Persistent creation without an explicit history mode reached unsupported
+`list_turns`. Explicit `ephemeral: false` / `historyMode: "legacy"` returns metadata;
+full-history read is unavailable until the first user message materialises it.
+New jobs use that private legacy-history contract. Real child materialisation and
+review attribution remain a live qualification requirement.
+
+The new root-only CI wait tool was separately checked without a model, using
+actual `command/exec` with exact `gh api` argv, read-only sandbox/network policy,
+`GH_DEBUG: null`, process identity, a 20-second timeout and 256 KiB output cap.
+The public candidate above returned all four declared checks as completed/success,
+14,171 stdout bytes and zero stderr bytes. The helper runs inside the owned
+namespace, holds queued/missing replies without further inference, and returns
+facts for workspace decisions. It does not manufacture canonical-check evidence.
+
+Read probes are retained under
+`/tmp/bokkie-workspace-probe/new-boundary/runtime/preflights/`:
+`6e44b12e51c6cf427488a595cc82fd2abd8e6759782a5caad8d9da0134cdf49c/thread-read-probe.json`
+records the ephemeral limitation;
+`2493fc84413aa067a49a5ca64c1fd445456516d21f95a238da34903ecaba5cdc/thread-read-probe.json`
+records explicit legacy mode; and
+`289373e6844ff528fadc9dd3d8eff9d1f53c3dc0d97177524f9942244dec50bb/actual-ci-read.json`
+records the actual CI RPC. Each diagnostic boundary has its own trusted cessation
+receipt. These probes started no model and did not restart the stopped job.
+
+## Delivered source and report recovery
+
+The second real execution used the persistent legacy-history contract. Actual
+child reads established the configured independent reviewer's parent, role,
+model, effort, completed turn and final PASS on the delivered candidate. The
+root-only wait helper waited for candidate and merge CI without model inference.
+The source landed as [PR62](https://github.com/robchristie/bokkie/pull/62), with
+candidate and merged CI passed; the [qualification record](qualification.md)
+retains the exact identities and restart observation.
+
+That execution reached its two-million observed-token threshold before reporting
+its result. Accounting includes repeated cached input, so that threshold is not
+a count of newly generated tokens. Completed delivery must survive such a stop.
+The qualification brief had introduced a literal result-tool condition beyond
+the user's outcome; it remains unmet in the original admission. Explicit report
+recovery and a separately reviewed, model-free assessment of retained delivery
+preserve that distinction rather than rewriting history or repeating the change.
+
 ## Retained evidence
 
 Private raw evidence remains under `/tmp/bokkie-workspace-probe`; credentials and

@@ -78,9 +78,48 @@ def event_bounds(event):
         if c['kind'] not in ('not_started','descendants_reaped'):
             raise ValueError('unconfirmed cessation')
         if event['result'] is not None:result_bounds(event['result'])
-        if event['verification'] is not None:strings(event['verification']['evidence'],64)
+        if event['verification'] is not None:verification_bounds(event['verification'])
+    elif kind=='recovered_result':
+        if set(event)!={'kind','result','provenance','verification'}:
+            raise ValueError('invalid recovered-result event shape')
+        result_bounds(event['result']);recovery_provenance_bounds(event['provenance'])
+        if event['verification'] is not None:verification_bounds(event['verification'])
     else:
         raise ValueError('unknown workspace event')
+
+
+def verification_bounds(value):
+    if not isinstance(value,dict) or set(value)!={'passed','evidence'} or type(value['passed']) is not bool:
+        raise ValueError('invalid trusted verification shape')
+    strings(value['evidence'],64)
+
+
+def recovery_provenance_bounds(value):
+    expected={'origin','algorithm','recovered_at','dispatch_digest','admission_digest','result_digest','cessation','sources'}
+    if not isinstance(value,dict) or set(value)!=expected:
+        raise ValueError('invalid recovery provenance shape')
+    if value['origin']!='host_reconciliation' or value['algorithm']!='retained-delivery-v1':
+        raise ValueError('unsupported recovery provenance')
+    if type(value['recovered_at']) is not int or value['recovered_at']<=0:
+        raise ValueError('invalid recovery time')
+    for key in ('dispatch_digest','admission_digest','result_digest'):
+        if not isinstance(value[key],str) or not re.fullmatch(r'[0-9a-f]{64}',value[key]):
+            raise ValueError('invalid recovery digest')
+    cessation=value['cessation']
+    if not isinstance(cessation,dict) or set(cessation)!={'boundary_id','kind','evidence'} or cessation['kind']!='descendants_reaped':
+        raise ValueError('recovery requires descendant cessation')
+    text(cessation['boundary_id'],256);text(cessation['evidence'],16384)
+    sources=value['sources']
+    if not isinstance(sources,list) or not 1<=len(sources)<=16:
+        raise ValueError('recovery source catalogue exceeds bounds')
+    kinds=set()
+    for source in sources:
+        if not isinstance(source,dict) or set(source)!={'kind','sha256'}:
+            raise ValueError('invalid recovery source descriptor')
+        text(source['kind'],64)
+        if source['kind'] in kinds or not isinstance(source['sha256'],str) or not re.fullmatch(r'[0-9a-f]{64}',source['sha256']):
+            raise ValueError('invalid or repeated recovery source')
+        kinds.add(source['kind'])
 
 
 def pidfd_open(pid):
@@ -277,6 +316,8 @@ class Config:
                 if review_config.get('sandbox_mode')!='read-only' or review_config.get('approval_policy')!='never':
                     raise ValueError('independent reviewer requires read-only, non-escalating permissions')
                 reviewer['sha256']=hashlib.sha256(Path(reviewer_path).read_bytes()).hexdigest()
+                reviewer['model']=review_config.get('model')
+                reviewer['reasoning_effort']=review_config.get('model_reasoning_effort')
             for repository in p['verification']['repositories']:
                 checkout = canonical(repository['checkout'])
                 common = subprocess.check_output(['git', '-C', checkout, 'rev-parse',
@@ -292,6 +333,16 @@ class Config:
             self.projects[p['id']] = p
 
     def admit(self, dispatch):
+        if not isinstance(dispatch['execution_id'], str) or not 1 <= len(dispatch['execution_id']) <= 200:
+            raise ValueError('invalid execution identity')
+        root = self.executions / hashlib.sha256(dispatch['execution_id'].encode()).hexdigest()
+        if root.exists():
+            canonical(str(root))
+            saved = read(root / 'admission.json')
+            if (saved['dispatch_digest'] != digest(dispatch) or
+                    saved['dispatch_digest'] != digest(saved['dispatch'])):
+                raise ValueError('execution identity reused with changed payload')
+            return root
         project = dispatch['assignment']['project']
         p = self.projects.get(project['id'])
         if (p is None or project['revision'] != p['revision'] or
@@ -306,18 +357,10 @@ class Config:
         actions=dispatch['assignment']['permitted_actions']
         if not isinstance(actions,list) or any(action not in p['permitted_actions'] for action in actions):
             raise ValueError('dispatch permitted actions exceed the host profile')
-        if not isinstance(dispatch['execution_id'], str) or not 1 <= len(dispatch['execution_id']) <= 200:
-            raise ValueError('invalid execution identity')
         if (type(dispatch['admitted_at']) is not int or type(dispatch['deadline_at']) is not int or
                 dispatch['deadline_at']<=dispatch['admitted_at'] or
                 dispatch['deadline_at']-dispatch['admitted_at']>limits['max_seconds']):
             raise ValueError('invalid controller-pinned admission deadline')
-        root = self.executions / hashlib.sha256(dispatch['execution_id'].encode()).hexdigest()
-        if root.exists():
-            saved = read(root / 'admission.json')
-            if saved['dispatch_digest'] != digest(dispatch):
-                raise ValueError('execution identity reused with changed payload')
-            return root
         root.mkdir(mode=0o700)
         (root / 'events').mkdir(mode=0o700)
         (root / 'requests').mkdir(mode=0o700)
@@ -327,6 +370,7 @@ class Config:
                'project_profile':p, 'admitted_at':dispatch['admitted_at'], 'deadline':dispatch['deadline_at'],
                'codex':self.value['codex'], 'bwrap':self.value['bwrap'],
                'runtime_root':str(self.root), 'registry':str(self.registry),
+               'host_id':self.value['host_id'],
                'token_file':self.token_file, 'config_file':self.path,
                'edge_authorization_file':self.value.get('edge_authorization_file')}, immutable=True)
         return root

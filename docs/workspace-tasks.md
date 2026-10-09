@@ -68,6 +68,21 @@ the host outside the model turn. A completion sentence, successful exit or
 notification outcome cannot satisfy these requirements. A missing result or
 verification observation does not authorise a replacement execution.
 
+If execution stops before submitting its report, the host can explicitly recover
+an evidence-backed report for that same execution. The recovery retains the
+original interruption and records its own source, time and evidence identities;
+it does not impersonate the missing agent submission or extend the run's budget.
+The task labels the report as recovered. Independent delivery verification still
+decides acceptance, and missing proof leaves the run in attention.
+
+An explicitly reviewed future definition can **Review retained work**. It names
+one earlier, ceased run of the same task and proposes completion evidence under
+the new criteria. Close the earlier run explicitly before confirming this
+immediate occurrence. It checks the existing delivery without starting another
+coding session, and preserves the original unmet criteria and report. The host
+rechecks the delivery identities and required CI; the new definition cannot
+substitute another project's work or imply that the earlier run succeeded.
+
 ## Contributor contract
 
 Managed definitions and the obligation kernel remain authoritative. Store persists
@@ -90,7 +105,9 @@ boundary's descendants have been reaped. A lost connection, expired lease,
 interrupt acknowledgement or missing broker is not cessation evidence.
 
 Migration18 appends workspace execution records and immutable event/answer/action
-receipts without rewriting previous history. Schema17 binaries cannot open it.
+receipts; migration19 adds immutable recovered reports without changing the
+original stopped result. Schema17 and schema18 binaries cannot open this source's
+schema19 state.
 Keep the prior stopped-state backup for any separately authorised deployment;
 rollback is a data operation and must account for later external effects.
 

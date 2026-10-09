@@ -14,6 +14,8 @@ from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from common import Config, Journal, MAX_MESSAGE, MAX_EXCHANGE_BYTES, atomic, control, encoded, locked, private_directory, read
 from broker import Broker, launch, stopped
+from recovery import recover_result
+from retained_review import is_retained_review,run_retained_review
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -112,16 +114,20 @@ class Worker:
             if type(sequence) is not int or not previous<=sequence<=last:
                 raise ValueError('invalid acknowledgement sequence')
             atomic(root/'ack.json',{'sequence':sequence})
+        admitted=[]
         for dispatch in response['dispatches']:
             root=self.config.admit(dispatch)
             by_id[dispatch['execution_id']]=root
-            if not (root/'launch-committed.json').exists() and not (root/'cessation.json').exists():
-                launch(root)
+            if root not in admitted:admitted.append(root)
         for value in response['controls']:
             root=by_id.get(value['execution_id'])
             if root is None:
                 raise ValueError('control names an unknown execution')
             control(root,value)
+        for root in admitted:
+            if not (root/'launch-committed.json').exists() and not (root/'cessation.json').exists():
+                if is_retained_review(Journal(root).admission):run_retained_review(self.config,root)
+                else:launch(root)
         return {'events_sent':len(events),'dispatches_observed':len(response['dispatches']),
                 'controls_observed':len(response['controls'])}
 
@@ -165,12 +171,17 @@ def main():
     preflight=sub.add_parser('preflight');preflight.add_argument('project_id')
     cancel=sub.add_parser('cancel');cancel.add_argument('execution_id')
     verify=sub.add_parser('verify');verify.add_argument('execution_id')
+    recover=sub.add_parser('recover-result');recover.add_argument('execution_id');recover.add_argument('--evidence',required=True)
     args=parser.parse_args()
     config=Config(args.config)
     if args.operation=='allowlist':
         print(json.dumps({'host_id':config.value['host_id'],'projects':list(config.projects.values())},indent=2))
     elif args.operation=='status':
         print(json.dumps(status(config),indent=2))
+    elif args.operation=='recover-result':
+        capsule=recover_result(config,args.execution_id,args.evidence)
+        print(json.dumps({'execution_id':args.execution_id,'result_digest':capsule['provenance']['result_digest'],
+                          'provenance':capsule['provenance']},indent=2))
     elif args.operation=='preflight':
         p=config.projects[args.project_id]
         config.executions=private_directory(config.root/'preflights')

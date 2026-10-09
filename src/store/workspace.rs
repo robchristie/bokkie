@@ -3,7 +3,7 @@ use super::*;
 use crate::workspace::{WorkspaceHost, bounded_text, validate_limits};
 use bokkie_operator_api::*;
 use serde::{Serialize, de::DeserializeOwned};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const LEASE_SECONDS: i64 = 90;
 const MAX_BATCH: usize = 100;
@@ -19,6 +19,38 @@ fn encode(value: &impl Serialize) -> Result<String, StoreError> {
 }
 fn decode<T: DeserializeOwned>(raw: &str) -> Result<T, StoreError> {
     serde_json::from_str(raw).map_err(|e| invalid(&e.to_string()))
+}
+
+/// Sort every object explicitly, including when another dependency enables
+/// serde_json's preserve_order feature. Strings retain their compact UTF-8 form.
+fn canonical_digest(value: &impl Serialize) -> Result<String, StoreError> {
+    fn sorted(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(object) => {
+                let entries: BTreeMap<_, _> = object.into_iter().collect();
+                serde_json::Value::Object(
+                    entries
+                        .into_iter()
+                        .map(|(key, value)| (key, sorted(value)))
+                        .collect(),
+                )
+            }
+            serde_json::Value::Array(values) => {
+                serde_json::Value::Array(values.into_iter().map(sorted).collect())
+            }
+            scalar => scalar,
+        }
+    }
+    let value = serde_json::to_value(value).map_err(|e| invalid(&e.to_string()))?;
+    let bytes = serde_json::to_vec(&sorted(value)).map_err(|e| invalid(&e.to_string()))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 fn text(value: &str, max: usize) -> Result<(), StoreError> {
     if !bounded_text(value, max, true) {
@@ -91,8 +123,100 @@ pub(super) fn validate_definition(def: &ManagedTaskDefinition) -> Result<(), Sto
             return Err(invalid("workspace permitted actions must be distinct"));
         }
     }
+    if let Some(review) = &assignment.review_retained_work {
+        if !matches!(def.trigger, ManagedTrigger::Immediate)
+            || assignment
+                .permitted_actions
+                .iter()
+                .any(|action| !matches!(action.as_str(), "inspect" | "verify"))
+        {
+            return Err(invalid(
+                "retained evidence review is immediate and permits only inspection and verification",
+            ));
+        }
+        text(&review.source.execution_id, 200)?;
+        if !sha256(&review.source.result_digest) {
+            return Err(invalid(
+                "retained evidence source requires a canonical result digest",
+            ));
+        }
+        text(&review.summary, def.max_output_chars as usize)?;
+        if review.criteria.len() != assignment.criteria.len() {
+            return Err(invalid(
+                "retained evidence review must map every new completion criterion exactly",
+            ));
+        }
+        let mut mapped = BTreeSet::new();
+        for criterion in &review.criteria {
+            text(&criterion.id, 200)?;
+            list(&criterion.evidence, 32, true)?;
+            if !ids.contains(&criterion.id) || !mapped.insert(&criterion.id) {
+                return Err(invalid(
+                    "retained evidence review has an unknown or repeated completion criterion",
+                ));
+            }
+        }
+    }
     if encode(def)?.len() > 262144 {
         return Err(invalid("workspace definition exceeds 256 KiB"));
+    }
+    Ok(())
+}
+
+/// The immutable definition is the binding; the authoritative source report
+/// supplies all delivery identities. No browser or model delivery replacement
+/// enters the review mode, and the original obligation is never closed here.
+fn retained_review_result(
+    conn: &Connection,
+    task_id: &str,
+    assignment: &WorkspaceTaskDefinition,
+    host_id: Option<&str>,
+) -> Result<Option<WorkspaceResult>, StoreError> {
+    let Some(review) = &assignment.review_retained_work else {
+        return Ok(None);
+    };
+    let source = execution(conn, &review.source.execution_id)?;
+    let obligation = require_obligation(conn, &source.dispatch.obligation_id)?;
+    if source.dispatch.task_id != task_id
+        || source.dispatch.assignment.project != assignment.project
+        || source.dispatch.assignment.review_retained_work.is_some()
+        || host_id.is_some_and(|id| source.host_id != id)
+        || !source.stopped
+        || !obligation.state.is_terminal()
+        || original_cessation(conn, &review.source.execution_id)?.kind != "descendants_reaped"
+    {
+        return Err(conflict(
+            "retained evidence review requires an explicitly closed, unchained source from this exact task, project and host",
+        ));
+    }
+    let result = source
+        .result
+        .ok_or_else(|| conflict("retained evidence source has no authoritative report"))?;
+    if canonical_digest(&result)? != review.source.result_digest {
+        return Err(conflict(
+            "retained evidence source result digest changed or is incorrect",
+        ));
+    }
+    if result.deliveries.is_empty() {
+        return Err(conflict(
+            "retained evidence source has no attributable deliveries to review",
+        ));
+    }
+    Ok(Some(WorkspaceResult {
+        summary: review.summary.clone(),
+        criteria: review.criteria.clone(),
+        deliveries: result.deliveries,
+        limitations: vec![],
+    }))
+}
+
+pub(super) fn validate_retained_review(
+    conn: &Connection,
+    task_id: &str,
+    def: &ManagedTaskDefinition,
+) -> Result<(), StoreError> {
+    if let Some(assignment) = &def.workspace {
+        retained_review_result(conn, task_id, assignment, None)?;
     }
     Ok(())
 }
@@ -174,12 +298,26 @@ struct Execution {
     cancel: bool,
     stopped: bool,
     result: Option<WorkspaceResult>,
+    recovery: Option<WorkspaceRecoveryProvenance>,
 }
 fn execution(conn: &Connection, id: &str) -> Result<Execution, StoreError> {
     let row:(String,String,String,String,i64,bool,bool,Option<String>)=conn.query_row(
         "SELECT dispatch_json,host_id,status,progress,last_event_sequence,cancellation_requested,cessation_verified,result_json FROM workspace_executions WHERE execution_id=?1",
         [id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?)))
         .optional()?.ok_or_else(||StoreError::NotFound(format!("workspace execution {id}")))?;
+    let original: Option<WorkspaceResult> = row.7.map(|s| decode(&s)).transpose()?;
+    let recovery:Option<(String,String)>=conn.query_row("SELECT result_json,provenance_json FROM workspace_execution_recoveries WHERE execution_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+    let (result, recovery) = match recovery {
+        Some((result, provenance)) if original.is_none() => {
+            (Some(decode(&result)?), Some(decode(&provenance)?))
+        }
+        Some(_) => {
+            return Err(invalid(
+                "workspace execution cannot have both an original and recovered result",
+            ));
+        }
+        None => (original, None),
+    };
     Ok(Execution {
         dispatch: decode(&row.0)?,
         host_id: row.1,
@@ -188,7 +326,8 @@ fn execution(conn: &Connection, id: &str) -> Result<Execution, StoreError> {
         cursor: row.4,
         cancel: row.5,
         stopped: row.6,
-        result: row.7.map(|s| decode(&s)).transpose()?,
+        result,
+        recovery,
     })
 }
 fn question(conn: &Connection, id: &str) -> Result<Option<WorkspaceQuestion>, StoreError> {
@@ -196,6 +335,20 @@ fn question(conn: &Connection, id: &str) -> Result<Option<WorkspaceQuestion>, St
         WHERE q.execution_id=?1 AND NOT EXISTS(SELECT 1 FROM workspace_execution_answers a WHERE a.execution_id=q.execution_id AND a.question_id=q.question_id)
         ORDER BY q.sequence DESC LIMIT 1",[id],|r|r.get(0)).optional()?;
     raw.map(|s| decode(&s)).transpose()
+}
+
+fn latest_verification(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<WorkspaceVerification>, StoreError> {
+    let raw:Option<String>=conn.query_row("SELECT event_json FROM workspace_execution_events WHERE execution_id=?1 AND json_extract(event_json,'$.kind') IN ('stopped','recovered_result') ORDER BY sequence DESC LIMIT 1",[id],|r|r.get(0)).optional()?;
+    match raw.map(|raw| decode::<WorkspaceEvent>(&raw)).transpose()? {
+        Some(
+            WorkspaceEvent::Stopped { verification, .. }
+            | WorkspaceEvent::RecoveredResult { verification, .. },
+        ) => Ok(verification),
+        _ => Ok(None),
+    }
 }
 pub(super) fn run_for_obligation(
     conn: &Connection,
@@ -217,6 +370,8 @@ pub(super) fn run_for_obligation(
                 progress: e.progress,
                 question: question(conn, &id)?,
                 result: e.result,
+                recovery: e.recovery,
+                verification: latest_verification(conn, &id)?,
                 cessation_verified: e.stopped,
                 cancellation_requested: e.cancel,
                 last_event_sequence: e.cursor,
@@ -292,6 +447,95 @@ pub(super) fn recover_reconciliation_wakes(
     Ok(())
 }
 
+fn validate_cessation(cessation: &WorkspaceCessation) -> Result<(), StoreError> {
+    text(&cessation.boundary_id, 256)?;
+    text(&cessation.evidence, 16384)?;
+    if !matches!(
+        cessation.kind.as_str(),
+        "not_started" | "descendants_reaped"
+    ) {
+        return Err(invalid("unsupported workspace cessation proof kind"));
+    }
+    Ok(())
+}
+
+fn validate_result(result: &WorkspaceResult) -> Result<(), StoreError> {
+    text(&result.summary, 16384)?;
+    list(&result.limitations, 32, false)?;
+    if result.criteria.len() > 64 || result.deliveries.len() > 32 {
+        return Err(invalid(
+            "workspace result exceeds criterion or delivery bounds",
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    for criterion in &result.criteria {
+        text(&criterion.id, 200)?;
+        list(&criterion.evidence, 32, false)?;
+        if !ids.insert(&criterion.id) {
+            return Err(invalid("workspace result repeats a criterion identity"));
+        }
+    }
+    for delivery in &result.deliveries {
+        for (value, bound) in [
+            (&delivery.repository, 256),
+            (&delivery.pull_request, 2048),
+            (&delivery.reviewed_head, 64),
+            (&delivery.merge_revision, 64),
+            (&delivery.tree, 64),
+        ] {
+            if !bounded_text(value, bound, false) {
+                return Err(invalid(
+                    "workspace delivery observation exceeds field bounds",
+                ));
+            }
+        }
+        list(&delivery.checks, 32, false)?;
+    }
+    Ok(())
+}
+
+fn validate_verification(verification: Option<&WorkspaceVerification>) -> Result<(), StoreError> {
+    if let Some(verification) = verification {
+        list(&verification.evidence, 64, false)?;
+    }
+    Ok(())
+}
+
+fn validate_provenance(provenance: &WorkspaceRecoveryProvenance) -> Result<(), StoreError> {
+    if provenance.origin != "host_reconciliation"
+        || provenance.algorithm != "retained-delivery-v1"
+        || provenance.recovered_at < 0
+        || provenance.sources.is_empty()
+        || provenance.sources.len() > 16
+        || [
+            &provenance.dispatch_digest,
+            &provenance.admission_digest,
+            &provenance.result_digest,
+        ]
+        .into_iter()
+        .any(|digest| !sha256(digest))
+    {
+        return Err(invalid(
+            "workspace recovery requires bounded host provenance and canonical SHA-256 identities",
+        ));
+    }
+    validate_cessation(&provenance.cessation)?;
+    if provenance.cessation.kind != "descendants_reaped" {
+        return Err(invalid(
+            "workspace result recovery requires verified descendant cessation",
+        ));
+    }
+    for source in &provenance.sources {
+        text(&source.kind, 200)?;
+        if !sha256(&source.sha256) {
+            return Err(invalid(
+                "workspace recovery source requires a canonical SHA-256 identity",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_event(event: &WorkspaceEvent) -> Result<(), StoreError> {
     if encode(event)?.len() > 262144 {
         return Err(invalid("workspace event exceeds 256 KiB"));
@@ -323,51 +567,21 @@ fn validate_event(event: &WorkspaceEvent) -> Result<(), StoreError> {
             verification,
             reason,
         } => {
-            text(&cessation.boundary_id, 256)?;
-            text(&cessation.evidence, 16384)?;
+            validate_cessation(cessation)?;
             text(reason, 4096)?;
-            if !matches!(
-                cessation.kind.as_str(),
-                "not_started" | "descendants_reaped"
-            ) {
-                return Err(invalid("unsupported workspace cessation proof kind"));
-            }
             if let Some(result) = result {
-                text(&result.summary, 16384)?;
-                list(&result.limitations, 32, false)?;
-                if result.criteria.len() > 64 || result.deliveries.len() > 32 {
-                    return Err(invalid(
-                        "workspace result exceeds criterion or delivery bounds",
-                    ));
-                }
-                let mut ids = BTreeSet::new();
-                for criterion in &result.criteria {
-                    text(&criterion.id, 200)?;
-                    list(&criterion.evidence, 32, false)?;
-                    if !ids.insert(&criterion.id) {
-                        return Err(invalid("workspace result repeats a criterion identity"));
-                    }
-                }
-                for delivery in &result.deliveries {
-                    for (value, bound) in [
-                        (&delivery.repository, 256),
-                        (&delivery.pull_request, 2048),
-                        (&delivery.reviewed_head, 64),
-                        (&delivery.merge_revision, 64),
-                        (&delivery.tree, 64),
-                    ] {
-                        if !bounded_text(value, bound, false) {
-                            return Err(invalid(
-                                "workspace delivery observation exceeds field bounds",
-                            ));
-                        }
-                    }
-                    list(&delivery.checks, 32, false)?;
-                }
+                validate_result(result)?;
             }
-            if let Some(verification) = verification {
-                list(&verification.evidence, 64, false)?;
-            }
+            validate_verification(verification.as_ref())?;
+        }
+        WorkspaceEvent::RecoveredResult {
+            result,
+            provenance,
+            verification,
+        } => {
+            validate_result(result)?;
+            validate_provenance(provenance)?;
+            validate_verification(verification.as_ref())?;
         }
     }
     Ok(())
@@ -426,6 +640,117 @@ fn accepted(
         })
 }
 
+fn original_cessation(conn: &Connection, id: &str) -> Result<WorkspaceCessation, StoreError> {
+    let saved:Option<String>=conn.query_row("SELECT event_json FROM workspace_execution_events WHERE execution_id=?1 AND json_extract(event_json,'$.kind')='stopped' ORDER BY sequence LIMIT 1",[id],|r|r.get(0)).optional()?;
+    match saved
+        .map(|raw| decode::<WorkspaceEvent>(&raw))
+        .transpose()?
+    {
+        Some(WorkspaceEvent::Stopped { cessation, .. }) => Ok(cessation),
+        _ => Err(conflict(
+            "workspace execution has no retained cessation observation",
+        )),
+    }
+}
+
+struct StoppedObservation<'a> {
+    cessation: &'a WorkspaceCessation,
+    result: Option<&'a WorkspaceResult>,
+    verification: Option<&'a WorkspaceVerification>,
+    reason: &'a str,
+    save_original: bool,
+}
+
+/// Both an original result and an additive recovery use the same acceptance and
+/// lifecycle gates. Verification cannot change either immutable result record.
+fn reconcile_stopped(
+    tx: &Transaction<'_>,
+    e: &Execution,
+    observation: StoppedObservation<'_>,
+    now: i64,
+) -> Result<(), StoreError> {
+    let id = &e.dispatch.obligation_id;
+    let max_output:u32=tx.query_row(
+        "SELECT json_extract(d.definition_json,'$.max_output_chars') FROM managed_bindings b JOIN managed_definitions d ON d.task_id=b.task_id AND d.revision=b.definition_revision WHERE b.obligation_id=?1",
+        [id],|r|r.get(0))?;
+    let review_result = retained_review_result(
+        tx,
+        &e.dispatch.task_id,
+        &e.dispatch.assignment,
+        Some(&e.host_id),
+    )?;
+    if review_result
+        .as_ref()
+        .zip(observation.result)
+        .is_some_and(|(expected, actual)| expected != actual)
+    {
+        return Err(conflict(
+            "retained evidence review result must preserve the admitted summary, criterion mapping and authoritative source deliveries",
+        ));
+    }
+    let accept = !e.cancel
+        && (observation.cessation.kind == "descendants_reaped"
+            || observation.cessation.kind == "not_started" && review_result.is_some())
+        && question(tx, &e.dispatch.execution_id)?.is_none()
+        && observation
+            .result
+            .is_some_and(|result| result.summary.chars().count() <= max_output as usize)
+        && accepted(&e.dispatch, observation.result, observation.verification);
+    let status = if e.cancel {
+        "cancelled"
+    } else if accept {
+        "completed"
+    } else {
+        "attention"
+    };
+    if observation.save_original {
+        tx.execute("UPDATE workspace_executions SET cessation_verified=1,result_json=?2,status=?3,progress=?4 WHERE execution_id=?1",
+            params![e.dispatch.execution_id,observation.result.map(encode).transpose()?,status,observation.reason])?;
+    } else {
+        tx.execute(
+            "UPDATE workspace_executions SET status=?2,progress=?3 WHERE execution_id=?1",
+            params![e.dispatch.execution_id, status, observation.reason],
+        )?;
+    }
+    if e.cancel {
+        apply_workspace_transition(
+            tx,
+            id,
+            WorkspaceTransition::Cancelled {
+                evidence: &observation.cessation.evidence,
+            },
+            now,
+        )?;
+        schedule_after_cancellation(tx, &e.dispatch.task_id, now)?;
+    } else if accept {
+        let result = observation.result.expect("accepted result");
+        tx.execute(
+            "INSERT INTO managed_results(obligation_id,result,created_at) VALUES (?1,?2,?3)",
+            params![id, result.summary, now],
+        )?;
+        apply_workspace_transition(
+            tx,
+            id,
+            WorkspaceTransition::Accepted {
+                evidence: &observation.cessation.evidence,
+            },
+            now,
+        )?;
+        super::managed::schedule(tx, &e.dispatch.task_id, now)?;
+    } else {
+        apply_workspace_transition(
+            tx,
+            id,
+            WorkspaceTransition::Attention {
+                reason: "Workspace stopped with retained results but acceptance evidence is incomplete; review the unmet criteria and delivery verification",
+                expired: false,
+            },
+            now,
+        )?;
+    }
+    Ok(())
+}
+
 fn reconcile_event(
     tx: &Transaction<'_>,
     host: &WorkspaceHost,
@@ -460,26 +785,26 @@ fn reconcile_event(
         ));
     }
     if e.stopped {
-        let saved:String=tx.query_row("SELECT event_json FROM workspace_execution_events WHERE execution_id=?1 AND json_extract(event_json,'$.kind')='stopped' ORDER BY sequence LIMIT 1",[&event.execution_id],|r|r.get(0))?;
-        match (decode::<WorkspaceEvent>(&saved)?, &event.event) {
-            (
-                WorkspaceEvent::Stopped {
-                    cessation: old_cessation,
-                    result: old_result,
-                    ..
-                },
-                WorkspaceEvent::Stopped {
-                    cessation, result, ..
-                },
-            ) if e.status == "attention"
-                && !e.cancel
-                && old_cessation == *cessation
-                && old_result == *result => {}
-            _ => {
-                return Err(conflict(
-                    "stopped workspace execution permits only verification of the identical retained result and cessation",
-                ));
+        let cessation = original_cessation(tx, &event.execution_id)?;
+        let permitted = match &event.event {
+            WorkspaceEvent::Stopped {
+                cessation: new,
+                result,
+                ..
+            } => cessation == *new && e.result == *result,
+            WorkspaceEvent::RecoveredResult { provenance, .. } => {
+                e.result.is_none()
+                    && e.recovery.is_none()
+                    && cessation.kind == "descendants_reaped"
+                    && cessation == provenance.cessation
+                    && question(tx, &event.execution_id)?.is_none()
             }
+            _ => false,
+        };
+        if e.status != "attention" || e.cancel || !permitted {
+            return Err(conflict(
+                "stopped workspace execution permits only bounded recovery or verification of its identical retained result and cessation",
+            ));
         }
     }
     if e.cancel
@@ -495,6 +820,11 @@ fn reconcile_event(
     let id = &e.dispatch.obligation_id;
     match &event.event {
         WorkspaceEvent::Started { .. } => {
+            if e.dispatch.assignment.review_retained_work.is_some() {
+                return Err(conflict(
+                    "retained evidence review cannot start a workspace implementation runtime",
+                ));
+            }
             let already:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM workspace_execution_events WHERE execution_id=?1 AND json_extract(event_json,'$.kind')='started')",[&event.execution_id],|r|r.get(0))?;
             if already {
                 return Err(conflict("workspace execution already started"));
@@ -557,58 +887,63 @@ fn reconcile_event(
             verification,
             reason,
         } => {
-            let max_output:u32=tx.query_row(
-                "SELECT json_extract(d.definition_json,'$.max_output_chars') FROM managed_bindings b JOIN managed_definitions d ON d.task_id=b.task_id AND d.revision=b.definition_revision WHERE b.obligation_id=?1",
-                [id],|r|r.get(0))?;
-            let accept = !e.cancel
-                && cessation.kind == "descendants_reaped"
-                && question(tx, &event.execution_id)?.is_none()
-                && result
-                    .as_ref()
-                    .is_some_and(|result| result.summary.chars().count() <= max_output as usize)
-                && accepted(&e.dispatch, result.as_ref(), verification.as_ref());
-            let status = if e.cancel {
-                "cancelled"
-            } else if accept {
-                "completed"
-            } else {
-                "attention"
-            };
-            tx.execute("UPDATE workspace_executions SET cessation_verified=1,result_json=?2,status=?3,progress=?4 WHERE execution_id=?1",
-                params![event.execution_id,result.as_ref().map(encode).transpose()?,status,reason])?;
-            if e.cancel {
-                apply_workspace_transition(
-                    tx,
-                    id,
-                    WorkspaceTransition::Cancelled {
-                        evidence: &cessation.evidence,
-                    },
-                    now,
-                )?;
-                schedule_after_cancellation(tx, &e.dispatch.task_id, now)?;
-            } else if accept {
-                let result = result.as_ref().expect("accepted result");
-                tx.execute("INSERT INTO managed_results(obligation_id,result,created_at) VALUES (?1,?2,?3)",params![id,result.summary,now])?;
-                apply_workspace_transition(
-                    tx,
-                    id,
-                    WorkspaceTransition::Accepted {
-                        evidence: &cessation.evidence,
-                    },
-                    now,
-                )?;
-                super::managed::schedule(tx, &e.dispatch.task_id, now)?;
-            } else {
-                apply_workspace_transition(
-                    tx,
-                    id,
-                    WorkspaceTransition::Attention {
-                        reason: "Workspace stopped with retained results but acceptance evidence is incomplete; review the unmet criteria and delivery verification",
-                        expired: false,
-                    },
-                    now,
-                )?;
+            reconcile_stopped(
+                tx,
+                &e,
+                StoppedObservation {
+                    cessation,
+                    result: result.as_ref(),
+                    verification: verification.as_ref(),
+                    reason,
+                    save_original: e.recovery.is_none(),
+                },
+                now,
+            )?;
+        }
+        WorkspaceEvent::RecoveredResult {
+            result,
+            provenance,
+            verification,
+        } => {
+            let obligation = require_obligation(tx, id)?;
+            if !e.stopped
+                || e.status != "attention"
+                || obligation.state != ObligationState::Attention
+                || e.cancel
+                || e.result.is_some()
+                || e.recovery.is_some()
+                || question(tx, &event.execution_id)?.is_some()
+            {
+                return Err(conflict(
+                    "workspace result recovery requires stopped attention with no original result, recovery, cancellation or unresolved question",
+                ));
             }
+            let cessation = original_cessation(tx, &event.execution_id)?;
+            if cessation.kind != "descendants_reaped"
+                || cessation != provenance.cessation
+                || provenance.recovered_at < e.dispatch.admitted_at
+                || provenance.recovered_at > now
+                || canonical_digest(&e.dispatch)? != provenance.dispatch_digest
+                || canonical_digest(result)? != provenance.result_digest
+            {
+                return Err(conflict(
+                    "workspace recovered result does not match its original dispatch, result digest, observation time or cessation",
+                ));
+            }
+            tx.execute("INSERT INTO workspace_execution_recoveries(execution_id,event_sequence,result_json,provenance_json,recorded_at) VALUES (?1,?2,?3,?4,?5)",
+                params![event.execution_id,event.sequence,encode(result)?,encode(provenance)?,now])?;
+            reconcile_stopped(
+                tx,
+                &e,
+                StoppedObservation {
+                    cessation: &provenance.cessation,
+                    result: Some(result),
+                    verification: verification.as_ref(),
+                    reason: "Workspace result recovered from retained host delivery evidence",
+                    save_original: false,
+                },
+                now,
+            )?;
         }
     }
     tx.execute("INSERT INTO workspace_execution_events(execution_id,sequence,event_json,observed_at) VALUES (?1,?2,?3,?4)",params![event.execution_id,event.sequence,raw,now])?;
@@ -750,6 +1085,15 @@ impl Store {
             if !host_allows(host, &definition) {
                 continue;
             }
+            retained_review_result(
+                &tx,
+                &task_id,
+                definition
+                    .workspace
+                    .as_ref()
+                    .expect("validated workspace assignment"),
+                Some(&host.id),
+            )?;
             let assignment = definition
                 .workspace
                 .expect("validated workspace assignment");

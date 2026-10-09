@@ -56,6 +56,7 @@ pub fn definition(
     definition.max_attempts = 1;
     definition.workspace = Some(WorkspaceTaskDefinition {
         project,
+        review_retained_work: previous.and_then(|w| w.review_retained_work.clone()),
         criteria:vec![WorkspaceCriterion {id:"outcome".into(),description:brief.acceptance.clone()}],
         brief,
         permitted_actions:previous.map(|w|w.permitted_actions.clone()).unwrap_or_else(||profile.map_or_else(||vec!["inspect".into()],|p|p.permitted_actions.clone())),

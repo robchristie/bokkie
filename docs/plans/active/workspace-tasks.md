@@ -2,8 +2,8 @@
 
 - Status: active
 - Reorientation budget: 180
-- Landed pull requests: none for this objective
-- Next action: qualify a real web-created documentation task through Bokkie workspace delivery, then independently review and land the connector package
+- Landed pull requests: [PR62](https://github.com/robchristie/bokkie/pull/62), real workspace delivery qualification change
+- Next action: finish canonical connector checks, independent review, CI and landing; then deliver portfolio decisions and task relationships
 
 ## Outcome and authority
 
@@ -41,7 +41,7 @@ starts modestly alongside useful execution. Refine packages from evidence.
 
 | Package | State | Acceptance remaining / next action |
 | --- | --- | --- |
-| Workspace execution | Adapter implemented; mechanism selected; [qualification](../../workspace-execution/qualification.md) | Real web-created task and attributable workspace delivery; exact-candidate review/CI/landing and merged-revision qualification |
+| Workspace execution | One visible conversational task delivered [PR62](https://github.com/robchristie/bokkie/pull/62), recovered its partial report and completed under an explicit future evidence-review definition; browser closure/restart preserved execution/results | Accepted real milestone; [qualification](../../workspace-execution/qualification.md); connector independent review/CI/landing remain |
 | Portfolio and decisions | Waiting for connector | Independent outcomes become distinct tasks; shared scope/dependencies retained; automatic pass continuation and actionable inconclusive question |
 | Recurring workspace tasks | Waiting for connector | Real scheduled correction, interruption recovery, actual repository/worktree conflict ownership; pause future versus stop active |
 | Consolidation | Avoid duplication from first package | Replace gardener with recurrence, Pagefold with workspace execution, hand-offs with briefs and optional export; preserve history and admitted work |

@@ -71,6 +71,7 @@ fn setup(store: &mut Store, recurring: bool) -> (WorkspaceHost, String) {
         permitted_actions: vec!["ordinary_code_delivery".into()],
         decision_rules: "Ask about wider authority".into(),
         limits,
+        review_retained_work: None,
     });
     let id = store
         .managed_create(&Uuid::new_v4().to_string(), &def, 0)
@@ -173,6 +174,876 @@ fn action(
         answer,
         cancel,
     }
+}
+
+fn recovered(
+    dispatch: &WorkspaceDispatch,
+    result: WorkspaceResult,
+    recovered_at: i64,
+    passed: bool,
+) -> WorkspaceEvent {
+    let WorkspaceEvent::Stopped { cessation, .. } = stopped(None, false) else {
+        unreachable!()
+    };
+    WorkspaceEvent::RecoveredResult {
+        provenance: WorkspaceRecoveryProvenance {
+            origin: "host_reconciliation".into(),
+            algorithm: "retained-delivery-v1".into(),
+            recovered_at,
+            dispatch_digest: canonical_digest(dispatch).unwrap(),
+            admission_digest: "d".repeat(64),
+            result_digest: canonical_digest(&result).unwrap(),
+            cessation,
+            sources: vec![
+                WorkspaceRecoverySource {
+                    kind: "command_observations".into(),
+                    sha256: "e".repeat(64),
+                },
+                WorkspaceRecoverySource {
+                    kind: "independent_review".into(),
+                    sha256: "f".repeat(64),
+                },
+                WorkspaceRecoverySource {
+                    kind: "criterion_mapping".into(),
+                    sha256: "0".repeat(64),
+                },
+            ],
+        },
+        result,
+        verification: Some(WorkspaceVerification {
+            passed,
+            evidence: vec![
+                "Synthetic trusted host independently inspected the retained delivery".into(),
+            ],
+        }),
+    }
+}
+
+fn evidence_review_definition(
+    store: &Store,
+    id: &str,
+    source: &WorkspaceDispatch,
+) -> ManagedTaskDefinition {
+    let retained = store
+        .workspace_run(&source.execution_id)
+        .unwrap()
+        .result
+        .unwrap();
+    let mut definition = store.managed_detail(id).unwrap().active.unwrap().definition;
+    definition.trigger = ManagedTrigger::Immediate;
+    let assignment = definition.workspace.as_mut().unwrap();
+    assignment.criteria = vec![WorkspaceCriterion {
+        id: "retained-delivery".into(),
+        description:
+            "Accept the retained reviewed delivery under explicit evidence-only completion criteria"
+                .into(),
+    }];
+    assignment.brief.acceptance = assignment.criteria[0].description.clone();
+    assignment.permitted_actions = vec!["inspect".into(), "verify".into()];
+    assignment.review_retained_work=Some(WorkspaceEvidenceReview {
+        source:WorkspaceEvidenceSource {execution_id:source.execution_id.clone(),result_digest:canonical_digest(&retained).unwrap()},
+        summary:"Retained delivery reviewed under the new completion criteria".into(),
+        criteria:vec![WorkspaceCriterionResult {id:"retained-delivery".into(),satisfied:true,evidence:vec!["Explicit revised mapping to retained command observations and independent delivery review".into()]}],
+    });
+    definition
+}
+
+fn source_for_evidence_review(store: &mut Store) -> (WorkspaceHost, String, WorkspaceDispatch) {
+    let (mut host, id) = setup(store, false);
+    let source = dispatch(store, &host, 1);
+    send(store, &host, event(&source, 1, stopped(None, false)), 2).unwrap();
+    let mut retained = result();
+    retained.criteria[0].satisfied = false;
+    retained.limitations = vec![
+        "The original result tool receipt is absent; original completion remains unproved".into(),
+    ];
+    send(
+        store,
+        &host,
+        event(&source, 2, recovered(&source, retained, 3, true)),
+        3,
+    )
+    .unwrap();
+    host.projects[0]
+        .permitted_actions
+        .extend(["inspect".into(), "verify".into()]);
+    (host, id, source)
+}
+
+fn activate_evidence_review(
+    store: &mut Store,
+    host: &WorkspaceHost,
+    id: &str,
+    definition: &ManagedTaskDefinition,
+    now: i64,
+) -> WorkspaceDispatch {
+    let expected = store.managed_detail(id).unwrap().configuration_revision;
+    store
+        .managed_revise(&Uuid::new_v4().to_string(), id, expected, definition, now)
+        .unwrap();
+    let profile = host.projects[0].capability_profile(&host.name);
+    let preview = store
+        .managed_preview(id, "session", std::slice::from_ref(&profile), now)
+        .unwrap();
+    assert!(preview.blockers.is_empty(), "{:?}", preview.blockers);
+    store
+        .managed_activate(
+            &Uuid::new_v4().to_string(),
+            &preview,
+            "session",
+            &[profile],
+            now,
+        )
+        .unwrap();
+    dispatch(store, host, now + 1)
+}
+
+fn evidence_review_stop(
+    dispatch: &WorkspaceDispatch,
+    result: WorkspaceResult,
+    passed: bool,
+) -> WorkspaceEvent {
+    WorkspaceEvent::Stopped {
+        cessation:WorkspaceCessation {boundary_id:format!("review-no-runtime/{}",dispatch.execution_id),kind:"not_started".into(),evidence:"The closed evidence review never launched a workspace implementation runtime".into()},
+        result:Some(result),verification:Some(WorkspaceVerification {passed,evidence:vec!["Trusted host independently checked the exact retained delivery and admitted evidence mapping".into()]}),
+        reason:"Evidence-only review finished without workspace execution".into(),
+    }
+}
+
+#[test]
+fn explicitly_closed_budget_stop_gets_one_evidence_review_without_rewriting_its_history() {
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, id, source) = source_for_evidence_review(&mut store);
+    let source_report = store.workspace_run(&source.execution_id).unwrap();
+    assert_eq!(source_report.status, "attention");
+    assert!(!source_report.result.as_ref().unwrap().criteria[0].satisfied);
+    let definition = evidence_review_definition(&store, &id, &source);
+    store
+        .managed_revise("review-before-closure", &id, 2, &definition, 4)
+        .unwrap();
+    let profile = host.projects[0].capability_profile(&host.name);
+    let preview = store
+        .managed_preview(&id, "session", std::slice::from_ref(&profile), 4)
+        .unwrap();
+    assert!(
+        preview
+            .blockers
+            .iter()
+            .any(|reason| reason.contains("explicitly closed"))
+    );
+    assert!(
+        preview
+            .changes
+            .iter()
+            .any(|change| change.contains("no workspace implementation will run"))
+    );
+    assert!(
+        preview
+            .changes
+            .iter()
+            .any(|change| change.contains("Completion criteria"))
+    );
+    assert!(
+        store
+            .managed_activate(
+                "cannot-close-implicitly",
+                &preview,
+                "session",
+                std::slice::from_ref(&profile),
+                4
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store.workspace_run(&source.execution_id).unwrap(),
+        source_report
+    );
+    store
+        .workspace_run_action(&action(&source, 2, None, true), 5)
+        .unwrap();
+    let original = store.workspace_run(&source.execution_id).unwrap();
+    let retired = store.attempts(&source.obligation_id).unwrap();
+    let review = activate_evidence_review(&mut store, &host, &id, &definition, 6);
+    assert_ne!(review.execution_id, source.execution_id);
+    assert_eq!(review.task_id, source.task_id);
+    assert_eq!(
+        review.assignment.review_retained_work,
+        definition.workspace.as_ref().unwrap().review_retained_work
+    );
+    assert_eq!(dispatch(&mut store, &host, 8), review);
+    assert_eq!(store.attempts(&review.obligation_id).unwrap().len(), 1);
+    assert!(
+        send(
+            &mut store,
+            &host,
+            event(
+                &review,
+                1,
+                WorkspaceEvent::Started {
+                    runtime_id: "forbidden-runtime".into(),
+                    instruction_sources: vec!["AGENTS.md".into()]
+                }
+            ),
+            8
+        )
+        .is_err()
+    );
+    let expected =
+        retained_review_result(&store.connection, &id, &review.assignment, Some(&host.id))
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        expected.deliveries,
+        original.result.as_ref().unwrap().deliveries
+    );
+    assert!(expected.limitations.is_empty());
+    let waiting = event(
+        &review,
+        1,
+        evidence_review_stop(&review, expected.clone(), false),
+    );
+    send(&mut store, &host, waiting.clone(), 8).unwrap();
+    assert_eq!(
+        store.workspace_run(&review.execution_id).unwrap().status,
+        "attention"
+    );
+    assert!(
+        store
+            .workspace_exchange(&host, &empty(), 9)
+            .unwrap()
+            .dispatches
+            .is_empty()
+    );
+    let complete = event(&review, 2, evidence_review_stop(&review, expected, true));
+    send(&mut store, &host, complete.clone(), 9).unwrap();
+    assert_eq!(
+        store.get(&review.obligation_id).unwrap().unwrap().state,
+        ObligationState::Completed
+    );
+    assert_eq!(
+        store.managed_detail(&id).unwrap().status,
+        ManagedTaskStatus::Completed
+    );
+    assert_eq!(store.managed_detail(&id).unwrap().runs.len(), 2);
+    assert_eq!(store.workspace_run(&source.execution_id).unwrap(), original);
+    assert_eq!(store.attempts(&source.obligation_id).unwrap(), retired);
+    let through = store.change_page(0, None, 100).unwrap().through;
+    send(&mut store, &host, waiting, 10).unwrap();
+    send(&mut store, &host, complete, 10).unwrap();
+    assert_eq!(store.change_page(0, None, 100).unwrap().through, through);
+}
+
+#[test]
+fn evidence_review_rejects_cross_task_project_digest_and_unclosed_or_chained_sources() {
+    for case in 0..4 {
+        let mut store = Store::open_in_memory().unwrap();
+        let (host, id, source) = source_for_evidence_review(&mut store);
+        if case != 3 {
+            store
+                .workspace_run_action(&action(&source, 2, None, true), 4)
+                .unwrap();
+        }
+        let mut definition = evidence_review_definition(&store, &id, &source);
+        if case == 1 {
+            definition
+                .workspace
+                .as_mut()
+                .unwrap()
+                .project
+                .registration
+                .context = "Different exact snapshot".into();
+        }
+        if case == 2 {
+            definition
+                .workspace
+                .as_mut()
+                .unwrap()
+                .review_retained_work
+                .as_mut()
+                .unwrap()
+                .source
+                .result_digest = "0".repeat(64);
+        }
+        let target = if case == 0 {
+            store
+                .managed_create("cross-task", &definition, 5)
+                .unwrap()
+                .task_id
+        } else {
+            store
+                .managed_revise("candidate", &id, 2, &definition, 5)
+                .unwrap()
+                .task_id
+        };
+        let profiles = [host.projects[0].capability_profile(&host.name)];
+        let preview = store
+            .managed_preview(&target, "session", &profiles, 5)
+            .unwrap();
+        assert!(!preview.blockers.is_empty());
+        assert!(
+            store
+                .managed_activate("reject-source", &preview, "session", &profiles, 5)
+                .is_err()
+        );
+    }
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, id, source) = source_for_evidence_review(&mut store);
+    store
+        .workspace_run_action(&action(&source, 2, None, true), 4)
+        .unwrap();
+    let definition = evidence_review_definition(&store, &id, &source);
+    let review = activate_evidence_review(&mut store, &host, &id, &definition, 5);
+    let expected =
+        retained_review_result(&store.connection, &id, &review.assignment, Some(&host.id))
+            .unwrap()
+            .unwrap();
+    send(
+        &mut store,
+        &host,
+        event(&review, 1, evidence_review_stop(&review, expected, false)),
+        7,
+    )
+    .unwrap();
+    store
+        .workspace_run_action(&action(&review, 1, None, true), 8)
+        .unwrap();
+    let chained = evidence_review_definition(&store, &id, &review);
+    let revision = store.managed_detail(&id).unwrap().configuration_revision;
+    store
+        .managed_revise("chained", &id, revision, &chained, 9)
+        .unwrap();
+    let preview = store
+        .managed_preview(
+            &id,
+            "session",
+            &[host.projects[0].capability_profile(&host.name)],
+            9,
+        )
+        .unwrap();
+    assert!(!preview.blockers.is_empty());
+}
+
+#[test]
+fn evidence_review_closed_shape_rejects_timing_write_actions_and_inexact_mapping() {
+    for case in 0..5 {
+        let mut store = Store::open_in_memory().unwrap();
+        let (_host, id, source) = source_for_evidence_review(&mut store);
+        let mut definition = evidence_review_definition(&store, &id, &source);
+        match case {
+            0 => {
+                definition.trigger = ManagedTrigger::Recurring {
+                    cron: "* * * * *".into(),
+                    timezone: "UTC".into(),
+                }
+            }
+            1 => {
+                definition.trigger = ManagedTrigger::Once {
+                    local_datetime: "2030-01-01T09:00".into(),
+                    timezone: "UTC".into(),
+                }
+            }
+            2 => definition
+                .workspace
+                .as_mut()
+                .unwrap()
+                .permitted_actions
+                .push("implement".into()),
+            3 => definition
+                .workspace
+                .as_mut()
+                .unwrap()
+                .review_retained_work
+                .as_mut()
+                .unwrap()
+                .criteria[0]
+                .evidence
+                .clear(),
+            _ => {
+                definition
+                    .workspace
+                    .as_mut()
+                    .unwrap()
+                    .review_retained_work
+                    .as_mut()
+                    .unwrap()
+                    .criteria[0]
+                    .id = "unknown-criterion".into()
+            }
+        }
+        assert!(
+            store
+                .managed_revise("invalid-mode", &id, 2, &definition, 4)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn retained_evidence_admission_cannot_change_the_authenticated_source_host() {
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, id, source) = source_for_evidence_review(&mut store);
+    store
+        .workspace_run_action(&action(&source, 2, None, true), 4)
+        .unwrap();
+    let definition = evidence_review_definition(&store, &id, &source);
+    store
+        .managed_revise("host-fenced-review", &id, 2, &definition, 5)
+        .unwrap();
+    let profile = host.projects[0].capability_profile(&host.name);
+    let preview = store
+        .managed_preview(&id, "session", std::slice::from_ref(&profile), 5)
+        .unwrap();
+    store
+        .managed_activate("activate-host-review", &preview, "session", &[profile], 5)
+        .unwrap();
+    let mut other = host.clone();
+    other.id = "replacement-host".into();
+    assert!(store.workspace_exchange(&other, &empty(), 6).is_err());
+    let runs = store.managed_detail(&id).unwrap().runs;
+    assert_eq!(runs[0].admitted_at, None);
+    assert_eq!(runs[0].workspace, None);
+    let review = dispatch(&mut store, &host, 7);
+    assert_eq!(
+        review.assignment.review_retained_work,
+        definition.workspace.as_ref().unwrap().review_retained_work
+    );
+}
+
+#[test]
+fn evidence_review_fences_host_result_replacement_and_cancellation_while_ordinary_not_started_cannot_accept()
+ {
+    for case in 0..5 {
+        let mut store = Store::open_in_memory().unwrap();
+        let (host, id, source) = source_for_evidence_review(&mut store);
+        store
+            .workspace_run_action(&action(&source, 2, None, true), 4)
+            .unwrap();
+        let definition = evidence_review_definition(&store, &id, &source);
+        let review = activate_evidence_review(&mut store, &host, &id, &definition, 5);
+        let mut expected =
+            retained_review_result(&store.connection, &id, &review.assignment, Some(&host.id))
+                .unwrap()
+                .unwrap();
+        let mut actor = host.clone();
+        match case {
+            0 => actor.id = "another-host".into(),
+            1 => expected.summary = "Host-invented summary".into(),
+            2 => expected.criteria[0]
+                .evidence
+                .push("Unreviewed replacement mapping".into()),
+            3 => expected.deliveries[0].merge_revision = "d".repeat(40),
+            _ => store
+                .workspace_run_action(&action(&review, 0, None, true), 7)
+                .unwrap(),
+        };
+        let stop = event(&review, 1, evidence_review_stop(&review, expected, true));
+        if case == 4 {
+            send(&mut store, &actor, stop, 8).unwrap();
+            assert_eq!(
+                store.get(&review.obligation_id).unwrap().unwrap().state,
+                ObligationState::Cancelled
+            );
+        } else {
+            assert!(send(&mut store, &actor, stop, 8).is_err());
+            assert_eq!(
+                store
+                    .workspace_run(&review.execution_id)
+                    .unwrap()
+                    .last_event_sequence,
+                0
+            );
+        }
+    }
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, _) = setup(&mut store, false);
+    let ordinary = dispatch(&mut store, &host, 1);
+    send(
+        &mut store,
+        &host,
+        event(
+            &ordinary,
+            1,
+            evidence_review_stop(&ordinary, result(), true),
+        ),
+        2,
+    )
+    .unwrap();
+    assert_eq!(
+        store.get(&ordinary.obligation_id).unwrap().unwrap().state,
+        ObligationState::Attention
+    );
+}
+
+#[test]
+fn canonical_recovery_digest_matches_sorted_compact_unicode_json() {
+    let value = json!({"z":"é","a":[{"β":"澳","a":1}]});
+    assert_eq!(
+        canonical_digest(&value).unwrap(),
+        "68e1ec55fab4afde87f531772e53e06a4fb15c35f3e9439fbc286120e15a0a69"
+    );
+}
+
+#[test]
+fn budget_stop_recovers_additively_and_verifies_the_same_result_once() {
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, id) = setup(&mut store, false);
+    let d = dispatch(&mut store, &host, 1);
+    send(
+        &mut store,
+        &host,
+        event(
+            &d,
+            1,
+            WorkspaceEvent::Started {
+                runtime_id: "runtime-budget".into(),
+                instruction_sources: vec!["AGENTS.md".into()],
+            },
+        ),
+        2,
+    )
+    .unwrap();
+    let mut budget_stop = stopped(None, false);
+    if let WorkspaceEvent::Stopped {
+        reason,
+        verification,
+        ..
+    } = &mut budget_stop
+    {
+        *reason = "Finite turn budget exhausted; descendants safely reaped".into();
+        *verification = None;
+    }
+    let budget_event = event(&d, 2, budget_stop.clone());
+    send(&mut store, &host, budget_event.clone(), 3).unwrap();
+    let retired_attempts = store.attempts(&d.obligation_id).unwrap();
+    let retained = result();
+    let recovery_event = event(
+        &d,
+        3,
+        recovered(&d, retained.clone(), d.deadline_at + 1, false),
+    );
+    let response = send(&mut store, &host, recovery_event.clone(), d.deadline_at + 2).unwrap();
+    assert!(response.dispatches.is_empty());
+    assert!(response.controls.is_empty());
+    let run = store.workspace_run(&d.execution_id).unwrap();
+    assert_eq!(run.result, Some(retained.clone()));
+    assert_eq!(run.status, "attention");
+    assert!(!run.verification.as_ref().unwrap().passed);
+    assert!(run.cessation_verified);
+    assert_eq!(run.recovery.as_ref().unwrap().origin, "host_reconciliation");
+    assert_eq!(
+        store.managed_detail(&id).unwrap().runs[0]
+            .workspace
+            .as_ref()
+            .unwrap()
+            .recovery,
+        run.recovery
+    );
+    let original: Option<String> = store
+        .connection
+        .query_row(
+            "SELECT result_json FROM workspace_executions WHERE execution_id=?1",
+            [&d.execution_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(original.is_none());
+    let original_event:String=store.connection.query_row("SELECT event_json FROM workspace_execution_events WHERE execution_id=?1 AND sequence=2",[&d.execution_id],|r|r.get(0)).unwrap();
+    assert_eq!(
+        decode::<WorkspaceEvent>(&original_event).unwrap(),
+        budget_stop
+    );
+    assert!(
+        store
+            .connection
+            .execute(
+                "UPDATE workspace_execution_recoveries SET result_json='{}' WHERE execution_id=?1",
+                [&d.execution_id]
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .connection
+            .execute(
+                "DELETE FROM workspace_execution_recoveries WHERE execution_id=?1",
+                [&d.execution_id]
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .connection
+            .execute(
+                "UPDATE workspace_executions SET result_json='{}' WHERE execution_id=?1",
+                [&d.execution_id]
+            )
+            .is_err()
+    );
+    let through = store.change_page(0, None, 100).unwrap().through;
+    send(&mut store, &host, recovery_event.clone(), d.deadline_at + 3).unwrap();
+    send(&mut store, &host, budget_event, d.deadline_at + 3).unwrap();
+    assert_eq!(store.change_page(0, None, 100).unwrap().through, through);
+    let mut changed = recovery_event.clone();
+    if let WorkspaceEvent::RecoveredResult { verification, .. } = &mut changed.event {
+        verification.as_mut().unwrap().passed = true;
+    }
+    assert!(send(&mut store, &host, changed, d.deadline_at + 3).is_err());
+    assert!(
+        send(
+            &mut store,
+            &host,
+            event(&d, 4, recovery_event.event.clone()),
+            d.deadline_at + 3
+        )
+        .is_err()
+    );
+    let verified = event(&d, 4, stopped(Some(retained.clone()), true));
+    send(&mut store, &host, verified.clone(), d.deadline_at + 4).unwrap();
+    assert_eq!(
+        store.get(&d.obligation_id).unwrap().unwrap().state,
+        ObligationState::Completed
+    );
+    assert_eq!(
+        store.managed_detail(&id).unwrap().status,
+        ManagedTaskStatus::Completed
+    );
+    assert_eq!(store.attempts(&d.obligation_id).unwrap(), retired_attempts);
+    assert!(
+        store
+            .workspace_run(&d.execution_id)
+            .unwrap()
+            .verification
+            .unwrap()
+            .passed
+    );
+    assert_eq!(
+        execution(&store.connection, &d.execution_id)
+            .unwrap()
+            .dispatch,
+        d
+    );
+    let through = store.change_page(0, None, 100).unwrap().through;
+    send(&mut store, &host, verified, d.deadline_at + 5).unwrap();
+    send(&mut store, &host, recovery_event, d.deadline_at + 5).unwrap();
+    assert_eq!(store.change_page(0, None, 100).unwrap().through, through);
+    let original: Option<String> = store
+        .connection
+        .query_row(
+            "SELECT result_json FROM workspace_executions WHERE execution_id=?1",
+            [&d.execution_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(original.is_none());
+    let count: i64 = store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM managed_results WHERE obligation_id=?1",
+            [&d.obligation_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+    assert!(
+        send(
+            &mut store,
+            &host,
+            event(&d, 5, stopped(Some(retained), true)),
+            d.deadline_at + 5
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn recovery_rejects_wrong_host_cancellation_and_existing_results_without_mutation() {
+    for case in 0..5 {
+        let mut store = Store::open_in_memory().unwrap();
+        let (host, _) = setup(&mut store, false);
+        let d = dispatch(&mut store, &host, 1);
+        let mut stop = stopped(if case == 2 { Some(result()) } else { None }, false);
+        if case == 3 {
+            if let WorkspaceEvent::Stopped { cessation, .. } = &mut stop {
+                cessation.kind = "not_started".into();
+            }
+        }
+        if case == 4 {
+            send(
+                &mut store,
+                &host,
+                event(
+                    &d,
+                    1,
+                    WorkspaceEvent::Question {
+                        question: WorkspaceQuestion {
+                            id: "missing-context".into(),
+                            kind: "missing_information".into(),
+                            prompt: "Which exact target?".into(),
+                            options: vec![],
+                        },
+                    },
+                ),
+                2,
+            )
+            .unwrap();
+        }
+        let sequence = if case == 4 { 2 } else { 1 };
+        send(&mut store, &host, event(&d, sequence, stop), 3).unwrap();
+        if case == 1 {
+            store
+                .workspace_run_action(&action(&d, sequence, None, true), 4)
+                .unwrap();
+        }
+        let mut actor = host.clone();
+        if case == 0 {
+            actor.id = "another-host".into();
+        }
+        let before = store.workspace_run(&d.execution_id).unwrap();
+        assert!(
+            send(
+                &mut store,
+                &actor,
+                event(&d, sequence + 1, recovered(&d, result(), 4, true)),
+                5
+            )
+            .is_err()
+        );
+        assert_eq!(store.workspace_run(&d.execution_id).unwrap(), before);
+        let count: i64 = store
+            .connection
+            .query_row(
+                "SELECT count(*) FROM workspace_execution_recoveries WHERE execution_id=?1",
+                [&d.execution_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+}
+
+#[test]
+fn recovery_retains_unsatisfied_original_criteria_and_named_limitations_in_attention() {
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, _) = setup(&mut store, false);
+    let d = dispatch(&mut store, &host, 1);
+    send(&mut store, &host, event(&d, 1, stopped(None, false)), 2).unwrap();
+    let mut retained = result();
+    retained.criteria[0].satisfied = false;
+    retained.limitations.push("The original admission required a result tool receipt that is absent from retained evidence".into());
+    send(
+        &mut store,
+        &host,
+        event(&d, 2, recovered(&d, retained.clone(), 3, true)),
+        3,
+    )
+    .unwrap();
+    let run = store.workspace_run(&d.execution_id).unwrap();
+    assert_eq!(run.result, Some(retained.clone()));
+    assert!(run.recovery.is_some());
+    assert_eq!(run.status, "attention");
+    assert_eq!(
+        store.get(&d.obligation_id).unwrap().unwrap().state,
+        ObligationState::Attention
+    );
+    send(
+        &mut store,
+        &host,
+        event(&d, 3, stopped(Some(retained.clone()), true)),
+        4,
+    )
+    .unwrap();
+    assert_eq!(
+        store.get(&d.obligation_id).unwrap().unwrap().state,
+        ObligationState::Attention
+    );
+    assert_eq!(store.attempts(&d.obligation_id).unwrap().len(), 1);
+    send(
+        &mut store,
+        &host,
+        event(&d, 4, stopped(Some(retained.clone()), false)),
+        5,
+    )
+    .unwrap();
+    assert!(
+        !store
+            .workspace_run(&d.execution_id)
+            .unwrap()
+            .verification
+            .unwrap()
+            .passed
+    );
+    let mut unavailable = stopped(Some(retained), false);
+    if let WorkspaceEvent::Stopped { verification, .. } = &mut unavailable {
+        *verification = None;
+    }
+    send(&mut store, &host, event(&d, 5, unavailable), 6).unwrap();
+    assert!(
+        store
+            .workspace_run(&d.execution_id)
+            .unwrap()
+            .verification
+            .is_none()
+    );
+}
+
+#[test]
+fn recovery_digests_provenance_and_replacements_are_fenced_atomically() {
+    for case in 0..9 {
+        let mut store = Store::open_in_memory().unwrap();
+        let (host, _) = setup(&mut store, false);
+        let d = dispatch(&mut store, &host, 1);
+        send(&mut store, &host, event(&d, 1, stopped(None, false)), 2).unwrap();
+        let mut recovery = recovered(&d, result(), 3, false);
+        if let WorkspaceEvent::RecoveredResult { provenance, .. } = &mut recovery {
+            match case {
+                0 => provenance.dispatch_digest = "0".repeat(64),
+                1 => provenance.result_digest = "1".repeat(64),
+                2 => provenance.admission_digest = "unchecked receipt".into(),
+                3 => provenance.cessation.boundary_id = "different-boundary".into(),
+                4 => provenance.origin = "agent_claim".into(),
+                5 => provenance.sources.clear(),
+                6 => provenance.sources[0].sha256 = "A".repeat(64),
+                7 => provenance.sources = vec![provenance.sources[0].clone(); 17],
+                _ => provenance.recovered_at = 100,
+            }
+        }
+        let before = store.workspace_run(&d.execution_id).unwrap();
+        assert!(send(&mut store, &host, event(&d, 2, recovery), 4).is_err());
+        assert_eq!(store.workspace_run(&d.execution_id).unwrap(), before);
+    }
+    let mut store = Store::open_in_memory().unwrap();
+    let (host, _) = setup(&mut store, false);
+    let d = dispatch(&mut store, &host, 1);
+    send(&mut store, &host, event(&d, 1, stopped(None, false)), 2).unwrap();
+    send(
+        &mut store,
+        &host,
+        event(&d, 2, recovered(&d, result(), 3, false)),
+        3,
+    )
+    .unwrap();
+    let before = store.workspace_run(&d.execution_id).unwrap();
+    let mut replacement = result();
+    replacement.summary = "Replacement cannot overwrite recovered evidence".into();
+    assert!(
+        send(
+            &mut store,
+            &host,
+            event(&d, 3, recovered(&d, replacement.clone(), 4, true)),
+            4
+        )
+        .is_err()
+    );
+    assert!(
+        send(
+            &mut store,
+            &host,
+            event(&d, 3, stopped(Some(replacement), true)),
+            4
+        )
+        .is_err()
+    );
+    assert_eq!(store.workspace_run(&d.execution_id).unwrap(), before);
 }
 
 #[test]

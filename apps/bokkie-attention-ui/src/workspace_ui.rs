@@ -64,6 +64,17 @@ impl Editor {
                         field(ui,"Outcome",&mut definition.purpose,"bokkie.task-editor.outcome",true,nodes);
                         if let Some(workspace) = &mut definition.workspace {
                             ui.label(format!("Workspace: {} on {}",workspace.project.registration.name,workspace.project.registration.host));
+                            if let Some(review) = &mut workspace.review_retained_work {
+                                ui.strong("Review retained work");
+                                ui.add(egui::Label::new(format!("Use the retained report from execution {}. This occurrence verifies existing delivery evidence without starting workspace implementation.", review.source.execution_id)).wrap());
+                                field(ui,"Proposed result summary",&mut review.summary,"bokkie.task-editor.review-summary",true,nodes);
+                                for criterion in &mut review.criteria {
+                                    ui.checkbox(&mut criterion.satisfied,format!("Evidence supports {}",criterion.id));
+                                    let mut evidence = criterion.evidence.join("\n");
+                                    field(ui,"Evidence (one item per line)",&mut evidence,&format!("bokkie.task-editor.review-evidence.{}",criterion.id),true,nodes);
+                                    criterion.evidence = evidence.lines().filter(|line| !line.trim().is_empty()).map(str::to_owned).collect();
+                                }
+                            }
                             field(ui,"Relevant context",&mut workspace.brief.context,"bokkie.task-editor.context",true,nodes);
                             field(ui,"Scope and constraints",&mut workspace.brief.constraints,"bokkie.task-editor.scope",true,nodes);
                             field(ui,"Completion criteria",&mut workspace.brief.acceptance,"bokkie.task-editor.acceptance",true,nodes);
@@ -72,6 +83,14 @@ impl Editor {
                             ui.horizontal(|ui| {
                                 ui.label("Maximum run time (seconds)");
                                 ui.add(egui::DragValue::new(&mut workspace.limits.max_seconds).range(1..=86_400));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Maximum turns");
+                                ui.add(egui::DragValue::new(&mut workspace.limits.max_turns).range(1..=100));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Observed token limit");
+                                ui.add(egui::DragValue::new(&mut workspace.limits.max_tokens).range(1..=2_000_000));
                             });
                             ui.small("Limits and actions cannot exceed the configured workspace profile. Changing the workspace requires a fresh conversation proposal.");
                         } else {
@@ -86,7 +105,9 @@ impl Editor {
                             if let Some(workspace) = &mut definition.workspace {
                                 workspace.brief.outcome = definition.purpose.clone();
                                 workspace.brief.references = definition.context_refs.clone();
-                                workspace.criteria = vec![bokkie_operator_api::WorkspaceCriterion { id:"outcome".into(),description:workspace.brief.acceptance.clone() }];
+                                if workspace.criteria.len()==1 && workspace.criteria[0].id=="outcome" {
+                                    workspace.criteria[0].description = workspace.brief.acceptance.clone();
+                                }
                                 definition.instructions = workspace.brief.context.clone();
                             }
                             request = Some(ApiRequest::EditTask { task_id:task_id.clone(), request:Box::new(WorkspaceTaskEditRequest {

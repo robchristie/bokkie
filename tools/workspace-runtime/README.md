@@ -95,8 +95,24 @@ passes that file through the named `exact_head_reviewer` configuration and pins
 its digest. Do not modify global account configuration. A completed child must
 have runtime-reported parent linkage and that role, a completed final-answer
 turn, and the exact `Verdict: PASS` / `Reviewed head: <full revision>` report.
+The anchored values may use matched `**PASS**` / `**BLOCK**` emphasis and matched
+single backticks around the full revision. Duplicate fields, malformed wrappers
+and values embedded in prose remain unverified; later `BLOCK` on the same head
+continues to prevent reuse of an earlier `PASS`.
 An implementation child or the root's own PR comment cannot satisfy review.
 An independent GitHub `APPROVED` review at the exact head is also supported.
+
+New jobs select `ephemeral: false` and `historyMode: "legacy"`, with materialised
+history retained only in their private per-execution Codex overlay. The root's
+stream may contain only `subAgentActivity` identifiers, without child metadata
+or final reports. The broker then issues supported `thread/read` requests on its
+own still-running app-server: metadata first, followed by `includeTurns: true`.
+It retains these actual responses as `child_thread_read`, separately from stream
+events. Acceptance requires the reported parent, protected reviewer role and
+completed turn's final answer at the exact head; a task path is only a label.
+Missing fields, unsupported reads and oversized history remain unavailable proof.
+No old job is resumed to recover a report. The zero-model seam establishes the
+read contract, not materialised independent review; each live task must prove it.
 
 For Bokkie, the current authored CI names are `Plan governance`,
 `Locked backend checks`, `Locked attention UI checks` and
@@ -115,6 +131,7 @@ python3 tools/workspace-runtime/worker.py --config /absolute/private/host.json r
 python3 tools/workspace-runtime/worker.py --config /absolute/private/host.json status
 python3 tools/workspace-runtime/worker.py --config /absolute/private/host.json cancel execution-id
 python3 tools/workspace-runtime/worker.py --config /absolute/private/host.json verify execution-id
+python3 tools/workspace-runtime/worker.py --config /absolute/private/host.json recover-result execution-id --evidence /absolute/private/proposal.json
 ```
 
 `preflight` creates a separate retained diagnostic execution, starts no model,
@@ -131,6 +148,71 @@ starts another model turn. It is useful when completed delivery was retained wit
 acceptance pending because review or CI evidence was temporarily unavailable.
 The Bokkie Store decides whether this later verification permits acceptance.
 
+`recover-result` is an explicit import for a ceased execution which delivered
+attributable work but submitted no result. The untrusted proposal has exactly
+`execution_id`, `dispatch_digest`, `result` (the existing structured-result shape)
+and `criterion_mapping`. Mapping rows have exactly `id` and `evidence`, cover
+every original criterion once and exactly match that criterion's result evidence.
+Evidence must contain documentary references: HTTPS URLs, `runtime:` / `sha256:`
+references or relative repository paths. Every false criterion remains false and
+requires a limitation beginning with its `id:`; recovery never fills in blanket
+satisfaction or substitutes for a required tool call.
+
+The importer holds the execution lock and requires the exact original admission,
+committed boundary and `descendants_reaped` proof, an original null-result stop,
+no cancellation and no agent result. Clean canonical observations, independent
+review and actual merged PR/head/tree identities must pass before import. Actual
+CI, unsatisfied criteria or remaining limitations can leave the imported report
+unaccepted. Qualified retained `BLOCK` cannot be erased by another GitHub approval.
+No model, namespace, source check, writer reservation or execution lease is started.
+
+The immutable `recovered-result.json` contains only `result` and explicit host
+reconciliation provenance, including fixed recovery time, admission/dispatch/result
+digests, the original cessation and bounded source-class digests. Proposal and
+actual projected GitHub observations are retained privately. The original
+`result.json`, protocol records and null-result stop are preserved. Publication
+emits a separate `recovered_result` event; a crash or lost acknowledgement replays
+that same capsule once. Later `verify` rechecks the effective report without
+rerunning work. Original false claims or limitations continue to prevent acceptance.
+
+Future admissions pin the route host identity. Legacy recovery is limited to
+receipts under their original canonical private configuration and runtime, with
+the original project still registered under its destination hostname. This
+fallback does not infer a route identity from the hostname; Bokkie independently
+authenticates and fences the original host's event.
+
+An explicitly reviewed future definition may set `review_retained_work` to
+`{"source":{"execution_id":"original-run","result_digest":"full-sha256"},"summary":"Reviewed summary","criteria":[...]}`.
+Its criterion results are the new pinned claims; the original partial report and
+its historical false criterion stay unchanged. Bokkie must first acknowledge the
+source result and close its original logical run. Store then validates the same
+visible task, host, exact project and source digest before admitting this mode.
+
+The host branches before coding launch or writer reservation. It independently
+requires the source's acknowledged result event, exact descendant cessation,
+unchanged effective result, compatible canonical/CI policy and no chained review.
+It derives deliveries only from that source and records an explicit
+`retained-review.json` manifest with admission/result/record/cessation identities.
+The new result uses the reviewed summary and criteria, with no copied protocol
+events and no model or source commands. Its `not_started` receipt describes the
+new coding boundary and names the ceased source boundary; it does not claim the
+original delivery was never executed. Actual required CI is read again with finite
+read/deadline bounds and cancellation fences. Pending CI retains the new result;
+later `verify` reads the original attributed records through the manifest and
+rechecks that same job. A profile promotion does not alter earlier admissions.
+
+The root-only `bokkie_workspace.wait_for_checks(repository, revision)` tool waits
+for the declared repository's actual required check names at one full revision.
+It runs exact read-only `gh api` requests through the same app-server's
+`command/exec`, inside the owned namespace, with the existing network policy,
+20-second request timeout and 256 KiB capture cap. It polls at 15-second intervals
+for at most 128 reads within the admitted deadline. Queued or missing checks hold
+the tool reply and consume no additional inference. Meaningful changes retain
+bounded facts and progress; passed, failed or unavailable facts are returned for
+the workspace's next decision. Failed or missing checks never count as success.
+Cancellation or deadline exhaustion stops the namespace and retains the unfinished
+wait. These helper reads never fabricate canonical command observations.
+
 ## Ownership, containment and recovery
 
 The account-wide registry at
@@ -144,7 +226,11 @@ replacement of an uncertain owner.
 
 One detached broker holds an exclusive execution lock. It commits its launch
 marker before spawning any cleanup owner/payload. A repeated dispatch hashes
-and compares the entire immutable payload; a changed payload conflicts. A later
+and compares the entire immutable payload; a changed payload conflicts. Matching
+replay returns the saved admission before checking current profiles, so promoting
+a profile cannot redirect or reject admitted work. New jobs still require the
+current allowlist. Retain stable declared worktree parent resources and a persistent
+verification checkout so task cleanup does not invalidate the next host startup. A later
 broker seeing that marker never launches a replacement. A lost app-server start
 reply stops/reaps the boundary; it does not retry `turn/start` or use thread resume
 as proof of in-flight recovery.
