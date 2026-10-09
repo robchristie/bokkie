@@ -145,6 +145,7 @@ fn application(executor: &DbExecutor, runtime: ApiRuntime, notes: bool) -> Route
             executor: executor.clone(),
             runtime,
             engineering_intake: None,
+            workspace: None,
             conversation: Some(ConversationConfig {
                 profile: None,
                 notes_enabled: notes,
@@ -623,6 +624,7 @@ async fn handoff_http_drafts_with_one_bounded_turn_then_transfers_without_models
             executor: fixture.executor.clone(),
             runtime: runtime(),
             engineering_intake: None,
+            workspace: None,
             conversation: None,
         },
         None,
@@ -746,6 +748,7 @@ impl ModelApplication {
                 executor: executor.clone(),
                 runtime: runtime(),
                 engineering_intake: None,
+                workspace: None,
                 conversation: Some(ConversationConfig {
                     profile: Some(Arc::new(profile)),
                     notes_enabled: true,

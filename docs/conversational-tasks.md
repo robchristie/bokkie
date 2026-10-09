@@ -6,8 +6,11 @@ result and a separate delivery intent for the explicitly reviewed destination.
 New reminders prefer the enrolled Bokkie Web Push device. Existing email
 definitions retain their recipient, profile and history.
 `local_note` keeps its established in-app result behaviour and sends no email.
-Neither browses pages, reads referenced documents, runs shell commands or invokes
-a model when due. Research finders and email monitors
+Neither note nor reminder browses pages, reads referenced documents, runs shell commands or invokes
+a model when due. The separately configured [workspace capability](workspace-tasks.md)
+dispatches an immutable assignment to its registered host and receiving workspace.
+Its progress, questions, cessation and delivery acceptance use a dedicated Store
+boundary; it cannot be completed as a local note. Research finders and email monitors
 can be discussed and saved as drafts; their missing adapters block activation.
 
 ## Definition and execution boundaries
@@ -134,8 +137,8 @@ at most four total calls, one consultation and one empty-lookup continuation.
 Every dispatch and outcome is durably recorded. No model is
 started by a timer, refresh, note occurrence or unchanged-state poll.
 
-Five named model tools propose discussion, catalogue lookup, saving a candidate,
-preview and activation/pause/resume. Draft arguments contain user-facing fields;
+Named model tools propose discussion, catalogue lookup, saving a candidate,
+preview, activation/pause/resume, workspace tasks and optional manual briefs. Draft arguments contain user-facing fields;
 trusted code supplies capability profile, effects, destination and finite bounds,
 preserving those settings on revisions of the same capability. A valid custom-tool
 request ends the contained runtime before Store applies the proposal. No tool

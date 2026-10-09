@@ -6,7 +6,7 @@ import sys
 request = json.loads(sys.stdin.readline())
 assert request['profile']['codex'] == '/usr/bin/true'
 assert request['profile']['bwrap'] == '/usr/bin/true'
-SCENARIOS = ('fixture-handoff', 'fixture-ui', 'fixture-settings', 'fixture-empty', 'fixture-matches', 'fixture-fail',
+SCENARIOS = ('fixture-workspace', 'fixture-handoff', 'fixture-ui', 'fixture-settings', 'fixture-empty', 'fixture-matches', 'fixture-fail',
              'fixture-invalid-json', 'fixture-malformed', 'fixture-read-fail',
              'fixture-repeat', 'fixture-adviser-main', 'fixture-adviser',
              'fixture-adviser-fail', 'fixture-adviser-malformed', 'fixture-adviser-timeout',
@@ -23,7 +23,7 @@ def output(proposal):
     operation = proposal['operation']
     names = {'save_definition': 'bokkie_save_draft', 'discuss': 'bokkie_discuss',
              'lookup': 'bokkie_lookup', 'preview': 'bokkie_preview', 'propose': 'bokkie_propose',
-             'prepare_handoff': 'bokkie_prepare_handoff'}
+             'prepare_handoff': 'bokkie_prepare_handoff', 'prepare_workspace': 'bokkie_workspace_task'}
     if operation == 'save_definition':
         definition = proposal['definition']
         args = {key: definition[key] for key in ('name', 'purpose', 'instructions', 'capability', 'trigger', 'context_refs') if key in definition}
@@ -33,6 +33,14 @@ def output(proposal):
 
 scenario = request['profile']['model']
 assert scenario in SCENARIOS
+if scenario == 'fixture-workspace':
+    output({'operation':'prepare_workspace','project_query':'Atlas','brief':{
+        'outcome':'Keep the documentation aligned with the code',
+        'context':'Retain existing examples and verified results.',
+        'constraints':'Original scope: ordinary source corrections only; no deployment.',
+        'acceptance':'Deliver reviewed documentation corrections with required checks and attributable revisions.',
+        'references':[]}})
+    sys.exit(0)
 if scenario == 'fixture-handoff':
     if text == 'Prepare a hand-off for Atlas to add a searchable project list with Australian English labels.':
         output({'operation': 'prepare_handoff', 'project_query': 'Atlas', 'brief': {

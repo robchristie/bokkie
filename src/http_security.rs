@@ -267,30 +267,38 @@ pub async fn enforce(
                 "HTTP mutations require Content-Type: application/json",
             );
         }
-        let token_header = HeaderName::from_static(MUTATION_TOKEN_HEADER);
-        let supplied = match single_optional_header(headers, &token_header) {
-            Some(Ok(value)) => value,
-            Some(Err(())) => {
+        // Dedicated host authentication is performed before this middleware.
+        // Its marker is inserted by trusted code only on the exact exchange route.
+        if request
+            .extensions()
+            .get::<crate::workspace_http::AuthenticatedWorkspaceHost>()
+            .is_none()
+        {
+            let token_header = HeaderName::from_static(MUTATION_TOKEN_HEADER);
+            let supplied = match single_optional_header(headers, &token_header) {
+                Some(Ok(value)) => value,
+                Some(Err(())) => {
+                    return rejection(
+                        StatusCode::FORBIDDEN,
+                        "mutation_token_invalid",
+                        "mutation token is invalid; acquire a current bootstrap session",
+                    );
+                }
+                None => {
+                    return rejection(
+                        StatusCode::FORBIDDEN,
+                        "mutation_token_required",
+                        "HTTP mutations require the current bootstrap session token",
+                    );
+                }
+            };
+            if !runtime.token_matches(supplied) {
                 return rejection(
                     StatusCode::FORBIDDEN,
                     "mutation_token_invalid",
                     "mutation token is invalid; acquire a current bootstrap session",
                 );
             }
-            None => {
-                return rejection(
-                    StatusCode::FORBIDDEN,
-                    "mutation_token_required",
-                    "HTTP mutations require the current bootstrap session token",
-                );
-            }
-        };
-        if !runtime.token_matches(supplied) {
-            return rejection(
-                StatusCode::FORBIDDEN,
-                "mutation_token_invalid",
-                "mutation token is invalid; acquire a current bootstrap session",
-            );
         }
     }
 

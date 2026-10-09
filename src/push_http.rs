@@ -124,6 +124,7 @@ mod tests {
         let key = config.public_key().unwrap();
         let app = router_with_state(
             ApiState {
+                workspace: None,
                 executor: executor.clone(),
                 runtime: runtime.clone(),
                 engineering_intake: None,

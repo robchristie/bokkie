@@ -196,6 +196,9 @@ enum Command {
         /// Explicit task-scoped engineering runtime profile; enables conversational supervision.
         #[arg(long)]
         engineering_profile: Option<PathBuf>,
+        /// Explicit authenticated execution-host registrations; credentials remain on the host.
+        #[arg(long)]
+        workspace_host_config: Option<PathBuf>,
         /// Explicit bounded model adapter for task definition conversation.
         #[arg(long)]
         conversation_profile: Option<PathBuf>,
@@ -418,6 +421,7 @@ struct ServeOptions {
     gardener_process_timeout_ms: u64,
     ui_dir: Option<PathBuf>,
     engineering_profile: Option<PathBuf>,
+    workspace_host_config: Option<PathBuf>,
     conversation_profile: Option<PathBuf>,
     enable_local_notes: bool,
     notification_config: Option<PathBuf>,
@@ -534,6 +538,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
             gardener_heartbeat_ms,
             gardener_process_timeout_ms,
             engineering_profile,
+            workspace_host_config,
             conversation_profile,
             enable_local_notes,
             notification_config,
@@ -565,6 +570,7 @@ async fn run(cli: Cli) -> Result<(), AppError> {
                     gardener_heartbeat_ms,
                     gardener_process_timeout_ms,
                     engineering_profile,
+                    workspace_host_config,
                     conversation_profile,
                     enable_local_notes,
                     notification_config,
@@ -1006,6 +1012,13 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
         .map(EngineeringRuntimeProfile::load)
         .transpose()
         .map_err(|error| AppError::Configuration(error.to_string()))?;
+    let workspace = options
+        .workspace_host_config
+        .as_deref()
+        .map(bokkie::workspace::WorkspaceHostConfig::load)
+        .transpose()
+        .map_err(|error| AppError::Configuration(error.to_string()))?
+        .map(Arc::new);
     if let Some(profile) = &engineering_profile {
         profile
             .validate_database(&database)
@@ -1164,6 +1177,7 @@ async fn serve(database: PathBuf, options: ServeOptions) -> Result<(), AppError>
             executor: database_executor.clone(),
             runtime: api_runtime,
             engineering_intake,
+            workspace,
             conversation,
         },
         options.ui_dir,

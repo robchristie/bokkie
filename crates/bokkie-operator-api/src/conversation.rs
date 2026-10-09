@@ -86,6 +86,8 @@ pub struct ConversationView {
     pub adviser_outcome: Option<ConversationAdviserOutcome>,
     pub notes_available: bool,
     #[serde(default)]
+    pub workspace_available: bool,
+    #[serde(default)]
     pub reminders_available: bool,
     pub receipt: Option<ManagedTaskReceipt>,
 }

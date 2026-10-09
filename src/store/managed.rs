@@ -44,6 +44,7 @@ fn validate(def: &ManagedTaskDefinition) -> Result<(), StoreError> {
             "task definition exceeds finite field or execution bounds",
         ));
     }
+    super::workspace::validate_definition(def)?;
     match &def.trigger {
         ManagedTrigger::Immediate => {}
         ManagedTrigger::Once {
@@ -114,8 +115,9 @@ fn capability_blockers(
     if !(matches!(
         (def.capability.as_str(), def.profile_revision.as_str()),
         ("local_note", "local-note-v1") | ("reminder", "reminder-v1")
-    ) || def.capability == "reminder"
-        && crate::notifications::push::push_device_id(&def.profile_revision).is_some())
+    ) || def.capability == "workspace" && def.workspace.is_some()
+        || def.capability == "reminder"
+            && crate::notifications::push::push_device_id(&def.profile_revision).is_some())
     {
         reasons.push(format!(
             "Capability {} has no installed execution adapter",
@@ -137,12 +139,25 @@ fn capability_blockers(
                     "Requested effects, destination or bounds exceed the capability profile".into(),
                 );
             }
+            if def.capability == "workspace" && !super::workspace::profile_allows(p, def) {
+                reasons.push("Workspace assignment exceeds the registered host, project, permitted actions or finite execution limits".into());
+            }
         }
     }
     if def.capability == "local_note"
         && (def.effects != ["store_local_result"] || def.destination != "task_results")
     {
         reasons.push("Local notes can only store a result in this task".into());
+    }
+    if def.capability == "workspace"
+        && (def.effects != ["workspace_execution", "store_local_result"]
+            || def.max_attempts != 1
+            || def
+                .workspace
+                .as_ref()
+                .is_none_or(|w| def.destination != format!("workspace:{}", w.project.id)))
+    {
+        reasons.push("Workspace tasks require the exact registered destination, execution effects and single admission".into());
     }
     if def.capability == "reminder"
         && (def.effects != ["store_local_result", "send_notification"]
@@ -254,9 +269,10 @@ fn detail(conn: &Connection, id: &str) -> Result<ManagedTaskDetail, StoreError> 
         FROM managed_bindings b JOIN obligations o ON o.id=b.obligation_id LEFT JOIN managed_results r ON r.obligation_id=o.id
         WHERE b.task_id=?1 ORDER BY o.created_at DESC,o.rowid DESC LIMIT 20")?
         .query_map([id], |r| Ok(ManagedRun { obligation_id:r.get(0)?, definition_revision:r.get(1)?,profile_revision:r.get(2)?,
-            scheduled_at:r.get(3)?,admitted_at:r.get(4)?,state:r.get(5)?,result:r.get(6)?,timezone:String::new(),delivery:None }))?.collect::<Result<Vec<_>,_>>()?;
+            scheduled_at:r.get(3)?,admitted_at:r.get(4)?,state:r.get(5)?,result:r.get(6)?,timezone:String::new(),delivery:None,workspace:None }))?.collect::<Result<Vec<_>,_>>()?;
     for run in &mut runs {
         run.delivery = super::notifications::delivery_for_source(conn, &run.obligation_id)?;
+        run.workspace = super::workspace::run_for_obligation(conn, &run.obligation_id)?;
         let bound = revision(conn, id, Some(run.definition_revision))?
             .ok_or_else(|| invalid("bound definition missing"))?;
         run.timezone = match bound.definition.trigger {
@@ -336,7 +352,7 @@ fn receipt(
     )?;
     Ok(result)
 }
-fn domain_event(
+pub(super) fn domain_event(
     tx: &Transaction<'_>,
     id: &str,
     event: &str,
@@ -356,7 +372,7 @@ fn cancel_unadmitted(tx: &Transaction<'_>, id: &str, now: i64) -> Result<(), Sto
     }
     Ok(())
 }
-fn schedule(tx: &Transaction<'_>, id: &str, now: i64) -> Result<(), StoreError> {
+pub(super) fn schedule(tx: &Transaction<'_>, id: &str, now: i64) -> Result<(), StoreError> {
     let state = detail(tx, id)?;
     if state.status != ManagedTaskStatus::Active {
         return Ok(());
@@ -572,6 +588,10 @@ impl Store {
             .ok_or_else(|| conflict("task has no definition"))?;
         let definition = &candidate.definition;
         let mut reasons = blockers(definition, profiles, now);
+        if let Err(error) = super::workspace::validate_current_project(&self.connection, definition)
+        {
+            reasons.push(error.to_string());
+        }
         if state.candidate.is_none() {
             reasons.push("No proposed revision to activate".into());
         }
@@ -804,6 +824,14 @@ impl Store {
         )?;
         let def =
             revision(&tx, &task, Some(rev))?.ok_or_else(|| invalid("bound definition missing"))?;
+        if !matches!(
+            def.definition.capability.as_str(),
+            "local_note" | "reminder"
+        ) {
+            return Err(conflict(
+                "workspace execution requires its designated result adapter",
+            ));
+        }
         if !bounded(result, def.definition.max_output_chars as usize) {
             return Err(invalid("note result exceeds approved output bound"));
         }
@@ -921,7 +949,7 @@ impl Store {
                    coalesce(json_extract(d.definition_json,'$.trigger.timezone'),?8) AS timezone,
                    (SELECT r.result FROM managed_bindings b JOIN managed_results r ON r.obligation_id=b.obligation_id WHERE b.task_id=t.id ORDER BY r.created_at DESC,r.rowid DESC LIMIT 1) AS latest_result,
                    (SELECT max(r.created_at) FROM managed_bindings b JOIN managed_results r ON r.obligation_id=b.obligation_id WHERE b.task_id=t.id) AS result_at,
-                   (t.candidate_revision IS NOT NULL OR t.status='draft' OR (t.status IN ('active','paused') AND json_extract(d.definition_json,'$.profile_revision') LIKE 'reminder-web-push-v1/%' AND NOT EXISTS(SELECT 1 FROM push_configuration pc WHERE pc.active=1 AND json_extract(d.definition_json,'$.profile_revision')='reminder-web-push-v1/'||pc.device_id)) OR EXISTS(SELECT 1 FROM managed_bindings b JOIN obligations o ON o.id=b.obligation_id WHERE b.task_id=t.id AND (o.state IN ('attention','awaiting_approval') OR (o.state='running' AND o.lease_expires_at<=?9))) OR EXISTS(SELECT 1 FROM notification_deliveries nd JOIN obligations no ON no.id=nd.id WHERE nd.task_id=t.id AND (no.state='attention' OR (no.state='running' AND no.lease_expires_at<=?9)))) AS needs_input,
+                   (t.candidate_revision IS NOT NULL OR t.status='draft' OR (t.status IN ('active','paused') AND json_extract(d.definition_json,'$.profile_revision') LIKE 'reminder-web-push-v1/%' AND NOT EXISTS(SELECT 1 FROM push_configuration pc WHERE pc.active=1 AND json_extract(d.definition_json,'$.profile_revision')='reminder-web-push-v1/'||pc.device_id)) OR EXISTS(SELECT 1 FROM managed_bindings b JOIN obligations o ON o.id=b.obligation_id WHERE b.task_id=t.id AND (o.state IN ('attention','awaiting_approval') OR (o.state='running' AND o.lease_expires_at<=?9))) OR EXISTS(SELECT 1 FROM workspace_executions we JOIN managed_bindings wb ON wb.obligation_id=we.obligation_id JOIN workspace_execution_questions wq ON wq.execution_id=we.execution_id WHERE wb.task_id=t.id AND we.cessation_verified=0 AND NOT EXISTS(SELECT 1 FROM workspace_execution_answers wa WHERE wa.execution_id=wq.execution_id AND wa.question_id=wq.question_id)) OR EXISTS(SELECT 1 FROM notification_deliveries nd JOIN obligations no ON no.id=nd.id WHERE nd.task_id=t.id AND (no.state='attention' OR (no.state='running' AND no.lease_expires_at<=?9)))) AS needs_input,
                    (SELECT c.id FROM conversations c WHERE c.selected_task_id=t.id ORDER BY c.updated_at DESC,c.id LIMIT 1) AS conversation_id
             FROM managed_tasks t JOIN managed_definitions d ON d.task_id=t.id AND d.revision=coalesce(t.active_revision,t.candidate_revision)
             UNION ALL
@@ -987,13 +1015,63 @@ fn definition_changes(
     old: &ManagedTaskDefinition,
     new: &ManagedTaskDefinition,
 ) -> Result<Vec<String>, StoreError> {
+    let mut workspace_changes = Vec::new();
+    match (&old.workspace, &new.workspace) {
+        (Some(old), Some(new)) => {
+            if old.project != new.project {
+                workspace_changes.push(format!(
+                    "Workspace: {} on {} → {} on {}",
+                    old.project.registration.name,
+                    old.project.registration.host,
+                    new.project.registration.name,
+                    new.project.registration.host
+                ));
+            }
+            for (label, before, after) in [
+                ("Relevant context", &old.brief.context, &new.brief.context),
+                (
+                    "Scope and constraints",
+                    &old.brief.constraints,
+                    &new.brief.constraints,
+                ),
+                (
+                    "Completion criteria",
+                    &old.brief.acceptance,
+                    &new.brief.acceptance,
+                ),
+                ("Decision rules", &old.decision_rules, &new.decision_rules),
+            ] {
+                if before != after {
+                    workspace_changes.push(format!("{label}: {before} → {after}"));
+                }
+            }
+            if old.permitted_actions != new.permitted_actions {
+                workspace_changes.push(format!(
+                    "Permitted actions: {} → {}",
+                    old.permitted_actions.join(", "),
+                    new.permitted_actions.join(", ")
+                ));
+            }
+            if old.limits != new.limits {
+                workspace_changes.push(format!("Execution limits: {} seconds / {} turns / {} observed tokens → {} seconds / {} turns / {} observed tokens",old.limits.max_seconds,old.limits.max_turns,old.limits.max_tokens,new.limits.max_seconds,new.limits.max_turns,new.limits.max_tokens));
+            }
+        }
+        (None, Some(new)) => workspace_changes.push(format!(
+            "Configure workspace execution for {} on {}",
+            new.project.registration.name, new.project.registration.host
+        )),
+        (Some(_), None) => {
+            workspace_changes.push("Remove workspace execution from future work".into())
+        }
+        (None, None) => {}
+    }
     let old = serde_json::to_value(old).map_err(|e| invalid(&e.to_string()))?;
     let new = serde_json::to_value(new).map_err(|e| invalid(&e.to_string()))?;
-    Ok(new
+    let mut changes: Vec<_> = new
         .as_object()
         .expect("definition object")
         .iter()
-        .filter(|(k, v)| old.get(*k) != Some(*v))
+        .filter(|(k, v)| k.as_str() != "workspace" && old.get(*k) != Some(*v))
         .map(|(key, value)| {
             format!(
                 "{}: {} → {}",
@@ -1002,7 +1080,9 @@ fn definition_changes(
                 value
             )
         })
-        .collect())
+        .collect();
+    changes.extend(workspace_changes);
+    Ok(changes)
 }
 
 pub(crate) fn activate_in_transaction(
@@ -1038,6 +1118,7 @@ pub(crate) fn activate_in_transaction(
         return Err(conflict("completed one-off cannot be activated again"));
     }
     let reasons = blockers(&candidate.definition, profiles, now);
+    super::workspace::validate_current_project(tx, &candidate.definition)?;
     super::push::validate_destination(tx, &candidate.definition)?;
     if !reviewed.blockers.is_empty() || !reasons.is_empty() {
         return Err(conflict(&format!(

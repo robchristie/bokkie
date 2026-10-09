@@ -23,7 +23,7 @@ note identity/revision and provides those facts with each bounded context.
 supported thinking levels through contained `model/list`, without starting a
 thread or turn. Discovery is bounded to 128 models, 16 pages and 256 KiB. Every
 preflight and generation revalidates the selected pair before `thread/start`.
-Codex 0.160.0 advertises effort strings rather than a fixed enum; no model alias
+Codex 0.160.0 and 0.160.1 advertise effort strings rather than a fixed enum; no model alias
 or shared list of effort options is assumed.
 
 The [role settings contract](../../docs/agent-settings.md) owns bootstrap,
@@ -41,10 +41,10 @@ no retry or thread-resume path. The compatibility method
 `generate(context, output_schema)` still accepts an object-root structured-output
 schema, with any operation union under a required object property.
 
-The tool method takes one to six unique Codex function specifications:
+The tool method takes one to seven unique Codex function specifications:
 `{"type":"function","name":"bokkie_lookup","description":"…","inputSchema":{"type":"object",…},"deferLoading":false}`.
 The allowed names are `bokkie_discuss`, `bokkie_lookup`, `bokkie_save_draft`,
-`bokkie_preview`, `bokkie_propose` and `bokkie_prepare_handoff`; the backend offers only the operations
+`bokkie_preview`, `bokkie_propose`, `bokkie_workspace_task` and `bokkie_prepare_handoff`; the backend offers only the operations
 legal for that interaction. Caller-supplied namespaces and deferred loading are forbidden.
 The broker registers these functions within the fixed `bokkie` namespace and
 requires that exact namespace on every proposal request. It sets the process-only

@@ -1,4 +1,6 @@
 use super::*;
+#[path = "workspace_ui.rs"]
+mod workspace_ui;
 use bokkie_operator_api::{
     ConversationAction, ConversationConfirmRequest, ConversationSelectRequest, ConversationSummary,
     ConversationTurnRequest, ConversationView, ManagedCatalogueEntry, ManagedTaskDefinition,
@@ -30,6 +32,7 @@ pub(super) struct ConversationState {
     error: Option<String>,
     select_after_load: Option<String>,
     poll_at: Option<Instant>,
+    editor: Option<workspace_ui::Editor>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -86,6 +89,7 @@ impl ConversationState {
         self.select_after_load = task;
         self.poll_at = None;
         self.panel = None;
+        self.editor = None;
     }
 
     fn turn_request(&self, text: String) -> Option<ConversationTurnRequest> {
@@ -189,7 +193,13 @@ impl ConversationState {
             }
             self.pending = None;
         }
-        self.poll_at = view.busy.then(|| Instant::now() + Duration::from_secs(1));
+        let workspace_active = view.task.as_ref().is_some_and(|t| {
+            t.runs
+                .iter()
+                .any(|r| r.workspace.as_ref().is_some_and(|w| !w.cessation_verified))
+        });
+        self.poll_at =
+            (view.busy || workspace_active).then(|| Instant::now() + Duration::from_secs(2));
         self.view = Some(view);
     }
 }
@@ -201,6 +211,8 @@ pub(super) fn is_request(request: &ApiRequest) -> bool {
             | ApiRequest::Conversation { .. }
             | ApiRequest::ConversationTurn(_)
             | ApiRequest::ConversationSelect(_)
+            | ApiRequest::EditTask { .. }
+            | ApiRequest::WorkspaceAction(_)
             | ApiRequest::ConversationConfirm(_)
             | ApiRequest::Catalogue { .. }
     )
@@ -271,12 +283,16 @@ impl AttentionApp {
             request,
             ApiRequest::ConversationTurn(_)
                 | ApiRequest::ConversationSelect(_)
+                | ApiRequest::EditTask { .. }
+                | ApiRequest::WorkspaceAction(_)
                 | ApiRequest::ConversationConfirm(_)
         );
         let request_id = match &request {
             ApiRequest::Conversation { id, .. } => Some(id.as_str()),
             ApiRequest::ConversationTurn(r) => Some(r.conversation_id.as_str()),
             ApiRequest::ConversationSelect(r) => Some(r.conversation_id.as_str()),
+            ApiRequest::EditTask { request, .. } => Some(request.conversation_id.as_str()),
+            ApiRequest::WorkspaceAction(r) => Some(r.conversation_id.as_str()),
             ApiRequest::ConversationConfirm(r) => Some(r.conversation_id.as_str()),
             _ => None,
         };
@@ -636,6 +652,24 @@ impl AttentionApp {
             });
         }
         match action {
+            Some(ConversationUiAction::EditTask) => {
+                if let Some(view) = &self.conversation.view {
+                    self.conversation.editor = view
+                        .task
+                        .as_ref()
+                        .and_then(|t| workspace_ui::Editor::task(view.id.clone(), t));
+                }
+            }
+            Some(ConversationUiAction::Run { run, cancel }) => {
+                if let Some(view) = &self.conversation.view {
+                    self.conversation.editor = Some(workspace_ui::Editor::Run {
+                        conversation_id: view.id.clone(),
+                        run,
+                        answer: String::new(),
+                        cancel,
+                    });
+                }
+            }
             Some(ConversationUiAction::Handoff(draft)) => {
                 self.open_handoff_draft(*draft, &context);
             }
@@ -719,10 +753,24 @@ impl AttentionApp {
             Some(ConversationUiAction::Example(text)) => self.conversation.text = text.into(),
             None => {}
         }
+        if let Some(editor) = &mut self.conversation.editor {
+            let (open, request) = editor.draw(&context, mutable, nodes);
+            if !open {
+                self.conversation.editor = None;
+            }
+            if let Some(request) = request {
+                self.send_conversation_mutation(request, &context);
+            }
+        }
     }
 }
 
 enum ConversationUiAction {
+    EditTask,
+    Run {
+        run: Box<bokkie_operator_api::WorkspaceRun>,
+        cancel: bool,
+    },
     Handoff(Box<bokkie_operator_api::HandoffDraft>),
     New,
     Open(String),
@@ -960,6 +1008,23 @@ fn conversation_panel(
                 if let Some(view) = &state.view {
                     if let Some(task) = &view.task {
                         task_detail(ui, task, nodes);
+                        if button(ui,"bokkie.task.edit","Edit task",mutable,nodes) {
+                            *action = Some(ConversationUiAction::EditTask);
+                        }
+                        for run in task.runs.iter().filter_map(|r|r.workspace.as_ref()) {
+                            if let Some(question) = &run.question {
+                                ui.add(egui::Label::new(&question.prompt).wrap().selectable(true));
+                                if question.kind == "new_authority" {
+                                    ui.small("This action needs a separately reviewed permission decision. An ordinary answer cannot expand the task's scope.");
+                                } else if button(ui,&format!("bokkie.workspace.answer.{}",run.execution_id),"Answer question",mutable,nodes) {
+                                    *action = Some(ConversationUiAction::Run {run:Box::new(run.clone()),cancel:false});
+                                }
+                            }
+                            if (!run.cessation_verified || run.status == "attention") && !run.cancellation_requested
+                                && button(ui,&format!("bokkie.workspace.stop.{}",run.execution_id),if run.cessation_verified {"Cancel this run"} else {"Stop active run"},mutable,nodes) {
+                                *action = Some(ConversationUiAction::Run {run:Box::new(run.clone()),cancel:true});
+                            }
+                        }
                         if button(
                             ui,
                             "bokkie.conversation.preview",
@@ -1005,13 +1070,13 @@ fn conversation_transcript(
     if !view.runtime_available {
         ui.label("Conversation runtime unavailable. Existing tasks and saved conversations remain readable.");
     }
-    if !view.notes_available {
-        ui.label("Local note execution is unavailable in this runtime.");
-    }
     if view.messages.is_empty() {
         ui.add_space(32.0);
         ui.heading("What would you like to organise?");
         ui.label("Draft a reminder, find a task, or refine its instructions and timing.");
+        if view.workspace_available {
+            ui.label("Describe work for a registered project workspace. Bokkie keeps its scope, progress, questions and results together in one task.");
+        }
         ui.add_space(16.0);
         if view.reminders_available {
             if button(
@@ -1493,13 +1558,57 @@ fn task_status(status: &str) -> &str {
     }
 }
 fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
-    ui.add(egui::Label::new(egui::RichText::new(&value.name).strong()).wrap());
-    ui.add(egui::Label::new(&value.purpose).wrap().selectable(true));
-    ui.add(
-        egui::Label::new(&value.instructions)
+    if let Some(workspace) = &value.workspace {
+        ui.add(
+            egui::Label::new(egui::RichText::new(&workspace.brief.outcome).heading())
+                .wrap()
+                .selectable(true),
+        );
+        ui.add(
+            egui::Label::new(format!(
+                "Workspace: {} on {}",
+                workspace.project.registration.name, workspace.project.registration.host
+            ))
             .wrap()
             .selectable(true),
-    );
+        );
+        for (label, text) in [
+            ("Relevant context", &workspace.brief.context),
+            ("Scope and constraints", &workspace.brief.constraints),
+            ("Completion criteria", &workspace.brief.acceptance),
+            ("Decision rules", &workspace.decision_rules),
+        ] {
+            if !text.is_empty() {
+                ui.strong(label);
+                ui.add(egui::Label::new(text).wrap().selectable(true));
+            }
+        }
+        ui.add(
+            egui::Label::new(format!(
+                "Permitted actions: {}",
+                workspace.permitted_actions.join(", ")
+            ))
+            .wrap(),
+        );
+        ui.add(
+            egui::Label::new(format!(
+                "Execution limits: {} seconds, {} turns, {} observed tokens",
+                workspace.limits.max_seconds,
+                workspace.limits.max_turns,
+                workspace.limits.max_tokens
+            ))
+            .wrap(),
+        );
+        ui.small("The workspace owns verification and reviewed delivery. Process completion alone cannot complete this task.");
+    } else {
+        ui.add(egui::Label::new(egui::RichText::new(&value.name).strong()).wrap());
+        ui.add(egui::Label::new(&value.purpose).wrap().selectable(true));
+        ui.add(
+            egui::Label::new(&value.instructions)
+                .wrap()
+                .selectable(true),
+        );
+    }
     ui.label(match &value.trigger {
         ManagedTrigger::Immediate => "Timing: once, immediately after confirmation".into(),
         ManagedTrigger::Once {
@@ -1511,6 +1620,7 @@ fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
     ui.label(match value.capability.as_str() {
         "reminder" => "Reminder: save this text and send a notification when due",
         "local_note" => "Capability: Local note",
+        "workspace" => "Workspace task: execute the reviewed assignment",
         _ => "This task requires a capability that is unavailable.",
     });
     if value.capability == "reminder" {
@@ -1522,6 +1632,8 @@ fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
         ui.small(
             "An occurrence saves its result first. Notification delivery is tracked separately.",
         );
+    } else if value.workspace.is_some() {
+        ui.label("Results: in this task, with attributable delivery evidence");
     } else {
         ui.label(match value.destination.as_str() {
             "task_results" => "Results: In-app task results",
@@ -1530,8 +1642,12 @@ fn definition(ui: &mut egui::Ui, value: &ManagedTaskDefinition) {
     }
     for effect in &value.effects {
         ui.label(match effect.as_str() {
+            "store_local_result" if value.workspace.is_some() => {
+                "Retain the workspace result and run history"
+            }
             "store_local_result" => "Save the supplied text as a local result",
             "send_notification" => "Send the reminder to the reviewed destination",
+            "workspace_execution" => "Run the agreed assignment through this workspace",
             _ => "This task requests an effect that is unavailable.",
         });
     }
@@ -1667,16 +1783,35 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
         .show(ui, |ui| definition(ui, &candidate.definition));
     }
     for run in &task.runs {
-        egui::CollapsingHeader::new(format!(
+        let status = run
+            .workspace
+            .as_ref()
+            .map_or_else(|| task_status(&run.state), |w| task_status(&w.status));
+        let title = format!(
             "{} · {}",
-            if run.result.is_some() { "Completed" } else { task_status(&run.state) },
+            if run.result.is_some() {
+                "Completed"
+            } else {
+                status
+            },
             short_local_time(run.scheduled_at, &run.timezone)
-        ))
+        );
+        let response = egui::CollapsingHeader::new(&title)
         .id_salt(("task-run", &run.obligation_id))
-        .default_open(run.result.is_some())
+        .default_open(run.result.is_some() || run.workspace.as_ref().is_some_and(|w|!w.cessation_verified || w.status=="attention"))
         .show(ui, |ui| {
             ui.add(egui::Label::new(local_time_in_zone(run.scheduled_at, &run.timezone)).wrap());
             ui.small(format!("Definition revision {}", run.definition_revision));
+            if let Some(workspace) = &run.workspace {
+                ui.add(egui::Label::new(format!("Workspace: {}",workspace.status)).wrap());
+                ui.add(egui::Label::new(&workspace.progress).wrap().selectable(true));
+                if workspace.cancellation_requested && !workspace.cessation_verified {ui.label("Stop requested; waiting for the host to account for this execution and its descendants.");}
+                if let Some(result) = &workspace.result {
+                    if run.result.is_none() {ui.add(egui::Label::new(&result.summary).wrap().selectable(true));}
+                    for delivery in &result.deliveries {ui.hyperlink_to(format!("Delivered change in {}",delivery.repository),&delivery.pull_request);}
+                    for limitation in &result.limitations {ui.add(egui::Label::new(format!("Limit: {limitation}")).wrap());}
+                }
+            }
             if let Some(result) = &run.result {
                 let response = ui.add(egui::Label::new(result).wrap().selectable(true));
                 observe(
@@ -1687,7 +1822,7 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
                     true,
                     nodes,
                 );
-            } else {
+            } else if run.workspace.is_none() {
                 ui.label("No local result yet.");
             }
             if let Some(delivery) = &run.delivery {
@@ -1713,6 +1848,16 @@ fn task_detail(ui: &mut egui::Ui, task: &ManagedTaskDetail, nodes: &mut Vec<UiNo
                 });
             }
         });
+        if let Some(workspace) = &run.workspace {
+            observe(
+                response.header_response.rect,
+                &format!("bokkie.workspace.run-heading.{}", workspace.execution_id),
+                &title,
+                UiRole::Section,
+                true,
+                nodes,
+            );
+        }
     }
 }
 fn trigger_timezone(trigger: &ManagedTrigger) -> &str {
@@ -1795,6 +1940,7 @@ mod tests {
             adviser_outcome: None,
             handoff_draft: None,
             notes_available: true,
+            workspace_available: false,
             reminders_available: true,
             receipt: None,
         }
@@ -2056,6 +2202,7 @@ mod tests {
                         "Review today's priorities and choose the work that matters most.".into(),
                     ),
                     timezone: "Australia/Adelaide".into(),
+                    workspace: None,
                     delivery: Some(ManagedDelivery {
                         id: "delivery".into(),
                         status: "accepted_by_relay".into(),

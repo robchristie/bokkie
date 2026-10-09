@@ -53,6 +53,11 @@ pub enum ApiRequest {
     ConversationTurn(bokkie_operator_api::ConversationTurnRequest),
     ConversationSelect(bokkie_operator_api::ConversationSelectRequest),
     ConversationConfirm(bokkie_operator_api::ConversationConfirmRequest),
+    EditTask {
+        task_id: String,
+        request: Box<bokkie_operator_api::WorkspaceTaskEditRequest>,
+    },
+    WorkspaceAction(bokkie_operator_api::WorkspaceRunActionRequest),
     Catalogue {
         query: String,
         after: Option<String>,
@@ -275,6 +280,8 @@ impl Transport {
             | ApiRequest::SaveAgentSettings(_)
             | ApiRequest::ConversationTurn(_)
             | ApiRequest::ConversationSelect(_)
+            | ApiRequest::EditTask { .. }
+            | ApiRequest::WorkspaceAction(_)
             | ApiRequest::ConversationConfirm(_)
             | ApiRequest::ConfigureTask { .. }
             | ApiRequest::EngineeringIntake(_)
@@ -303,6 +310,12 @@ impl Transport {
                     }
                     ApiRequest::ConversationSelect(value) => {
                         serde_json::to_vec(value).expect("serialisable selection")
+                    }
+                    ApiRequest::EditTask { request, .. } => {
+                        serde_json::to_vec(request).expect("serialisable task definition")
+                    }
+                    ApiRequest::WorkspaceAction(value) => {
+                        serde_json::to_vec(value).expect("serialisable workspace action")
                     }
                     ApiRequest::ConversationConfirm(value) => {
                         serde_json::to_vec(value).expect("serialisable confirmation")
@@ -361,6 +374,10 @@ impl Transport {
             }
             ApiRequest::ConversationTurn(_) => "/conversations/turn".into(),
             ApiRequest::ConversationSelect(_) => "/conversations/select".into(),
+            ApiRequest::EditTask { task_id, .. } => {
+                format!("/tasks/managed/{}/definition", encode_path_segment(task_id))
+            }
+            ApiRequest::WorkspaceAction(_) => "/tasks/workspace/action".into(),
             ApiRequest::ConversationConfirm(_) => "/conversations/confirm".into(),
             ApiRequest::Catalogue { query, after, view } => {
                 let mut path = format!(
@@ -570,6 +587,8 @@ fn decode(
         ApiRequest::Conversation { .. }
         | ApiRequest::ConversationTurn(_)
         | ApiRequest::ConversationSelect(_)
+        | ApiRequest::EditTask { .. }
+        | ApiRequest::WorkspaceAction(_)
         | ApiRequest::ConversationConfirm(_) => {
             let value = decode_json::<bokkie_operator_api::ConversationView>(&response)?;
             validate_response_identity(Some(&value.service), expected_session, "conversation")?;
