@@ -47,3 +47,11 @@ Evidence owner: this record plus focused executable regressions and attributed
 private probe artefacts. Exit: no-model confinement/provenance falsification tests
 pass, followed by a real sealed report/review and both portfolio decision paths.
 Fixtures establish lifecycle rejection only; they do not prove live assessment.
+
+Budget calibration retains total observed and cached input counts. The hard
+future ceiling is 16 million observed tokens; a profile/definition should choose
+a smaller finite allowance for its assignment. This raises no old admission
+or profile. Wall-clock, turn and context limits remain independent bounds.
+Tool replies should expose remaining budget so the workspace can seal useful
+partial work before cancellation. A larger ceiling is not proof of sufficiency;
+the actual representative report owns the next observation.

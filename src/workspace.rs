@@ -38,7 +38,7 @@ pub(crate) fn bounded_text(value: &str, max: usize, required: bool) -> bool {
 pub(crate) fn validate_limits(limits: &WorkspaceLimits) -> Result<(), StoreError> {
     if !(1..=86400).contains(&limits.max_seconds)
         || !(1..=100).contains(&limits.max_turns)
-        || !(1..=2_000_000).contains(&limits.max_tokens)
+        || !(1..=16_000_000).contains(&limits.max_tokens)
     {
         return Err(StoreError::Invalid(
             "workspace limits exceed finite execution bounds".into(),
@@ -201,6 +201,20 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    #[test]
+    fn future_budget_ceiling_does_not_change_existing_profiles() {
+        let original = config();
+        let mut future = original.clone();
+        future.hosts[0].projects[0]
+            .profile_revision
+            .push_str("/larger-budget");
+        future.hosts[0].projects[0].limits.max_tokens = 16_000_000;
+        assert!(future.validate().is_ok());
+        assert_eq!(original.hosts[0].projects[0].limits.max_tokens, 100000);
+        future.hosts[0].projects[0].limits.max_tokens += 1;
+        assert!(future.validate().is_err());
     }
 
     #[test]

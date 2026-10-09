@@ -94,7 +94,7 @@ impl Editor {
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Observed token limit");
-                                ui.add(egui::DragValue::new(&mut workspace.limits.max_tokens).range(1..=2_000_000));
+                                ui.add(egui::DragValue::new(&mut workspace.limits.max_tokens).range(1..=16_000_000));
                             });
                             ui.small("Limits and actions cannot exceed the configured workspace profile. Changing the workspace requires a fresh conversation proposal.");
                         } else {
