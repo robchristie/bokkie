@@ -1860,7 +1860,7 @@ fn insufficient_acceptance_retains_result_and_trusted_reverification_never_rerun
 
 #[test]
 fn successful_exit_or_incomplete_delivery_and_criteria_cannot_complete_workspace_work() {
-    for mutation in 0..4 {
+    for mutation in 0..5 {
         let mut store = Store::open_in_memory().unwrap();
         let (host, _) = setup(&mut store, false);
         let d = dispatch(&mut store, &host, 1);
@@ -1869,7 +1869,10 @@ fn successful_exit_or_incomplete_delivery_and_criteria_cannot_complete_workspace
             0 => r.deliveries.clear(),
             1 => r.criteria[0].satisfied = false,
             2 => r.criteria[0].evidence.clear(),
-            _ => r.deliveries[0].reviewed_head = "branch-name".into(),
+            3 => r.deliveries[0].reviewed_head = "branch-name".into(),
+            _ => r
+                .limitations
+                .push("The admitted delivery is unresolved".into()),
         };
         send(
             &mut store,
@@ -2258,6 +2261,8 @@ fn report_result() -> WorkspaceResult {
     result.deliveries.clear();
     result.summary =
         "Evidence assessment completed; performance benefit remains inconclusive".into();
+    result.limitations =
+        vec!["Comparable performance measurements are absent; no speedup is claimed".into()];
     let sources = vec![WorkspaceReportSource {
         id: "d".repeat(64),
         url: "https://github.com/robchristie/bokkie/pull/61#issuecomment-6076168099".into(),
@@ -2316,11 +2321,30 @@ fn report_acceptance_is_distinct_from_the_assessed_subject_outcome() {
             .progress
             .contains("Continue assessment")
     );
+    let retained = report_result();
     send(
         &mut store,
         &host,
-        event(&d, 2, stopped(Some(report_result()), true)),
+        event(&d, 2, stopped(Some(retained.clone()), false)),
         3,
+    )
+    .unwrap();
+    assert_eq!(
+        store.get(&d.obligation_id).unwrap().unwrap().state,
+        ObligationState::Attention
+    );
+    assert!(
+        store
+            .workspace_exchange(&host, &empty(), 4)
+            .unwrap()
+            .dispatches
+            .is_empty()
+    );
+    send(
+        &mut store,
+        &host,
+        event(&d, 3, stopped(Some(retained.clone()), true)),
+        4,
     )
     .unwrap();
     assert_eq!(
@@ -2338,6 +2362,42 @@ fn report_acceptance_is_distinct_from_the_assessed_subject_outcome() {
             .deliveries
             .is_empty()
     );
+    assert_eq!(
+        store.workspace_run(&d.execution_id).unwrap().result,
+        Some(retained)
+    );
+    assert_eq!(store.attempts(&d.obligation_id).unwrap().len(), 1);
+}
+
+#[test]
+fn report_subject_limits_cannot_replace_missing_criteria_or_verification() {
+    for mutation in 0..4 {
+        let mut store = Store::open_in_memory().unwrap();
+        let (host, _) = report_setup(&mut store);
+        let d = dispatch(&mut store, &host, 1);
+        let mut retained = report_result();
+        match mutation {
+            0 => retained.criteria[0].satisfied = false,
+            1 => retained.criteria[0].evidence.clear(),
+            2 => retained.criteria[0].id = "unadmitted".into(),
+            _ => {}
+        }
+        send(
+            &mut store,
+            &host,
+            event(&d, 1, stopped(Some(retained.clone()), mutation != 3)),
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            store.get(&d.obligation_id).unwrap().unwrap().state,
+            ObligationState::Attention
+        );
+        assert_eq!(
+            store.workspace_run(&d.execution_id).unwrap().result,
+            Some(retained)
+        );
+    }
 }
 
 #[test]

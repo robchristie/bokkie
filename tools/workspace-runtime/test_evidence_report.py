@@ -281,6 +281,22 @@ class EvidenceReportTests(unittest.TestCase):
         mirror=self.store.mirror/'reports'/(report['digest']+'.json');atomic(mirror,report|{'markdown':'tampered'})
         self.assertFalse(verify(self.admission,self.result(report),records,root=self.root)['passed'])
 
+    def test_complete_report_retains_subject_limits_without_waiving_criteria_or_review(self):
+        report=self.sealed();records=self.records(report);result=self.result(report)
+        result['limitations']=['Comparable benefit measurements are absent; no speedup is claimed.']
+        original=copy.deepcopy(result)
+        self.assertTrue(verify(self.admission,result,records,root=self.root)['passed'])
+        self.assertEqual(result,original)
+        for change in ('false-criterion','missing-evidence','wrong-criterion','missing-review','missing-policy'):
+            candidate=copy.deepcopy(result);observations=copy.deepcopy(records)
+            if change=='false-criterion':candidate['criteria'][0]['satisfied']=False
+            elif change=='missing-evidence':candidate['criteria'][0]['evidence']=[]
+            elif change=='wrong-criterion':candidate['criteria'][0]['id']='unadmitted'
+            elif change=='missing-review':observations.pop()
+            elif change=='missing-policy':observations.pop(0)
+            with self.subTest(change=change):
+                self.assertFalse(verify(self.admission,candidate,observations,root=self.root)['passed'])
+
     def test_independent_completed_post_seal_child_is_required_for_both_digests(self):
         report=self.sealed();baseline=self.records(report)
         self.assertTrue(verify(self.admission,self.result(report),baseline,root=self.root)['passed'])

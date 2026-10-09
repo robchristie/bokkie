@@ -322,6 +322,13 @@ checks and candidate/merge CI gates. Changing the report's assessed subject to
 inconclusive does not relax its own completion criteria. Unanswered questions
 remain for Bokkie's Store to resolve.
 
+Report `limitations` retain the assessed subject's evidence gaps. They do not
+prevent completion when every exact admitted criterion is satisfied and evidenced,
+the sealed report and sources remain valid, independent review passes and no
+question remains unresolved. False or unsupported criteria and missing proof
+still prevent acceptance. Engineering delivery retains its separate requirement
+that `limitations` be empty.
+
 For a report profile, set `result_contract` to `evidence_report`,
 `permitted_actions` to `inspect` and/or `verify`, `network_access` to `false`,
 `readonly_mcp_servers` to `[]` and `write_roots` to the one exact `scratch`

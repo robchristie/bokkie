@@ -487,6 +487,13 @@ class VerificationTests(unittest.TestCase):
         self.records[-1]['value']['source']={**self.records[-1]['value']['source'],'clean':False}
         self.assertFalse(verify(self.admission,self.result,self.records+self.review,query=self.query)['passed'])
 
+    def test_engineering_delivery_still_rejects_unresolved_limitations_before_queries(self):
+        self.result['limitations']=['The admitted delivery remains unresolved']
+        calls=[]
+        observed=verify(self.admission,self.result,self.records+self.review,query=lambda endpoint:calls.append(endpoint))
+        self.assertFalse(observed['passed']);self.assertEqual(calls,[])
+        self.assertIn('Result retains unresolved limitations',observed['evidence'])
+
     def test_missing_or_incomplete_independent_review_rejected(self):
         self.assertFalse(verify(self.admission,self.result,self.records+self.review[:-1],query=self.query)['passed'])
         self.review[2]['value']['params']['item']['text']='Verdict: PASS\nReviewed head: '+'d'*40

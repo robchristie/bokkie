@@ -695,7 +695,6 @@ fn accepted(
     };
     let complete = verification.passed
         && !verification.evidence.is_empty()
-        && result.limitations.is_empty()
         && result.criteria.len() == dispatch.assignment.criteria.len()
         && dispatch.assignment.criteria.iter().all(|wanted| {
             result.criteria.iter().any(|actual| {
@@ -706,6 +705,8 @@ fn accepted(
         return false;
     }
     if !dispatch.assignment.result_contract.is_delivery() {
+        // Subject evidence limits may be the completed assessment's findings.
+        // Exact admitted criteria and trusted verification still own acceptance.
         return result.deliveries.is_empty()
             && result.report.as_ref().is_some_and(|report| {
                 report.sources.iter().all(|source| {
@@ -717,7 +718,8 @@ fn accepted(
                 })
             });
     }
-    result.report.is_none()
+    result.limitations.is_empty()
+        && result.report.is_none()
         && !result.deliveries.is_empty()
         && result.deliveries.iter().all(|d| {
             sha(&d.reviewed_head)

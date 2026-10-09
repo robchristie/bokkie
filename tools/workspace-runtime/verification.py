@@ -354,9 +354,10 @@ def verify_report(admission, result, records, root):
     result_bounds(result)
     assignment = admission['dispatch']['assignment']
     wanted = {criterion['id'] for criterion in assignment['criteria']}
+    # Subject evidence limits do not waive any admitted report criterion or proof.
     if (result['deliveries'] or result.get('report') is None or
             len(result['criteria']) != len(wanted) or {c['id'] for c in result['criteria']} != wanted or
-            any(c['satisfied'] is not True or not c['evidence'] for c in result['criteria']) or result['limitations']):
+            any(c['satisfied'] is not True or not c['evidence'] for c in result['criteria'])):
         raise ValueError('Evidence report does not satisfy the admitted completion criteria')
     if root is None:
         raise ValueError('Host-owned sealed evidence store is unavailable')
