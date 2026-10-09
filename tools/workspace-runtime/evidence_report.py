@@ -152,7 +152,8 @@ def _github_get(policy, selected, deadline):
             while True:
                 if time.monotonic() >= end:
                     raise ValueError('source GET deadline exhausted')
-                response.fp.raw._sock.settimeout(max(.01, end-time.monotonic()))
+                # The owned helper enforces the overall deadline. urllib may
+                # close its private fp/socket as soon as Content-Length ends.
                 chunk = response.read1(min(4096, maximum+1-len(raw)))
                 raw.extend(chunk)
                 if len(raw) > maximum:

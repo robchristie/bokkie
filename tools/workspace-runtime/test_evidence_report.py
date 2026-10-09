@@ -442,13 +442,16 @@ print(json.dumps(values,sort_keys=True))
             def __exit__(self,*_):pass
             def geturl(self):return 'https://api.github.com/'+endpoint(self.selected)
             def read1(self,size):
-                raw=self.raw[:size];self.raw=self.raw[size:];return raw
+                raw=self.raw[:size];self.raw=self.raw[size:]
+                if not self.raw:self.fp=None  # Real HTTPResponse closes on Content-Length exhaustion.
+                return raw
         response=Response();response.selected=self.selected;response.raw=encoded(self.response())
         requests=[]
         def open_request(request,timeout):requests.append(request);return response
         with patch('evidence_report.bounded_process',return_value=b'private-token\n') as credential,patch('evidence_report.build_opener',return_value=SimpleNamespace(open=open_request)):
             value=_github_get(self.profile['source_read'],self.selected,time.monotonic()+5)
         self.assertEqual(value,self.response());self.assertNotIn('private-token',json.dumps(value))
+        self.assertIsNone(response.fp)
         self.assertEqual(requests[0].get_method(),'GET');self.assertEqual(requests[0].full_url,'https://api.github.com/'+endpoint(self.selected))
         self.assertEqual(credential.call_args.args[0],['/trusted/gh','auth','token','--hostname','github.com'])
         self.assertEqual(credential.call_args.args[1],'/trusted/cwd');self.assertEqual(credential.call_args.args[2]['GH_CONFIG_DIR'],'/trusted/config')
