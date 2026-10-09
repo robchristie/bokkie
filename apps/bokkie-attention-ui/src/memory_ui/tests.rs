@@ -63,26 +63,201 @@ fn correction_and_removal_pin_identity_revision_and_preserve_sources() {
 }
 
 #[test]
-fn uncertain_result_retries_exact_command_and_conflict_retains_operator_text() {
-    let mut state = MemoryState::default();
-    state.accept(list(1), false, false);
-    let mut draft = MemoryDraft::from_entry(&entry(1));
-    draft.content = "My corrected content".into();
-    state.draft = Some(draft);
-    let pending = state.command(false).unwrap();
-    state.failed(&ApiFailure::Other("Lost reply".into()));
-    state.reset_session();
-    state.accept(list(2), false, false);
-    assert_eq!(state.command(false).unwrap(), pending);
-    state.failed(&ApiFailure::Conflict("Revision changed".into()));
-    assert!(state.command(false).is_err());
-    assert_eq!(
-        state.draft.as_ref().unwrap().content,
-        "My corrected content"
-    );
-    state.accept(list(2), false, true);
-    assert!(!state.conflict);
-    assert!(state.draft.is_none());
+fn session_change_bootstrap_and_current_memory_read_unlock_exact_save_and_remove_retries() {
+    for remove in [false, true] {
+        let context = egui::Context::default();
+        Appearance::default().apply(&context);
+        let mut app = super::super::tests::test_app();
+        // Capture dispatches and supply adapter replies through the app's queue;
+        // no HTTP request or model call is made by this regression.
+        app.transport = Some(Transport::new("http://127.0.0.1:7744").unwrap());
+        app.test_dispatch = Some(Vec::new());
+        app.session = Some(
+            ApiSession::from_bootstrap(SessionBootstrap {
+                service: service(),
+                mutation_token: "a".repeat(64),
+            })
+            .unwrap(),
+        );
+        app.agent_settings.open = true;
+        let original = entry(1);
+        let mut draft = MemoryDraft::from_entry(&original);
+        draft.content = "My corrected content".into();
+        draft.confirm_remove = remove;
+        app.memory = MemoryState {
+            open: true,
+            entries: vec![original.clone()],
+            draft: Some(draft),
+            current: true,
+            ..Default::default()
+        };
+
+        app.submit_memory(remove, &context);
+        let pending = app.memory.pending.clone().unwrap();
+        let save = ApiRequest::SaveMemory(pending.clone());
+        assert_eq!(app.test_dispatch.as_ref().unwrap().last(), Some(&save));
+        app.sender
+            .send(ApiMessage {
+                request: save.clone(),
+                result: Err(ApiFailure::SessionChanged(
+                    "Service restarted after the mutation reply was lost".into(),
+                )),
+            })
+            .unwrap();
+        app.poll_transport(&context);
+        assert!(app.session.is_none());
+        assert!(!app.memory.current);
+        assert!(!app.memory.busy);
+        assert_eq!(app.memory.pending.as_ref(), Some(&pending));
+        assert_eq!(
+            app.memory.draft.as_ref().unwrap().content,
+            "My corrected content"
+        );
+        assert_eq!(
+            app.test_dispatch.as_ref().unwrap().last(),
+            Some(&ApiRequest::Bootstrap)
+        );
+
+        let mut new_service = service();
+        new_service.session_id = "memory-restarted".into();
+        new_service.process_id = 2;
+        app.sender
+            .send(ApiMessage {
+                request: ApiRequest::Bootstrap,
+                result: Ok(ApiPayload::Bootstrap(
+                    ApiSession::from_bootstrap(SessionBootstrap {
+                        service: new_service.clone(),
+                        mutation_token: "b".repeat(64),
+                    })
+                    .unwrap(),
+                )),
+            })
+            .unwrap();
+        app.poll_transport(&context);
+        let (generation, cursor, replace) = app
+            .memory
+            .reading
+            .clone()
+            .expect("Bootstrap must refresh the open Memory editor");
+        assert_eq!(cursor, None);
+        assert!(
+            !replace,
+            "Session recovery must preserve the draft and exact pending command"
+        );
+        let read = ApiRequest::Memory {
+            after: None,
+            generation,
+        };
+        assert!(app.test_dispatch.as_ref().unwrap().contains(&read));
+        assert!(!app.memory.current);
+        assert_eq!(app.memory.pending.as_ref(), Some(&pending));
+
+        // A reply from the previous read/session cannot bless the editor.
+        app.sender
+            .send(ApiMessage {
+                request: ApiRequest::Memory {
+                    after: None,
+                    generation: generation - 1,
+                },
+                result: Ok(ApiPayload::Memory(list(1))),
+            })
+            .unwrap();
+        app.poll_transport(&context);
+        assert!(!app.memory.current);
+        assert_eq!(
+            app.memory.reading.as_ref().map(|read| read.0),
+            Some(generation)
+        );
+        let fresh = MemoryList {
+            service: new_service.clone(),
+            entries: if remove { vec![] } else { vec![entry(2)] },
+            next_after: None,
+        };
+        app.sender
+            .send(ApiMessage {
+                request: read,
+                result: Ok(ApiPayload::Memory(fresh)),
+            })
+            .unwrap();
+        app.poll_transport(&context);
+        assert!(app.memory.current);
+        assert!(
+            app.memory.conflict,
+            "The read may observe an already applied change or a later revision"
+        );
+        assert_eq!(app.memory.pending.as_ref(), Some(&pending));
+        assert_eq!(
+            app.memory.draft.as_ref().unwrap().content,
+            "My corrected content"
+        );
+        assert_eq!(
+            app.memory
+                .draft
+                .as_ref()
+                .unwrap()
+                .original
+                .as_ref()
+                .unwrap(),
+            &original
+        );
+        assert!(app.session.as_ref().unwrap().matches(&new_service));
+        assert!(!app.session.as_ref().unwrap().matches(&service()));
+
+        let tokens = app.theme.resolve(
+            app.preferences.theme_variant(false),
+            app.preferences.density_variant(),
+            TypographyProfile::Reading,
+        );
+        let mut nodes = Vec::new();
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(390.0, 844.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.show_memory(ui, tokens, &mut nodes, &mut Vec::new()),
+            )
+            .textures_delta
+            .clear();
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.name == "Retry saved request" && node.enabled)
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.name == "Reload memory" && !node.enabled)
+        );
+
+        // The footer's retry action uses the retained Save/Remove payload even
+        // when the current read observed a different or removed entry.
+        app.submit_memory(false, &context);
+        assert_eq!(app.test_dispatch.as_ref().unwrap().last(), Some(&save));
+        assert_eq!(app.memory.pending.as_ref(), Some(&pending));
+        assert_eq!(pending.expected_revision, original.revision);
+        app.sender
+            .send(ApiMessage {
+                request: save,
+                result: Err(ApiFailure::Conflict(
+                    "The retained command was rejected against the changed revision".into(),
+                )),
+            })
+            .unwrap();
+        app.poll_transport(&context);
+        assert!(app.memory.pending.is_none());
+        assert!(app.memory.conflict);
+        assert_eq!(
+            app.memory.draft.as_ref().unwrap().content,
+            "My corrected content"
+        );
+        let dispatched = app.test_dispatch.as_ref().unwrap().len();
+        app.submit_memory(false, &context);
+        assert_eq!(app.test_dispatch.as_ref().unwrap().len(), dispatched);
+    }
 }
 
 #[test]

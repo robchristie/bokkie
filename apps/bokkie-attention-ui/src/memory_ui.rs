@@ -164,6 +164,13 @@ impl AttentionApp {
         self.memory.open = true;
         self.refresh_memory(None, false, context);
     }
+    pub(super) fn refresh_open_memory(&mut self, context: &egui::Context) {
+        if self.agent_settings.open && self.memory.open {
+            // A new session needs a current read before an uncertain command can
+            // be retried. Retain its exact receipt and the operator's draft.
+            self.refresh_memory(None, false, context);
+        }
+    }
     fn refresh_memory(&mut self, after: Option<String>, replace: bool, context: &egui::Context) {
         if self.session.is_none()
             || self.transport.is_none()
@@ -363,15 +370,18 @@ impl AttentionApp {
             self.refresh_memory(self.memory.next_after.clone(), false, &context);
         }
         if save || remove {
-            match self.memory.command(remove) {
-                Ok(request) => {
-                    self.memory.busy = true;
-                    self.memory.error = None;
-                    self.memory.notice = None;
-                    self.dispatch(ApiRequest::SaveMemory(request), &context);
-                }
-                Err(error) => self.memory.error = Some(error),
+            self.submit_memory(remove, &context);
+        }
+    }
+    fn submit_memory(&mut self, remove: bool, context: &egui::Context) {
+        match self.memory.command(remove) {
+            Ok(request) => {
+                self.memory.busy = true;
+                self.memory.error = None;
+                self.memory.notice = None;
+                self.dispatch(ApiRequest::SaveMemory(request), context);
             }
+            Err(error) => self.memory.error = Some(error),
         }
     }
 }

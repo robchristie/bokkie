@@ -290,6 +290,8 @@ pub struct AttentionApp {
     frame_number: u64,
     last_test_snapshot: TestSnapshot,
     test_observer: Option<Rc<RefCell<TestSnapshot>>>,
+    #[cfg(test)]
+    test_dispatch: Option<Vec<ApiRequest>>,
 }
 
 impl AttentionApp {
@@ -361,6 +363,8 @@ impl AttentionApp {
             frame_number: 0,
             last_test_snapshot: TestSnapshot::default(),
             test_observer,
+            #[cfg(test)]
+            test_dispatch: None,
         };
         app.restore_handoff_local_state();
         app.dispatch(ApiRequest::Bootstrap, &creation.egui_ctx);
@@ -503,6 +507,11 @@ impl AttentionApp {
             | ApiRequest::EngineeringCancel(_) => self.model.action_busy = true,
             _ => {}
         }
+        #[cfg(test)]
+        if let Some(requests) = &mut self.test_dispatch {
+            requests.push(request);
+            return;
+        }
         transport.send(
             request,
             self.session.as_ref(),
@@ -572,6 +581,7 @@ impl AttentionApp {
                     self.session = Some(session);
                     self.refresh_conversation(context);
                     self.refresh_agent_settings(false, context);
+                    self.refresh_open_memory(context);
                     self.refresh_handoff(context);
                     self.begin_full_rebuild(false, context);
                 }
@@ -5101,6 +5111,7 @@ mod tests {
             frame_number: 0,
             last_test_snapshot: TestSnapshot::default(),
             test_observer: None,
+            test_dispatch: None,
         }
     }
 
