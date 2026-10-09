@@ -6095,7 +6095,8 @@ mod tests {
                 (17, "0017_workspace_handoffs.sql".to_owned()),
                 (18, "0018_workspace_execution.sql".to_owned()),
                 (19, "0019_workspace_result_recovery.sql".to_owned()),
-                (20, "0020_memory.sql".to_owned())
+                (20, "0020_memory.sql".to_owned()),
+                (21, "0021_workspace_evidence_reports.sql".to_owned())
             ]
         );
         drop(store);
