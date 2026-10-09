@@ -149,3 +149,12 @@ ran the new observer against that clean committed checkout, then revalidated
 the retained real delivery and current GitHub checks. It created no coding job
 or model call. Exact final-head journey attribution is retained with the
 PR63 review/landing receipt; historic records keep their original provenance.
+
+Hosted requalification exposed a Noble user-namespace capability restriction:
+Bubblewrap failed private loopback setup before the Git payload started. Bounded
+helper diagnostics now retain that failure. Governance selects the compatible
+GitHub-hosted Jammy image with pinned Python3.12, signed Bubblewrap, descriptor
+capability and actual confinement probes; other jobs retain their authored image.
+No host policy or observer isolation flag changed. The workflow records Jammy
+retirement on 17 April 2027. Two diagnostic regressions bring the host suite to
+68 tests. The final candidate and merge receipts own hosted readiness.

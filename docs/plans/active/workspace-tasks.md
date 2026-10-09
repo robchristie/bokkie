@@ -3,7 +3,7 @@
 - Status: active
 - Reorientation budget: 180
 - Landed pull requests: [PR62](https://github.com/robchristie/bokkie/pull/62), real workspace delivery qualification change
-- Next action: obtain independent review and CI for the repaired PR63, land and reconcile; then implement portfolio decisions
+- Next action: qualify the compatible hosted observer environment, review and land PR63; then portfolio reports/decisions and memory
 
 ## Outcome and authority
 
@@ -41,7 +41,7 @@ starts modestly alongside useful execution. Refine packages from evidence.
 
 | Package | State | Acceptance remaining / next action |
 | --- | --- | --- |
-| Workspace execution | One visible conversational task delivered [PR62](https://github.com/robchristie/bokkie/pull/62), recovered its partial report and completed under an explicit future evidence-review definition; browser closure/restart preserved execution/results | Accepted real milestone; [qualification](../../workspace-execution/qualification.md); [PR63](https://github.com/robchristie/bokkie/pull/63) repairs independently found cancellation and host-observation defects; 452 backend tests, 66 host tests and 26 browser checks pass; final review/CI/landing remain |
+| Workspace execution | One visible conversational task delivered [PR62](https://github.com/robchristie/bokkie/pull/62), recovered its partial report and completed under an explicit future evidence-review definition; browser closure/restart preserved execution/results | Accepted real milestone; [qualification](../../workspace-execution/qualification.md); [PR63](https://github.com/robchristie/bokkie/pull/63) repairs independently found cancellation and host-observation defects; 452 backend tests, 68 host tests and 26 browser checks pass; final review/CI/landing remain |
 | Portfolio and decisions | Waiting for connector | Refine finite token-budget bounds from the recorded cache-inclusive stops; independent outcomes become distinct tasks; shared scope/dependencies retained; automatic pass continuation and actionable inconclusive question |
 | Recurring workspace tasks | Waiting for connector | Real scheduled correction, interruption recovery, actual repository/worktree conflict ownership; pause future versus stop active |
 | Consolidation | Avoid duplication from first package | Replace gardener with recurrence, Pagefold with workspace execution, hand-offs with briefs and optional export; preserve history and admitted work |
