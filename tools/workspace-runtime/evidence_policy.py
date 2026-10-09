@@ -3,12 +3,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import tempfile
 import time
 import tomllib
 from urllib.parse import urlsplit
-from common import atomic
+from common import atomic, digest, read
 
 MIRROR = '/bokkie-evidence'
 FORWARDING = ('SSH_AUTH_SOCK', 'SSH_AGENT_PID', 'DBUS_SESSION_BUS_ADDRESS',
@@ -17,11 +18,17 @@ FORWARDING = ('SSH_AUTH_SOCK', 'SSH_AGENT_PID', 'DBUS_SESSION_BUS_ADDRESS',
               'GH_TOKEN','GITHUB_TOKEN','GH_ENTERPRISE_TOKEN','GITHUB_ENTERPRISE_TOKEN',
               'HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy')
 MASKS = ('/run', '/var/run', '/tmp', '/var/tmp')
+ROOT_PERMISSIONS='bokkie_report_root'
+REVIEW_PERMISSIONS='bokkie_report_reviewer'
+FILE_READ_FEATURES=('view_image','image_generation','computer_use','browser_use','browser_use_external','browser_use_full_cdp_access','in_app_browser')
+RUNTIME_ENV=('PATH','HOME','LANG','LC_ALL','TERM','SSL_CERT_FILE','SSL_CERT_DIR','CODEX_HOME',
+             'CODEX_CI','CODEX_MANAGED_BY_NPM','CODEX_MANAGED_PACKAGE_ROOT','CODEX_REMOTE_PAYLOAD',
+             'CODEX_SESSION_ID','CODEX_THREAD_ID','CODEX_VERSION','OPENAI_API_KEY')
 CONTROL_SLOTS = ('.git','.agents','.codex','.aws','.azure','.config','.kube','.ssh','.docker','.gnupg')
 
 
 def environment(scratch):
-    value = {key: val for key, val in os.environ.items() if key not in FORWARDING}
+    value = {key:val for key,val in os.environ.items() if key in RUNTIME_ENV}
     value['TMPDIR'] = scratch
     return value
 
@@ -33,7 +40,183 @@ def policy(profile, reviewer=False):
             'excludeSlashTmp': True, 'excludeTmpdirEnvVar': True}
 
 
-def derived_roles(root, codex_home, inherited, profile):
+def command_policy(profile,reviewer=False):
+    return {'permissionProfile':REVIEW_PERMISSIONS if reviewer else ROOT_PERMISSIONS}
+
+
+def inline_toml(value):
+    if isinstance(value,dict):return '{'+','.join(json.dumps(key)+'='+inline_toml(item) for key,item in value.items())+'}'
+    if isinstance(value,list):return '['+','.join(inline_toml(item) for item in value)+']'
+    if isinstance(value,(str,bool,int,float)):return json.dumps(value,ensure_ascii=False)
+    if hasattr(value,'isoformat'):return value.isoformat()
+    raise ValueError('unsupported private task configuration value')
+
+
+def permission_profiles(admission,profile,home):
+    reads={':minimal':'read',MIRROR:'read','/tmp':'read','/var/tmp':'read'}
+    for path in profile['read_roots']:reads[path]='read'
+    for name in ('AGENTS.md','instructions.md','rules','skills','agents'):
+        path=Path(home)/name
+        if path.exists() or name=='agents':reads[str(path)]='read'
+    reads[str(Path(admission['codex']).resolve())]='read'
+    companion=code_mode_host_path(admission['codex'])
+    if companion is not None:reads[companion]='read'
+    for path in public_ca_paths():reads[path]='read'
+    # Never inherit unrestricted filesystem access from the account's profile.
+    root=dict(reads);root[profile['scratch']]='write'
+    review=dict(reads);review[profile['scratch']]='read'
+    return {ROOT_PERMISSIONS:{'description':'Selected report reads and scratch-only writes','filesystem':root,'network':{'enabled':False}},
+            REVIEW_PERMISSIONS:{'description':'Selected immutable report reads','filesystem':review,'network':{'enabled':False}}}
+
+
+def prepare_task_config(root,inherited,profiles,home,scratch):
+    value=dict(inherited)
+    for key in ('sandbox_mode','sandbox_workspace_write','sandbox_read_only','default_permissions','permissions','shell_environment_policy'):
+        value.pop(key,None)
+    value['default_permissions']=ROOT_PERMISSIONS;value['permissions']=profiles
+    value['features']={**value.get('features',{}),**{name:False for name in FILE_READ_FEATURES}}
+    value['shell_environment_policy']={'inherit':'none','set':{'PATH':'/usr/local/bin:/usr/bin:/bin',
+        'HOME':str(Path.home()),'CODEX_HOME':str(home),'TMPDIR':scratch,'LANG':'C.UTF-8','TERM':'dumb'}}
+    raw='\n'.join(json.dumps(key)+'='+inline_toml(item) for key,item in value.items())+'\n'
+    path=Path(root)/'agent-state'/'config.toml'
+    if path.exists() and path.read_text()!=raw:raise ValueError('private report configuration changed after preparation')
+    if not path.exists():
+        with path.open('x') as stream:stream.write(raw)
+        path.chmod(0o400)
+    return value
+
+
+def profile_proof(config,profiles):
+    effective=config.get('permissions')
+    if (config.get('default_permissions')!=ROOT_PERMISSIONS or config.get('sandbox_mode') is not None or
+            config.get('sandbox_workspace_write') is not None or not isinstance(effective,dict) or
+            set(effective)!=set(profiles) or config.get('shell_environment_policy',{}).get('inherit')!='none'):
+        raise ValueError('effective report readable-root profiles or environment policy differ')
+    for name,wanted in profiles.items():
+        value=effective[name];filesystem=value.get('filesystem',{})
+        if (value.get('extends') is not None or {key:item for key,item in filesystem.items() if key!='glob_scan_max_depth'}!=wanted['filesystem'] or
+                value.get('network',{}).get('enabled') is not False or
+                any(item not in (None,False) for key,item in value.get('network',{}).items() if key!='enabled')):
+            raise ValueError('effective report profile broadens declared reads or network')
+    return {'root':ROOT_PERMISSIONS,'reviewer':REVIEW_PERMISSIONS,'restricted_reads':True,'model_calls':0}
+
+
+def file_feature_proof(value):
+    if not isinstance(value,dict) or value.get('nextCursor') is not None or not isinstance(value.get('data'),list):
+        raise ValueError('native non-command file-tool feature inventory is incomplete')
+    inventory={item['name']:item for item in value['data']}
+    if any(name not in inventory or inventory[name].get('enabled') is not False for name in FILE_READ_FEATURES):
+        raise ValueError('native non-command image/browser file tools remain available')
+    return {'disabled_native_features':list(FILE_READ_FEATURES),'model_calls':0}
+
+
+def turn_policy_proof(context, profiles, home, reviewer=False, *, root_sandbox=None):
+    """Version-qualified ancillary policy evidence, never a lifecycle API."""
+    name=REVIEW_PERMISSIONS if reviewer else ROOT_PERMISSIONS
+    permission=context.get('permission_profile')
+    if not isinstance(permission,dict) or set(permission)!={'type','file_system','network'}:
+        raise ValueError('actual report turn permission profile is unsupported')
+    filesystem=permission.get('file_system')
+    if not isinstance(filesystem,dict) or set(filesystem)!={'type','entries'}:
+        raise ValueError('actual report turn filesystem policy is unsupported')
+    entries=filesystem.get('entries')
+    if (context.get('approval_policy')!='never' or context.get('approvals_reviewer')!='user' or
+            context.get('permission_profile',{}).get('type')!='managed' or
+            context['permission_profile'].get('network')!='restricted' or filesystem.get('type')!='restricted' or
+            not isinstance(entries,list) or context.get('file_system_sandbox_policy')!={'kind':'restricted','entries':entries}):
+        raise ValueError('actual report turn approval, filesystem or network policy differs')
+    observed={};exceptions=[]
+    for entry in entries:
+        if not isinstance(entry,dict) or set(entry)!={'path','access'} or not isinstance(entry['path'],dict):
+            raise ValueError('actual report turn has an unsupported readable-root entry')
+        path=entry.get('path',{})
+        if path.get('type')=='path' and set(path)=={'type','path'}:
+            key=path['path']
+            if not isinstance(key,str):raise ValueError('actual report turn has an unsupported readable-root path')
+        elif path=={'type':'special','value':{'kind':'minimal'}}:
+            key=':minimal'
+        else:raise ValueError('actual report turn has an unsupported readable-root entry')
+        if key in observed or entry.get('access') not in ('read','write','none'):
+            raise ValueError('actual report turn has ambiguous readable-root entries')
+        # Codex adds one private directory containing its executable shims.
+        # Permit only this observed 0.160.1 spelling, read access and depth.
+        prefix=str(Path(home)/'tmp'/'arg0')+'/'
+        if key.startswith(prefix) and re.fullmatch(r'codex-arg0[A-Za-z0-9]+',key[len(prefix):]) and entry['access']=='read':
+            exceptions.append(key)
+        else:observed[key]=entry['access']
+    if observed!=profiles[name]['filesystem'] or len(exceptions)>1:
+        raise ValueError('actual report turn broadens or changes declared readable roots')
+    sandbox=context.get('sandbox_policy')
+    expected={'type':'read-only'}
+    if not reviewer:
+        if (not isinstance(root_sandbox,dict) or
+                set(root_sandbox)!={'type','writableRoots','networkAccess','excludeTmpdirEnvVar','excludeSlashTmp'} or
+                root_sandbox['type']!='workspaceWrite' or root_sandbox['networkAccess'] is not False or
+                root_sandbox['writableRoots']!=[key for key,access in profiles[name]['filesystem'].items() if access=='write'] or
+                type(root_sandbox['excludeTmpdirEnvVar']) is not bool or root_sandbox['excludeSlashTmp'] is not True):
+            raise ValueError('actual report root compatibility projection is unavailable or broadens writes')
+        expected={'type':'workspace-write','writable_roots':root_sandbox['writableRoots'],'network_access':False,
+                  'exclude_tmpdir_env_var':root_sandbox['excludeTmpdirEnvVar'],'exclude_slash_tmp':True}
+    if sandbox!=expected:raise ValueError('actual report turn compatibility policy conflicts with restricted profile')
+    return {'profile':name,'profiles_sha256':digest(profiles),'runtime_read_exceptions':exceptions}
+
+
+def retain_turn_policy(root, thread, turn_id, profiles, home, reviewer=False, *, retain=True):
+    """Read only a protected session path supplied by the actual app-server."""
+    root=Path(root);home=Path(home)
+    path=Path(thread.get('path') or '')
+    try:relative=path.relative_to(home/'sessions')
+    except ValueError:raise ValueError('actual report turn has no protected session path') from None
+    target=root/'agent-state'/'sessions'/relative
+    if not relative.parts or '..' in relative.parts or target.is_symlink() or target.resolve()!=target:
+        raise ValueError('actual report session path is not canonical')
+    if target.stat().st_size>64*1024*1024:raise ValueError('actual report session exceeds policy observation bound')
+    contexts=[];total=0;header=None
+    with target.open('rb') as stream:
+        while line:=stream.readline(2*1024*1024+1):
+            total+=len(line)
+            if total>64*1024*1024 or len(line)>2*1024*1024:raise ValueError('actual report session exceeds policy observation bound')
+            record=json.loads(line)
+            if header is None:
+                header=record
+                if (header.get('type')!='session_meta' or header.get('payload',{}).get('id')!=thread['id'] or
+                        header['payload'].get('cli_version')!='0.160.1'):
+                    raise ValueError('actual report session identity or version is unavailable')
+                metadata=header['payload'];parent=thread.get('parentThreadId');role=thread.get('agentRole')
+                if parent is not None:
+                    source=metadata.get('source')
+                    if not isinstance(source,dict):raise ValueError('actual report child session source is unavailable')
+                    subagent=source.get('subagent')
+                    spawn=subagent.get('thread_spawn') if isinstance(subagent,dict) else None
+                    if not isinstance(spawn,dict):raise ValueError('actual report child session spawn is unavailable')
+                    if (metadata.get('parent_thread_id')!=parent or metadata.get('agent_role')!=role or
+                            spawn.get('parent_thread_id')!=parent or spawn.get('agent_role')!=role):
+                        raise ValueError('actual report session parent or role conflicts with app-server metadata')
+                elif metadata.get('parent_thread_id') is not None or metadata.get('agent_role') is not None:
+                    raise ValueError('actual report root session has child metadata')
+            if record.get('type')=='turn_context' and record.get('payload',{}).get('turn_id')==turn_id:
+                context={key:record['payload'].get(key) for key in ('turn_id','root_turn_id','approval_policy',
+                    'approvals_reviewer','permission_profile','file_system_sandbox_policy','sandbox_policy','model','effort')}
+                turn_policy_proof(context,profiles,home,reviewer,root_sandbox=thread.get('sandbox'))
+                if context['model']!=thread.get('model') or context['effort']!=thread.get('reasoningEffort'):
+                    raise ValueError('actual report turn tuning conflicts with app-server metadata')
+                contexts.append(context)
+    if not contexts or any(context!=contexts[0] for context in contexts):
+        raise ValueError('actual report turn policy is absent or conflicting')
+    value={'runtime':'0.160.1','thread_id':thread['id'],'turn_id':turn_id,'context':contexts[0],
+           'session_meta_sha256':digest(header),'context_sha256':digest(contexts[0]),
+           'parent_thread_id':thread.get('parentThreadId'),'agent_role':thread.get('agentRole'),
+           'session_path':str(path),'root_sandbox':None if reviewer else thread.get('sandbox'),
+           **turn_policy_proof(contexts[0],profiles,home,reviewer,root_sandbox=thread.get('sandbox'))}
+    if not retain:return value
+    directory=root/'policy-contexts';directory.mkdir(mode=0o700,exist_ok=True)
+    receipt=directory/(digest({'thread_id':thread['id'],'turn_id':turn_id})+'.json')
+    if receipt.exists() and read(receipt)!=value:raise ValueError('retained actual report turn policy changed')
+    if not receipt.exists():atomic(receipt,value,immutable=True)
+    return value
+
+
+def derived_roles(root, codex_home, inherited, profile, *, profiles=None):
     """All configured children inherit a closed policy; named tuning is retained."""
     root = Path(root)
     directory = root/'agent-state'/'agents'
@@ -56,9 +239,17 @@ def derived_roles(root, codex_home, inherited, profile):
         value = tomllib.loads(path.read_text())
         safe = {key: value[key] for key in ('name', 'description', 'model', 'model_reasoning_effort', 'developer_instructions') if key in value}
         safe['name']=name
-        safe.update(sandbox_mode='read-only', approval_policy='never', approvals_reviewer='user', web_search='disabled')
-        raw = '\n'.join(key+' = '+json.dumps(val, ensure_ascii=False) for key, val in safe.items())+'\n'
-        raw += '\n[sandbox_read_only]\nnetwork_access = false\n\n[features]\napps = false\n'
+        safe.update(approval_policy='never',approvals_reviewer='user',web_search='disabled')
+        if profiles is None:
+            safe['sandbox_mode']='read-only'
+        else:
+            safe['default_permissions']=REVIEW_PERMISSIONS
+            safe['permissions']=profiles
+            safe['shell_environment_policy']={'inherit':'none','set':{'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':str(Path.home()),'CODEX_HOME':str(codex_home),'TMPDIR':profile['scratch'],'LANG':'C.UTF-8','TERM':'dumb'}}
+        raw = '\n'.join(key+' = '+inline_toml(val) for key, val in safe.items())+'\n'
+        if profiles is None:raw+='\n[sandbox_read_only]\nnetwork_access = false\n'
+        raw+='\n[features]\napps = false\n'
+        for feature in FILE_READ_FEATURES:raw+=feature+' = false\n'
         # Drop role-local MCP configuration. The root's inherited servers are
         # already disabled; transport-free role tables are invalid standalone
         # configuration in the qualified CLI and may make the role unavailable.
@@ -72,7 +263,9 @@ def derived_roles(root, codex_home, inherited, profile):
                 stream.write(raw)
             target.chmod(0o400)
         parsed = tomllib.loads(raw)
-        if parsed['sandbox_mode'] != 'read-only' or parsed['sandbox_read_only']['network_access'] is not False:
+        if (profiles is None and parsed.get('sandbox_mode')!='read-only' or
+                profiles is not None and (parsed.get('default_permissions')!=REVIEW_PERMISSIONS or parsed.get('permissions')!=profiles) or
+                profiles is None and parsed['sandbox_read_only']['network_access'] is not False):
             raise ValueError('derived child policy is not closed')
         description=safe.get('description')
         if not isinstance(description,str) or not description.strip():
@@ -82,12 +275,12 @@ def derived_roles(root, codex_home, inherited, profile):
         identities.append({'role': name, 'config_file':str(codex_home/'agents'/target.name),
                            'description':description, 'sha256': hashlib.sha256(raw.encode()).hexdigest(),
                            'model': safe.get('model'), 'effort': safe.get('model_reasoning_effort'),
-                           'sandbox': policy(profile, reviewer=True), 'approval_policy': 'never',
+                           'permissions': REVIEW_PERMISSIONS if profiles is not None else ':read-only', 'approval_policy': 'never',
                            'approvals_reviewer': 'user'})
     return overrides, identities
 
 
-def reviewer_selection_proof(config, profile, root, identities):
+def reviewer_selection_proof(config, profile, root, identities, *, profiles=None):
     reviewer=profile['reviewer'];name=reviewer['role']
     registered=config.get('agents')
     if not isinstance(registered,dict) or registered.get('enabled') is False:
@@ -104,8 +297,9 @@ def reviewer_selection_proof(config, profile, root, identities):
             value.get('description')!=selected['description'] or
             not isinstance(value.get('developer_instructions'),str) or not value['developer_instructions'].strip() or
             value.get('model')!=reviewer['model'] or value.get('model_reasoning_effort')!=reviewer['reasoning_effort'] or
-            value.get('sandbox_mode')!='read-only' or value.get('approval_policy')!='never' or
-            value.get('approvals_reviewer')!='user' or value.get('sandbox_read_only',{}).get('network_access') is not False or
+            (profiles is None and value.get('sandbox_mode')!='read-only' or profiles is not None and
+             (value.get('sandbox_mode') is not None or value.get('default_permissions')!=REVIEW_PERMISSIONS or value.get('permissions')!=profiles)) or value.get('approval_policy')!='never' or
+            value.get('approvals_reviewer')!='user' or profiles is None and value.get('sandbox_read_only',{}).get('network_access') is not False or
             value.get('web_search')!='disabled' or value.get('features',{}).get('apps') is not False):
         raise ValueError('named reviewer layer differs from its protected tuning or policy')
     return {'role':name,'config_file':selected['config_file'],'sha256':selected['sha256'],
@@ -221,7 +415,7 @@ finally:
     for reviewer in (False,True):
         response=broker.rpc('command/exec',{'command':['/usr/bin/python3','-c',code,companion],
             'cwd':broker.profile['workspace'],'timeoutMs':6000,'outputBytesCap':4096,
-            'sandboxPolicy':policy(broker.profile,reviewer)})
+            **command_policy(broker.profile,reviewer)})
         if response.get('exitCode')!=0:
             raise ValueError('no-model code-mode companion execution failed')
         observed=json.loads(response['stdout'])
@@ -281,7 +475,9 @@ def mounts(admission, profile, codex_home, root):
         if name not in present:command+=['--dir',str(workspace/name)]
     command+=['--remount-ro',str(workspace)]
     command += ['--bind', str(Path(root)/'agent-state'), str(codex_home)]
-    for name in ('config.toml', 'auth.json', 'AGENTS.md', 'instructions.md', 'rules', 'skills'):
+    task_config=Path(root)/'agent-state'/'config.toml'
+    if task_config.exists():command+=['--ro-bind',str(task_config),str(codex_home/'config.toml')]
+    for name in ('auth.json', 'AGENTS.md', 'instructions.md', 'rules', 'skills'):
         path = codex_home/name
         if path.exists():
             command += ['--ro-bind', str(path), str(path)]
@@ -318,9 +514,55 @@ def mount_view(profile, deadline=None):
             'public_tls_assets':[{'path':path,'sha256':hashlib.sha256(Path(path).read_bytes()).hexdigest()} for path in public_ca_paths()]}
 
 
+def confidentiality_probe(broker):
+    home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex'))).resolve()
+    label='bokkie-read-'+broker.generation
+    positive=Path(broker.profile['scratch'])/(label+'.public')
+    alias=Path(broker.profile['scratch'])/(label+'.auth-link')
+    secret=broker.root/'agent-state'/(label+'.private')
+    positive.write_text('harmless read positive control');positive.chmod(0o600)
+    secret.write_text('harmless synthetic private control');secret.chmod(0o600)
+    alias.symlink_to(home/'auth.json')
+    paths={'auth':str(home/'auth.json'),'config':str(home/'config.toml'),
+           'synthetic_secret':str(home/secret.name),'positive':str(positive),'scratch_auth_alias':str(alias),
+           'proc_auth_alias':'/proc/self/root'+str(home/'auth.json'),
+           'guidance':str(home/'AGENTS.md'),'workspace_guidance':str(Path(broker.profile['workspace'])/'AGENTS.md'),
+           'mirror':'/bokkie-evidence','runtime_control':str(broker.root/'admission.json')}
+    code='''import json,os,sys
+result={}
+for key,path in json.loads(sys.argv[1]).items():
+ try:
+  descriptor=os.open(path,os.O_RDONLY);os.close(descriptor);result[key]=True
+ except OSError:result[key]=False
+result['synthetic_secret_environment']=bool(os.environ.get('BOKKIE_SYNTHETIC_SECRET'))
+print(json.dumps(result,sort_keys=True))
+'''
+    host_controls={}
+    for name,path in [('auth',home/'auth.json'),('synthetic_secret',secret),('positive',positive)]:
+        descriptor=os.open(path,os.O_RDONLY);os.close(descriptor);host_controls[name]=True
+    expected={key:key in ('positive','guidance','workspace_guidance','mirror') for key in paths}
+    expected['synthetic_secret_environment']=False
+    observations=[]
+    try:
+        for reviewer in (False,True):
+            result=broker.rpc('command/exec',{'command':['/usr/bin/python3','-c',code,json.dumps(paths)],
+                'cwd':broker.profile['workspace'],'timeoutMs':5000,'outputBytesCap':4096,
+                **command_policy(broker.profile,reviewer)})
+            if result.get('exitCode')!=0:raise ValueError('no-model restricted-read probe could not execute')
+            observed=json.loads(result['stdout'])
+            if observed!=expected:raise ValueError('no-model protected-read or environment denial failed')
+            observations.append({'reviewer':reviewer,'permissions':command_policy(broker.profile,reviewer)['permissionProfile'],'open_success':observed})
+    finally:
+        positive.unlink(missing_ok=True);alias.unlink(missing_ok=True);secret.unlink(missing_ok=True)
+    value={'host_open_positive_controls':host_controls,'observations':observations,'read_contents':False,'model_calls':0}
+    broker.journal.record('evidence_confidentiality',value)
+    return value
+
+
 def qualify(broker):
     """No turn is started until the actual command sandbox rejects alternate effects."""
     profile = broker.profile
+    confidentiality=confidentiality_probe(broker)
     readiness=companion_readiness(broker)
     scratch = Path(profile['scratch'])
     marker = 'bokkie-policy-'+broker.generation
@@ -367,7 +609,7 @@ print(json.dumps(result,sort_keys=True))
             for reviewer in (False, True):
                 value = broker.rpc('command/exec', {'command': ['/usr/bin/python3', '-c', code, json.dumps(paths)],
                     'cwd': profile['workspace'], 'timeoutMs': 5000, 'outputBytesCap': 4096,
-                    'sandboxPolicy': policy(profile, reviewer)})
+                    **command_policy(profile,reviewer)})
                 broker.journal.record('evidence_policy_probe',{'reviewer':reviewer,'exit_code':value.get('exitCode'),
                     'stdout':value.get('stdout','')[:4096],'stderr':value.get('stderr','')[:4096]})
                 if value.get('exitCode') != 0:
@@ -377,14 +619,16 @@ print(json.dumps(result,sort_keys=True))
                           'tmp':False, 'unix': False, 'visible_unix':False, 'tcp': False, 'forwarding': False}
                 if observed != wanted:
                     raise ValueError('no-model evidence policy failed: '+json.dumps(observed, sort_keys=True))
-                observations.append({'reviewer': reviewer, 'sandbox': policy(profile, reviewer), 'observed': observed})
+                observations.append({'reviewer':reviewer,'permissions':command_policy(profile,reviewer)['permissionProfile'],'observed':observed})
                 if scratch_file.exists():
                     scratch_file.unlink()
             Path(visible_path).unlink()
             if product_file.exists() or Path(git_file).exists():
                 raise ValueError('report policy probe unexpectedly wrote a selected source')
     value = {'model_calls': 0, 'controls': {'host_unix_connected': True, 'host_visible_unix_connected':True, 'host_tcp_connected': True},
-             'observations': observations, 'derived_roles': broker.evidence_roles, 'companion_readiness':readiness,
+             'observations': observations, 'derived_roles': broker.evidence_roles, 'companion_readiness':readiness,'confidentiality':confidentiality,
+             'permission_profiles':broker.permission_profiles,
+             'codex_home':str(Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex'))).resolve()),
              'approval_policy': 'never', 'approvals_reviewer': 'user',
              'apps': False, 'web_search': 'disabled', 'inherited_mcp': False}
     atomic(broker.root/'evidence-policy.json', value, immutable=True)

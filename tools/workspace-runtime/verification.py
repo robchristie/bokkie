@@ -247,7 +247,7 @@ def verify(admission, result, records, *, query=github, deadline=None, root=None
         return {'passed':False,'evidence':evidence+[str(error)[:1024]]}
 
 
-def report_review_observation(records, root_thread, report, sealed_index, completed_at, configured):
+def report_review_observation(records, root_thread, report, sealed_index, completed_at, configured, qualified_turns):
     """Only actual post-seal reviewer descendants' completed final turns qualify."""
     if (configured.get('role') != 'evidence_reviewer' or not configured.get('model') or
             not configured.get('reasoning_effort')):
@@ -292,13 +292,61 @@ def report_review_observation(records, root_thread, report, sealed_index, comple
             report_id = review_value(answer, 'Reviewed report:', r'([0-9a-f]{64})|`([0-9a-f]{64})`')
             sources_id = review_value(answer, 'Reviewed sources:', r'([0-9a-f]{64})|`([0-9a-f]{64})`')
             if report_id == report['digest'] and sources_id == report['source_manifest_digest']:
-                latest[child] = (turn['id'], review_verdict(answer))
+                verdict=review_verdict(answer)
+                policy=qualified_turns.get((child,turn['id']),{}).get('context',{})
+                if verdict=='PASS' and (policy.get('model')!=configured['model'] or
+                        policy.get('effort')!=configured['reasoning_effort']):verdict='UNAVAILABLE'
+                latest[child] = (turn['id'], verdict)
     if any(verdict != 'PASS' for _, verdict in latest.values()):
         raise ValueError('Independent completed child blocks the sealed report')
     if latest:
         child, (turn, _) = next(iter(latest.items()))
         return 'Observed independent completed evidence reviewer '+child+' turn '+turn
     return None
+
+
+def report_policy_attestations(admission, records, root, policy):
+    from common import digest, read
+    from evidence_policy import permission_profiles,retain_turn_policy,ROOT_PERMISSIONS,REVIEW_PERMISSIONS
+    profiles=policy.get('permission_profiles');home=policy.get('codex_home')
+    if not home or profiles!=permission_profiles(admission,admission['project_profile'],home):
+        raise ValueError('Qualified report profiles do not match the admitted readable roots')
+    identity=next((r['value'] for r in records if r['kind']=='thread_identity'),{})
+    root_thread=identity.get('thread_id');root_settings=identity.get('settings',{})
+    qualified={};unavailable=set()
+    for record in records:
+        value=record['value']
+        if record['kind']=='report_turn_policy_unavailable':
+            unavailable.add((value.get('thread_id'),value.get('turn_id')))
+        if record['kind']!='report_turn_policy':continue
+        key=(value.get('thread_id'),value.get('turn_id'))
+        reviewer=key[0]!=root_thread
+        expected=REVIEW_PERMISSIONS if reviewer else ROOT_PERMISSIONS
+        if value.get('runtime')!='0.160.1' or value.get('profile')!=expected:
+            raise ValueError('Actual report turn policy version or role differs')
+        receipt=Path(root)/'policy-contexts'/(digest({'thread_id':key[0],'turn_id':key[1]})+'.json')
+        if read(receipt)!=value:raise ValueError('Actual report turn policy receipt differs from host observation')
+        thread={'id':key[0],'path':value.get('session_path'),'parentThreadId':value.get('parent_thread_id'),
+                'agentRole':value.get('agent_role'),'model':value['context'].get('model'),
+                'reasoningEffort':value['context'].get('effort'),'sandbox':value.get('root_sandbox')}
+        actual=retain_turn_policy(root,thread,key[1],profiles,home,reviewer,retain=False)
+        if actual!=value:raise ValueError('Original actual report turn policy metadata changed')
+        if reviewer and (thread['parentThreadId']!=root_thread or thread['agentRole']!='evidence_reviewer'):
+            raise ValueError('Actual report child policy does not belong to the independent reviewer')
+        if not reviewer and (root_settings.get('activePermissionProfile')!={'id':ROOT_PERMISSIONS,'extends':None} or
+                value['root_sandbox']!=root_settings.get('sandbox') or
+                thread['model']!=root_settings.get('model') or thread['reasoningEffort']!=root_settings.get('reasoningEffort')):
+            raise ValueError('Actual report root turn policy conflicts with supported startup metadata')
+        if key in qualified and qualified[key]!=actual:raise ValueError('Actual report turn policy observations conflict')
+        qualified[key]=actual
+    qualified={key:value for key,value in qualified.items() if key not in unavailable}
+    root_completed={
+        (r['value'].get('params',{}).get('threadId'),r['value'].get('params',{}).get('turn',{}).get('id'))
+        for r in records if r['kind']=='protocol_event' and r['value'].get('method')=='turn/completed' and
+        r['value'].get('params',{}).get('threadId')==root_thread}
+    if not root_completed or not root_completed.issubset(qualified):
+        raise ValueError('Actual completed report root lacks protected turn policy proof')
+    return qualified
 
 
 def verify_report(admission, result, records, root):
@@ -318,6 +366,7 @@ def verify_report(admission, result, records, root):
     from common import read
     if policy is None or read(Path(root)/'evidence-policy.json') != policy or policy.get('model_calls') != 0:
         raise ValueError('No attributable no-model report policy qualification')
+    qualified_turns=report_policy_attestations(admission,records,root,policy)
     store=EvidenceStore(root,admission,create=False)
     report = store.report(result['report']['digest'])
     provenance=store.seal_provenance(report['digest'])
@@ -333,7 +382,7 @@ def verify_report(admission, result, records, root):
     configured = next((r['value'] for r in records if r['kind'] == 'reviewer_profile'), {})
     if configured != admission['project_profile'].get('reviewer'):
         raise ValueError('Independent reviewer does not match admitted profile')
-    observation = report_review_observation(records, thread, report, sealed_index, provenance['completed_at'], configured)
+    observation = report_review_observation(records, thread, report, sealed_index, provenance['completed_at'], configured, qualified_turns)
     if observation is None:
         raise ValueError('No independent completed child review of both sealed report and sources')
     return ['Host recomputed sealed report '+report['digest'],

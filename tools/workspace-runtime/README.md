@@ -392,8 +392,8 @@ A repair creates another identity and needs another review.
 
 Derive a separately named `evidence_reviewer` role from the existing independent
 reviewer profile, retaining its flagship model, high effort and review instructions.
-Set `sandbox_mode = "read-only"`, `approval_policy = "never"`,
-`approvals_reviewer = "user"` and `[sandbox_read_only] network_access = false`.
+The worker selects its private `bokkie_report_reviewer` permission profile,
+`approval_policy = "never"` and `approvals_reviewer = "user"`.
 The worker derives closed task-local copies of every configured child role,
 retaining model, effort and instructions while disabling network, escalation,
 apps, web search, inherited MCP and plugins. No global role or account settings
@@ -426,16 +426,32 @@ remaining tokens and remaining wall time. New profile/definition limits may sele
 up to 16 million tokens; previously saved admissions retain their exact limits.
 
 Before any model turn, the worker qualifies its actual root and reviewer command
-sandboxes. The root has scratch-only `workspaceWrite`, no task network and
-`never`/`user` approvals; the reviewer has literal `readOnly` with the same network
-and approval bounds. A shallow read-only mount view preserves the actual workspace
+sandboxes. Named `bokkie_report_root` and `bokkie_report_reviewer` profiles allow
+only selected readable roots, with scratch writing restricted to the root,
+task network disabled and `never`/`user` approvals. Explicit thread/turn
+`permissions` and command `permissionProfile` selectors use these supported
+installed interfaces. The compatibility `workspaceWrite`/`readOnly` projection
+does not establish confidentiality. A shallow read-only mount view preserves the actual workspace
 entry and every existing top-level source path without copying sources or adding
 metadata to the workspace. Private empty control slots let Codex prepare nested
 sandboxes; the runtime records this view and the loaded instruction hashes.
 Conventional control roots are masked. A fresh private `/tmp` supports sandbox
 construction, while actual task commands must prove `/tmp` writes are denied.
-SSH, DBus, Docker and display forwarding and inherited GitHub token variables
-are removed.
+The enclosing inference process receives a minimal runtime environment, with SSH,
+DBus, Docker, display, GitHub token and proxy forwarding removed. Task shells
+inherit no ambient environment and receive only fixed public tool variables.
+
+Account authentication remains read-only in its approved store for the enclosing
+inference client. A task-private configuration snapshot replaces legacy sandbox
+selectors from the account configuration with the two closed named profiles;
+global configuration and credentials remain untouched. Effective configuration,
+registered reviewer tuning and private configuration digests are checked before
+inference. Both task profiles must deny opening account authentication,
+configuration and private runtime files, a synthetic secret, scratch/proc aliases
+to authentication, and an injected synthetic secret environment variable.
+Host open/close controls establish that the protected files exist; actual
+authentication bytes and hashes are neither read nor retained by these probes.
+Exact personal/workspace guidance, scratch and immutable mirror reads must work.
 
 The no-model preflight requires successful scratch writing by the root, denied
 scratch writing by the reviewer, denied product/Git/mirror/`/tmp` writes, and denied
@@ -444,6 +460,30 @@ positive controls prove those sockets are reachable before testing denial. A
 failed or unsupported probe blocks the model turn; reported configuration alone
 never establishes confinement. Inference network access by the enclosing
 app-server remains separate from the task-tool sandbox.
+
+Known installed feature inventory must attest that native image, browser and
+computer tools are disabled. A bounded installed-0.160.1 synthetic-home cohort
+also exercised the emitted native tool catalogue and patch handler through a
+local scripted Responses provider: eight scripted requests, zero OpenAI inference,
+account or source requests. Its native `functions.exec` catalogue omitted
+context-free operator `fs/readFile` and `thread/shellCommand` APIs. Protected-file
+update/move and out-of-scope creation failed under both profiles; root scratch
+patching succeeded and reviewer scratch patching failed. An outer-boundary
+positive control could open the protected synthetic file, but no sentinel reached
+tool replies or subsequent mock requests. This qualifies the native enforcement
+path for this runtime and policy; it is separate from live-report acceptance and
+is not repeated for every reviewer. Unknown runtime/tool paths remain unavailable
+proof rather than inheriting assurance from shell probes.
+
+Each completed actual root/reviewer turn additionally requires original protected
+0.160.1 `session_meta` and `turn_context` records. This version-specific ancillary
+attestation cross-checks public thread/turn/parent/role and tuning, exact metadata
+hashes, complete restricted filesystem entries, network and approval settings.
+Only the qualified single read-only `CODEX_HOME/tmp/arg0/codex-arg0<suffix>` shim
+directory may augment declared roots. The task cannot edit these records, and
+verification rereads them; absent, conflicting or broadened policy fails closed.
+Supported app-server events and `thread/read` still own lifecycle and final-answer
+evidence. A model statement cannot establish its own policy.
 
 Before preparing a report turn, the host also calls the supported `account/read`
 with `refreshToken: false`. A ChatGPT account must return valid workspace routing

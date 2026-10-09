@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from broker import Broker, tools, cli_component, STARTUP_STDERR_BYTES
 from common import Config, atomic, checkpoint_bounds, digest, encoded, read, result_bounds
 from evidence_report import EvidenceStore, NoRedirect, bounded_process, captured_content, endpoint, github_get, _github_get, selector
-from evidence_policy import derived_roles, environment, mounts, policy, closed_mcp_inventory, routing_proof, public_ca_paths, code_mode_host_path, companion_readiness, reviewer_selection_proof
+from evidence_policy import derived_roles, environment, mounts, policy, closed_mcp_inventory, routing_proof, public_ca_paths, code_mode_host_path, companion_readiness, reviewer_selection_proof, permission_profiles, prepare_task_config, profile_proof, file_feature_proof, turn_policy_proof, retain_turn_policy, FILE_READ_FEATURES, ROOT_PERMISSIONS, REVIEW_PERMISSIONS
 from verification import verify
 
 
@@ -44,7 +44,8 @@ class EvidenceReportTests(unittest.TestCase):
             'repository_scope':['owner/repo'],'criteria':[{'id':'receipt','description':'Assess retained receipts'}],
             'limits':self.profile['limits']}}
         self.admission = {'dispatch':self.dispatch,'dispatch_digest':digest(self.dispatch),
-            'project_profile':self.profile,'deadline':time.time()+60,'registry':str(self.base/'registry')}
+            'project_profile':self.profile,'deadline':time.time()+60,'registry':str(self.base/'registry'),
+            'codex':str(Path('/usr/bin/true').resolve())}
         atomic(self.root/'admission.json',self.admission)
         self.store = EvidenceStore(self.root,self.admission)
         self.selected = {'kind':'repository_file','repository':'owner/repo','commit':'a'*40,'path':'docs/receipt.md'}
@@ -69,16 +70,44 @@ class EvidenceReportTests(unittest.TestCase):
                 'criteria':[{'id':'receipt','satisfied':True,'evidence':['Assessed retained source bytes']}],
                 'deliveries':[],'limitations':[],'report':report}
 
+    def policy_record(self, thread_id, turn_id, profiles, home, reviewer=False):
+        name=REVIEW_PERMISSIONS if reviewer else ROOT_PERMISSIONS
+        entries=[{'path':{'type':'special','value':{'kind':'minimal'}} if key==':minimal' else
+                  {'type':'path','path':key},'access':access} for key,access in profiles[name]['filesystem'].items()]
+        context={'turn_id':turn_id,'root_turn_id':turn_id,'approval_policy':'never','approvals_reviewer':'user',
+            'permission_profile':{'type':'managed','file_system':{'type':'restricted','entries':entries},'network':'restricted'},
+            'file_system_sandbox_policy':{'kind':'restricted','entries':entries},
+            'sandbox_policy':{'type':'read-only'} if reviewer else {'type':'workspace-write','writable_roots':[str(self.scratch)],
+                'network_access':False,'exclude_tmpdir_env_var':True,'exclude_slash_tmp':True},
+            'model':'review-model' if reviewer else 'implementation-model','effort':'high' if reviewer else 'medium'}
+        metadata={'id':thread_id,'cli_version':'0.160.1'}
+        if reviewer:metadata.update(parent_thread_id='root',agent_role='evidence_reviewer',
+            source={'subagent':{'thread_spawn':{'parent_thread_id':'root','agent_role':'evidence_reviewer'}}})
+        path=self.root/'agent-state'/'sessions'/(thread_id+'.jsonl');path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps({'type':'session_meta','payload':metadata})+'\n'+json.dumps({'type':'turn_context','payload':context})+'\n')
+        thread={'id':thread_id,'path':str(home/'sessions'/path.name),'parentThreadId':'root' if reviewer else None,
+            'agentRole':'evidence_reviewer' if reviewer else None,'model':context['model'],'reasoningEffort':context['effort'],
+            'sandbox':{'type':'workspaceWrite','writableRoots':[str(self.scratch)],'networkAccess':False,
+                       'excludeTmpdirEnvVar':True,'excludeSlashTmp':True}}
+        return {'kind':'report_turn_policy','value':retain_turn_policy(self.root,thread,turn_id,profiles,home,reviewer)}
+
     def records(self, report):
         completed_at=self.store.seal_provenance(report['digest'])['completed_at']
-        qualification = {'model_calls':0,'observations':[]}
+        home=self.base/'codex-home';profiles=permission_profiles(self.admission,self.profile,home)
+        qualification = {'model_calls':0,'observations':[],'permission_profiles':profiles,'codex_home':str(home)}
         atomic(self.root/'evidence-policy.json',qualification)
         return [
             {'kind':'evidence_policy_qualified','value':qualification},
             {'kind':'reviewer_profile','value':self.profile['reviewer']},
-            {'kind':'thread_identity','value':{'thread_id':'root'}},
+            {'kind':'thread_identity','value':{'thread_id':'root','settings':{'model':'implementation-model',
+                'reasoningEffort':'medium','activePermissionProfile':{'id':ROOT_PERMISSIONS,'extends':None},
+                'sandbox':{'type':'workspaceWrite','writableRoots':[str(self.scratch)],'networkAccess':False,
+                    'excludeTmpdirEnvVar':True,'excludeSlashTmp':True}}}},
             {'kind':'evidence_report_sealed','value':{'digest':report['digest'],'source_manifest_digest':report['source_manifest_digest'],'completed_at':completed_at}},
             {'kind':'protocol_event','value':{'method':'item/started','params':{'threadId':'root','startedAtMs':(completed_at+1)*1000,'item':{'type':'subAgentActivity','kind':'started','agentThreadId':'review-child'}}}},
+            {'kind':'protocol_event','value':{'method':'turn/completed','params':{'threadId':'root','turn':{'id':'root-turn','status':'completed'}}}},
+            self.policy_record('root','root-turn',profiles,home),
+            self.policy_record('review-child','review-turn',profiles,home,True),
             {'kind':'child_thread_read','value':{'child_id':'review-child','include_turns':True,'thread':{
                 'id':'review-child','createdAt':completed_at+1,'parentThreadId':'root','agentRole':'evidence_reviewer','model':'review-model',
                 'reasoningEffort':'high','turns':[{'id':'review-turn','status':'completed','items':[
@@ -263,6 +292,56 @@ class EvidenceReportTests(unittest.TestCase):
         repaired=self.store.seal('Repaired report.',[report['sources'][0]['id']])
         self.assertFalse(verify(self.admission,self.result(repaired),self.records(report),root=self.root)['passed'])
 
+    def test_original_completed_root_and_reviewer_turn_policies_are_required(self):
+        report=self.sealed();baseline=self.records(report)
+        for change in ('root-missing','child-missing','child-unavailable','wrong-turn','context-hash','parent','role','original-mutation'):
+            records=copy.deepcopy(baseline)
+            if change=='root-missing':records.pop(6)
+            elif change=='child-missing':records.pop(7)
+            elif change=='child-unavailable':records.insert(7,{'kind':'report_turn_policy_unavailable','value':{'thread_id':'review-child','turn_id':'review-turn'}})
+            elif change=='wrong-turn':records[7]['value']['turn_id']='other-turn'
+            elif change=='context-hash':records[7]['value']['context_sha256']='0'*64
+            elif change=='parent':records[7]['value']['parent_thread_id']='other-root'
+            elif change=='role':records[7]['value']['agent_role']='worker'
+            elif change=='original-mutation':
+                path=self.root/'agent-state'/'sessions'/'review-child.jsonl';raw=path.read_text()
+                path.write_text(raw.replace('"network": "restricted"','"network": "enabled"'))
+            with self.subTest(change=change):self.assertFalse(verify(self.admission,self.result(report),records,root=self.root)['passed'])
+            if change=='original-mutation':path.write_text(raw)
+
+    def test_turn_policy_rejects_broader_reads_network_approvals_and_arg0_aliases(self):
+        home=self.base/'codex-home';profiles=permission_profiles(self.admission,self.profile,home)
+        record=self.policy_record('review-child','review-turn',profiles,home,True)
+        baseline=record['value']['context']
+        exception={'path':{'type':'path','path':str(home/'tmp'/'arg0'/'codex-arg0Ab123')},'access':'read'}
+        context=copy.deepcopy(baseline);context['permission_profile']['file_system']['entries'].append(exception)
+        context['file_system_sandbox_policy']['entries']=copy.deepcopy(context['permission_profile']['file_system']['entries'])
+        self.assertEqual(turn_policy_proof(context,profiles,home,True)['runtime_read_exceptions'],[exception['path']['path']])
+        for change in ('root-read','scratch-write','network','approval','reviewer','different-projection','arg0-write','arg0-traversal','duplicate'):
+            context=copy.deepcopy(baseline);entries=context['permission_profile']['file_system']['entries']
+            if change=='root-read':entries.append({'path':{'type':'path','path':'/'},'access':'read'})
+            elif change=='scratch-write':next(value for value in entries if value['path'].get('path')==str(self.scratch))['access']='write'
+            elif change=='network':context['permission_profile']['network']='enabled'
+            elif change=='approval':context['approval_policy']='on-request'
+            elif change=='reviewer':context['approvals_reviewer']='auto_review'
+            elif change=='different-projection':context['file_system_sandbox_policy']={'kind':'unrestricted'}
+            elif change=='arg0-write':entries.append(exception|{'access':'write'})
+            elif change=='arg0-traversal':entries.append({'path':{'type':'path','path':str(home/'tmp'/'arg0')+'/codex-arg0Ab/../auth.json'},'access':'read'})
+            elif change=='duplicate':entries.append(copy.deepcopy(entries[0]))
+            if change!='different-projection':context['file_system_sandbox_policy']['entries']=copy.deepcopy(entries)
+            with self.subTest(change=change),self.assertRaises(ValueError):turn_policy_proof(context,profiles,home,True)
+
+    def test_root_turn_projection_binds_supported_metadata_with_scratch_tmpdir(self):
+        home=self.base/'codex-home';profiles=permission_profiles(self.admission,self.profile,home)
+        record=self.policy_record('root','root-turn',profiles,home)
+        context=copy.deepcopy(record['value']['context']);projection=copy.deepcopy(record['value']['root_sandbox'])
+        projection['excludeTmpdirEnvVar']=False;context['sandbox_policy']['exclude_tmpdir_env_var']=False
+        self.assertEqual(turn_policy_proof(context,profiles,home,root_sandbox=projection)['profile'],ROOT_PERMISSIONS)
+        with self.assertRaises(ValueError):turn_policy_proof(context,profiles,home)
+        with self.assertRaises(ValueError):turn_policy_proof(context,profiles,home,root_sandbox=record['value']['root_sandbox'])
+        projection['writableRoots'].append(str(self.workspace))
+        with self.assertRaises(ValueError):turn_policy_proof(context,profiles,home,root_sandbox=projection)
+
     def test_report_submission_uses_only_host_seal_and_root_checkpoint_is_nonterminal(self):
         report=self.sealed();broker=Broker(self.root);broker.thread='root';sent=[];broker.send=sent.append
         def call(tool,args,thread='root'):
@@ -376,8 +455,8 @@ print(json.dumps(values,sort_keys=True))
             calls.append((method,params));return {'exitCode':0,'stdout':json.dumps(observed),'stderr':''}
         broker.rpc=rpc;proofs=companion_readiness(broker)
         self.assertEqual(len(proofs),2);self.assertTrue(proofs[1]['reviewer'])
-        self.assertEqual(calls[0][1]['sandboxPolicy'],policy(self.profile))
-        self.assertEqual(calls[1][1]['sandboxPolicy'],policy(self.profile,True))
+        self.assertEqual(calls[0][1]['permissionProfile'],'bokkie_report_root')
+        self.assertEqual(calls[1][1]['permissionProfile'],'bokkie_report_reviewer')
         self.assertEqual(calls[0][1]['command'][-1],str(companion))
         self.assertIn("'enabled_tools':[]",calls[0][1]['command'][2])
         broker.rpc=lambda *_:{'exitCode':1,'stdout':'','stderr':'synthetic failure'}
@@ -415,6 +494,38 @@ print(json.dumps(values,sort_keys=True))
         self.assertEqual(reply['review']['fork_turns'],'none')
         self.assertNotEqual(reply['review']['task_name'],reply['review']['agent_type'])
         self.assertNotIn('model',reply['review']);self.assertNotIn('reasoning_effort',reply['review'])
+
+    def test_private_report_config_removes_legacy_and_ambient_environment_without_global_edits(self):
+        home=self.base/'private-codex';home.mkdir()
+        inherited={'sandbox_mode':'danger-full-access','sandbox_workspace_write':{'network_access':True},
+            'default_permissions':':danger-full-access','shell_environment_policy':{'inherit':'all','set':{'SYNTHETIC_SECRET':'harmless'}},
+            'model':'review-model','model_reasoning_effort':'high'}
+        original=copy.deepcopy(inherited)
+        profiles=permission_profiles({'codex':'/usr/bin/python3'},self.profile,home)
+        generated=prepare_task_config(self.root,inherited,profiles,home,str(self.scratch))
+        self.assertEqual(inherited,original)
+        self.assertNotIn('sandbox_mode',generated);self.assertNotIn('sandbox_workspace_write',generated)
+        self.assertEqual(generated['default_permissions'],ROOT_PERMISSIONS)
+        self.assertEqual(generated['shell_environment_policy']['inherit'],'none')
+        self.assertNotIn('SYNTHETIC_SECRET',generated['shell_environment_policy']['set'])
+        self.assertNotIn(str(home/'auth.json'),profiles[ROOT_PERMISSIONS]['filesystem'])
+        self.assertNotIn(str(home/'config.toml'),profiles[ROOT_PERMISSIONS]['filesystem'])
+        self.assertEqual(profiles[ROOT_PERMISSIONS]['filesystem'][str(self.scratch)],'write')
+        self.assertEqual(profiles[REVIEW_PERMISSIONS]['filesystem'][str(self.scratch)],'read')
+        self.assertEqual(profiles[ROOT_PERMISSIONS]['filesystem']['/tmp'],'read')
+        effective=copy.deepcopy(generated)
+        self.assertTrue(profile_proof(effective,profiles)['restricted_reads'])
+        effective['permissions'][ROOT_PERMISSIONS]['filesystem']['/']='read'
+        with self.assertRaisesRegex(ValueError,'broadens'):profile_proof(effective,profiles)
+
+    def test_native_file_features_require_actual_known_inventory_disabled_values(self):
+        inventory={'data':[{'name':name,'enabled':False} for name in FILE_READ_FEATURES],'nextCursor':None}
+        self.assertIn('view_image',file_feature_proof(inventory)['disabled_native_features'])
+        missing=copy.deepcopy(inventory);missing['data'].pop()
+        with self.assertRaises(ValueError):file_feature_proof(missing)
+        enabled=copy.deepcopy(inventory);enabled['data'][0]['enabled']=True
+        with self.assertRaises(ValueError):file_feature_proof(enabled)
+        with self.assertRaises(ValueError):file_feature_proof(inventory|{'nextCursor':'next'})
 
     def test_no_model_routing_proof_rejects_unbound_origins_without_retaining_account_values(self):
         account={'account':{'type':'chatgpt','email':'synthetic-private-email'},'workspaceRouting':{
@@ -471,9 +582,9 @@ print(json.dumps(values,sort_keys=True))
         self.assertNotIn('mcp_servers.fixture',json.dumps(diagnostic))
 
     def test_forwarding_and_account_source_credentials_are_removed_from_task_environment(self):
-        with patch.dict(os.environ,{'SSH_AUTH_SOCK':'/tmp/ssh','DBUS_SESSION_BUS_ADDRESS':'unix:path=/run/bus','DOCKER_HOST':'unix:///tmp/docker','GH_TOKEN':'secret'}):
+        with patch.dict(os.environ,{'SSH_AUTH_SOCK':'/tmp/ssh','DBUS_SESSION_BUS_ADDRESS':'unix:path=/run/bus','DOCKER_HOST':'unix:///tmp/docker','GH_TOKEN':'secret','BOKKIE_SYNTHETIC_SECRET':'harmless'}):
             value=environment(str(self.scratch))
-        self.assertFalse(any(key in value for key in ('SSH_AUTH_SOCK','DBUS_SESSION_BUS_ADDRESS','DOCKER_HOST','GH_TOKEN')))
+        self.assertFalse(any(key in value for key in ('SSH_AUTH_SOCK','DBUS_SESSION_BUS_ADDRESS','DOCKER_HOST','GH_TOKEN','BOKKIE_SYNTHETIC_SECRET')))
         self.assertEqual(value['TMPDIR'],str(self.scratch))
 
     def test_trusted_source_process_rejects_overflow_and_enforces_wall_deadline(self):
