@@ -5,8 +5,10 @@
 use std::io::BufRead;
 use std::net::SocketAddr;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use bokkie_gateway::clock::Clock;
+use bokkie_gateway::codex::{Launcher, Supervisor, catalog};
 use bokkie_gateway::config::Config;
 use bokkie_gateway::{AppState, accounts, db, router};
 
@@ -41,8 +43,9 @@ async fn serve() -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(config.listen)
         .await
         .map_err(|e| format!("listen on {}: {e}", config.listen))?;
+    let supervisor = supervisor(&config).await?;
     tracing::info!(listen = %config.listen, origin = config.origin.as_str(), "serving");
-    let app = router(AppState::new(config, pool, Clock::system()));
+    let app = router(AppState::new(config, pool, Clock::system(), supervisor));
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -52,6 +55,34 @@ async fn serve() -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Builds Bokkie's model catalog from the pinned binary and the supervisor
+/// that uses it. Refuses to serve if the catalog cannot be made safe.
+async fn supervisor(config: &Config) -> Result<Arc<Supervisor>, String> {
+    let bundled = catalog::export_bundled(
+        &config.codex_program,
+        &config.data_dir.join("codex").join("catalog-home"),
+    )
+    .await
+    .map_err(|e| format!("exporting the model catalog: {e}"))?;
+    let catalog = catalog::write(&config.catalog_path(), bundled)
+        .map_err(|e| format!("writing the model catalog: {e}"))?;
+    let (supervisor, mut events) = Supervisor::new(
+        &config.data_dir,
+        catalog,
+        Launcher::Process {
+            program: config.codex_program.clone(),
+            overrides: Vec::new(),
+        },
+    );
+    // Bots route these from a later increment; until then, record them.
+    tokio::spawn(async move {
+        while let Some(event) = events.recv().await {
+            tracing::debug!(user = %event.user, kind = ?event.kind, "app-server event");
+        }
+    });
+    Ok(Arc::new(supervisor))
 }
 
 async fn bootstrap(username: &str, display_name: &str) -> Result<(), String> {

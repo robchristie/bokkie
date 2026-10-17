@@ -1,11 +1,16 @@
-//! A gateway on a temporary database, driven in-process.
+//! A gateway on a temporary database, driven in-process, with a fake app
+//! server per user.
 
 #![allow(dead_code)]
+
+pub mod fake_codex;
+pub mod mock_model;
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use bokkie_gateway::clock::Clock;
+use bokkie_gateway::codex::{RuntimeEvent, Supervisor, catalog};
 use bokkie_gateway::config::{Config, PublicOrigin};
 use bokkie_gateway::{AppState, accounts, db, router};
 use bokkie_protocol::api::{CreateInvitationRequest, Role, SessionResponse};
@@ -21,6 +26,9 @@ pub const PASSWORD: &str = "a long test password";
 pub struct Gateway {
     pub app: Router,
     pub state: AppState,
+    pub fake: fake_codex::FakeCodex,
+    /// What the app servers reported, for tests that route it themselves.
+    pub events: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<RuntimeEvent>>,
     pub dir: tempfile::TempDir,
 }
 
@@ -121,12 +129,28 @@ impl Gateway {
             origin: PublicOrigin::parse(ORIGIN).unwrap(),
             extra_hosts: vec!["bokkie.tailnet.test".into()],
             trust_forwarded_for: false,
+            codex_program: "/nonexistent/codex".into(),
         };
         let pool = db::open(&config.database_path()).await.unwrap();
-        let state = AppState::new(config, pool, Clock::manual(1_800_000_000_000));
+        let catalog =
+            catalog::write(&config.catalog_path(), fake_codex::bundled_catalog()).unwrap();
+        let fake = fake_codex::FakeCodex::default();
+        let (supervisor, events) = Supervisor::new(
+            &config.data_dir,
+            catalog.clone(),
+            fake.launcher(&config.data_dir, &catalog.path),
+        );
+        let state = AppState::new(
+            config,
+            pool,
+            Clock::manual(1_800_000_000_000),
+            std::sync::Arc::new(supervisor),
+        );
         Self {
             app: router(state.clone()),
             state,
+            fake,
+            events: tokio::sync::Mutex::new(events),
             dir,
         }
     }

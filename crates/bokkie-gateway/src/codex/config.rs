@@ -79,7 +79,9 @@ pub fn render(data_dir: &Path, catalog: &Path) -> String {
         quote(&data_dir.display().to_string())
     ));
     out.push_str("\":workspace_roots\" = \"write\"\n");
-    out.push_str(&format!("\n[permissions.{PROFILE}.network]\nenabled = false\n"));
+    out.push_str(&format!(
+        "\n[permissions.{PROFILE}.network]\nenabled = false\n"
+    ));
     out
 }
 
@@ -94,7 +96,10 @@ mod tests {
         assert!(text.contains("model_catalog_json = \"/data/codex/models.json\"\n"));
         assert!(text.contains("\"/data\" = \"deny\"\n"));
         for feature in DISABLED_FEATURES {
-            assert!(text.contains(&format!("\n{feature} = false\n")), "{feature}");
+            assert!(
+                text.contains(&format!("\n{feature} = false\n")),
+                "{feature}"
+            );
         }
     }
 
@@ -102,6 +107,9 @@ mod tests {
     fn paths_are_quoted() {
         let text = render(Path::new("/da\"ta"), Path::new("/x\\y.json"));
         assert!(text.contains(r#""/da\"ta" = "deny""#), "{text}");
-        assert!(text.contains(r#"model_catalog_json = "/x\\y.json""#), "{text}");
+        assert!(
+            text.contains(r#"model_catalog_json = "/x\\y.json""#),
+            "{text}"
+        );
     }
 }

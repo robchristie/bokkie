@@ -186,6 +186,7 @@ dependencies = [
  "argon2",
  "axum",
  "base64",
+ "bokkie-codex",
  "bokkie-protocol",
  "getrandom 0.3.4",
  "http-body-util",

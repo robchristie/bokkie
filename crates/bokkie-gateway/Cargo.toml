@@ -11,6 +11,7 @@ repository.workspace = true
 argon2 = { version = "0.5", features = ["std"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log"] }
 base64 = "0.22"
+bokkie-codex = { path = "../bokkie-codex" }
 bokkie-protocol = { path = "../bokkie-protocol" }
 getrandom = "0.3"
 serde.workspace = true

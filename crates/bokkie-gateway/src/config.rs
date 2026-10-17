@@ -21,6 +21,8 @@ pub struct Config {
     /// as the client address for sign-in rate limiting. Enable only behind a
     /// proxy that sets it.
     pub trust_forwarded_for: bool,
+    /// The pinned `codex` binary.
+    pub codex_program: PathBuf,
 }
 
 /// An `https://host[:port]` or `http://host[:port]` origin, normalised to
@@ -59,7 +61,8 @@ impl PublicOrigin {
 impl Config {
     /// Reads `BOKKIE_DATA` (default `/data`), `BOKKIE_LISTEN` (default
     /// `0.0.0.0:8080`), `BOKKIE_ORIGIN` (required), `BOKKIE_EXTRA_HOSTS`
-    /// (comma-separated) and `BOKKIE_TRUST_FORWARDED_FOR` (`1` to enable).
+    /// (comma-separated), `BOKKIE_TRUST_FORWARDED_FOR` (`1` to enable) and
+    /// `BOKKIE_CODEX_BIN` (default `/usr/local/bin/codex`).
     pub fn from_env() -> Result<Self, String> {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
         let origin = var("BOKKIE_ORIGIN").ok_or("BOKKIE_ORIGIN is required")?;
@@ -80,12 +83,20 @@ impl Config {
                 })
                 .unwrap_or_default(),
             trust_forwarded_for: var("BOKKIE_TRUST_FORWARDED_FOR").as_deref() == Some("1"),
+            codex_program: var("BOKKIE_CODEX_BIN")
+                .unwrap_or_else(|| "/usr/local/bin/codex".into())
+                .into(),
         })
     }
 
     /// The database file.
     pub fn database_path(&self) -> PathBuf {
         self.data_dir.join("bokkie.sqlite3")
+    }
+
+    /// Bokkie's own model catalog, shared by every app server.
+    pub fn catalog_path(&self) -> PathBuf {
+        self.data_dir.join("codex").join("models.json")
     }
 
     /// Whether `host` (a `Host` header value) names this gateway.

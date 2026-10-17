@@ -193,7 +193,12 @@ mod tests {
         assert_eq!(sol["tool_mode"], Value::Null);
         assert_eq!(sol["shell_type"], "disabled");
         // A field that was absent is now present and null.
-        assert!(stripped["models"][1].as_object().unwrap().contains_key("tool_mode"));
+        assert!(
+            stripped["models"][1]
+                .as_object()
+                .unwrap()
+                .contains_key("tool_mode")
+        );
     }
 
     #[test]

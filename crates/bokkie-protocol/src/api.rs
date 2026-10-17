@@ -382,6 +382,26 @@ pub struct StopResponse {
 }
 
 // ---------------------------------------------------------------------------
+// The user's Codex account
+
+/// `GET /api/v1/codex/account`: whether the user's own app server is signed
+/// in to ChatGPT. Only that user sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexAccount {
+    pub signed_in: bool,
+    /// The ChatGPT plan, such as `pro`, when signed in.
+    pub plan: Option<String>,
+}
+
+/// `POST /api/v1/codex/login`: a device-code sign-in. Open the URL, enter
+/// the code, then poll [`CodexAccount`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceCodeLogin {
+    pub verification_url: String,
+    pub user_code: String,
+}
+
+// ---------------------------------------------------------------------------
 // Usage
 
 /// `GET /api/v1/usage`: the shared subscription's rate-limit windows and the
