@@ -31,6 +31,63 @@ struct UserLog {
     live: broadcast::Sender<EventEnvelope>,
 }
 
+async fn stored_last(db: &SqlitePool, user: UserId) -> Result<u64> {
+    let last: Option<i64> = sqlx::query_scalar("SELECT max(seq) FROM events WHERE user_id = ?")
+        .bind(user.0)
+        .fetch_one(db)
+        .await?;
+    Ok(last.unwrap_or(0) as u64)
+}
+
+/// One append, run to completion in its own task.
+struct Append {
+    db: SqlitePool,
+    at: Timestamp,
+    retention: u64,
+    log: Arc<UserLog>,
+    user: UserId,
+    event: Event,
+}
+
+impl Append {
+    async fn run(self) -> Result<EventEnvelope> {
+        let mut last = self.log.last.lock().await;
+        let previous = match last.take() {
+            Some(previous) => previous,
+            None => stored_last(&self.db, self.user).await?,
+        };
+        let envelope = EventEnvelope {
+            seq: Seq(previous + 1),
+            at: self.at,
+            event: self.event,
+        };
+        let body = serde_json::to_string(&envelope.event).map_err(Failure::internal)?;
+        sqlx::query("INSERT INTO events (user_id, seq, at, body) VALUES (?, ?, ?, ?)")
+            .bind(self.user.0)
+            .bind(envelope.seq.0 as i64)
+            .bind(envelope.at.0)
+            .bind(body)
+            .execute(&self.db)
+            .await?;
+        *last = Some(envelope.seq.0);
+        // Broadcast while still holding the lock, so live order is log order.
+        // Nobody listening is fine.
+        let _ = self.log.live.send(envelope.clone());
+        drop(last);
+        if envelope.seq.0.is_multiple_of(256) && envelope.seq.0 > self.retention {
+            let pruned = sqlx::query("DELETE FROM events WHERE user_id = ? AND seq <= ?")
+                .bind(self.user.0)
+                .bind((envelope.seq.0 - self.retention) as i64)
+                .execute(&self.db)
+                .await;
+            if let Err(error) = pruned {
+                tracing::warn!(user = %self.user, %error, "pruning the event log failed");
+            }
+        }
+        Ok(envelope)
+    }
+}
+
 /// The gateway's event logs, one per user.
 #[derive(Debug)]
 pub struct EventLog {
@@ -75,45 +132,27 @@ impl EventLog {
     }
 
     async fn stored_last(&self, user: UserId) -> Result<u64> {
-        let last: Option<i64> = sqlx::query_scalar("SELECT max(seq) FROM events WHERE user_id = ?")
-            .bind(user.0)
-            .fetch_one(&self.db)
-            .await?;
-        Ok(last.unwrap_or(0) as u64)
+        stored_last(&self.db, user).await
     }
 
     /// Appends an event to the user's log and broadcasts it.
+    ///
+    /// The work runs in its own task, so a caller that is dropped midway (a
+    /// client disconnecting from a request, say) cannot leave an event
+    /// stored but not broadcast. A stored event and the cached sequence
+    /// number also cannot disagree: the cache is cleared while an insert is
+    /// in flight, so any failure makes the next append re-read the stored
+    /// maximum.
     pub async fn append(&self, user: UserId, event: Event) -> Result<EventEnvelope> {
-        let log = self.user(user);
-        let mut last = log.last.lock().await;
-        let previous = match *last {
-            Some(previous) => previous,
-            None => self.stored_last(user).await?,
-        };
-        let envelope = EventEnvelope {
-            seq: Seq(previous + 1),
+        let job = Append {
+            db: self.db.clone(),
             at: self.clock.now(),
+            retention: self.retention,
+            log: self.user(user),
+            user,
             event,
         };
-        let body = serde_json::to_string(&envelope.event).map_err(Failure::internal)?;
-        sqlx::query("INSERT INTO events (user_id, seq, at, body) VALUES (?, ?, ?, ?)")
-            .bind(user.0)
-            .bind(envelope.seq.0 as i64)
-            .bind(envelope.at.0)
-            .bind(body)
-            .execute(&self.db)
-            .await?;
-        *last = Some(envelope.seq.0);
-        if envelope.seq.0.is_multiple_of(256) && envelope.seq.0 > self.retention {
-            sqlx::query("DELETE FROM events WHERE user_id = ? AND seq <= ?")
-                .bind(user.0)
-                .bind((envelope.seq.0 - self.retention) as i64)
-                .execute(&self.db)
-                .await?;
-        }
-        // Nobody listening is fine.
-        let _ = log.live.send(envelope.clone());
-        Ok(envelope)
+        tokio::spawn(job.run()).await.map_err(Failure::internal)?
     }
 
     /// The newest sequence number in the user's log, or zero.

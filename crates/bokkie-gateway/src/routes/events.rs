@@ -53,7 +53,11 @@ pub async fn events(
 
 async fn send(socket: &mut WebSocket, frame: &ServerFrame) -> Result<(), &'static str> {
     let text = serde_json::to_string(frame).map_err(|_| "encoding failed")?;
-    tokio::time::timeout(SEND_TIMEOUT, socket.send(Message::Text(text.into())))
+    send_raw(socket, Message::Text(text.into())).await
+}
+
+async fn send_raw(socket: &mut WebSocket, message: Message) -> Result<(), &'static str> {
+    tokio::time::timeout(SEND_TIMEOUT, socket.send(message))
         .await
         .map_err(|_| "the client stopped reading")?
         .map_err(|_| "the connection failed")
@@ -119,6 +123,12 @@ async fn serve(
                         .map_err(|_| "log unavailable")?;
                     let Some(last) = page.last() else { break };
                     let last = last.seq;
+                    // A prune between the earliest check and this read
+                    // would leave a hole: start over from a snapshot.
+                    if page.first().is_some_and(|first| first.seq != sent.next()) {
+                        send(&mut socket, &ServerFrame::Reset { after: latest }).await?;
+                        break;
+                    }
                     for envelope in page {
                         if envelope.seq > latest {
                             break;
@@ -139,8 +149,13 @@ async fn serve(
         tokio::select! {
             event = live.recv() => match event {
                 Ok(envelope) => {
-                    // Events up to `sent` were replayed already.
+                    // Events up to `sent` were replayed already. Anything
+                    // but the next one is a hole: let the client resume
+                    // from the log, which has it.
                     if envelope.seq > sent {
+                        if envelope.seq != sent.next() {
+                            return close(&mut socket, CLOSE_LAGGED, "missed an event; resume").await;
+                        }
                         sent = envelope.seq;
                         send(&mut socket, &ServerFrame::Event(envelope)).await?;
                     }
@@ -156,10 +171,7 @@ async fn serve(
                     _ => return close(&mut socket, CLOSE_PROTOCOL, "unexpected frame").await,
                 },
                 Some(Ok(Message::Ping(payload))) => {
-                    socket
-                        .send(Message::Pong(payload))
-                        .await
-                        .map_err(|_| "the connection failed")?;
+                    send_raw(&mut socket, Message::Pong(payload)).await?;
                 }
                 Some(Ok(Message::Pong(_))) => {}
                 Some(Ok(Message::Binary(_))) => {
@@ -176,10 +188,7 @@ async fn serve(
                 if !alive {
                     return close(&mut socket, CLOSE_SIGNED_OUT, "signed out").await;
                 }
-                socket
-                    .send(Message::Ping(Default::default()))
-                    .await
-                    .map_err(|_| "the connection failed")?;
+                send_raw(&mut socket, Message::Ping(Default::default())).await?;
             }
         }
     }

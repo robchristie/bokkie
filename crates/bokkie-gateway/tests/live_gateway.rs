@@ -89,7 +89,8 @@ async fn a_bot_reply_streams_over_the_websocket_from_a_real_app_server() {
     assert!(working);
     assert_eq!(reply.state, MessageState::Complete);
     assert_eq!(reply.text, "Pasta with pesto.");
-    assert!(streamed.is_empty() || streamed == reply.text, "{streamed}");
+    // Deltas may stop short: the final text replaces what streamed.
+    assert!(reply.text.starts_with(&streamed), "{streamed}");
     // The model saw the Bot's profile.
     let request = mock.requests.lock().unwrap()[0].to_string();
     assert!(request.contains("Suggest one dinner."));

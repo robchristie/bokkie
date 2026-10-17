@@ -178,8 +178,10 @@ impl Conversations {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Appends an event to the user's log. A failure is logged: the change
-    /// itself has happened, and clients catch up from HTTP after a reset.
+    /// Appends an event to the user's log. A failure, which means the
+    /// database failed, is logged: the change itself has happened, the event
+    /// is lost, and sequence numbers stay contiguous. Clients see the change
+    /// the next time they load it over HTTP.
     async fn emit(&self, user: UserId, event: Event) {
         if let Err(failure) = self.events.append(user, event).await {
             tracing::error!(user = %user, message = %failure.message, "appending an event failed");
