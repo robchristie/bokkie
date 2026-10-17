@@ -502,6 +502,20 @@ fn thread_and_turn_params_conform() {
 }
 
 #[test]
+fn command_exec_params_conform() {
+    check_outgoing(
+        "v2/CommandExecParams",
+        &CommandExecParams {
+            command: vec!["true".into()],
+            cwd: Some("/w".into()),
+            permission_profile: Some("bokkie".into()),
+            timeout_ms: Some(1000),
+            process_id: Some("p".into()),
+        },
+    );
+}
+
+#[test]
 fn server_request_answers_conform() {
     check_outgoing(
         "DynamicToolCallResponse",
@@ -536,6 +550,7 @@ fn method_results_decode() {
     check_incoming::<ThreadResumeResponse>("v2/ThreadResumeResponse");
     check_incoming::<TurnStartResponse>("v2/TurnStartResponse");
     check_incoming::<TurnInterruptResponse>("v2/TurnInterruptResponse");
+    check_incoming::<CommandExecResponse>("v2/CommandExecResponse");
 }
 
 #[test]

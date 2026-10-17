@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: Copyright The Moby Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Bokkie Phase 0 profile B. Derived from the Docker default AppArmor template
+# (github.com/moby/profiles/apparmor) at Docker Engine 29.8.1, commit 464cd50,
+# as rendered for nostromo. Changes from the template are marked "Bokkie:".
+abi <abi/3.0>,
+#include <tunables/global>
+
+profile "bokkie-qualify-b" flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  network,
+  # Disallow AF_ALG (Linux kernel crypto API); see https://copy.fail/
+  deny network alg,
+  # Disallow AF_VSOCK to prevent host/guest communication.
+  deny network vsock,
+  capability,
+  file,
+  umount,
+  # Host (privileged) processes may send signals to container processes.
+  signal (receive) peer=unconfined,
+  # runc may send signals to container processes (for "docker stop").
+  signal (receive) peer=runc,
+  # crun may send signals to container processes (for "docker stop" when used with crun OCI runtime).
+  signal (receive) peer=crun,
+  # dockerd may send signals to container processes (for "docker kill").
+  signal (receive) peer="unconfined",
+  # Container processes may send signals amongst themselves.
+  signal (send,receive) peer="bokkie-qualify-b",
+
+  deny @{PROC}/* w,   # deny write for all files directly in /proc (not in a subdir)
+  # deny write to files not in /proc/<number>/** or /proc/sys/**
+  deny @{PROC}/{[^1-9/],[^1-9/][^0-9/],[^1-9s/][^0-9y/][^0-9s/],[^1-9/][^0-9/][^0-9/][^0-9/]*}/** w,
+  deny @{PROC}/sys/[^k]** w,  # deny /proc/sys except /proc/sys/k* (effectively /proc/sys/kernel)
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,  # deny everything except shm* in /proc/sys/kernel/
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/kcore rwklx,
+
+  # Bokkie: profile B runs with systempaths=unconfined, because Docker's
+  # masked and read-only /proc paths stop Bubblewrap mounting a fresh procfs.
+  # These rules stand in for the masks Docker would otherwise apply.
+  deny @{PROC}/{acpi,asound,interrupts,keys,latency_stats,sched_debug,scsi,timer_list,timer_stats}{,/**} rwklx,
+  deny @{PROC}/{bus,fs,irq,sys}/** w,
+  deny @{PROC}/**/mem rw,
+
+  # Bokkie: the template's "deny mount," is replaced by Bubblewrap's setup
+  # operations. Mount targets are confined to Bubblewrap's staging root
+  # (/newroot) and staging tmpfs (/tmp), whatever the options; propagation
+  # changes are allowed on the namespace root and the detached old root.
+  # Seccomp cannot inspect these paths, so this is where they are limited.
+  mount -> /newroot/,
+  mount -> /newroot/**,
+  mount -> /tmp/,
+  mount -> /tmp/**,
+  mount options=(rslave,silent) -> /,
+  mount options=(rprivate,silent) -> /oldroot/,
+  # Bubblewrap 0.12 binds the old /proc into its staging root before it
+  # mounts the fresh procfs for the sandbox.
+  mount options=(rw,rbind,silent) /oldroot/proc/ -> /proc/,
+  pivot_root oldroot=/newroot/ /newroot/,
+  pivot_root oldroot=/tmp/oldroot/ /tmp/,
+  pivot_root /newroot/,
+  pivot_root /tmp/,
+
+  deny /sys/[^f]*/** wklx,
+  deny /sys/f[^s]*/** wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/devices/virtual/powercap/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+
+  # allow processes within the container to trace each other,
+  # provided all other LSM and yama setting allow it.
+  ptrace (trace,tracedby,read,readby) peer="bokkie-qualify-b",
+}

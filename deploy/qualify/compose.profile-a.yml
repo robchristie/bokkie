@@ -1,0 +1,9 @@
+# Profile A, relaxed: no seccomp filter, no AppArmor profile and Docker's
+# masked and read-only /proc and /sys paths removed. Everything else in
+# compose.yml stays. Running it on nostromo needs the owner's go-ahead.
+services:
+  qualify:
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - systempaths=unconfined

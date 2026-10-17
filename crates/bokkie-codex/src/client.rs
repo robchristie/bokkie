@@ -16,13 +16,13 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::protocol::{
-    CancelLoginAccountParams, CancelLoginAccountResponse, ConfigReadParams, ConfigReadResponse,
-    GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse, InitializeParams,
-    InitializeResponse, LoginAccountParams, LoginAccountResponse, ModelListParams,
-    ModelListResponse, PermissionProfileListParams, PermissionProfileListResponse,
-    ServerNotification, ServerRequest, ServerRequestKind, ThreadResumeParams, ThreadResumeResponse,
-    ThreadStartParams, ThreadStartResponse, TurnInterruptParams, TurnInterruptResponse,
-    TurnStartParams, TurnStartResponse,
+    CancelLoginAccountParams, CancelLoginAccountResponse, CommandExecParams, CommandExecResponse,
+    ConfigReadParams, ConfigReadResponse, GetAccountParams, GetAccountRateLimitsResponse,
+    GetAccountResponse, InitializeParams, InitializeResponse, LoginAccountParams,
+    LoginAccountResponse, ModelListParams, ModelListResponse, PermissionProfileListParams,
+    PermissionProfileListResponse, ServerNotification, ServerRequest, ServerRequestKind,
+    ThreadResumeParams, ThreadResumeResponse, ThreadStartParams, ThreadStartResponse,
+    TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
 };
 use crate::rpc::{Error, Message, RequestId, RpcError};
 
@@ -238,6 +238,13 @@ impl Client {
 
     pub async fn turn_start(&self, params: &TurnStartParams) -> Result<TurnStartResponse, Error> {
         self.request("turn/start", Some(params)).await
+    }
+
+    pub async fn command_exec(
+        &self,
+        params: &CommandExecParams,
+    ) -> Result<CommandExecResponse, Error> {
+        self.request("command/exec", Some(params)).await
     }
 
     pub async fn turn_interrupt(
