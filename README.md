@@ -26,5 +26,5 @@ the Codex app server and its sandbox in a container on the LAN host. The
 [foundation plan](docs/plans/foundation-plan.md) records the agreed decisions,
 the architecture, the phases and the open questions. Build, test and
 verification rules are in [CONTRIBUTING.md](CONTRIBUTING.md). Phase 2's
-gateway is under way; [docs/gateway.md](docs/gateway.md) is its operator
-reference.
+gateway has landed; [docs/gateway.md](docs/gateway.md) is its operator
+reference, and the plan records what remains.

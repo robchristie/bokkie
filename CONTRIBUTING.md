@@ -23,6 +23,13 @@ downloads the pinned Codex release (about 160 MB, cached under ignored
 download and those checks during quick local iteration; a change is not
 verified until the full script passes.
 
+The end-to-end check, `deploy/e2e/run.sh`, runs the gateway and a real app
+server in the qualified image on the Docker host and streams a Bot reply
+over the event WebSocket. It uses Docker's default confinement and the Phase 0
+qualification sign-in in place; see [its README](deploy/e2e/README.md). Run
+it from a clean checkout of the exact commit under test, after changes to
+the gateway's Codex path.
+
 ## Codex pin
 
 Bokkie depends on one exact Codex release, recorded in
