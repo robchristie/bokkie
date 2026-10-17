@@ -398,10 +398,10 @@ Acceptance:
 - `bokkie-codex` types `item/permissions/requestApproval` alongside the
   command and file-change approvals.
 - Requalification with the probe hardening from the
-  [Phase 0 report](../phase-0-report.md#open-items-for-later-phases). Then
-  remove the Phase 0 leftovers from nostromo: the `bokkie-qualify-data`
-  volume, which holds the qualification sign-in, and the
-  `bokkie-qualify:<commit>` images.
+  [Phase 0 report](../phase-0-report.md#open-items-for-later-phases). Then,
+  with the owner's go-ahead, remove the Phase 0 leftovers from nostromo: the
+  `bokkie-qualify-data` volume, which holds the qualification sign-in, and
+  the `bokkie-qualify` images.
 - Approval requests in the UI: allow once, allow for the session, deny.
   Admin policy can deny approvals for some users.
 - A file browser for the workspace, read-only at first.
