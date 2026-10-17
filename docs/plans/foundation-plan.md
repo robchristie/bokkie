@@ -346,6 +346,11 @@ spike's device checklist applies.
   - every `thread/start` and `thread/resume` reports
     `activePermissionProfile.id = "bokkie"`;
   - the existing tools-disabled check holds.
+- `bokkie-codex` additions for this phase:
+  - type `turn/steer`;
+  - bound the length of a single incoming line, so a runaway app server
+    cannot exhaust the gateway's memory.
+- CI pins its GitHub Actions by commit SHA rather than by tag.
 - A conversation list with avatar, name, preview and time.
 - The usage meter and the limit-reached banner.
 - PWA install. Deploy behind Traefik with a LAN and tailnet allowlist under a
@@ -390,6 +395,13 @@ Acceptance:
   for example with AppArmor `userns` mediation.
 - Profile B's AppArmor profile loaded persistently on nostromo, with the
   owner's go-ahead.
+- `bokkie-codex` types `item/permissions/requestApproval` alongside the
+  command and file-change approvals.
+- Requalification with the probe hardening from the
+  [Phase 0 report](../phase-0-report.md#open-items-for-later-phases). Then
+  remove the Phase 0 leftovers from nostromo: the `bokkie-qualify-data`
+  volume, which holds the qualification sign-in, and the
+  `bokkie-qualify:<commit>` images.
 - Approval requests in the UI: allow once, allow for the session, deny.
   Admin policy can deny approvals for some users.
 - A file browser for the workspace, read-only at first.
