@@ -1,0 +1,31 @@
+[package]
+name = "bokkie-gateway"
+description = "The Bokkie gateway: accounts, sessions, Bots, the Codex supervisor and the client event log"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+argon2 = { version = "0.5", features = ["std"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log"] }
+base64 = "0.22"
+bokkie-protocol = { path = "../bokkie-protocol" }
+getrandom = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

@@ -98,7 +98,7 @@ pub struct User {
 
 /// `POST /api/v1/session`: sign in with a password. Success sets the session
 /// cookie and returns [`SessionResponse`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
@@ -130,7 +130,7 @@ pub struct SessionList {
 
 /// `PUT /api/v1/session/password`: change the signed-in user's password.
 /// Every other session of that user is revoked.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,
@@ -153,7 +153,7 @@ pub struct CreateInvitationRequest {
 
 /// A newly created invitation. The code is shown once; the gateway stores
 /// only its hash.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreatedInvitation {
     pub id: i64,
     pub code: String,
@@ -179,7 +179,7 @@ pub struct InvitationList {
 
 /// `POST /api/v1/invitations/accept`, which needs no session. Success
 /// creates the account, signs it in and returns [`SessionResponse`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcceptInvitationRequest {
     pub code: String,
     pub username: String,
@@ -213,7 +213,8 @@ pub struct AdminUserList {
 }
 
 /// `PATCH /api/v1/admin/users/{id}`. Disabling an account revokes its
-/// sessions and stops its Bots.
+/// sessions and stops its Bots. `limits`, when present, replaces both limits
+/// at once: send the whole object, because an omitted field means unlimited.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateUserRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,7 +227,7 @@ pub struct UpdateUserRequest {
 
 /// `PUT /api/v1/admin/users/{id}/password`. Revokes every session of that
 /// user.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResetPasswordRequest {
     pub new_password: String,
 }
@@ -419,6 +420,60 @@ pub struct Allowance {
     pub tokens_this_week: u64,
     /// Set when a limit is reached; new turns are refused until it resets.
     pub exhausted: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Secret-bearing types print their secrets redacted, so that a `{:?}` in a
+// log line cannot leak a password or an invitation code.
+
+const REDACTED: &str = "<redacted>";
+
+impl std::fmt::Debug for LoginRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginRequest")
+            .field("username", &self.username)
+            .field("password", &REDACTED)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for ChangePasswordRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChangePasswordRequest")
+            .field("current_password", &REDACTED)
+            .field("new_password", &REDACTED)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for AcceptInvitationRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AcceptInvitationRequest")
+            .field("code", &REDACTED)
+            .field("username", &self.username)
+            .field("password", &REDACTED)
+            .field("display_name", &self.display_name)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for ResetPasswordRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResetPasswordRequest")
+            .field("new_password", &REDACTED)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for CreatedInvitation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreatedInvitation")
+            .field("id", &self.id)
+            .field("code", &REDACTED)
+            .field("role", &self.role)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Serde support for `Option<Option<T>>` fields: absent means "unchanged",
