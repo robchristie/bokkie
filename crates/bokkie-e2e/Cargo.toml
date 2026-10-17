@@ -1,0 +1,19 @@
+[package]
+name = "bokkie-e2e"
+description = "The scripted end-to-end check: a Bot reply streamed over the event WebSocket from a real gateway and app server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+bokkie-protocol = { path = "../bokkie-protocol" }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["net"] }
+tokio-tungstenite = "0.27"
+
+[lints]
+workspace = true

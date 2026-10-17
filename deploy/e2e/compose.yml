@@ -1,0 +1,58 @@
+# Phase 2 end-to-end check: the gateway and a real Codex app server in the
+# qualified image, under Docker's default confinement. Chat-only threads
+# need no Bubblewrap, so no relaxed seccomp or AppArmor profile is used.
+# The project name is bokkie-e2e (set by run.sh); never use `bokkie`.
+# No ports are published and there is no Traefik route.
+services:
+  gateway:
+    image: ${E2E_IMAGE:?set by run.sh}
+    init: true
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    entrypoint: ["/opt/bokkie/bokkie-gateway", "serve"]
+    environment:
+      BOKKIE_ORIGIN: http://bokkie-e2e.invalid
+      BOKKIE_LISTEN: 127.0.0.1:8080
+      BOKKIE_DATA: /data
+      BOKKIE_CODEX_BIN: /usr/local/bin/codex
+      BOKKIE_LOG: info
+    volumes:
+      - type: volume
+        source: data
+        target: /data
+      # The account's CODEX_HOME is the Phase 0 qualification sign-in,
+      # used in place. Nothing is copied out of its volume.
+      - type: volume
+        source: credential
+        target: /data/users/1/codex
+        volume:
+          subpath: users/alice/codex
+      - type: bind
+        source: ./bin
+        target: /opt/bokkie
+        read_only: true
+    networks:
+      - egress
+    stop_grace_period: 10s
+
+networks:
+  egress:
+    ipam:
+      config:
+        - subnet: ${E2E_SUBNET:-172.30.52.112/28}
+
+volumes:
+  data:
+    name: bokkie-e2e-data
+    external: true
+  credential:
+    name: bokkie-qualify-data
+    external: true
