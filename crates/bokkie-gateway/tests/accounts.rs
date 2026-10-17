@@ -154,12 +154,12 @@ async fn signing_out_revokes_the_session() {
         .send(Call::new(Method::DELETE, "/api/v1/session").cookie(&cookie))
         .await;
     assert_eq!(logout.status, StatusCode::NO_CONTENT);
-    assert!(
-        logout.headers[header::SET_COOKIE]
-            .to_str()
-            .unwrap()
-            .contains("Max-Age=0")
-    );
+    // The browser drops the very cookie that sign-in set.
+    let cleared = logout.headers[header::SET_COOKIE].to_str().unwrap();
+    let name = cookie.split('=').next().unwrap();
+    assert_eq!(name, bokkie_protocol::SESSION_COOKIE);
+    assert!(cleared.starts_with(&format!("{name}=;")), "{cleared}");
+    assert!(cleared.contains("Max-Age=0"), "{cleared}");
     let me = gateway
         .send(Call::get("/api/v1/session").cookie(&cookie))
         .await;

@@ -35,7 +35,10 @@ pub fn session_cookie(token: &str) -> HeaderValue {
 
 /// The `Set-Cookie` value that removes the session cookie.
 pub fn clear_session_cookie() -> HeaderValue {
-    HeaderValue::from_static("bokkie_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax")
+    HeaderValue::from_str(&format!(
+        "{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax"
+    ))
+    .expect("a valid header value")
 }
 
 /// The session token from the `Cookie` headers, if any.
