@@ -1056,10 +1056,20 @@ fn sleeper_seconds() -> String {
     format!("{}", 900_000 + nanos % 90_000)
 }
 
+/// Whether the sandboxed sleeper itself runs: `sleep <seconds>` exactly,
+/// not merely a wrapper whose command line names it.
+fn sleeper_running(seconds: &str) -> bool {
+    visible_pids().into_iter().any(|(pid, comm)| {
+        comm == "sleep"
+            && read_cmdline(Path::new(&format!("/proc/{pid}/cmdline")))
+                .is_some_and(|c| c == format!("sleep {seconds}"))
+    })
+}
+
 async fn wait_for_sleeper(seconds: &str) -> bool {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
-        if !sleepers(seconds).is_empty() {
+        if sleeper_running(seconds) {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1207,7 +1217,7 @@ fn find_sleeper(args: &Args) -> Result<Value> {
         .collect();
     Ok(json!({
         "step": "find-sleeper",
-        "pass": if expect_none { found.is_empty() } else { !found.is_empty() },
+        "pass": if expect_none { found.is_empty() } else { sleeper_running(seconds) },
         "sleepers": found,
         "app_servers_running": app_servers,
     }))
