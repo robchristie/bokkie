@@ -46,9 +46,13 @@ struct Reply {
 
 impl Gateway {
     async fn call(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Reply, Failure> {
-        let mut stream = tokio::net::TcpStream::connect(&self.address)
-            .await
-            .map_err(|e| format!("connect {}: {e}", self.address))?;
+        let mut stream = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::net::TcpStream::connect(&self.address),
+        )
+        .await
+        .map_err(|_| format!("connect {} timed out", self.address))?
+        .map_err(|e| format!("connect {}: {e}", self.address))?;
         let body = body.map(Value::to_string).unwrap_or_default();
         let mut request = format!(
             "{method} {path} HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\nConnection: close\r\n",
@@ -74,10 +78,12 @@ impl Gateway {
             .await
             .map_err(|_| format!("{method} {path} timed out"))?
             .map_err(|e| e.to_string())?;
-        let text = String::from_utf8_lossy(&raw);
-        let (head, payload) = text
-            .split_once("\r\n\r\n")
+        let split = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
             .ok_or_else(|| format!("{method} {path}: malformed response"))?;
+        let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+        let payload = &raw[split + 4..];
         let status = head
             .split(' ')
             .nth(1)
@@ -98,9 +104,9 @@ impl Gateway {
         let payload = if chunked {
             dechunk(payload)
         } else {
-            payload.to_owned()
+            payload.to_vec()
         };
-        let body = serde_json::from_str(&payload).unwrap_or(Value::Null);
+        let body = serde_json::from_slice(&payload).unwrap_or(Value::Null);
         Ok(Reply {
             status,
             set_cookie,
@@ -109,17 +115,21 @@ impl Gateway {
     }
 }
 
-fn dechunk(mut payload: &str) -> String {
-    let mut out = String::new();
-    while let Some((size, rest)) = payload.split_once("\r\n") {
-        let Ok(size) = usize::from_str_radix(size.trim(), 16) else {
-            break;
-        };
-        if size == 0 || rest.len() < size {
-            break;
+/// Decodes a chunked body, as bytes, so a chunk may split a character.
+fn dechunk(mut payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    while let Some(end) = payload.windows(2).position(|w| w == b"\r\n") {
+        let size = std::str::from_utf8(&payload[..end])
+            .ok()
+            .and_then(|s| usize::from_str_radix(s.trim(), 16).ok());
+        let rest = &payload[end + 2..];
+        match size {
+            Some(size) if size > 0 && rest.len() >= size => {
+                out.extend_from_slice(&rest[..size]);
+                payload = rest[size..].strip_prefix(b"\r\n").unwrap_or(&rest[size..]);
+            }
+            _ => break,
         }
-        out.push_str(&rest[..size]);
-        payload = rest[size..].trim_start_matches("\r\n");
     }
     out
 }
@@ -245,6 +255,19 @@ async fn run(result: &mut serde_json::Map<String, Value>) -> Result<(), Failure>
         .send(Message::text(resume))
         .await
         .map_err(|e| e.to_string())?;
+    // Wait until the socket is live, so no event of this run is missed.
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(30), socket.next())
+            .await
+            .map_err(|_| "the event socket did not go live")?
+            .ok_or("the event socket closed")?
+            .map_err(|e| format!("the event socket failed: {e}"))?;
+        if let Message::Text(text) = frame
+            && matches!(serde_json::from_str(&text), Ok(ServerFrame::Live { .. }))
+        {
+            break;
+        }
+    }
 
     let sent = gateway
         .call(

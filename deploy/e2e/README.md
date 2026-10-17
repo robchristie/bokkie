@@ -18,6 +18,8 @@ deploy/e2e/run.sh            # host: nostromo.yutani.tech
 - **Image.** `bokkie-qualify:c94cebe67cf1`, the image Phase 0 qualified
   (Codex 0.163.0). The gateway and the `bokkie-e2e` client are built from
   the checkout and bind-mounted read-only. Set `E2E_IMAGE` to use another.
+  The project network takes the explicit subnet `172.30.52.112/28`, because
+  nostromo's address pools are exhausted.
 - **Sign-in.** The run's account uses the Phase 0 qualification sign-in in
   place: the `bokkie-qualify-data` volume's `users/alice/codex` is mounted as
   its `CODEX_HOME`. Nothing is copied out of the volume. The run rewrites
