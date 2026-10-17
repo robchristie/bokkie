@@ -183,6 +183,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bokkie-e2e"
+version = "0.1.0"
+dependencies = [
+ "bokkie-protocol",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.27.0",
+]
+
+[[package]]
 name = "bokkie-gateway"
 version = "0.1.0"
 dependencies = [

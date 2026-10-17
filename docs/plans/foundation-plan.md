@@ -1,9 +1,10 @@
 # Bokkie foundation
 
 Status: active
-Next action: Phase 1, the Stobie prerequisites, and in parallel Phase 2's
-gateway work. Phase 0 is complete; see the
-[Phase 0 report](../phase-0-report.md).
+Next action: Phase 1, the Stobie prerequisites, then Phase 2's client and
+deployment. Phase 0 is complete; see the
+[Phase 0 report](../phase-0-report.md). Phase 2's gateway has landed; see
+[Phase 2 progress](#phase-2-progress).
 
 This plan takes Bokkie from an empty repository to a household assistant that
 can be installed as a PWA. Each phase below has its own acceptance criteria and
@@ -356,6 +357,55 @@ spike's device checklist applies.
 - PWA install. Deploy behind Traefik with a LAN and tailnet allowlist under a
   temporary hostname. At go-live, take over `bokkie.yutani.tech` after
   confirming that the old stack can be stopped.
+
+#### Phase 2 progress
+
+The gateway, the backend half of Phase 2, landed on 17 October 2026. Its
+operator reference is [docs/gateway.md](../gateway.md).
+
+| Item | State |
+| --- | --- |
+| Wire types shared with the WASM client (`crates/bokkie-protocol`) | Done (#6) |
+| Accounts: admin bootstrap, invitation-only signup, password sign-in with rate limiting, revocable `__Host-` session cookies, `Origin` and `Host` checks, admin user management and limits | Done (#7) |
+| Startup and per-thread checks, a supervisor with one app server and `CODEX_HOME` per user, `turn/steer`, the line bound | Done (#8) |
+| Bot create, edit, pin and hide; one conversation per Bot; start, resume, steer and stop | Done (#9) |
+| The WebSocket with a durable, resumable per-user event log and coalesced deltas | Done (#10) |
+| Usage: the subscription's windows and per-user allowances, enforced for a member account | Done (#11) |
+| A scripted end-to-end check on the qualified image ([`deploy/e2e/`](../../deploy/e2e/README.md)) | Done (#12) |
+| CI pins GitHub Actions by commit SHA | Not started |
+| The conversation list, usage meter and limit-reached banner in the client | Waits for Phase 1 |
+| PWA install, and deployment behind Traefik under a temporary hostname | Not started; deployment needs the owner's go-ahead |
+
+The end-to-end check ran on nostromo against the exact commit it landed
+with. A Bot reply streamed over the event WebSocket from a real Codex app
+server, through the gateway, in the qualified image under Docker's default
+confinement. Each PR's description records its own validation and
+independent review.
+
+What the gateway work found, now recorded in docs/gateway.md:
+
+- **Tools.** With Codex 0.163.0, feature flags alone do not make threads
+  chat-only. Catalog entries add `apply_patch`, a JavaScript `exec` tool and
+  multi-agent spawning. The gateway therefore also writes its own model
+  catalog without that metadata. A live test captures the tools the real app
+  server offers a model, and a control run shows the capture works.
+- **Sandbox.** Codex reads `AGENTS.md` through its Bubblewrap helper, so
+  threads failed to start where Bubblewrap cannot run. The gateway sets
+  `project_doc_max_bytes = 0`, so chat-only threads need no sandbox.
+- **Profiles.** Developer instructions are fixed when a thread starts;
+  `thread/resume` ignores new ones. A Bot's later profile edits travel as a
+  turn context fragment instead.
+- **Refusals.** A safety rule broken mid-turn stops Codex for the whole
+  gateway until it restarts, and refuses that Bot's thread for good.
+
+Still open before Phase 2's acceptance:
+
+- the decision on ChatGPT credentials for other household members (see
+  [Open decisions](#open-decisions)); until then no member account is
+  created for a real person;
+- the client work, which waits for Phase 1, and deployment, which needs the
+  owner's go-ahead;
+- the acceptance checks themselves, on devices after deployment.
 
 Acceptance:
 
