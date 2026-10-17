@@ -1,0 +1,25 @@
+# Phase 0 qualification container. The project name is set by qualify.sh
+# (bokkie-qualify-<profile>); never use the project name `bokkie`.
+# No ports are published and there is no Traefik route.
+services:
+  qualify:
+    image: ${QUALIFY_IMAGE:?set by qualify.sh}
+    init: true
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: 2
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - data:/data
+    stop_grace_period: 10s
+
+volumes:
+  data:
+    name: ${QUALIFY_VOLUME:?set by qualify.sh}
+    external: true

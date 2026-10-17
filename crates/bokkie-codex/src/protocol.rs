@@ -437,6 +437,35 @@ pub enum ThreadItem {
 }
 
 // ---------------------------------------------------------------------------
+// command/exec
+
+/// Runs one command in the app server's sandbox without a thread or turn.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecParams {
+    pub command: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// A named permission profile. Codex rejects it together with
+    /// `sandboxPolicy`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<i64>,
+    /// Required for `command/exec/terminate`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+// ---------------------------------------------------------------------------
 // Dynamic tools (experimental)
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

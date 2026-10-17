@@ -1,0 +1,12 @@
+# Profile B, targeted: Docker's default seccomp policy plus Bubblewrap's
+# namespace and mount calls, and an AppArmor profile that confines mount
+# targets to Bubblewrap's staging paths. Docker's /proc masks are removed
+# (systempaths=unconfined) and replaced by AppArmor denials. The AppArmor
+# profile must be loaded first (qualify.sh apparmor-load). Running it on
+# nostromo needs the owner's go-ahead.
+services:
+  qualify:
+    security_opt:
+      - seccomp=./policy/seccomp-b.json
+      - apparmor=bokkie-qualify-b
+      - systempaths=unconfined

@@ -81,6 +81,11 @@ pub const CLIENT_METHODS: &[MethodSchema] = &[
         "v2/TurnStartResponse",
     ),
     MethodSchema::new(
+        "command/exec",
+        Some("v2/CommandExecParams"),
+        "v2/CommandExecResponse",
+    ),
+    MethodSchema::new(
         "turn/interrupt",
         Some("v2/TurnInterruptParams"),
         "v2/TurnInterruptResponse",
