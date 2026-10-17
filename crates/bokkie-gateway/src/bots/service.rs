@@ -145,8 +145,8 @@ pub struct Conversations {
     events: Arc<EventLog>,
     subscription: SubscriptionCache,
     live: std::sync::Mutex<Live>,
-    /// Serialises sends to one Bot.
-    sends: std::sync::Mutex<HashMap<BotId, Arc<tokio::sync::Mutex<()>>>>,
+    /// Serialises each user's sends.
+    sends: std::sync::Mutex<HashMap<UserId, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 fn limit_reached() -> Failure {
@@ -203,11 +203,11 @@ impl Conversations {
         self.live().turns.contains_key(&bot)
     }
 
-    fn send_lock(&self, bot: BotId) -> Arc<tokio::sync::Mutex<()>> {
+    fn send_lock(&self, user: UserId) -> Arc<tokio::sync::Mutex<()>> {
         self.sends
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entry(bot)
+            .entry(user)
             .or_default()
             .clone()
     }
@@ -248,7 +248,10 @@ impl Conversations {
     ) -> Result<SendMessageResponse> {
         let user = owner.user.id;
         let text = store::check_message(text)?;
-        let lock = self.send_lock(bot_id);
+        // One send per user at a time: the allowance is checked here and
+        // counted once the turn starts, and concurrent sends to several
+        // Bots must not all pass the check first.
+        let lock = self.send_lock(user);
         let _sending = lock.lock().await;
         let bot = store::bot(&self.db, user, bot_id)
             .await?
@@ -751,7 +754,11 @@ impl Conversations {
     /// The user's usage meter. Reads the subscription's windows from the
     /// user's app server when none have been reported yet.
     pub async fn usage(&self, user: UserId) -> Result<Usage> {
-        let subscription = match self.subscription.get(user) {
+        let cached = self
+            .subscription
+            .get(user)
+            .filter(|buckets| !usage::stale(buckets, self.clock.now()));
+        let subscription = match cached {
             Some(buckets) => buckets,
             None => match self.supervisor.runtime(user).await {
                 Ok(runtime) => match runtime.rate_limits().await {

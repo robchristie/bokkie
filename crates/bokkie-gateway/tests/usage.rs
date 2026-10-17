@@ -94,6 +94,10 @@ async fn a_members_daily_turns_are_enforced_and_refill() {
     assert_eq!(refused.code(), "limit_reached");
     // The refused message was not stored, and no turn started.
     assert_eq!(gateway.fake.received("turn/start").len(), 2);
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}/messages")).cookie(&amy))
+        .await;
+    assert_eq!(page.body["messages"].as_array().unwrap().len(), 4);
     let meter = usage(&gateway, &amy).await;
     assert_eq!(meter["allowance"]["turns_today"], 2);
     assert_eq!(meter["allowance"]["exhausted"], true);
@@ -179,7 +183,7 @@ async fn the_meter_shows_the_subscription_windows() {
         json!({"method": "account/rateLimits/updated", "params": {"rateLimits": {
             "limitId": "codex", "limitName": null, "planType": "pro",
             "primary": {"usedPercent": 100, "windowDurationMins": 10080, "resetsAt": 1_800_700_000},
-            "secondary": null, "rateLimitReachedType": "primary"}}}),
+            "secondary": null, "rateLimitReachedType": "rate_limit_reached"}}}),
     );
     let meter = gateway
         .wait_for(&rob, "/api/v1/usage", |b| {
@@ -300,4 +304,44 @@ async fn concurrent_usage_writes_are_not_lost() {
         usage(&gateway, &rob).await["allowance"]["tokens_this_week"],
         1000
     );
+}
+
+/// Sends to several Bots at once, say from two devices, must not all pass
+/// the turn check before any of them is counted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_sends_to_several_bots_cannot_overrun_the_turn_limit() {
+    let (gateway, rob) = setup().await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    set_limits(
+        &gateway,
+        &rob,
+        amy_id,
+        json!({"daily_turns": 1, "weekly_tokens": null}),
+    )
+    .await;
+    let mut bots = Vec::new();
+    for name in ["One", "Two", "Three", "Four"] {
+        bots.push(create_bot(&gateway, &amy, name).await);
+    }
+    let calls = bots
+        .iter()
+        .map(|bot| {
+            Call::post(&format!("/api/v1/bots/{bot}/messages"))
+                .cookie(&amy)
+                .json(&json!({"text": "hi"}))
+        })
+        .collect();
+    let replies = gateway.send_all(calls).await;
+    let accepted = replies
+        .iter()
+        .filter(|r| r.status == StatusCode::OK)
+        .count();
+    assert_eq!(accepted, 1, "{replies:?}");
+    assert!(
+        replies
+            .iter()
+            .filter(|r| r.status != StatusCode::OK)
+            .all(|r| r.code() == "limit_reached")
+    );
+    assert_eq!(gateway.fake.received("turn/start").len(), 1);
 }

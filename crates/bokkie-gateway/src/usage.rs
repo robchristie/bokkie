@@ -34,8 +34,7 @@ pub async fn record_turn(db: &SqlitePool, now: Timestamp, user: UserId, bot: Bot
 }
 
 /// Records a thread's reported token total, storing its growth since the
-/// last report. A total lower than the last one (a thread whose count was
-/// reset) counts from zero.
+/// last report. A total lower than the last one becomes the new baseline.
 pub async fn record_tokens(
     db: &SqlitePool,
     now: Timestamp,
@@ -54,11 +53,9 @@ pub async fn record_tokens(
         return Err(Failure::not_found());
     };
     let total = i64::try_from(thread_total).unwrap_or(i64::MAX);
-    let growth = if total >= reported {
-        total - reported
-    } else {
-        total
-    };
+    // A total that fell is a new baseline, not new usage: counting it all
+    // could lock a user out for a whole thread's history.
+    let growth = (total - reported).max(0);
     sqlx::query("UPDATE bots SET tokens_reported = ? WHERE id = ? AND user_id = ?")
         .bind(total)
         .bind(bot.0)
@@ -142,12 +139,38 @@ pub fn buckets(response: &GetAccountRateLimitsResponse) -> Vec<RateLimitBucket> 
 }
 
 /// Merges an `account/rateLimits/updated` snapshot into known buckets.
+/// Codex sends sparse updates, so only the values present replace known
+/// ones.
 pub fn merge(buckets: &mut Vec<RateLimitBucket>, snapshot: &RateLimitSnapshot) {
     let updated = bucket("codex", snapshot);
     match buckets.iter_mut().find(|b| b.id == updated.id) {
-        Some(existing) => *existing = updated,
+        Some(existing) => {
+            if updated.name.is_some() {
+                existing.name = updated.name;
+            }
+            if updated.primary.is_some() {
+                existing.primary = updated.primary;
+            }
+            if updated.secondary.is_some() {
+                existing.secondary = updated.secondary;
+            }
+            existing.reached = snapshot.rate_limit_reached_type.is_some()
+                || [&existing.primary, &existing.secondary]
+                    .into_iter()
+                    .flatten()
+                    .any(|w| w.used_percent >= 100);
+        }
         None => buckets.push(updated),
     }
+}
+
+/// Whether a known reset time has passed, so the cached buckets are stale.
+pub fn stale(buckets: &[RateLimitBucket], now: Timestamp) -> bool {
+    buckets
+        .iter()
+        .flat_map(|b| [&b.primary, &b.secondary])
+        .flatten()
+        .any(|w| w.resets_at.is_some_and(|at| at <= now))
 }
 
 /// The latest subscription buckets each user's app server reported.
@@ -229,5 +252,25 @@ mod tests {
         merge(&mut buckets, &snapshot(100, None));
         assert_eq!(buckets.len(), 1);
         assert!(buckets[0].reached);
+    }
+
+    #[test]
+    fn sparse_updates_keep_what_they_do_not_mention() {
+        let mut full = snapshot(10, None);
+        full.secondary = Some(CodexWindow {
+            used_percent: 40,
+            window_duration_mins: Some(300),
+            resets_at: Some(1_800_000_100),
+        });
+        full.limit_name = Some("Codex".into());
+        let mut buckets = vec![bucket("codex", &full)];
+        let mut sparse = snapshot(15, None);
+        sparse.limit_name = None;
+        merge(&mut buckets, &sparse);
+        assert_eq!(buckets[0].primary.as_ref().unwrap().used_percent, 15);
+        assert_eq!(buckets[0].secondary.as_ref().unwrap().used_percent, 40);
+        assert_eq!(buckets[0].name.as_deref(), Some("Codex"));
+        assert!(stale(&buckets, Timestamp(1_800_000_100_000)));
+        assert!(!stale(&buckets, Timestamp(1_800_000_099_000)));
     }
 }

@@ -207,6 +207,15 @@ also arrive on the event socket as `usage_updated`.
   of each thread's total from `thread/tokenUsage/updated`, because the
   subscription's own limits are shared by everyone. A message that would
   start a turn beyond the allowance, or any message once the tokens are used
-  up, is refused with `limit_reached` and is not stored.
+  up, is refused with `limit_reached` and is not stored. One user's sends
+  are handled one at a time, so sends to several Bots at once cannot all pass
+  the check. The exception: a message meant to steer a turn that ends just
+  before it arrives needs a new turn; if none is left, it stays stored
+  without a reply.
+- Codex sends sparse rate-limit updates; the gateway merges the values each
+  one carries, and reads the windows afresh once a known reset time passes.
+  A thread total that falls is taken as a new baseline. Totals include
+  cached input, so a long conversation uses a token allowance faster than
+  its visible length suggests.
 - `GET /api/v1/admin/users/{id}/usage` shows an admin another account's
   counts, never its conversations.
