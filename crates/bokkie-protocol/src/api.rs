@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::events::Seq;
 use crate::{BotId, MessageId, Timestamp, UserId};
 
 // ---------------------------------------------------------------------------
@@ -277,6 +278,8 @@ pub struct MessagePreview {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BotList {
     pub bots: Vec<Bot>,
+    /// The list reflects every event up to and including this one.
+    pub seq: Seq,
 }
 
 /// `POST /api/v1/bots`.
@@ -350,6 +353,8 @@ pub struct MessagePage {
     pub messages: Vec<Message>,
     /// Pass as `before` to fetch older messages; `None` at the start.
     pub older: Option<MessageId>,
+    /// The page reflects every event up to and including this one.
+    pub seq: Seq,
 }
 
 /// `POST /api/v1/bots/{id}/messages`.

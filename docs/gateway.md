@@ -161,3 +161,29 @@ long-lived Codex thread in that user's app server.
 - Every query names the signed-in user. Another user's Bot, even for an
   admin, reads as not found, and an app server's events are routed only to
   Bots of the user it belongs to.
+
+## The event WebSocket
+
+`GET /api/v1/events` upgrades to a WebSocket that carries the signed-in
+user's event log. The upgrade needs the session cookie and the gateway's
+`Origin`. The protocol is documented in `bokkie_protocol::events`.
+
+- Every event the user should see is appended to their log in SQLite with
+  the next sequence number: 1, 2, 3 and so on, per user, with no gaps. The
+  numbers survive restarts. The log keeps the newest 5,000 events per user.
+- The client's first frame names the last sequence number it processed.
+  The gateway replays everything after it and then sends `live`. If that
+  number is older than the retained log, or beyond its end, the gateway
+  sends `reset` instead, and the client reloads over HTTP.
+- `GET /api/v1/bots` and `GET /api/v1/bots/{id}/messages` carry the `seq`
+  they reflect, so a client can load a snapshot and apply only later events.
+- Streaming text arrives as `message_delta` events. The gateway coalesces the
+  app server's deltas and emits at most one per reply every 100 ms, each
+  with the character offset it starts at, so a replay overlapping a snapshot
+  can be applied without duplicating text.
+- Codex never waits on a client. Events are broadcast without blocking; a
+  connection that falls more than 1,024 events behind, or cannot take a
+  frame within 10 seconds, is closed, and the client resumes from its last
+  sequence number.
+- An open socket rechecks its session every 30 seconds, so signing out, a
+  revoked session or a disabled account closes it.

@@ -484,3 +484,106 @@ async fn a_turn_that_finishes_before_turn_start_answers_leaves_the_bot_idle() {
     assert_eq!(next.body["delivery"], "new_turn");
     assert!(gateway.fake.received("turn/steer").is_empty());
 }
+
+async fn wait_status(gateway: &Gateway, cookie: &str, bot: i64, status: &str) {
+    gateway
+        .wait_for(cookie, &format!("/api/v1/bots/{bot}"), |b| {
+            b["status"] == status
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_steer_that_misses_its_turn_starts_a_new_one_with_the_profile() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    say(&gateway, &rob, chef, "Start").await;
+    wait_status(&gateway, &rob, chef, "working").await;
+    // The profile changes mid-turn; the next message carries it.
+    gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/bots/{chef}"))
+                .cookie(&rob)
+                .json(&json!({"label": "Baker"})),
+        )
+        .await;
+    let steered = say(&gateway, &rob, chef, "Also bread").await;
+    assert_eq!(steered.body["delivery"], "steered");
+    let steer = &gateway.fake.received("turn/steer")[0];
+    assert!(
+        steer.params["additionalContext"]["bokkie-profile"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Baker")
+    );
+    // When the turn has already ended, the message starts a new turn.
+    gateway.fake.with(|b| b.steer_fails = true);
+    let next = say(&gateway, &rob, chef, "And cake").await;
+    assert_eq!(next.status, StatusCode::OK, "{:?}", next.body);
+    assert_eq!(next.body["delivery"], "new_turn");
+    let turns = gateway.fake.received("turn/start");
+    assert_eq!(turns.len(), 2);
+    // The profile was already delivered by the steer.
+    assert!(turns[1].params.get("additionalContext").is_none());
+}
+
+#[tokio::test]
+async fn an_app_server_exit_mid_reply_fails_the_reply() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    say(&gateway, &rob, chef, "Hi").await;
+    let path = format!("/api/v1/bots/{chef}/messages");
+    gateway
+        .wait_for(&rob, &path, |b| {
+            last_bot_reply(b).is_some_and(|m| m["text"] == "Hello there")
+        })
+        .await;
+    gateway.fake.crash(UserId(1));
+    let runtime = gateway.state.supervisor.running(UserId(1)).await.unwrap();
+    let _ = runtime.account().await;
+    let page = gateway
+        .wait_for(&rob, &path, |b| {
+            last_bot_reply(b).is_some_and(|m| m["state"] == "failed")
+        })
+        .await;
+    assert_eq!(last_bot_reply(&page).unwrap()["text"], "Hello there");
+    wait_status(&gateway, &rob, chef, "idle").await;
+}
+
+#[tokio::test]
+async fn a_violation_mid_reply_refuses_that_bot_but_not_its_siblings() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let tutor = create_bot(&gateway, &rob, "Tutor").await;
+    say(&gateway, &rob, chef, "Hi").await;
+    let path = format!("/api/v1/bots/{chef}/messages");
+    gateway
+        .wait_for(&rob, &path, |b| last_bot_reply(b).is_some())
+        .await;
+    let thread = gateway.fake.received("thread/start")[0].clone();
+    let turn = gateway.fake.received("turn/start")[0].params["threadId"].clone();
+    assert!(thread.params.is_object());
+    gateway.fake.inject(
+        UserId(1),
+        json!({"method": "item/started", "params": {"threadId": turn, "turnId": "t",
+            "item": {"type": "webSearch", "id": "w1", "query": "x"}}}),
+    );
+    let page = gateway
+        .wait_for(&rob, &path, |b| {
+            last_bot_reply(b).is_some_and(|m| m["state"] == "failed")
+        })
+        .await;
+    assert!(last_bot_reply(&page).is_some());
+    wait_status(&gateway, &rob, chef, "refused").await;
+    // Codex is stopped for the whole gateway, but the sibling Bot is not
+    // marked refused: the refusal is not about its thread.
+    let sibling = say(&gateway, &rob, tutor, "Hello").await;
+    assert_eq!(sibling.status, StatusCode::SERVICE_UNAVAILABLE);
+    let tutor_bot = gateway
+        .send(Call::get(&format!("/api/v1/bots/{tutor}")).cookie(&rob))
+        .await;
+    assert_eq!(tutor_bot.body["status"], "idle");
+}

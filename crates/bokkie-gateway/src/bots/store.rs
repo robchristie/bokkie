@@ -285,7 +285,6 @@ pub async fn update_bot(
     id: BotId,
     changes: BotChanges,
 ) -> Result<BotRow> {
-    let current = bot(db, user, id).await?.ok_or_else(Failure::not_found)?;
     let name = changes.name.as_deref().map(check_name).transpose()?;
     let label = changes.label.as_deref().map(check_label).transpose()?;
     let description = changes
@@ -297,24 +296,32 @@ pub async fn update_bot(
         Some(Some(avatar)) => Some(Some(check_avatar(&avatar)?)),
         other => other,
     };
-    let profile_changed = name.as_ref().is_some_and(|n| *n != current.name)
-        || label.as_ref().is_some_and(|l| *l != current.label)
-        || description
-            .as_ref()
-            .is_some_and(|d| *d != current.description);
-    unique_name(
+    // One statement, so concurrent edits cannot lose each other's fields.
+    // SQLite evaluates every expression against the row as it was, so the
+    // revision compares the old profile with the new one.
+    let done = unique_name(
         sqlx::query(
-            "UPDATE bots SET name = ?, label = ?, description = ?, avatar = ?, pinned = ?,
-                 hidden = ?, profile_revision = profile_revision + ?, updated_at = ?
-             WHERE id = ? AND user_id = ?",
+            "UPDATE bots SET
+                 profile_revision = profile_revision + (CASE
+                     WHEN (?1 IS NOT NULL AND ?1 != name)
+                       OR (?2 IS NOT NULL AND ?2 != label)
+                       OR (?3 IS NOT NULL AND ?3 != description) THEN 1 ELSE 0 END),
+                 name = coalesce(?1, name),
+                 label = coalesce(?2, label),
+                 description = coalesce(?3, description),
+                 avatar = CASE WHEN ?4 THEN ?5 ELSE avatar END,
+                 pinned = coalesce(?6, pinned),
+                 hidden = coalesce(?7, hidden),
+                 updated_at = ?8
+             WHERE id = ?9 AND user_id = ?10",
         )
-        .bind(name.unwrap_or(current.name))
-        .bind(label.unwrap_or(current.label))
-        .bind(description.unwrap_or(current.description))
-        .bind(avatar.unwrap_or(current.avatar))
-        .bind(changes.pinned.unwrap_or(current.pinned) as i64)
-        .bind(changes.hidden.unwrap_or(current.hidden) as i64)
-        .bind(profile_changed as i64)
+        .bind(name)
+        .bind(label)
+        .bind(description)
+        .bind(avatar.is_some())
+        .bind(avatar.flatten())
+        .bind(changes.pinned.map(i64::from))
+        .bind(changes.hidden.map(i64::from))
         .bind(now.0)
         .bind(id.0)
         .bind(user.0)
@@ -322,6 +329,9 @@ pub async fn update_bot(
         .await,
     )
     .await?;
+    if done.rows_affected() == 0 {
+        return Err(Failure::not_found());
+    }
     bot(db, user, id).await?.ok_or_else(Failure::not_found)
 }
 

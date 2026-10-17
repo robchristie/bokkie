@@ -10,12 +10,23 @@
 //! 1. The client opens the WebSocket with its session cookie and sends
 //!    [`ClientFrame::Resume`] with the last sequence number it processed, or
 //!    `None` on first start.
-//! 2. If events after that number have already been dropped from the log, the
-//!    gateway sends [`ServerFrame::Reset`]. The client then reloads its state
-//!    over HTTP and continues from the sequence number the reset names.
+//! 2. If that number is outside the retained log (events after it have been
+//!    dropped, or it is beyond the newest event), the gateway sends
+//!    [`ServerFrame::Reset`]. The client then reloads its state over HTTP and
+//!    continues from the sequence number the reset names.
 //! 3. The gateway replays every retained event after that number, in order,
 //!    then sends [`ServerFrame::Live`]. From then on events arrive as they
 //!    happen.
+//!
+//! Sequence numbers are durable: they survive gateway restarts.
+//!
+//! HTTP snapshots ([`BotList`](crate::api::BotList) and
+//! [`MessagePage`](crate::api::MessagePage)) carry a `seq`: they reflect
+//! every event up to and including it, and may reflect some later ones. To
+//! start from a snapshot, open the WebSocket first, load the snapshot, and
+//! apply events after its `seq`. Applying an event twice is harmless:
+//! messages replace by id, and [`Event::MessageDelta`] carries the offset it
+//! starts at.
 //!
 //! Streaming text arrives as [`Event::MessageDelta`]. The gateway coalesces
 //! the app server's deltas, so one event may carry many model tokens. A
@@ -26,6 +37,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::api::{Bot, BotStatus, Message, Usage};
+#[cfg(doc)]
+use crate::api::{BotList, MessagePage};
 use crate::{BotId, MessageId, Timestamp};
 
 /// A position in a user's event log. Sequence numbers start at 1.
@@ -64,10 +77,14 @@ pub enum Event {
     /// [`MessageState::Streaming`](crate::api::MessageState::Streaming) with
     /// empty or partial text.
     MessageCreated { message: Message },
-    /// Text appended to a streaming Bot reply.
+    /// Text appended to a streaming Bot reply. `offset` is the length of
+    /// the reply before this delta, in Unicode scalar values (Rust `char`s).
+    /// Skip what the client already has; reload the message if `offset` is
+    /// beyond the text the client holds.
     MessageDelta {
         bot_id: BotId,
         message_id: MessageId,
+        offset: u64,
         delta: String,
     },
     /// A message reached its final text and state. The text replaces
