@@ -14,7 +14,10 @@ cargo test --workspace
 ```
 
 Full verification is `scripts/verify`, and CI runs exactly that. It checks
-formatting, runs Clippy with warnings denied and runs every test. It also
+formatting, runs Clippy with warnings denied, runs every test and builds
+`crates/bokkie-protocol` for `wasm32-unknown-unknown`, because the WASM
+client shares those wire types. Keep that crate pure serde, with no I/O and
+no platform-specific dependencies. It also
 downloads the pinned Codex release (about 160 MB, cached under ignored
 `.tools/codex/`) for the live checks. Set `BOKKIE_SKIP_LIVE=1` to skip the
 download and those checks during quick local iteration; a change is not
