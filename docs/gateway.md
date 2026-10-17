@@ -16,6 +16,7 @@ The gateway reads its settings from the environment.
 | `BOKKIE_DATA` | `/data` | The data directory. The database is `bokkie.sqlite3`, created mode 600 |
 | `BOKKIE_LISTEN` | `0.0.0.0:8080` | The listening address. The gateway speaks plain HTTP behind the reverse proxy, which terminates TLS |
 | `BOKKIE_TRUST_FORWARDED_FOR` | off | Set to `1` behind a proxy that appends the client address to `X-Forwarded-For`, so sign-in rate limits apply per client rather than per proxy |
+| `BOKKIE_CODEX_BIN` | `/usr/local/bin/codex` | The pinned `codex` binary |
 | `BOKKIE_LOG` | `info` | A `tracing` filter |
 
 `GET /healthz` answers `ok` for any `Host`, for container health checks.
@@ -58,3 +59,75 @@ per-user limits; disabling or resetting revokes that account's sessions.
   `BOKKIE_ORIGIN`.
 - Every query for a user's data is scoped to the signed-in user. Another
   user's resources read as not found.
+
+## Codex app servers
+
+The gateway runs one `codex app-server` per user, started on first use, with
+everything under `<data>/users/<id>/` (mode 700):
+
+| Path | Holds |
+| --- | --- |
+| `codex/` | The user's `CODEX_HOME`: their ChatGPT credential, Codex's state and the gateway's `config.toml` |
+| `home/` | The app server's `HOME` |
+| `workspace/` | The working directory of every thread: the Bots' computer from Phase 4 |
+| `app-server.log` | The app server's standard error, mode 600 |
+
+A user signs their own app server in to ChatGPT with a device code
+(`POST /api/v1/codex/login`) and checks it with `GET /api/v1/codex/account`.
+Nobody else sees either. Disabling an account stops its app server.
+
+### Chat-only until Phase 4
+
+Until Phase 4's sandbox gate passes, threads may not run commands, change
+files or use a shell or any other tool that reaches outside the
+conversation. With the pinned Codex this takes two things together:
+
+- The gateway writes each `config.toml` itself on every start: the `bokkie`
+  permission profile as the default, approvals `never`, web search disabled,
+  `project_doc_max_bytes = 0`, and every tool-bearing feature off (the list
+  is `DISABLED_FEATURES` in `crates/bokkie-gateway/src/codex/config.rs`).
+  Codex reads `AGENTS.md` files through its sandbox helper, so turning
+  project docs off means chat-only threads need no working Bubblewrap; it
+  also stops a file in the workspace from adding instructions.
+- Some tools come from the model's catalog entry rather than from features:
+  `apply_patch`, a JavaScript `exec` tool that orchestrates nested tools, and
+  multi-agent spawning. At startup the gateway exports the binary's bundled
+  catalog (`codex debug models --bundled`), removes that metadata, writes it
+  to `<data>/codex/models.json` and sets `model_catalog_json` to it. A static
+  catalog also stops Codex replacing it with a remotely fetched one.
+
+The gateway refuses to serve an app server or thread unless these all hold:
+
+- at startup, `config/read` reports the profile, the approvals, the web
+  search setting, project docs off, Bokkie's catalog, every listed feature
+  off, no MCP servers, no config profiles, and a `bokkie` permission profile
+  that grants exactly `:minimal` read, workspace write, no access to the data
+  directory and no network;
+- `model/list` lists only models from Bokkie's catalog, and the catalog on
+  disk still carries no tool metadata;
+- before each `thread/start` and `thread/resume`, `config/read` passes again;
+  the response must report `activePermissionProfile.id = "bokkie"`, approvals
+  `never`, a catalog model and the user's workspace;
+- a thread must pass these checks on the current app server before any turn
+  runs on it, so after a restart every thread is resumed and checked again;
+- a thread that fails its checks stays refused on every later app server;
+- during a turn, every item must be a message, reasoning, a plan, a
+  compaction or one of Bokkie's own tools. Any other item, any approval
+  request (declined), and any item or approval the gateway cannot decode
+  shows that the configuration did not hold. The gateway then refuses the
+  thread, stops every user's app server and serves no Codex at all until it
+  is restarted, which is the operator's decision. The refusals live in
+  memory, so a restart clears them; Bots record their own refusal in the
+  database.
+
+`tests/live_codex.rs` proves the result against the real pinned app server
+with a mock model: the only tools it offers are Bokkie's own and
+`request_user_input`, which the gateway answers with an error. Its control
+test shows that the same capture sees `apply_patch`, `exec_command` and
+`spawn_agent` without the gateway's configuration. Other live tests show
+that a thread runs with every Bubblewrap broken, and that one user's app
+server cannot load another user's thread.
+
+These results hold for the pinned release: the tool flags, the catalog
+fields and the static catalog are all Codex 0.163.0 behaviour. Moving the
+pin must rerun the live tests, including the control.

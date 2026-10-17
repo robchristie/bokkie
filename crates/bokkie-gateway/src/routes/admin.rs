@@ -44,6 +44,10 @@ pub async fn update_user(
         request.limits,
     )
     .await?;
+    if request.disabled == Some(true) {
+        // A disabled account's Bots stop at once.
+        state.supervisor.stop(UserId(id)).await;
+    }
     tracing::info!(admin = %admin.id(), user = id, "updated an account");
     Ok(Json(updated))
 }

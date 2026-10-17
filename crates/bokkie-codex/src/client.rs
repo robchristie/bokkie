@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
@@ -23,6 +23,7 @@ use crate::protocol::{
     PermissionProfileListResponse, ServerNotification, ServerRequest, ServerRequestKind,
     ThreadResumeParams, ThreadResumeResponse, ThreadStartParams, ThreadStartResponse,
     TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
+    TurnSteerParams, TurnSteerResponse,
 };
 use crate::rpc::{Error, Message, RequestId, RpcError};
 
@@ -44,6 +45,11 @@ pub enum Incoming {
         error: String,
     },
 }
+
+/// The default bound on one incoming line. A `thread/resume` response
+/// carries the whole conversation, so the bound is generous; it exists so
+/// that a runaway app server cannot exhaust the gateway's memory.
+pub const MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
 
 type Pending = HashMap<i64, oneshot::Sender<Result<Value, RpcError>>>;
 type SharedPending = Arc<std::sync::Mutex<Option<Pending>>>;
@@ -95,6 +101,19 @@ impl Client {
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
+        Self::with_max_line(reader, writer, MAX_LINE_BYTES)
+    }
+
+    /// Like [`Client::new`], with a different bound on one incoming line.
+    pub fn with_max_line<R, W>(
+        reader: R,
+        writer: W,
+        max_line: usize,
+    ) -> (Self, mpsc::UnboundedReceiver<Incoming>)
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
         let (lines_tx, lines_rx) = mpsc::unbounded_channel();
         let client = Self {
             lines: lines_tx,
@@ -102,7 +121,12 @@ impl Client {
             next_id: Arc::new(AtomicI64::new(1)),
         };
         let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
-        tokio::spawn(read_loop(reader, client.pending.clone(), incoming_tx));
+        tokio::spawn(read_loop(
+            reader,
+            max_line,
+            client.pending.clone(),
+            incoming_tx,
+        ));
         tokio::spawn(write_loop(writer, lines_rx, client.pending.clone()));
         (client, incoming_rx)
     }
@@ -247,6 +271,10 @@ impl Client {
         self.request("command/exec", Some(params)).await
     }
 
+    pub async fn turn_steer(&self, params: &TurnSteerParams) -> Result<TurnSteerResponse, Error> {
+        self.request("turn/steer", Some(params)).await
+    }
+
     pub async fn turn_interrupt(
         &self,
         params: &TurnInterruptParams,
@@ -275,17 +303,38 @@ async fn write_loop<W>(
     lock(&pending).take();
 }
 
-async fn read_loop<R>(reader: R, pending: SharedPending, incoming: mpsc::UnboundedSender<Incoming>)
-where
+async fn read_loop<R>(
+    reader: R,
+    max_line: usize,
+    pending: SharedPending,
+    incoming: mpsc::UnboundedSender<Incoming>,
+) where
     R: AsyncRead + Unpin,
 {
+    // `take` bounds how much one line may buffer: a line that reaches the
+    // bound without a newline ends the connection.
     let mut reader = BufReader::new(reader);
     let mut buffer = Vec::new();
     loop {
         buffer.clear();
-        match reader.read_until(b'\n', &mut buffer).await {
+        let limit = u64::try_from(max_line)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        match (&mut reader)
+            .take(limit)
+            .read_until(b'\n', &mut buffer)
+            .await
+        {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
+        }
+        if buffer.len() > max_line && buffer.last() != Some(&b'\n') {
+            buffer.truncate(256);
+            let _ = incoming.send(Incoming::Malformed {
+                line: String::from_utf8_lossy(&buffer).into_owned(),
+                error: format!("a line exceeded {max_line} bytes; closing the connection"),
+            });
+            break;
         }
         let line = match std::str::from_utf8(&buffer) {
             Ok(line) => line.trim_end_matches(['\n', '\r']).to_owned(),

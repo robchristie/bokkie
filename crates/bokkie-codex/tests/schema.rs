@@ -499,6 +499,16 @@ fn thread_and_turn_params_conform() {
             turn_id: "u".into(),
         },
     );
+    check_outgoing(
+        "v2/TurnSteerParams",
+        &TurnSteerParams {
+            thread_id: "t".into(),
+            expected_turn_id: "u".into(),
+            input: vec![UserInput::Text {
+                text: "also this".into(),
+            }],
+        },
+    );
 }
 
 #[test]
@@ -550,6 +560,7 @@ fn method_results_decode() {
     check_incoming::<ThreadResumeResponse>("v2/ThreadResumeResponse");
     check_incoming::<TurnStartResponse>("v2/TurnStartResponse");
     check_incoming::<TurnInterruptResponse>("v2/TurnInterruptResponse");
+    check_incoming::<TurnSteerResponse>("v2/TurnSteerResponse");
     check_incoming::<CommandExecResponse>("v2/CommandExecResponse");
 }
 
@@ -575,6 +586,9 @@ fn every_thread_item_variant_decodes() {
         let typed = [
             "userMessage",
             "agentMessage",
+            "reasoning",
+            "plan",
+            "contextCompaction",
             "commandExecution",
             "dynamicToolCall",
             "mcpToolCall",
@@ -607,6 +621,7 @@ fn typed_notifications_decode() {
     check_incoming::<AccountRateLimitsUpdatedNotification>(
         "v2/AccountRateLimitsUpdatedNotification",
     );
+    check_incoming::<ThreadTokenUsageUpdatedNotification>("v2/ThreadTokenUsageUpdatedNotification");
     check_incoming::<ErrorNotification>("v2/ErrorNotification");
 }
 

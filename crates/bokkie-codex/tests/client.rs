@@ -287,3 +287,71 @@ async fn an_undecodable_response_fails_only_its_request() {
         .await;
     assert_eq!(next.await.unwrap().unwrap(), 1);
 }
+
+#[tokio::test]
+async fn an_over_long_line_closes_the_connection() {
+    let (client_side, server_side) = tokio::io::duplex(1 << 16);
+    let (client_read, client_write) = tokio::io::split(client_side);
+    let (server_read, mut server_write) = tokio::io::split(server_side);
+    let (client, mut incoming) = Client::with_max_line(client_read, client_write, 1024);
+    let mut lines = BufReader::new(server_read).lines();
+    let call = tokio::spawn({
+        let client = client.clone();
+        async move { client.request_value("thread/resume", None).await }
+    });
+    lines.next_line().await.unwrap().unwrap();
+    // A line exactly at the bound still decodes.
+    let fits = format!(
+        r#"{{"method":"warning","params":{{"pad":"{}"}}}}"#,
+        "x".repeat(960)
+    );
+    assert!(fits.len() <= 1024);
+    server_write
+        .write_all(format!("{fits}\n").as_bytes())
+        .await
+        .unwrap();
+    match incoming.recv().await.unwrap() {
+        Incoming::Notification(ServerNotification::Unknown { method, .. }) => {
+            assert_eq!(method, "warning")
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    // A runaway line is cut off without buffering it whole.
+    let runaway = "y".repeat(64 * 1024);
+    server_write.write_all(runaway.as_bytes()).await.unwrap();
+    match incoming.recv().await.unwrap() {
+        Incoming::Malformed { line, error } => {
+            assert!(line.len() <= 256);
+            assert!(error.contains("1024"), "{error}");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    assert!(matches!(call.await.unwrap(), Err(Error::Closed)));
+    assert!(incoming.recv().await.is_none());
+}
+
+#[tokio::test]
+async fn turn_steer_names_the_expected_turn() {
+    let (client, _incoming, mut server) = connect();
+    let call = tokio::spawn({
+        let client = client.clone();
+        async move {
+            client
+                .turn_steer(&TurnSteerParams {
+                    thread_id: "t".into(),
+                    expected_turn_id: "u".into(),
+                    input: vec![UserInput::Text {
+                        text: "also".into(),
+                    }],
+                })
+                .await
+        }
+    });
+    let request = server.read().await;
+    assert_eq!(request["method"], "turn/steer");
+    assert_eq!(request["params"]["expectedTurnId"], "u");
+    server
+        .write(json!({"id": request["id"], "result": {"turnId": "u"}}))
+        .await;
+    assert_eq!(call.await.unwrap().unwrap().turn_id, "u");
+}

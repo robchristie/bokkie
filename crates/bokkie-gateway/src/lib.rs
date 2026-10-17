@@ -9,6 +9,7 @@
 pub mod accounts;
 pub mod auth;
 pub mod clock;
+pub mod codex;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -25,6 +26,7 @@ use tokio::sync::Semaphore;
 
 use crate::auth::LoginLimiter;
 use crate::clock::Clock;
+use crate::codex::Supervisor;
 use crate::config::Config;
 
 /// State shared by every request.
@@ -36,23 +38,25 @@ pub struct AppState {
     pub limiter: Arc<LoginLimiter>,
     /// Bounds concurrent password hashing, which is slow by design.
     pub hashing: Arc<Semaphore>,
+    pub supervisor: Arc<Supervisor>,
 }
 
 impl AppState {
-    pub fn new(config: Config, db: SqlitePool, clock: Clock) -> Self {
+    pub fn new(config: Config, db: SqlitePool, clock: Clock, supervisor: Arc<Supervisor>) -> Self {
         Self {
             config: Arc::new(config),
             db,
             clock,
             limiter: Arc::default(),
             hashing: Arc::new(Semaphore::new(2)),
+            supervisor,
         }
     }
 }
 
 /// The gateway's routes, behind the request guard.
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, admin};
+    use routes::{accounts, admin, codex};
     let api = Router::new()
         .route("/version", get(version))
         .route(
@@ -65,6 +69,8 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions", get(accounts::list_sessions))
         .route("/sessions/{id}", delete(accounts::revoke_session))
         .route("/invitations/accept", post(accounts::accept_invitation))
+        .route("/codex/account", get(codex::account))
+        .route("/codex/login", post(codex::login))
         .route("/admin/users", get(admin::list_users))
         .route("/admin/users/{id}", patch(admin::update_user))
         .route("/admin/users/{id}/password", put(admin::reset_password))
