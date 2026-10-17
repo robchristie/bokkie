@@ -1,0 +1,17 @@
+[package]
+name = "bokkie-protocol"
+description = "Wire types shared by the Bokkie gateway and its WASM client. Pure serde, with no I/O"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
