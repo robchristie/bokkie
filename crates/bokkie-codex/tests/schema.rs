@@ -4,9 +4,12 @@
 //!   schema with the expected parameter definition.
 //! - Outgoing values validate against their definitions, and every field name
 //!   they emit is declared there.
-//! - Incoming types decode both the smallest and the fullest instance the
-//!   schema allows, for every top-level variant, and every field name they
-//!   read is declared in the schema.
+//! - Incoming types decode a generated minimal instance (required fields
+//!   only, null where allowed) and maximal instance (every field) for every
+//!   top-level variant, and every field name they read is declared in the
+//!   schema. Nested unions take their first non-null branch, enums their
+//!   first value and arrays one item, so closed enums that Bokkie decodes
+//!   are also checked value by value.
 
 use std::sync::OnceLock;
 
@@ -324,12 +327,30 @@ fn union_entry(union: &str, method: &str) -> &'static Value {
         .unwrap_or_else(|| panic!("{union} has no method {method}"))
 }
 
-fn params_ref(entry: &Value) -> Option<String> {
-    entry["properties"]
-        .get("params")
-        .and_then(|p| p.get("$ref"))
+/// The parameter definition of a union entry, and whether the server
+/// requires parameters. `anyOf` with `null` marks optional parameters.
+fn params_of(entry: &Value) -> (Option<String>, bool) {
+    let Some(params) = entry["properties"].get("params") else {
+        return (None, false);
+    };
+    let required = entry["required"]
+        .as_array()
+        .is_some_and(|r| r.iter().any(|name| name == "params"));
+    let reference = params
+        .get("$ref")
+        .or_else(|| {
+            params["anyOf"]
+                .as_array()?
+                .iter()
+                .find_map(|branch| branch.get("$ref"))
+        })
         .and_then(Value::as_str)
-        .map(|r| r.trim_start_matches("#/definitions/").to_owned())
+        .map(|r| r.trim_start_matches("#/definitions/").to_owned());
+    (reference, required)
+}
+
+fn params_ref(entry: &Value) -> Option<String> {
+    params_of(entry).0
 }
 
 // ---------------------------------------------------------------------------
@@ -339,12 +360,12 @@ fn params_ref(entry: &Value) -> Option<String> {
 fn client_methods_exist_with_their_parameter_definitions() {
     for method in CLIENT_METHODS {
         let entry = union_entry("ClientRequest", method.method);
-        assert_eq!(
-            params_ref(entry).as_deref(),
-            method.params,
-            "{} parameters",
-            method.method
-        );
+        let (reference, required) = params_of(entry);
+        match method.params {
+            Some(params) => assert_eq!(reference.as_deref(), Some(params), "{}", method.method),
+            // Bokkie sends no parameters, so the server must not require any.
+            None => assert!(!required, "{} requires parameters", method.method),
+        }
         definition(method.result);
     }
 }
@@ -515,6 +536,18 @@ fn method_results_decode() {
     check_incoming::<ThreadResumeResponse>("v2/ThreadResumeResponse");
     check_incoming::<TurnStartResponse>("v2/TurnStartResponse");
     check_incoming::<TurnInterruptResponse>("v2/TurnInterruptResponse");
+}
+
+#[test]
+fn every_turn_status_decodes() {
+    // The generator takes the first enum value, so cover every value of the
+    // closed enums Bokkie decodes.
+    let values = definition("v2/TurnStatus")["enum"].as_array().unwrap();
+    assert!(!values.is_empty());
+    for value in values {
+        let _: TurnStatus = serde_json::from_value(value.clone())
+            .unwrap_or_else(|e| panic!("TurnStatus {value} does not decode: {e}"));
+    }
 }
 
 #[test]

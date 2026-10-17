@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::protocol::{
     CancelLoginAccountParams, CancelLoginAccountResponse, ConfigReadParams, ConfigReadResponse,
@@ -30,6 +31,13 @@ use crate::rpc::{Error, Message, RequestId, RpcError};
 pub enum Incoming {
     Notification(ServerNotification),
     Request(ServerRequest),
+    /// A server request whose parameters did not decode. The server still
+    /// waits for an answer, so answer it, for example with an error.
+    MalformedRequest {
+        id: RequestId,
+        method: String,
+        error: String,
+    },
     /// A line that could not be decoded. The connection stays open.
     Malformed {
         line: String,
@@ -38,12 +46,17 @@ pub enum Incoming {
 }
 
 type Pending = HashMap<i64, oneshot::Sender<Result<Value, RpcError>>>;
+type SharedPending = Arc<std::sync::Mutex<Option<Pending>>>;
 
 /// A connection to one app server. Cloning shares the connection.
+///
+/// Every method is cancellation-safe: a dropped request future never leaves
+/// a partial line on the wire, because one writer task writes whole lines,
+/// and it removes its pending entry.
 #[derive(Clone)]
 pub struct Client {
-    writer: Arc<Mutex<Box<dyn AsyncWrite + Send + Unpin>>>,
-    pending: Arc<std::sync::Mutex<Option<Pending>>>,
+    lines: mpsc::UnboundedSender<String>,
+    pending: SharedPending,
     next_id: Arc<AtomicI64>,
 }
 
@@ -51,6 +64,26 @@ impl std::fmt::Debug for Client {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Client").finish_non_exhaustive()
     }
+}
+
+/// Removes a pending entry when its request future ends for any reason.
+struct PendingGuard<'a> {
+    pending: &'a SharedPending,
+    id: i64,
+}
+
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(pending) = lock(self.pending).as_mut() {
+            pending.remove(&self.id);
+        }
+    }
+}
+
+fn lock(pending: &SharedPending) -> std::sync::MutexGuard<'_, Option<Pending>> {
+    pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl Client {
@@ -62,13 +95,15 @@ impl Client {
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
+        let (lines_tx, lines_rx) = mpsc::unbounded_channel();
         let client = Self {
-            writer: Arc::new(Mutex::new(Box::new(writer))),
+            lines: lines_tx,
             pending: Arc::new(std::sync::Mutex::new(Some(HashMap::new()))),
             next_id: Arc::new(AtomicI64::new(1)),
         };
         let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
         tokio::spawn(read_loop(reader, client.pending.clone(), incoming_tx));
+        tokio::spawn(write_loop(writer, lines_rx, client.pending.clone()));
         (client, incoming_rx)
     }
 
@@ -88,21 +123,19 @@ impl Client {
     pub async fn request_value(&self, method: &str, params: Option<Value>) -> Result<Value, Error> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        {
-            let mut pending = self.pending.lock().expect("pending map lock");
-            pending.as_mut().ok_or(Error::Closed)?.insert(id, tx);
-        }
-        let message = Message::Request {
+        lock(&self.pending)
+            .as_mut()
+            .ok_or(Error::Closed)?
+            .insert(id, tx);
+        let _guard = PendingGuard {
+            pending: &self.pending,
+            id,
+        };
+        self.send(&Message::Request {
             id: RequestId::Integer(id),
             method: method.to_owned(),
             params,
-        };
-        if let Err(error) = self.send(&message).await {
-            if let Some(pending) = self.pending.lock().expect("pending map lock").as_mut() {
-                pending.remove(&id);
-            }
-            return Err(error);
-        }
+        })?;
         Ok(rx.await.map_err(|_| Error::Closed)??)
     }
 
@@ -112,7 +145,6 @@ impl Client {
             method: method.to_owned(),
             params,
         })
-        .await
     }
 
     /// Answers a server request.
@@ -121,7 +153,6 @@ impl Client {
             id,
             result: serde_json::to_value(result)?,
         })
-        .await
     }
 
     /// Answers a server request with an error.
@@ -130,16 +161,13 @@ impl Client {
             id: Some(id),
             error,
         })
-        .await
     }
 
-    async fn send(&self, message: &Message) -> Result<(), Error> {
+    /// Queues one whole line for the writer task.
+    fn send(&self, message: &Message) -> Result<(), Error> {
         let mut line = message.encode();
         line.push('\n');
-        let mut writer = self.writer.lock().await;
-        writer.write_all(line.as_bytes()).await?;
-        writer.flush().await?;
-        Ok(())
+        self.lines.send(line).map_err(|_| Error::Closed)
     }
 
     // -- Typed methods ------------------------------------------------------
@@ -220,77 +248,130 @@ impl Client {
     }
 }
 
-async fn read_loop<R>(
-    reader: R,
-    pending: Arc<std::sync::Mutex<Option<Pending>>>,
-    incoming: mpsc::UnboundedSender<Incoming>,
+async fn write_loop<W>(
+    mut writer: W,
+    mut lines: mpsc::UnboundedReceiver<String>,
+    pending: SharedPending,
 ) where
+    W: AsyncWrite + Unpin,
+{
+    while let Some(line) = lines.recv().await {
+        let written = async {
+            writer.write_all(line.as_bytes()).await?;
+            writer.flush().await
+        };
+        if written.await.is_err() {
+            break;
+        }
+    }
+    // The server can no longer hear us: fail every outstanding request.
+    lock(&pending).take();
+}
+
+async fn read_loop<R>(reader: R, pending: SharedPending, incoming: mpsc::UnboundedSender<Incoming>)
+where
     R: AsyncRead + Unpin,
 {
-    let mut lines = BufReader::new(reader).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
+    let mut reader = BufReader::new(reader);
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        match reader.read_until(b'\n', &mut buffer).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let line = match std::str::from_utf8(&buffer) {
+            Ok(line) => line.trim_end_matches(['\n', '\r']).to_owned(),
+            Err(error) => {
+                let _ = incoming.send(Incoming::Malformed {
+                    line: String::from_utf8_lossy(&buffer).into_owned(),
+                    error: error.to_string(),
+                });
+                continue;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
-        let event = match Message::decode(&line) {
-            Ok(Message::Response { id, result }) => {
-                complete(&pending, &id, Ok(result));
-                None
-            }
-            Ok(Message::Error {
-                id: Some(id),
-                error,
-            }) => {
-                complete(&pending, &id, Err(error));
-                None
-            }
-            Ok(Message::Error { id: None, error }) => Some(Incoming::Malformed {
-                line,
-                error: error.to_string(),
-            }),
-            Ok(Message::Notification { method, params }) => {
-                Some(match ServerNotification::decode(method, params) {
-                    Ok(notification) => Incoming::Notification(notification),
-                    Err(error) => Incoming::Malformed {
-                        line,
-                        error: error.to_string(),
-                    },
-                })
-            }
-            Ok(Message::Request { id, method, params }) => {
-                Some(match ServerRequestKind::decode(method, params) {
-                    Ok(kind) => Incoming::Request(ServerRequest { id, kind }),
-                    Err(error) => Incoming::Malformed {
-                        line,
-                        error: error.to_string(),
-                    },
-                })
-            }
-            Err(error) => Some(Incoming::Malformed {
-                line,
-                error: error.to_string(),
-            }),
-        };
-        if let Some(event) = event {
+        if let Some(event) = dispatch(line, &pending) {
             // A dropped receiver only means nobody is listening.
             let _ = incoming.send(event);
         }
     }
     // Fail every outstanding and future request.
-    pending.lock().expect("pending map lock").take();
+    lock(&pending).take();
 }
 
-fn complete(
-    pending: &std::sync::Mutex<Option<Pending>>,
-    id: &RequestId,
-    result: Result<Value, RpcError>,
-) {
+fn dispatch(line: String, pending: &SharedPending) -> Option<Incoming> {
+    match Message::decode(&line) {
+        Ok(Message::Response { id, result }) => {
+            complete(pending, &id, Ok(result));
+            None
+        }
+        Ok(Message::Error {
+            id: Some(id),
+            error,
+        }) => {
+            complete(pending, &id, Err(error));
+            None
+        }
+        Ok(Message::Error { id: None, error }) => Some(Incoming::Malformed {
+            line,
+            error: error.to_string(),
+        }),
+        Ok(Message::Notification { method, params }) => {
+            Some(match ServerNotification::decode(method, params) {
+                Ok(notification) => Incoming::Notification(notification),
+                Err(error) => Incoming::Malformed {
+                    line,
+                    error: error.to_string(),
+                },
+            })
+        }
+        Ok(Message::Request { id, method, params }) => {
+            Some(match ServerRequestKind::decode(method.clone(), params) {
+                Ok(kind) => Incoming::Request(ServerRequest { id, kind }),
+                Err(error) => Incoming::MalformedRequest {
+                    id,
+                    method,
+                    error: error.to_string(),
+                },
+            })
+        }
+        Err(error) => {
+            // An undecodable response still answers its request: fail it
+            // rather than leave it waiting until the connection closes.
+            let value: Option<Value> = serde_json::from_str(&line).ok();
+            let id = value
+                .as_ref()
+                .filter(|value| value.get("method").is_none())
+                .and_then(|value| {
+                    serde_json::from_value::<RequestId>(value.get("id")?.clone()).ok()
+                });
+            if let Some(id) = id {
+                complete(
+                    pending,
+                    &id,
+                    Err(RpcError {
+                        code: RpcError::PARSE_ERROR,
+                        message: format!("undecodable response: {error}"),
+                        data: None,
+                    }),
+                );
+            }
+            Some(Incoming::Malformed {
+                line,
+                error: error.to_string(),
+            })
+        }
+    }
+}
+
+fn complete(pending: &SharedPending, id: &RequestId, result: Result<Value, RpcError>) {
     let RequestId::Integer(id) = id else {
         return;
     };
-    let sender = pending
-        .lock()
-        .expect("pending map lock")
+    let sender = lock(pending)
         .as_mut()
         .and_then(|pending| pending.remove(id));
     if let Some(sender) = sender {
@@ -361,9 +442,11 @@ impl AppServer {
         }
         match &command.stderr {
             Some(path) => {
+                // Codex diagnostics can be sensitive: keep them private.
                 let file = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
+                    .mode(0o600)
                     .open(path)?;
                 process.stderr(file);
             }

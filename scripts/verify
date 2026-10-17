@@ -18,6 +18,9 @@ cargo test --workspace --locked
 if command -v shellcheck >/dev/null; then
   mapfile -t shell_scripts < <(git ls-files 'scripts/*' '*.sh')
   shellcheck "${shell_scripts[@]}"
+elif [[ -n "${CI:-}" ]]; then
+  echo "verify: shellcheck is required in CI" >&2
+  exit 1
 else
   echo "verify: shellcheck is not installed; skipping shell lint" >&2
 fi

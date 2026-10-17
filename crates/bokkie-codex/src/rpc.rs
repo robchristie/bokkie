@@ -34,6 +34,8 @@ pub struct RpcError {
 impl RpcError {
     /// The standard code for a method the receiver does not implement.
     pub const METHOD_NOT_FOUND: i64 = -32601;
+    /// The standard code for a message that could not be parsed.
+    pub const PARSE_ERROR: i64 = -32700;
 
     pub fn method_not_found(method: &str) -> Self {
         Self {

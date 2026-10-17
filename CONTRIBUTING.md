@@ -24,8 +24,8 @@ verified until the full script passes.
 
 Bokkie depends on one exact Codex release, recorded in
 [`deploy/codex-release.env`](deploy/codex-release.env) together with the
-release tarball's URL and SHA-256. Images, CI and `scripts/fetch-codex` all
-read that file.
+release tarball's URL and SHA-256. CI and `scripts/fetch-codex` read that
+file, and so must any image that installs Codex.
 
 `crates/bokkie-codex` covers only the app-server methods Bokkie uses. Its
 types are checked against the schema bundle that the pinned release
@@ -35,7 +35,9 @@ generates, vendored as
 - `tests/schema.rs` proves that every method, notification and server
   request Bokkie uses exists with the expected definitions, that outgoing
   values validate and use only declared field names, and that incoming types
-  decode the smallest and fullest instances the schema allows.
+  decode generated minimal and maximal instances of every top-level variant.
+  Nested unions use their first variant, so closed enums that Bokkie decodes
+  are checked value by value.
 - `tests/live.rs` runs only when `BOKKIE_CODEX_BIN` names a Codex binary. It
   checks the binary's version, regenerates the schema and requires it to be
   byte-identical to the vendored copy, and runs signed-out startup queries
@@ -49,7 +51,9 @@ against the new version. To move it:
 2. Regenerate the schema into a new `schema/codex-<version>/` directory with
    `codex app-server generate-json-schema --experimental --out <dir>`, keep
    only `codex_app_server_protocol.schemas.json`, delete the old directory and
-   update the path in `lib.rs`.
+   update the path in `lib.rs`. The schema is Apache-2.0 material from OpenAI
+   Codex: copy the release's upstream `LICENSE` and `NOTICE` beside it and
+   update the provenance `README.md` (tag, commit and command).
 3. Run `scripts/verify`, fix any type drift, and rerun the qualification
    probe before relying on the new version.
 

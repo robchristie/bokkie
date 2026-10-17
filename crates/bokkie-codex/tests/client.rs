@@ -214,3 +214,76 @@ async fn closing_the_stream_fails_pending_and_later_requests() {
         Err(Error::Closed) | Err(Error::Io(_))
     ));
 }
+
+#[tokio::test]
+async fn a_cancelled_request_leaves_the_connection_usable() {
+    let (client, _incoming, mut server) = connect();
+    // Cancel a request before its answer arrives.
+    let cancelled = tokio::time::timeout(
+        Duration::from_millis(50),
+        client.request_value("thread/start", None),
+    )
+    .await;
+    assert!(cancelled.is_err(), "the request timed out");
+    let abandoned = server.read().await;
+    // A late answer to the abandoned request is ignored.
+    server
+        .write(json!({"id": abandoned["id"], "result": "late"}))
+        .await;
+    let next = tokio::spawn({
+        let client = client.clone();
+        async move { client.request_value("model/list", None).await }
+    });
+    let request = server.read().await;
+    assert_eq!(request["method"], "model/list");
+    server
+        .write(json!({"id": request["id"], "result": "fresh"}))
+        .await;
+    assert_eq!(next.await.unwrap().unwrap(), "fresh");
+}
+
+#[tokio::test]
+async fn an_undecodable_server_request_keeps_its_id() {
+    let (_client, mut incoming, mut server) = connect();
+    server
+        .write(json!({"id": 5, "method": "item/tool/call", "params": {"tool": 1}}))
+        .await;
+    let Some(Incoming::MalformedRequest { id, method, .. }) = incoming.recv().await else {
+        panic!("expected a malformed request");
+    };
+    assert_eq!(id, RequestId::Integer(5));
+    assert_eq!(method, "item/tool/call");
+}
+
+#[tokio::test]
+async fn an_undecodable_response_fails_only_its_request() {
+    let (client, mut incoming, mut server) = connect();
+    let call = tokio::spawn({
+        let client = client.clone();
+        async move { client.request_value("config/read", None).await }
+    });
+    let request = server.read().await;
+    server
+        .write(json!({"id": request["id"], "error": {"code": "not a number"}}))
+        .await;
+    match call.await.unwrap() {
+        Err(Error::Rpc(error)) => assert_eq!(error.code, RpcError::PARSE_ERROR),
+        other => panic!("unexpected {other:?}"),
+    }
+    assert!(matches!(
+        incoming.recv().await,
+        Some(Incoming::Malformed { .. })
+    ));
+    // Invalid UTF-8 is reported without closing the connection.
+    server.writer.write_all(b"\xff\xfe\n").await.unwrap();
+    assert!(matches!(
+        incoming.recv().await,
+        Some(Incoming::Malformed { .. })
+    ));
+    let next = tokio::spawn(async move { client.request_value("model/list", None).await });
+    let request = server.read().await;
+    server
+        .write(json!({"id": request["id"], "result": 1}))
+        .await;
+    assert_eq!(next.await.unwrap().unwrap(), 1);
+}
