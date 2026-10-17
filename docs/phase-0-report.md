@@ -109,7 +109,11 @@ the fresh procfs. One rule admits it:
 was needed.
 
 B's AppArmor rules confine mount targets to Bubblewrap's staging paths
-(`/newroot/**` and `/tmp/**`) instead of exact flag tuples. The previous
+(`/newroot/**` and `/tmp/**`) instead of exact flag tuples. This is an
+accepted surface. Any source and filesystem type may be mounted onto those
+targets, and only inside a user namespace, which a process must create
+first. The fresh-procfs check catches a mount that leaks the container's
+`/proc` into a sandbox. The previous
 iteration's flag-exact policy broke when nostromo's mount flags differed.
 Codex also changes its mount list between releases.
 
@@ -272,3 +276,21 @@ not built.
   owner's go-ahead at deployment time. Requalify B whenever Bubblewrap,
   Docker or the kernel changes.
 - **Codex upgrades.** Moving the Codex pin needs this probe to pass first.
+- **Probe hardening**, from the independent review of the probe. These items
+  were not blocking, and were deferred so that the qualified commit stayed
+  unchanged. Make them before the next qualification run, which at the latest
+  is Phase 4's requalification:
+  - Bring the container down from a `trap` in `qualify.sh`, so that an
+    interrupted run cannot leave a profile A or B container running.
+  - Require an explicit opt-in variable before `run a`, `run b` or
+    `apparmor`, as a guard alongside the owner's go-ahead.
+  - Sign in under the `default` profile, which needs no sandbox.
+  - Check from outside that each denied path exists, so that a mistyped plan
+    path cannot pass trivially.
+  - Fail invariant 4 when any outer process's `root`, `cwd` or `environ` is
+    readable, whatever its name.
+  - Write to the workspace's parent directories, and try symlink escapes.
+  - Add unit tests for the shared-write, users-directory and orphan matchers.
+  - Add a `.dockerignore`, read the Codex version label from the release
+    pin, and check `seccomp-b.json` for drift in `scripts/verify`.
+  - Move the apt pins to `snapshot.debian.org` so rebuilds stay reproducible.
