@@ -55,6 +55,9 @@ profile "bokkie-qualify-b" flags=(attach_disconnected,mediate_deleted) {
   mount -> /tmp/**,
   mount options=(rslave,silent) -> /,
   mount options=(rprivate,silent) -> /oldroot/,
+  # Bubblewrap 0.12 binds the old /proc into its staging root before it
+  # mounts the fresh procfs for the sandbox.
+  mount options=(rw,rbind,silent) /oldroot/proc/ -> /proc/,
   pivot_root oldroot=/newroot/ /newroot/,
   pivot_root oldroot=/tmp/oldroot/ /tmp/,
   pivot_root /newroot/,
