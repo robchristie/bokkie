@@ -214,8 +214,8 @@ and Codex silently drops the fresh procfs.
 3. A sandboxed command cannot read another user's workspace, data or Bokkie's
    database.
 4. A sandboxed command sees only its own PID namespace. A fresh procfs is
-   actually mounted: `/proc/1/cmdline` is the sandbox's own process and the
-   process count is small. It cannot reach another process's
+   actually mounted: `/proc/1/cmdline` is the sandbox's own process and only
+   the sandbox's own processes are visible. It cannot reach another process's
    `/proc/<pid>/root`, `cwd` or `environ`. A Codex fallback that drops the
    fresh procfs counts as a failure, not a pass.
 5. Sandbox network access follows the per-user setting.
@@ -232,6 +232,11 @@ before command execution ships. Candidates:
 App-server features that run in-process, outside the sandbox (for example,
 image and file reads), run as the app-server's UID. That favours per-user UIDs
 or containers over relying on Codex's filesystem policy alone.
+
+Until Phase 4's acceptance passes on the deployed profile, every thread runs
+with command execution, file changes and shell tools disabled. The gateway
+checks this at startup and for each thread through `config/read` and the
+`thread/start` response, and refuses to serve a thread that does not match.
 
 Codex credentials live in a persistent per-user `CODEX_HOME` on a volume, not
 in a read-only bind of the owner's personal `auth.json`. That lets token
