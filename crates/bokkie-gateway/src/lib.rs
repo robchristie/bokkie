@@ -8,6 +8,7 @@
 
 pub mod accounts;
 pub mod auth;
+pub mod bots;
 pub mod clock;
 pub mod codex;
 pub mod config;
@@ -25,6 +26,7 @@ use sqlx::SqlitePool;
 use tokio::sync::Semaphore;
 
 use crate::auth::LoginLimiter;
+use crate::bots::Conversations;
 use crate::clock::Clock;
 use crate::codex::Supervisor;
 use crate::config::Config;
@@ -39,11 +41,18 @@ pub struct AppState {
     /// Bounds concurrent password hashing, which is slow by design.
     pub hashing: Arc<Semaphore>,
     pub supervisor: Arc<Supervisor>,
+    pub conversations: Arc<Conversations>,
 }
 
 impl AppState {
     pub fn new(config: Config, db: SqlitePool, clock: Clock, supervisor: Arc<Supervisor>) -> Self {
+        let conversations = Arc::new(Conversations::new(
+            db.clone(),
+            clock.clone(),
+            supervisor.clone(),
+        ));
         Self {
+            conversations,
             config: Arc::new(config),
             db,
             clock,
@@ -56,7 +65,7 @@ impl AppState {
 
 /// The gateway's routes, behind the request guard.
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, admin, codex};
+    use routes::{accounts, admin, bots, codex};
     let api = Router::new()
         .route("/version", get(version))
         .route(
@@ -69,6 +78,10 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions", get(accounts::list_sessions))
         .route("/sessions/{id}", delete(accounts::revoke_session))
         .route("/invitations/accept", post(accounts::accept_invitation))
+        .route("/bots", get(bots::list).post(bots::create))
+        .route("/bots/{id}", get(bots::get).patch(bots::update))
+        .route("/bots/{id}/messages", get(bots::messages).post(bots::send))
+        .route("/bots/{id}/stop", post(bots::stop))
         .route("/codex/account", get(codex::account))
         .route("/codex/login", post(codex::login))
         .route("/admin/users", get(admin::list_users))

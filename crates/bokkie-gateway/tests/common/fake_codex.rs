@@ -52,6 +52,8 @@ pub struct Behaviour {
     pub reply: Vec<String>,
     /// Whether turns finish on their own after streaming the reply.
     pub finish_turns: bool,
+    /// Whether a turn streams and finishes before `turn/start` answers.
+    pub finish_before_answer: bool,
     pub signed_in: bool,
     /// The `account/rateLimits/read` result.
     pub rate_limits: Value,
@@ -67,6 +69,7 @@ impl Default for Behaviour {
             extra_model: None,
             reply: vec!["Hello".into(), " there".into()],
             finish_turns: true,
+            finish_before_answer: false,
             signed_in: true,
             rate_limits: json!({
                 "rateLimits": {"limitId": "codex", "limitName": null, "planType": "pro",
@@ -233,7 +236,13 @@ impl FakeCodex {
                     format!("turn-{}", b.next_id)
                 });
                 let thread = params["threadId"].as_str().unwrap().to_owned();
-                self.stream_turn(out.clone(), thread, turn.clone());
+                if self.with(|b| b.finish_before_answer) {
+                    for line in self.turn_lines(&thread, &turn) {
+                        let _ = out.send(line);
+                    }
+                } else {
+                    self.stream_turn(out.clone(), thread, turn.clone());
+                }
                 json!({"turn": {"id": turn, "items": [], "status": "inProgress", "error": null}})
             }
             "turn/steer" => json!({"turnId": params["expectedTurnId"]}),
@@ -314,6 +323,31 @@ impl FakeCodex {
             "sandbox": {"type": "workspaceWrite"},
             "activePermissionProfile": {"id": profile, "extends": null},
         })
+    }
+
+    /// Every message of a finished turn, in order.
+    fn turn_lines(&self, thread: &str, turn: &str) -> Vec<Value> {
+        let reply = self.with(|b| b.reply.clone());
+        let item = format!("{turn}-msg");
+        let mut lines = vec![
+            json!({"method": "turn/started", "params": {"threadId": thread,
+                "turn": {"id": turn, "items": [], "status": "inProgress", "error": null}}}),
+            json!({"method": "item/started", "params": {"threadId": thread, "turnId": turn,
+                "item": {"type": "agentMessage", "id": item, "text": ""}}}),
+        ];
+        for piece in &reply {
+            lines.push(json!({"method": "item/agentMessage/delta", "params": {
+                "threadId": thread, "turnId": turn, "itemId": item, "delta": piece}}));
+        }
+        lines.push(
+            json!({"method": "item/completed", "params": {"threadId": thread, "turnId": turn,
+            "item": {"type": "agentMessage", "id": item, "text": reply.concat()}}}),
+        );
+        lines.push(
+            json!({"method": "turn/completed", "params": {"threadId": thread,
+            "turn": {"id": turn, "items": [], "status": "completed", "error": null}}}),
+        );
+        lines
     }
 
     /// Streams the scripted reply as a real turn would.

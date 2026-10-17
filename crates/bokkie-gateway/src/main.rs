@@ -8,9 +8,10 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use bokkie_gateway::clock::Clock;
-use bokkie_gateway::codex::{Launcher, Supervisor, catalog};
+use bokkie_gateway::codex::{Launcher, RuntimeEvent, Supervisor, catalog};
 use bokkie_gateway::config::Config;
 use bokkie_gateway::{AppState, accounts, db, router};
+use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -40,12 +41,16 @@ async fn serve() -> Result<(), String> {
     let pool = db::open(&config.database_path())
         .await
         .map_err(|e| format!("database: {e}"))?;
-    let listener = tokio::net::TcpListener::bind(config.listen)
+    let (supervisor, events) = supervisor(&config).await?;
+    let state = AppState::new(config, pool, Clock::system(), supervisor);
+    state.conversations.recover().await.map_err(|f| f.message)?;
+    tokio::spawn(state.conversations.clone().run(events));
+    tracing::info!(listen = %state.config.listen, origin = state.config.origin.as_str(), "serving");
+    let listener_address = state.config.listen;
+    let app = router(state);
+    let listener = tokio::net::TcpListener::bind(listener_address)
         .await
-        .map_err(|e| format!("listen on {}: {e}", config.listen))?;
-    let supervisor = supervisor(&config).await?;
-    tracing::info!(listen = %config.listen, origin = config.origin.as_str(), "serving");
-    let app = router(AppState::new(config, pool, Clock::system(), supervisor));
+        .map_err(|e| format!("listen on {listener_address}: {e}"))?;
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -59,7 +64,9 @@ async fn serve() -> Result<(), String> {
 
 /// Builds Bokkie's model catalog from the pinned binary and the supervisor
 /// that uses it. Refuses to serve if the catalog cannot be made safe.
-async fn supervisor(config: &Config) -> Result<Arc<Supervisor>, String> {
+async fn supervisor(
+    config: &Config,
+) -> Result<(Arc<Supervisor>, mpsc::UnboundedReceiver<RuntimeEvent>), String> {
     let bundled = catalog::export_bundled(
         &config.codex_program,
         &config.data_dir.join("codex").join("catalog-home"),
@@ -68,7 +75,7 @@ async fn supervisor(config: &Config) -> Result<Arc<Supervisor>, String> {
     .map_err(|e| format!("exporting the model catalog: {e}"))?;
     let catalog = catalog::write(&config.catalog_path(), bundled)
         .map_err(|e| format!("writing the model catalog: {e}"))?;
-    let (supervisor, mut events) = Supervisor::new(
+    let (supervisor, events) = Supervisor::new(
         &config.data_dir,
         catalog,
         Launcher::Process {
@@ -77,13 +84,7 @@ async fn supervisor(config: &Config) -> Result<Arc<Supervisor>, String> {
             env: Vec::new(),
         },
     );
-    // Bots route these from a later increment; until then, record them.
-    tokio::spawn(async move {
-        while let Some(event) = events.recv().await {
-            tracing::debug!(user = %event.user, kind = ?event.kind, "app-server event");
-        }
-    });
-    Ok(Arc::new(supervisor))
+    Ok((Arc::new(supervisor), events))
 }
 
 async fn bootstrap(username: &str, display_name: &str) -> Result<(), String> {

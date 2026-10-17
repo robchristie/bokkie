@@ -91,7 +91,10 @@ async fn the_real_app_server_passes_the_checks_and_offers_no_unsafe_tools() {
         thread.active_permission_profile.as_ref().unwrap().id,
         "bokkie"
     );
-    let turn = runtime.start_turn(&thread.thread.id, "hi").await.unwrap();
+    let turn = runtime
+        .start_turn(&thread.thread.id, "hi", None)
+        .await
+        .unwrap();
 
     let mut text = String::new();
     let status = tokio::time::timeout(Duration::from_secs(60), async {
@@ -252,7 +255,7 @@ async fn run_turn(
     events: &mut tokio::sync::mpsc::UnboundedReceiver<bokkie_gateway::codex::RuntimeEvent>,
     thread: &str,
 ) -> TurnStatus {
-    let turn = runtime.start_turn(thread, "hi").await.unwrap();
+    let turn = runtime.start_turn(thread, "hi", None).await.unwrap();
     tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             match events.recv().await.expect("events flow").kind {

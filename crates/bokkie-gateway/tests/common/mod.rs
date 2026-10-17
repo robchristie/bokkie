@@ -172,6 +172,30 @@ impl Gateway {
         replies
     }
 
+    /// Routes app-server events into conversations, as the gateway does.
+    pub async fn route(&self) {
+        let (_, empty) = tokio::sync::mpsc::unbounded_channel();
+        let events = std::mem::replace(&mut *self.events.lock().await, empty);
+        tokio::spawn(self.state.conversations.clone().run(events));
+    }
+
+    /// Polls `path` until `done` accepts the reply.
+    pub async fn wait_for(&self, cookie: &str, path: &str, done: impl Fn(&Value) -> bool) -> Value {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let reply = self.send(Call::get(path).cookie(cookie)).await;
+            if done(&reply.body) {
+                return reply.body;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting on {path}: {}",
+                reply.body
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
     /// Creates the first admin and signs in. Returns the cookie.
     pub async fn admin(&self, username: &str) -> String {
         accounts::bootstrap_admin(

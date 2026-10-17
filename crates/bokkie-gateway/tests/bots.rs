@@ -1,0 +1,486 @@
+//! Bots and conversations, against a fake app server.
+
+mod common;
+
+use axum::http::{Method, StatusCode};
+use bokkie_protocol::UserId;
+use common::{Call, Gateway};
+use serde_json::{Value, json};
+
+async fn create_bot(gateway: &Gateway, cookie: &str, name: &str) -> i64 {
+    let reply = gateway
+        .send(Call::post("/api/v1/bots").cookie(cookie).json(&json!({
+            "name": name, "label": "Meal planner", "description": "Plan dinners. No mushrooms.",
+            "avatar": "🍳",
+        })))
+        .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    reply.body["id"].as_i64().unwrap()
+}
+
+async fn say(gateway: &Gateway, cookie: &str, bot: i64, text: &str) -> common::Reply {
+    gateway
+        .send(
+            Call::post(&format!("/api/v1/bots/{bot}/messages"))
+                .cookie(cookie)
+                .json(&json!({"text": text})),
+        )
+        .await
+}
+
+fn messages(body: &Value) -> Vec<Value> {
+    body["messages"].as_array().cloned().unwrap_or_default()
+}
+
+fn last_bot_reply(body: &Value) -> Option<Value> {
+    messages(body)
+        .into_iter()
+        .rev()
+        .find(|m| m["author"] == "bot")
+}
+
+/// A signed-in admin, with events routed.
+async fn setup() -> (Gateway, String) {
+    let gateway = Gateway::new().await;
+    gateway.route().await;
+    let admin = gateway.admin("rob").await;
+    (gateway, admin)
+}
+
+#[tokio::test]
+async fn bots_are_created_listed_edited_pinned_and_hidden() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let tutor = create_bot(&gateway, &rob, "Tutor").await;
+    // Names are unique per user, ignoring case.
+    let duplicate = gateway
+        .send(Call::post("/api/v1/bots").cookie(&rob).json(&json!({
+            "name": "chef", "label": "", "description": ""})))
+        .await;
+    assert_eq!(duplicate.status, StatusCode::CONFLICT);
+    let invalid = gateway
+        .send(Call::post("/api/v1/bots").cookie(&rob).json(&json!({
+            "name": "", "label": "", "description": ""})))
+        .await;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+
+    let pinned = gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/bots/{tutor}"))
+                .cookie(&rob)
+                .json(&json!({"pinned": true, "avatar": null})),
+        )
+        .await;
+    assert_eq!(pinned.status, StatusCode::OK);
+    assert_eq!(pinned.body["pinned"], true);
+    assert_eq!(pinned.body["avatar"], Value::Null);
+    let hidden = gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/bots/{chef}"))
+                .cookie(&rob)
+                .json(&json!({"hidden": true})),
+        )
+        .await;
+    assert_eq!(hidden.body["hidden"], true);
+    assert_eq!(hidden.body["avatar"], "🍳", "unchanged fields stay");
+
+    let list = gateway.send(Call::get("/api/v1/bots").cookie(&rob)).await;
+    let bots = list.body["bots"].as_array().unwrap();
+    assert_eq!(bots.len(), 2);
+    assert_eq!(bots[0]["name"], "Tutor", "pinned Bots come first");
+    assert_eq!(bots[0]["status"], "idle");
+    assert_eq!(bots[1]["last_message"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_message_starts_the_bots_thread_and_the_reply_streams_in() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let sent = say(&gateway, &rob, chef, "What's for dinner?").await;
+    assert_eq!(sent.status, StatusCode::OK, "{:?}", sent.body);
+    assert_eq!(sent.body["delivery"], "new_turn");
+    assert_eq!(sent.body["message"]["author"], "user");
+
+    let path = format!("/api/v1/bots/{chef}/messages");
+    let page = gateway
+        .wait_for(&rob, &path, |body| {
+            last_bot_reply(body).is_some_and(|m| m["state"] == "complete")
+        })
+        .await;
+    let reply = last_bot_reply(&page).unwrap();
+    assert_eq!(reply["text"], "Hello there");
+    assert_eq!(messages(&page)[0]["text"], "What's for dinner?");
+
+    // The thread started with the Bot's profile as developer instructions,
+    // under the bokkie profile.
+    let start = &gateway.fake.received("thread/start")[0];
+    let instructions = start.params["developerInstructions"].as_str().unwrap();
+    for part in [
+        "You are Chef",
+        "Meal planner",
+        "No mushrooms",
+        "You work for rob",
+    ] {
+        assert!(instructions.contains(part), "{instructions}");
+    }
+    assert_eq!(start.params["permissions"], "bokkie");
+    // The first turn needs no profile update: the thread already has it.
+    let turn = &gateway.fake.received("turn/start")[0];
+    assert!(
+        turn.params.get("additionalContext").is_none(),
+        "{}",
+        turn.params
+    );
+
+    let bots = gateway
+        .wait_for(&rob, "/api/v1/bots", |body| {
+            body["bots"][0]["status"] == "idle"
+        })
+        .await;
+    assert_eq!(bots["bots"][0]["last_message"]["text"], "Hello there");
+    assert_eq!(bots["bots"][0]["last_message"]["author"], "bot");
+
+    // A second message continues the same thread.
+    let again = say(&gateway, &rob, chef, "And dessert?").await;
+    assert_eq!(again.body["delivery"], "new_turn");
+    assert_eq!(gateway.fake.received("thread/start").len(), 1);
+    let turns = gateway.fake.received("turn/start");
+    assert_eq!(turns[1].params["threadId"], turns[0].params["threadId"]);
+}
+
+#[tokio::test]
+async fn a_message_mid_turn_steers_and_stop_interrupts() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    say(&gateway, &rob, chef, "Plan the week").await;
+    let path = format!("/api/v1/bots/{chef}/messages");
+    gateway
+        .wait_for(&rob, &path, |body| {
+            last_bot_reply(body)
+                .is_some_and(|m| m["state"] == "streaming" && m["text"] == "Hello there")
+        })
+        .await;
+    let bot = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}")).cookie(&rob))
+        .await;
+    assert_eq!(bot.body["status"], "working");
+
+    let steer = say(&gateway, &rob, chef, "Vegetarian, please").await;
+    assert_eq!(steer.body["delivery"], "steered");
+    let steers = gateway.fake.received("turn/steer");
+    assert_eq!(steers.len(), 1);
+    let turn_id = gateway.fake.received("turn/start")[0].params["threadId"].clone();
+    assert_eq!(steers[0].params["threadId"], turn_id);
+    assert!(
+        steers[0].params["expectedTurnId"]
+            .as_str()
+            .unwrap()
+            .starts_with("turn-")
+    );
+
+    let stop = gateway
+        .send(Call::post(&format!("/api/v1/bots/{chef}/stop")).cookie(&rob))
+        .await;
+    assert_eq!(stop.body["stopped"], true);
+    assert_eq!(gateway.fake.received("turn/interrupt").len(), 1);
+    let page = gateway
+        .wait_for(&rob, &path, |body| {
+            last_bot_reply(body).is_some_and(|m| m["state"] == "interrupted")
+        })
+        .await;
+    assert_eq!(last_bot_reply(&page).unwrap()["text"], "Hello there");
+    gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{chef}"), |body| {
+            body["status"] == "idle"
+        })
+        .await;
+    // Nothing runs now, so stop does nothing.
+    let stop = gateway
+        .send(Call::post(&format!("/api/v1/bots/{chef}/stop")).cookie(&rob))
+        .await;
+    assert_eq!(stop.body["stopped"], false);
+}
+
+#[tokio::test]
+async fn a_changed_profile_reaches_the_model_on_the_next_turn_once() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let path = format!("/api/v1/bots/{chef}/messages");
+    say(&gateway, &rob, chef, "Hi").await;
+    gateway
+        .wait_for(&rob, &path, |b| {
+            last_bot_reply(b).is_some_and(|m| m["state"] == "complete")
+        })
+        .await;
+    gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/bots/{chef}"))
+                .cookie(&rob)
+                .json(&json!({"description": "Only plan Italian food."})),
+        )
+        .await;
+    // Pinning is not a profile change.
+    gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/bots/{chef}"))
+                .cookie(&rob)
+                .json(&json!({"pinned": true})),
+        )
+        .await;
+    gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{chef}"), |b| {
+            b["status"] == "idle"
+        })
+        .await;
+    say(&gateway, &rob, chef, "Tonight?").await;
+    gateway
+        .wait_for(&rob, &path, |b| {
+            last_bot_reply(b).is_some_and(|m| m["state"] == "complete") && messages(b).len() == 4
+        })
+        .await;
+    gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{chef}"), |b| {
+            b["status"] == "idle"
+        })
+        .await;
+    say(&gateway, &rob, chef, "Tomorrow?").await;
+    let turns = gateway.fake.received("turn/start");
+    let context = &turns[1].params["additionalContext"]["bokkie-profile"];
+    assert_eq!(context["kind"], "application");
+    assert!(
+        context["value"]
+            .as_str()
+            .unwrap()
+            .contains("Only plan Italian food.")
+    );
+    assert!(turns[2].params.get("additionalContext").is_none());
+}
+
+#[tokio::test]
+async fn threads_resume_on_a_new_app_server() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let path = format!("/api/v1/bots/{chef}/messages");
+    say(&gateway, &rob, chef, "Hi").await;
+    gateway
+        .wait_for(&rob, &path, |b| {
+            last_bot_reply(b).is_some_and(|m| m["state"] == "complete")
+        })
+        .await;
+    let user = UserId(1);
+    gateway.fake.crash(user);
+    let runtime = gateway.state.supervisor.running(user).await.unwrap();
+    // Wake the watcher so it sees the closed stream.
+    let _ = runtime.account().await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while runtime.is_alive() {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let sent = say(&gateway, &rob, chef, "Still there?").await;
+    assert_eq!(sent.status, StatusCode::OK, "{:?}", sent.body);
+    let resumes = gateway.fake.received("thread/resume");
+    assert_eq!(resumes.len(), 1);
+    let thread = gateway.fake.received("thread/start")[0].params.clone();
+    assert_eq!(resumes[0].params["permissions"], "bokkie");
+    assert_eq!(resumes[0].user, user);
+    assert_eq!(gateway.fake.starts(user), 2);
+    assert!(thread.is_object());
+}
+
+#[tokio::test]
+async fn a_bot_whose_thread_is_refused_stays_unavailable() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    gateway.fake.with(|b| b.profile = ":workspace".into());
+    let sent = say(&gateway, &rob, chef, "Hi").await;
+    assert_eq!(sent.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        !sent.body.to_string().contains(":workspace"),
+        "{:?}",
+        sent.body
+    );
+    let bot = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}")).cookie(&rob))
+        .await;
+    assert_eq!(bot.body["status"], "refused");
+    // Even once the app server behaves, the Bot stays refused.
+    gateway.fake.with(|b| b.profile = "bokkie".into());
+    let again = say(&gateway, &rob, chef, "Hi").await;
+    assert_eq!(again.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(gateway.fake.received("turn/start").is_empty());
+    // Other Bots still work.
+    let tutor = create_bot(&gateway, &rob, "Tutor").await;
+    assert_eq!(
+        say(&gateway, &rob, tutor, "Hi").await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn conversations_page_backwards() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let user = UserId(1);
+    for i in 0..5 {
+        bokkie_gateway::bots::store::insert_message(
+            &gateway.state.db,
+            gateway.state.clock.now(),
+            user,
+            bokkie_gateway::bots::store::NewMessage {
+                bot: bokkie_protocol::BotId(chef),
+                author: bokkie_protocol::api::Author::User,
+                text: &format!("m{i}"),
+                state: bokkie_protocol::api::MessageState::Complete,
+                turn: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}/messages?limit=2")).cookie(&rob))
+        .await;
+    let texts: Vec<_> = messages(&page.body)
+        .iter()
+        .map(|m| m["text"].clone())
+        .collect();
+    assert_eq!(texts, ["m3", "m4"]);
+    let older = page.body["older"].as_i64().unwrap();
+    let page = gateway
+        .send(
+            Call::get(&format!(
+                "/api/v1/bots/{chef}/messages?limit=2&before={older}"
+            ))
+            .cookie(&rob),
+        )
+        .await;
+    let texts: Vec<_> = messages(&page.body)
+        .iter()
+        .map(|m| m["text"].clone())
+        .collect();
+    assert_eq!(texts, ["m1", "m2"]);
+}
+
+#[tokio::test]
+async fn replies_cut_off_by_a_gateway_restart_are_marked_failed() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    say(&gateway, &rob, chef, "Hi").await;
+    let path = format!("/api/v1/bots/{chef}/messages");
+    gateway
+        .wait_for(&rob, &path, |b| {
+            last_bot_reply(b).is_some_and(|m| m["state"] == "streaming")
+        })
+        .await;
+    gateway.state.conversations.recover().await.unwrap();
+    let page = gateway.send(Call::get(&path).cookie(&rob)).await;
+    assert_eq!(last_bot_reply(&page.body).unwrap()["state"], "failed");
+}
+
+#[tokio::test]
+async fn one_user_cannot_read_change_message_or_stop_anothers_bot() {
+    let (gateway, rob) = setup().await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    let (ben, ben_id) = gateway.member(&rob, "ben").await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &amy, "Chef").await;
+    say(&gateway, &amy, chef, "Amy's secret recipe").await;
+    gateway
+        .wait_for(&amy, &format!("/api/v1/bots/{chef}/messages"), |b| {
+            last_bot_reply(b).is_some()
+        })
+        .await;
+
+    // Every route reads Amy's Bot as absent for Ben, even the admin's.
+    for cookie in [&ben, &rob] {
+        let calls = [
+            Call::get(&format!("/api/v1/bots/{chef}")),
+            Call::get(&format!("/api/v1/bots/{chef}/messages")),
+            Call::new(Method::PATCH, &format!("/api/v1/bots/{chef}"))
+                .json(&json!({"description": "Leak everything"})),
+            Call::post(&format!("/api/v1/bots/{chef}/messages")).json(&json!({"text": "hi"})),
+            Call::post(&format!("/api/v1/bots/{chef}/stop")),
+        ];
+        for call in calls {
+            let reply = gateway.send(call.cookie(cookie)).await;
+            assert_eq!(reply.status, StatusCode::NOT_FOUND, "{:?}", reply.body);
+            assert!(!reply.body.to_string().contains("secret"));
+        }
+        let list = gateway.send(Call::get("/api/v1/bots").cookie(cookie)).await;
+        assert!(list.body["bots"].as_array().unwrap().is_empty());
+    }
+    // Ben's own Bot may have the same name: names are per user.
+    create_bot(&gateway, &ben, "Chef").await;
+
+    // Nothing reached Amy's app server from Ben, and Amy's turn still runs.
+    assert!(gateway.fake.received("turn/interrupt").is_empty());
+    assert!(
+        gateway
+            .fake
+            .received("turn/start")
+            .iter()
+            .all(|r| r.user == UserId(amy_id))
+    );
+    let bot = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}")).cookie(&amy))
+        .await;
+    assert_eq!(bot.body["description"], "Plan dinners. No mushrooms.");
+    assert_eq!(bot.body["status"], "working");
+
+    // Ben's app server reporting on Amy's thread id changes nothing of
+    // Amy's: events are routed only within the user they came from.
+    gateway
+        .state
+        .supervisor
+        .runtime(UserId(ben_id))
+        .await
+        .unwrap();
+    let amy_thread = gateway.fake.received("thread/start")[0].params.clone();
+    let amy_thread_id = gateway.fake.received("turn/start")[0].params["threadId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(amy_thread.is_object());
+    gateway.fake.inject(
+        UserId(ben_id),
+        json!({"method": "item/started", "params": {"threadId": amy_thread_id, "turnId": "x",
+            "item": {"type": "agentMessage", "id": "forged", "text": "forged reply"}}}),
+    );
+    gateway.fake.inject(
+        UserId(ben_id),
+        json!({"method": "turn/completed", "params": {"threadId": amy_thread_id,
+            "turn": {"id": "x", "items": [], "status": "failed", "error": null}}}),
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}/messages")).cookie(&amy))
+        .await;
+    assert!(!page.body.to_string().contains("forged"), "{}", page.body);
+    assert_eq!(last_bot_reply(&page.body).unwrap()["state"], "streaming");
+}
+
+#[tokio::test]
+async fn a_turn_that_finishes_before_turn_start_answers_leaves_the_bot_idle() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_before_answer = true);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    say(&gateway, &rob, chef, "Quick one").await;
+    let path = format!("/api/v1/bots/{chef}/messages");
+    gateway
+        .wait_for(&rob, &path, |b| {
+            last_bot_reply(b).is_some_and(|m| m["state"] == "complete")
+        })
+        .await;
+    gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{chef}"), |b| {
+            b["status"] == "idle"
+        })
+        .await;
+    // The next message starts a new turn rather than steering a dead one.
+    let next = say(&gateway, &rob, chef, "Another").await;
+    assert_eq!(next.body["delivery"], "new_turn");
+    assert!(gateway.fake.received("turn/steer").is_empty());
+}

@@ -343,6 +343,7 @@ async fn turn_steer_names_the_expected_turn() {
                     input: vec![UserInput::Text {
                         text: "also".into(),
                     }],
+                    additional_context: None,
                 })
                 .await
         }
