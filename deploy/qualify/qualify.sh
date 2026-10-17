@@ -67,8 +67,9 @@ record() {
   shift 2
   local status=0
   "$@" >"$dir/$name.json" 2>"$dir/$name.stderr" || status=$?
+  # bokkie-qualify exits 0 only when every check in the step passed.
   local verdict="FAIL"
-  grep -q '"pass":true' "$dir/$name.json" && verdict="pass"
+  [[ "$status" -eq 0 ]] && verdict="pass"
   printf '%-28s %s (exit %s)\n' "$name" "$verdict" "$status" | tee -a "$dir/summary.txt"
 }
 
