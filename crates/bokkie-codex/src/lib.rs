@@ -13,7 +13,7 @@ pub mod client;
 pub mod protocol;
 pub mod rpc;
 
-pub use client::{AppServer, AppServerCommand, Client, Incoming};
+pub use client::{AppServer, AppServerCommand, Client, Incoming, MAX_LINE_BYTES};
 pub use rpc::{Error, RequestId, RpcError};
 
 /// The exact Codex release this crate is checked against.
@@ -84,6 +84,11 @@ pub const CLIENT_METHODS: &[MethodSchema] = &[
         "command/exec",
         Some("v2/CommandExecParams"),
         "v2/CommandExecResponse",
+    ),
+    MethodSchema::new(
+        "turn/steer",
+        Some("v2/TurnSteerParams"),
+        "v2/TurnSteerResponse",
     ),
     MethodSchema::new(
         "turn/interrupt",

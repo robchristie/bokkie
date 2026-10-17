@@ -363,6 +363,22 @@ pub struct TurnStartResponse {
     pub turn: Turn,
 }
 
+/// Adds input to the running turn. Fails unless `expected_turn_id` is the
+/// thread's active turn.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnSteerParams {
+    pub thread_id: String,
+    pub expected_turn_id: String,
+    pub input: Vec<UserInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnSteerResponse {
+    pub turn_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnInterruptParams {
@@ -406,6 +422,12 @@ pub enum ThreadItem {
     UserMessage { id: String },
     #[serde(rename_all = "camelCase")]
     AgentMessage { id: String, text: String },
+    #[serde(rename_all = "camelCase")]
+    Reasoning { id: String },
+    #[serde(rename_all = "camelCase")]
+    Plan { id: String, text: String },
+    #[serde(rename_all = "camelCase")]
+    ContextCompaction { id: String },
     #[serde(rename_all = "camelCase")]
     CommandExecution {
         id: String,
@@ -600,6 +622,34 @@ pub struct AccountRateLimitsUpdatedNotification {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ThreadTokenUsageUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub token_usage: ThreadTokenUsage,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadTokenUsage {
+    /// Totals for the thread so far.
+    pub total: TokenUsageBreakdown,
+    /// The most recent model call.
+    pub last: TokenUsageBreakdown,
+    pub model_context_window: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsageBreakdown {
+    pub total_tokens: i64,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ErrorNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -619,6 +669,7 @@ pub enum ServerNotification {
     AccountLoginCompleted(AccountLoginCompletedNotification),
     AccountUpdated(AccountUpdatedNotification),
     AccountRateLimitsUpdated(AccountRateLimitsUpdatedNotification),
+    ThreadTokenUsageUpdated(ThreadTokenUsageUpdatedNotification),
     Error(ErrorNotification),
     Unknown {
         method: String,
@@ -645,6 +696,10 @@ pub const TYPED_NOTIFICATIONS: &[(&str, &str)] = &[
         "account/rateLimits/updated",
         "v2/AccountRateLimitsUpdatedNotification",
     ),
+    (
+        "thread/tokenUsage/updated",
+        "v2/ThreadTokenUsageUpdatedNotification",
+    ),
     ("error", "v2/ErrorNotification"),
 ];
 
@@ -664,6 +719,7 @@ impl ServerNotification {
             "account/login/completed" => Self::AccountLoginCompleted(typed(params)?),
             "account/updated" => Self::AccountUpdated(typed(params)?),
             "account/rateLimits/updated" => Self::AccountRateLimitsUpdated(typed(params)?),
+            "thread/tokenUsage/updated" => Self::ThreadTokenUsageUpdated(typed(params)?),
             "error" => Self::Error(typed(params)?),
             _ => Self::Unknown { method, params },
         })
