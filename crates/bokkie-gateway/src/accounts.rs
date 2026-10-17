@@ -121,7 +121,7 @@ pub async fn bootstrap_admin(
     let display_name = normalise_display_name(display_name)?;
     check_password(password)?;
     let hash = hash_password(password).await?;
-    let mut tx = db.begin().await?;
+    let mut tx = crate::db::write(db).await?;
     let admins: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE role = 'admin'")
         .fetch_one(&mut *tx)
         .await?;
@@ -200,7 +200,7 @@ pub async fn admin_update_user(
         return Err(Failure::invalid("You cannot disable your own account"));
     }
     let display_name = display_name.map(normalise_display_name).transpose()?;
-    let mut tx = db.begin().await?;
+    let mut tx = crate::db::write(db).await?;
     let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM users WHERE id = ?")
         .bind(target.0)
         .fetch_optional(&mut *tx)
@@ -256,7 +256,7 @@ pub async fn admin_reset_password(
 ) -> Result<()> {
     check_password(new_password)?;
     let hash = hash_password(new_password).await?;
-    let mut tx = db.begin().await?;
+    let mut tx = crate::db::write(db).await?;
     let updated = sqlx::query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
         .bind(hash)
         .bind(now.0)
@@ -295,7 +295,7 @@ pub async fn change_own_password(
         return Err(Failure::forbidden("The current password is wrong"));
     }
     let hash = hash_password(new_password).await?;
-    let mut tx = db.begin().await?;
+    let mut tx = crate::db::write(db).await?;
     sqlx::query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
         .bind(hash)
         .bind(now.0)
@@ -574,7 +574,7 @@ pub async fn accept_invitation(
     .await?;
     let role = role_from(&role.ok_or_else(invalid)?);
     let password_hash = hash_password(password).await?;
-    let mut tx = db.begin().await?;
+    let mut tx = crate::db::write(db).await?;
     let user = insert_user(&mut tx, now, &username, &display_name, role, &password_hash).await?;
     // Consume the code in the same transaction, so two concurrent accepts
     // cannot both succeed.

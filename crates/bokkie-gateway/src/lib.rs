@@ -17,6 +17,7 @@ pub mod error;
 pub mod events;
 pub mod routes;
 pub mod secrets;
+pub mod usage;
 
 use std::sync::Arc;
 
@@ -90,7 +91,7 @@ impl AppState {
 
 /// The gateway's routes, behind the request guard.
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, admin, bots, codex, events};
+    use routes::{accounts, admin, bots, codex, events, usage};
     let api = Router::new()
         .route("/version", get(version))
         .route(
@@ -108,6 +109,8 @@ pub fn router(state: AppState) -> Router {
         .route("/bots/{id}/messages", get(bots::messages).post(bots::send))
         .route("/bots/{id}/stop", post(bots::stop))
         .route("/events", get(events::events))
+        .route("/usage", get(usage::usage))
+        .route("/admin/users/{id}/usage", get(usage::admin_usage))
         .route("/codex/account", get(codex::account))
         .route("/codex/login", post(codex::login))
         .route("/admin/users", get(admin::list_users))

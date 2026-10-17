@@ -60,6 +60,8 @@ pub struct Behaviour {
     /// The `account/rateLimits/read` result.
     pub rate_limits: Value,
     pub received: Vec<Received>,
+    /// Each thread's token total, which grows by 120 per turn.
+    pub tokens: HashMap<String, i64>,
     next_id: u64,
 }
 
@@ -81,6 +83,7 @@ impl Default for Behaviour {
                 "rateLimitsByLimitId": null,
             }),
             received: Vec::new(),
+            tokens: HashMap::new(),
             next_id: 0,
         }
     }
@@ -360,7 +363,11 @@ impl FakeCodex {
 
     /// Streams the scripted reply as a real turn would.
     fn stream_turn(&self, out: mpsc::UnboundedSender<Value>, thread: String, turn: String) {
-        let (reply, finish) = self.with(|b| (b.reply.clone(), b.finish_turns));
+        let (reply, finish, total) = self.with(|b| {
+            let total = b.tokens.entry(thread.clone()).or_default();
+            *total += 120;
+            (b.reply.clone(), b.finish_turns, *total)
+        });
         tokio::spawn(async move {
             let item = format!("{turn}-msg");
             let send = |value: Value| {
@@ -389,8 +396,9 @@ impl FakeCodex {
             );
             send(json!({"method": "thread/tokenUsage/updated", "params": {
                 "threadId": thread, "turnId": turn, "tokenUsage": {
-                    "total": {"totalTokens": 120, "inputTokens": 100, "cachedInputTokens": 0,
-                              "outputTokens": 20, "reasoningOutputTokens": 0},
+                    "total": {"totalTokens": total, "inputTokens": total - 20,
+                              "cachedInputTokens": 0, "outputTokens": 20,
+                              "reasoningOutputTokens": 0},
                     "last": {"totalTokens": 120, "inputTokens": 100, "cachedInputTokens": 0,
                              "outputTokens": 20, "reasoningOutputTokens": 0},
                     "modelContextWindow": 272000}}}));

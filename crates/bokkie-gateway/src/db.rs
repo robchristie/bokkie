@@ -42,3 +42,13 @@ fn create_private(path: &Path) -> std::io::Result<()> {
         .open(path)
         .map(drop)
 }
+
+/// Starts a write transaction. `BEGIN IMMEDIATE` takes the write lock at the
+/// start, waiting out the busy timeout. A deferred transaction that reads
+/// and then writes can instead fail at once (`SQLITE_BUSY_SNAPSHOT`) when
+/// another connection wrote in between.
+pub async fn write(
+    db: &SqlitePool,
+) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>, sqlx::Error> {
+    db.begin_with("BEGIN IMMEDIATE").await
+}
