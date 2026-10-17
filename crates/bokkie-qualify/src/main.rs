@@ -730,59 +730,84 @@ async fn chat(context: &Context, args: &Args) -> Result<Value> {
 }
 
 /// The "message another Bot" route through experimental `dynamicTools`.
+///
+/// `--phase start` creates the Planner (with the tool) and Chef threads.
+/// `--phase resume`, after a restart, resumes both without passing the tool
+/// again: Codex must restore it from the thread's persisted metadata.
 async fn tool(context: &Context, args: &Args) -> Result<Value> {
     let user = args.required("user")?;
+    let phase = args.get("phase").unwrap_or("start");
+    let state_path = context.layout.state(user).join("tool.json");
     let (server, mut incoming) = context.start(user).await?;
     let client = server.client.clone();
-    let secret = format!("paprika-{}", nonce());
-    let chef = client
-        .thread_start(&thread_params(
-            context,
-            user,
-            &format!(
-                "You are the Bot named Chef. When anyone asks for the secret word, reply with \
-                 exactly {secret} and nothing else."
-            ),
-        ))
-        .await
-        .map_err(|e| format!("thread/start Chef: {e}"))?;
-    let mut planner_params = thread_params(
-        context,
-        user,
-        "You are the Bot named Planner. You can message the user's other Bots with the \
-         message_bot tool. Do not run shell commands.",
-    );
-    planner_params.dynamic_tools = Some(vec![DynamicToolSpec::Function {
-        name: "message_bot".into(),
-        description: "Send a message to another of this user's Bots and wait for its reply.".into(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "bot": {"type": "string", "description": "The other Bot's name."},
-                "message": {"type": "string", "description": "The message to send."},
-            },
-            "required": ["bot", "message"],
-            "additionalProperties": false,
-        }),
-    }]);
-    let planner = client
-        .thread_start(&planner_params)
-        .await
-        .map_err(|e| format!("thread/start Planner: {e}"))?;
+    let (planner_id, chef_id, secret) = match phase {
+        "start" => {
+            let secret = format!("paprika-{}", nonce());
+            let chef = client
+                .thread_start(&thread_params(
+                    context,
+                    user,
+                    &format!(
+                        "You are the Bot named Chef. When anyone asks for the secret word, \
+                         reply with exactly {secret} and nothing else."
+                    ),
+                ))
+                .await
+                .map_err(|e| format!("thread/start Chef: {e}"))?;
+            let mut planner_params = thread_params(
+                context,
+                user,
+                "You are the Bot named Planner. You can message the user's other Bots with the \
+                 message_bot tool. Do not run shell commands.",
+            );
+            planner_params.dynamic_tools = Some(vec![message_bot_spec()]);
+            let planner = client
+                .thread_start(&planner_params)
+                .await
+                .map_err(|e| format!("thread/start Planner: {e}"))?;
+            std::fs::write(
+                &state_path,
+                json!({"planner": planner.thread.id, "chef": chef.thread.id, "secret": secret})
+                    .to_string(),
+            )
+            .map_err(|e| e.to_string())?;
+            (planner.thread.id, chef.thread.id, secret)
+        }
+        "resume" => {
+            let state: Value = std::fs::read_to_string(&state_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .ok_or("no tool state: run --phase start first")?;
+            let id = |key: &str| state[key].as_str().unwrap_or_default().to_owned();
+            for thread_id in [id("planner"), id("chef")] {
+                client
+                    .thread_resume(&ThreadResumeParams {
+                        thread_id,
+                        permissions: Some(PROFILE.into()),
+                        approval_policy: Some(AskForApproval::Never),
+                        ..ThreadResumeParams::default()
+                    })
+                    .await
+                    .map_err(|e| format!("thread/resume: {e}"))?;
+            }
+            (id("planner"), id("chef"), id("secret"))
+        }
+        other => return Err(format!("unknown phase {other:?}")),
+    };
     let bots = [
         BotRoute {
             name: "Chef".into(),
-            thread_id: chef.thread.id.clone(),
+            thread_id: chef_id,
         },
         BotRoute {
             name: "Planner".into(),
-            thread_id: planner.thread.id.clone(),
+            thread_id: planner_id.clone(),
         },
     ];
     let (outcome, calls) = drive_turn(
         &client,
         &mut incoming,
-        &planner.thread.id,
+        &planner_id,
         "Ask the Bot named Chef for the secret word using message_bot, then reply with only \
          the word Chef gave you.",
         &bots,
@@ -794,7 +819,7 @@ async fn tool(context: &Context, args: &Args) -> Result<Value> {
         .filter(|i| matches!(i, ThreadItem::DynamicToolCall { .. }))
         .count();
     Ok(json!({
-        "step": "tool", "user": user, "route": "dynamicTools",
+        "step": format!("tool-{phase}"), "user": user, "route": "dynamicTools",
         "pass": outcome.status == Some(TurnStatus::Completed)
             && !calls.is_empty() && outcome.text.contains(&secret),
         "tool_calls": calls,
@@ -802,6 +827,22 @@ async fn tool(context: &Context, args: &Args) -> Result<Value> {
         "reply_has_secret": outcome.text.contains(&secret),
         "turn": {"status": outcome.status, "error": outcome.error},
     }))
+}
+
+fn message_bot_spec() -> DynamicToolSpec {
+    DynamicToolSpec::Function {
+        name: "message_bot".into(),
+        description: "Send a message to another of this user's Bots and wait for its reply.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "bot": {"type": "string", "description": "The other Bot's name."},
+                "message": {"type": "string", "description": "The message to send."},
+            },
+            "required": ["bot", "message"],
+            "additionalProperties": false,
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------

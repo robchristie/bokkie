@@ -72,7 +72,7 @@ removes the qualification credential when Phase 0 is done.
 | `account` | `account/read`, `model/list`, `account/rateLimits/read`, `permissionProfile/list`, `config/read` |
 | `chat-start`, `chat-resume` | A persistent thread, a streamed turn, and the thread resumed after a container restart |
 | `refresh`, `refresh-persisted` | A forced token refresh that survives a container restart |
-| `tool` | "Message another Bot" through `dynamicTools`: one Bot asks another and relays its reply |
+| `tool-start`, `tool-resume` | "Message another Bot" through `dynamicTools`: one Bot asks another and relays its reply, then again after a container restart without passing the tool again |
 | `turn-exec` | A real turn whose shell command runs the sandbox probe |
 
 Invariant 4 treats Codex's silent procfs fallback as a failure. The sandbox

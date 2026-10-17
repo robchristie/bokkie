@@ -171,14 +171,15 @@ model_checks() {
   fi
   record "$dir" account q "$profile" "$gateway" account --user alice
   record "$dir" chat-start q "$profile" "$gateway" chat --user alice --phase start
+  record "$dir" tool-start q "$profile" "$gateway" tool --user alice --phase start
   compose "$profile" restart
   sleep 3
   record "$dir" chat-resume q "$profile" "$gateway" chat --user alice --phase resume
+  record "$dir" tool-resume q "$profile" "$gateway" tool --user alice --phase resume
   record "$dir" refresh q "$profile" "$gateway" account --user alice --refresh
   compose "$profile" restart
   sleep 3
   record "$dir" refresh-persisted q "$profile" "$gateway" account --user alice --expect-persisted
-  record "$dir" tool q "$profile" "$gateway" tool --user alice
   record "$dir" turn-exec q "$profile" "$gateway" turn-exec --user alice --users alice,bob
 }
 
