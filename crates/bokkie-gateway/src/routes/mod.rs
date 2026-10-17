@@ -2,4 +2,5 @@
 
 pub mod accounts;
 pub mod admin;
+pub mod bots;
 pub mod codex;

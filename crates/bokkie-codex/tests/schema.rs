@@ -491,7 +491,26 @@ fn thread_and_turn_params_conform() {
     turn.approval_policy = Some(AskForApproval::Untrusted);
     turn.permissions = Some("bokkie".into());
     turn.model = Some("m".into());
+    turn.additional_context = Some(
+        [(
+            "bokkie-profile".to_owned(),
+            AdditionalContextEntry {
+                kind: AdditionalContextKind::Application,
+                value: "v".into(),
+            },
+        )]
+        .into(),
+    );
     check_outgoing("v2/TurnStartParams", &turn);
+    for kind in [
+        AdditionalContextKind::Application,
+        AdditionalContextKind::Untrusted,
+    ] {
+        assert_valid(
+            "v2/AdditionalContextKind",
+            &serde_json::to_value(kind).unwrap(),
+        );
+    }
     check_outgoing(
         "v2/TurnInterruptParams",
         &TurnInterruptParams {
@@ -507,6 +526,16 @@ fn thread_and_turn_params_conform() {
             input: vec![UserInput::Text {
                 text: "also this".into(),
             }],
+            additional_context: Some(
+                [(
+                    "bokkie-profile".to_owned(),
+                    AdditionalContextEntry {
+                        kind: AdditionalContextKind::Untrusted,
+                        value: "v".into(),
+                    },
+                )]
+                .into(),
+            ),
         },
     );
 }

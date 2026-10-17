@@ -111,6 +111,10 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
 pub type Connect =
     Arc<dyn Fn(UserId, &UserPaths) -> (Client, mpsc::UnboundedReceiver<Incoming>) + Send + Sync>;
 
+/// Context fragments for a turn, by key.
+pub type Context =
+    std::collections::BTreeMap<String, bokkie_codex::protocol::AdditionalContextEntry>;
+
 /// One user's runtime, behind a lock held while it starts.
 type Slot = Arc<tokio::sync::Mutex<Option<Arc<Runtime>>>>;
 
@@ -443,6 +447,9 @@ impl Runtime {
         developer_instructions: String,
         dynamic_tools: Option<Vec<DynamicToolSpec>>,
     ) -> Result<ThreadSessionResponse, CodexError> {
+        if let Some(reason) = self.latch.tainted() {
+            return Err(Refusal::new(reason).into());
+        }
         self.check_config().await?;
         let response = timed(self.client.thread_start(&ThreadStartParams {
             cwd: Some(self.expected.workspace.clone()),
@@ -513,10 +520,16 @@ impl Runtime {
         self.latch.refuse_thread(self.user, thread_id, reason);
     }
 
-    /// Starts a turn on a served thread.
-    pub async fn start_turn(&self, thread_id: &str, text: &str) -> Result<Turn, CodexError> {
+    /// Starts a turn on a served thread, with optional context fragments.
+    pub async fn start_turn(
+        &self,
+        thread_id: &str,
+        text: &str,
+        context: Option<Context>,
+    ) -> Result<Turn, CodexError> {
         self.ensure_served(thread_id)?;
         let mut params = TurnStartParams::text(thread_id, text);
+        params.additional_context = context;
         params.approval_policy = Some(AskForApproval::Never);
         params.permissions = Some(PROFILE.into());
         params.cwd = Some(self.expected.workspace.clone());
@@ -529,12 +542,14 @@ impl Runtime {
         thread_id: &str,
         turn_id: &str,
         text: &str,
+        context: Option<Context>,
     ) -> Result<String, CodexError> {
         self.ensure_served(thread_id)?;
         Ok(timed(self.client.turn_steer(&TurnSteerParams {
             thread_id: thread_id.into(),
             expected_turn_id: turn_id.into(),
             input: vec![UserInput::Text { text: text.into() }],
+            additional_context: context,
         }))
         .await?
         .turn_id)
@@ -708,6 +723,11 @@ async fn watch(
         }
     }
     alive.store(false, Ordering::SeqCst);
+    // Whatever closed the stream, a child left running would go unwatched:
+    // kill it.
+    if let Some(runtime) = weak.upgrade() {
+        runtime.stop();
+    }
     tracing::info!(user = %user, "app server closed");
     send(RuntimeEventKind::Exited);
 }

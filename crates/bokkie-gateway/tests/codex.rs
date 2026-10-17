@@ -46,7 +46,7 @@ async fn a_checked_app_server_serves_bokkie_threads() {
         .unwrap();
     assert_eq!(thread.active_permission_profile.unwrap().id, "bokkie");
     let turn = runtime
-        .start_turn(&thread.thread.id, "hello")
+        .start_turn(&thread.thread.id, "hello", None)
         .await
         .unwrap();
     assert!(!turn.id.is_empty());
@@ -107,9 +107,12 @@ async fn one_users_app_server_will_not_act_on_anothers_thread() {
     let thread = amy.start_thread("Amy's Bot".into(), None).await.unwrap();
     // Ben's runtime has never checked Amy's thread, so it refuses to start
     // or steer a turn on it.
-    let reason = refused(ben.start_turn(&thread.thread.id, "hi").await);
+    let reason = refused(ben.start_turn(&thread.thread.id, "hi", None).await);
     assert!(reason.contains("not passed"), "{reason}");
-    refused(ben.steer_turn(&thread.thread.id, "turn-1", "hi").await);
+    refused(
+        ben.steer_turn(&thread.thread.id, "turn-1", "hi", None)
+            .await,
+    );
     assert!(
         gateway
             .fake
@@ -176,7 +179,7 @@ async fn a_thread_without_the_bokkie_profile_is_not_served() {
     // Resume is checked the same way.
     let reason = refused(runtime.resume_thread("thr-old", "x".into()).await);
     assert!(reason.contains("bokkie"), "{reason}");
-    refused(runtime.start_turn("thr-old", "hi").await);
+    refused(runtime.start_turn("thr-old", "hi", None).await);
     assert!(gateway.fake.received("turn/start").is_empty());
 }
 
@@ -193,15 +196,15 @@ async fn threads_must_be_resumed_on_a_new_app_server() {
         .id;
     gateway.fake.crash(user);
     // Wake the watcher so it sees the closed stream.
-    let _ = first.start_turn(&thread, "hi").await;
+    let _ = first.start_turn(&thread, "hi", None).await;
     next_event(&gateway, |k| matches!(k, RuntimeEventKind::Exited)).await;
     assert!(!first.is_alive());
 
     let second = gateway.state.supervisor.runtime(user).await.unwrap();
     assert_eq!(gateway.fake.starts(user), 2);
-    refused(second.start_turn(&thread, "hi").await);
+    refused(second.start_turn(&thread, "hi", None).await);
     second.resume_thread(&thread, "x".into()).await.unwrap();
-    second.start_turn(&thread, "hi").await.unwrap();
+    second.start_turn(&thread, "hi", None).await.unwrap();
 }
 
 async fn wait_until(mut condition: impl FnMut() -> bool) {
@@ -227,7 +230,7 @@ async fn a_forbidden_item_mid_turn_stops_codex_for_the_whole_gateway() {
         .unwrap()
         .thread
         .id;
-    let turn = runtime.start_turn(&thread, "hi").await.unwrap().id;
+    let turn = runtime.start_turn(&thread, "hi", None).await.unwrap().id;
     gateway.fake.inject(
         amy,
         json!({"method": "item/started", "params": {"threadId": thread, "turnId": turn,
@@ -248,7 +251,7 @@ async fn a_forbidden_item_mid_turn_stops_codex_for_the_whole_gateway() {
     assert!(gateway.state.supervisor.tainted().is_some());
     refused(gateway.state.supervisor.runtime(amy).await);
     refused(gateway.state.supervisor.runtime(ben).await);
-    refused(runtime.start_turn(&thread, "again").await);
+    refused(runtime.start_turn(&thread, "again", None).await);
     refused(runtime.resume_thread(&thread, "x".into()).await);
 }
 
@@ -266,7 +269,7 @@ async fn a_refused_thread_stays_refused_on_the_next_app_server() {
     gateway.fake.with(|b| b.profile = ":workspace".into());
     refused(first.resume_thread("thr-bad", "x".into()).await);
     gateway.fake.crash(user);
-    let _ = first.start_turn(&good, "hi").await;
+    let _ = first.start_turn(&good, "hi", None).await;
     next_event(&gateway, |k| matches!(k, RuntimeEventKind::Exited)).await;
 
     // Even with the app server now reporting the right profile, the
@@ -274,9 +277,9 @@ async fn a_refused_thread_stays_refused_on_the_next_app_server() {
     gateway.fake.with(|b| b.profile = "bokkie".into());
     let second = gateway.state.supervisor.runtime(user).await.unwrap();
     refused(second.resume_thread("thr-bad", "x".into()).await);
-    refused(second.start_turn("thr-bad", "hi").await);
+    refused(second.start_turn("thr-bad", "hi", None).await);
     second.resume_thread(&good, "x".into()).await.unwrap();
-    second.start_turn(&good, "hi").await.unwrap();
+    second.start_turn(&good, "hi", None).await.unwrap();
 }
 
 #[tokio::test]
@@ -304,7 +307,7 @@ async fn approval_requests_are_declined_and_stop_codex() {
         .expect("the request was answered first");
     assert_eq!(answer.params["result"]["decision"], "decline");
     assert!(gateway.state.supervisor.tainted().is_some());
-    refused(runtime.start_turn(&thread, "hi").await);
+    refused(runtime.start_turn(&thread, "hi", None).await);
 }
 
 #[tokio::test]

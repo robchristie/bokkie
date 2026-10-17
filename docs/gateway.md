@@ -131,3 +131,33 @@ server cannot load another user's thread.
 These results hold for the pinned release: the tool flags, the catalog
 fields and the static catalog are all Codex 0.163.0 behaviour. Moving the
 pin must rerun the live tests, including the control.
+
+## Bots and conversations
+
+Each Bot belongs to one user and has one conversation, carried by one
+long-lived Codex thread in that user's app server.
+
+- The first message starts the thread with the Bot's profile (name, label,
+  description) and Bokkie's chat-only rules as its developer instructions.
+- Codex 0.163.0 fixes developer instructions when a thread starts:
+  `thread/resume` ignores new ones, warm or cold. So when a user edits a
+  Bot's name, label or description, the next turn carries the new profile as
+  a `bokkie-profile` context fragment (`additionalContext`, kind
+  `application`), which Codex adds to the thread as a developer message. It
+  is sent once per change.
+- A message to an idle Bot starts a turn (`turn/start`). A message to a Bot
+  that is mid-turn steers it (`turn/steer`, naming the running turn); if the
+  turn has just ended, it starts a new one. `POST /api/v1/bots/{id}/stop`
+  interrupts the running turn (`turn/interrupt`).
+- After an app server restart, the next message resumes the thread
+  (`thread/resume`), which passes the per-thread checks again.
+- Replies stream into the database as they arrive. Deltas are coalesced and
+  written at most every 100 ms. A reply ends `complete`, `interrupted` or
+  `failed`. Replies cut off by an app server exit or a gateway restart are
+  marked `failed`.
+- A Bot whose thread fails a safety check is marked refused in the database
+  and accepts no more messages; its other Bots carry on, unless the failure
+  stopped Codex for the whole gateway.
+- Every query names the signed-in user. Another user's Bot, even for an
+  admin, reads as not found, and an app server's events are routed only to
+  Bots of the user it belongs to.

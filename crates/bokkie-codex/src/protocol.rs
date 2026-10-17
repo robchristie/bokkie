@@ -335,6 +335,27 @@ pub struct TurnStartParams {
     pub permissions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Context fragments keyed by source. Codex adds each as a developer
+    /// message, `<key>value</key>`, which stays in the thread's history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<BTreeMap<String, AdditionalContextEntry>>,
+}
+
+/// A context fragment for a turn.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdditionalContextEntry {
+    pub kind: AdditionalContextKind,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AdditionalContextKind {
+    /// Context from the client application itself.
+    Application,
+    /// Context from an untrusted source.
+    Untrusted,
 }
 
 impl TurnStartParams {
@@ -347,6 +368,7 @@ impl TurnStartParams {
             approval_policy: None,
             permissions: None,
             model: None,
+            additional_context: None,
         }
     }
 }
@@ -371,6 +393,8 @@ pub struct TurnSteerParams {
     pub thread_id: String,
     pub expected_turn_id: String,
     pub input: Vec<UserInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<BTreeMap<String, AdditionalContextEntry>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
