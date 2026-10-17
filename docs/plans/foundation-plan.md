@@ -157,8 +157,9 @@ The previous Bokkie wrapped Codex in an outer Bubblewrap. That needed:
   cannot express per-path masks.
 
 All of that was pinned to nostromo's exact kernel (`6.12.73+deb13-amd64`) and
-Docker (29.8.1). The story is in the archived repository under
-`docs/container-evidence/`, PRs #38 to #46. Codex's own sandbox never ran
+Docker (29.8.1). The story is in the archived repository
+([robchristie/bokkie.v1](https://github.com/robchristie/bokkie.v1)) under
+`docs/container-evidence/`, its PRs #38 to #46. Codex's own sandbox never ran
 inside that container. Running it there is new work, and Phase 0 qualifies it
 before anything depends on it.
 
@@ -166,10 +167,27 @@ What Codex's sandbox needs inside Docker:
 
 - unprivileged user namespaces;
 - namespace-creating `clone` and `unshare`;
-- `mount` and `pivot_root` inside the new namespace;
-- a fresh procfs mount, which Docker's masked `/proc` paths block.
+- `mount` and `pivot_root` inside the new namespace.
 
 The default Docker seccomp and AppArmor profiles deny these.
+
+Codex also tries to mount a fresh procfs (`--proc /proc`), which Docker's
+masked `/proc` paths block. In Codex 0.163.0, when its preflight for that
+mount fails, Codex **silently drops it** and runs the command anyway
+(`codex-rs/linux-sandbox/src/linux_run_main.rs`,
+`run_bwrap_with_proc_fallback`). The default filesystem view is
+`--ro-bind / /`, so the command then sees the container's own `/proc`.
+Through `/proc/<pid>/root`, `cwd` and `environ` it can reach the gateway and
+every other user's app-server, so a working fresh procfs is a security
+requirement, not an optional extra.
+
+All users' app-servers share one container. With one shared UID,
+cross-user isolation would depend entirely on Codex's filesystem policy and on
+there being no fallback. Phase 0 therefore also evaluates two stronger
+separations:
+
+- a distinct UID for each user's app-server and workspace;
+- one container per user.
 
 Phase 0 compares two profiles:
 
@@ -183,22 +201,37 @@ Phase 0 compares two profiles:
 
 Prefer B if it holds across a Codex upgrade without rework. Otherwise accept A,
 and record that as a security decision. Applying either profile on nostromo
-weakens the default container confinement, so it is applied only with the
-owner's explicit go-ahead at deploy time.
+weakens the default container confinement. Applying one, including Phase 0's
+qualification runs on nostromo, needs the owner's explicit go-ahead each time.
 
 Invariants that tests must prove, checked by real reads and writes rather than
-by startup success. Bubblewrap 0.8 is known to silently leave mounts writable.
+by startup success. Bubblewrap 0.8 is known to silently leave mounts writable,
+and Codex silently drops the fresh procfs.
 
 1. A sandboxed command cannot read any `CODEX_HOME`, so it cannot read
    `auth.json`.
-   - If Codex's read policy allows that read, Phase 0 must find a mitigation
-     before command execution ships: a Codex permission profile that denies
-     the read, or one container per user.
 2. A sandboxed command cannot write outside its own user's workspace.
-3. A sandboxed command cannot read another user's workspace.
-4. Sandbox network access follows the per-user setting.
-5. Killing the gateway or app-server leaves no orphaned sandbox processes. The
+3. A sandboxed command cannot read another user's workspace, data or Bokkie's
+   database.
+4. A sandboxed command sees only its own PID namespace. A fresh procfs is
+   actually mounted: `/proc/1/cmdline` is the sandbox's own process and the
+   process count is small. It cannot reach another process's
+   `/proc/<pid>/root`, `cwd` or `environ`. A Codex fallback that drops the
+   fresh procfs counts as a failure, not a pass.
+5. Sandbox network access follows the per-user setting.
+6. Killing the gateway or app-server leaves no orphaned sandbox processes. The
    container runs an init process.
+
+If invariant 1, 3 or 4 fails under a profile, Phase 0 must find a mitigation
+before command execution ships. Candidates:
+
+- a Codex permission profile that denies the reads;
+- a distinct UID for each user;
+- one container per user.
+
+App-server features that run in-process, outside the sandbox (for example,
+image and file reads), run as the app-server's UID. That favours per-user UIDs
+or containers over relying on Codex's filesystem policy alone.
 
 Codex credentials live in a persistent per-user `CODEX_HOME` on a volume, not
 in a read-only bind of the owner's personal `auth.json`. That lets token
@@ -222,7 +255,7 @@ and pull request, and then Bokkie moves its pin.
 | Copy a reply | Spike item 2: selectable or copyable message text, and message text in `observe` | Phase 2 |
 | Emoji in chat | Spike item 5: font fallback for colour emoji and CJK | Phase 3 |
 | Avatars, sign-in form, banners and toasts, chat icons | Avatar component, form recipe, a banner or toast pattern, new `IconId`s (send, attach, mic, copy, user) | Phases 2 and 3 |
-| Long conversations | Spike item 8: a variable-height list pinned to the bottom | Phase 3 |
+| Long conversations | Spike item 8: a variable-height list pinned to the bottom. The spike deferred this because egui's `stick_to_bottom` held 200 messages; measure before building | Phase 3, if measured |
 | Approvals | A modal or sheet recipe | Phase 4 |
 | Notifications | Web Push subscription support in the PWA output | Phase 5 |
 
@@ -244,9 +277,13 @@ on them.
   `crates/bokkie-codex`.
 - Pin Codex. 0.163.0 was the latest stable on 2026-10-17. Generate the
   JSON schema from the pinned version and check the client's types against it
-  in tests.
+  in tests. Use `codex app-server generate-json-schema --experimental`:
+  experimental methods and fields such as `dynamicTools` appear only in that
+  output, and they need `capabilities.experimentalApi` at `initialize`.
 - Build the image: pinned digests, Codex installed at the exact version,
-  system `bwrap`, and a non-root user with a real passwd entry.
+  a pinned `bwrap` version and source, and a non-root user with a real passwd
+  entry. Codex uses the first `bwrap` on `PATH` before its bundled copy, so
+  record which binary it actually ran.
 - Run it under a qualification Compose project on nostromo with no Traefik
   route.
 - Run the qualification probe with each container profile (A and B):
@@ -254,9 +291,9 @@ on them.
   - `model/list` and `account/rateLimits/read`;
   - start a thread, stream a turn and resume the thread after a container
     restart;
-  - run `codex sandbox linux` probes, then a real turn that executes
-    commands;
-  - prove sandbox invariants 1 to 5;
+  - run probe commands under `codex sandbox <command>`, then a real turn
+    that executes commands;
+  - prove sandbox invariants 1 to 6 for both a single user and two users;
   - prove that token refresh persists.
 - Choose the route for Bokkie's tools (`dynamicTools` or MCP) with a working
   "message another Bot" call.
@@ -266,7 +303,8 @@ Acceptance:
 - A short report in `docs/` that records, for each profile, what passed and
   what failed.
 - The chosen profile and its rationale.
-- The `auth.json` readability result and its mitigation.
+- The isolation results for invariants 1, 3 and 4, and the mitigation chosen:
+  a Codex permission profile, a UID per user, or a container per user.
 - The chosen tool route.
 - Raw logs are kept out of the repository.
 
@@ -286,7 +324,7 @@ spike's device checklist applies.
 - A gateway WebSocket with a resumable event log.
 - A conversation list with avatar, name, preview and time.
 - The usage meter and the limit-reached banner.
-- PWA install. Deploy behind Traefik with an LAN and tailnet allowlist under a
+- PWA install. Deploy behind Traefik with a LAN and tailnet allowlist under a
   temporary hostname. At go-live, take over `bokkie.yutani.tech` after
   confirming that the old stack can be stopped.
 
@@ -305,6 +343,14 @@ Acceptance:
 - Group chats of 2 to 6 Bots with @mention, reply and @everyone routing.
 - Emoji support and the long-conversation list.
 
+Acceptance:
+
+- One Bot asks another for work and receives a reply without user input.
+- A two-Bot loop stops at the hop limit or the turn budget, and the stop is
+  visible in the UI.
+- An @mention in a group chat reaches only the named Bot.
+- A Bot cannot message another user's Bots, proved by an isolation test.
+
 ### Phase 4: The Bots' computer
 
 - Command execution in the per-user workspace under the qualified sandbox.
@@ -312,12 +358,29 @@ Acceptance:
   Admin policy can deny approvals for some users.
 - A file browser for the workspace, read-only at first.
 
+Acceptance:
+
+- Sandbox invariants 1 to 6 pass on the deployed nostromo profile, with two
+  users and live app-servers, against the pinned Codex and `bwrap`.
+- An approval request reaches only the owning user, and deny, expiry and
+  allow-for-session behave as specified.
+- An admin deny policy blocks a member's approvals and command execution.
+- A refused or expired approval leaves no command running.
+
 ### Phase 5: Always-on
 
 - Routines: scheduled runs owned by a Bot, with test runs and run history.
 - Web Push notifications for results, questions and approvals, scoped per user
   and per device.
 - A per-user skills library. Bot memory notes, presented as non-authoritative.
+
+Acceptance:
+
+- A routine runs on schedule and records its run history.
+- A routine's test run behaves like a scheduled run.
+- Routines respect per-user limits and stop when the user is disabled.
+- A push notification reaches only the owning user's subscribed devices,
+  including an iPhone home-screen install.
 
 ## Open decisions
 
@@ -344,9 +407,10 @@ Acceptance:
 
 - **Updates.** Build the image from an exact source commit and record that
   commit as an OCI label. Do not use a moving tag.
-- **Compose project names.** Do not reuse the name `bokkie`. Orphaned
-  `bokkie-bokkie-api-1` and `bokkie-postgres-1` containers still collide with
-  it.
+- **Compose project names.** Do not reuse the name `bokkie`. As recently as
+  2026-10-17, starting the old stack warned about orphaned
+  `bokkie-bokkie-api-1` and `bokkie-postgres-1` containers under that
+  project.
 - **Edge proxy.** The old nginx edge shared the runtime's network namespace,
   so it had to be recreated whenever the runtime was. Prefer the gateway
   serving HTTP directly behind Traefik.
