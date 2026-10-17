@@ -17,7 +17,18 @@ services:
       - /tmp:size=64m,mode=1777
     volumes:
       - data:/data
+    networks:
+      - egress
     stop_grace_period: 10s
+
+# Nostromo's predefined address pools are exhausted, so the project network
+# takes an explicit subnet, as nostromo's other stacks do. Egress only; no
+# other container joins it.
+networks:
+  egress:
+    ipam:
+      config:
+        - subnet: ${QUALIFY_SUBNET:-172.30.52.96/28}
 
 volumes:
   data:
