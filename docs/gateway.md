@@ -84,8 +84,11 @@ conversation. With the pinned Codex this takes two things together:
 
 - The gateway writes each `config.toml` itself on every start: the `bokkie`
   permission profile as the default, approvals `never`, web search disabled,
-  and every tool-bearing feature off (the list is
-  `DISABLED_FEATURES` in `crates/bokkie-gateway/src/codex/config.rs`).
+  `project_doc_max_bytes = 0`, and every tool-bearing feature off (the list
+  is `DISABLED_FEATURES` in `crates/bokkie-gateway/src/codex/config.rs`).
+  Codex reads `AGENTS.md` files through its sandbox helper, so turning
+  project docs off means chat-only threads need no working Bubblewrap; it
+  also stops a file in the workspace from adding instructions.
 - Some tools come from the model's catalog entry rather than from features:
   `apply_patch`, a JavaScript `exec` tool that orchestrates nested tools, and
   multi-agent spawning. At startup the gateway exports the binary's bundled
@@ -96,9 +99,10 @@ conversation. With the pinned Codex this takes two things together:
 The gateway refuses to serve an app server or thread unless these all hold:
 
 - at startup, `config/read` reports the profile, the approvals, the web
-  search setting, Bokkie's catalog, every listed feature off, no MCP servers,
-  and a `bokkie` profile that grants exactly `:minimal` read, workspace write,
-  no access to the data directory and no network;
+  search setting, project docs off, Bokkie's catalog, every listed feature
+  off, no MCP servers, no config profiles, and a `bokkie` permission profile
+  that grants exactly `:minimal` read, workspace write, no access to the data
+  directory and no network;
 - `model/list` lists only models from Bokkie's catalog, and the catalog on
   disk still carries no tool metadata;
 - before each `thread/start` and `thread/resume`, `config/read` passes again;
@@ -106,13 +110,24 @@ The gateway refuses to serve an app server or thread unless these all hold:
   `never`, a catalog model and the user's workspace;
 - a thread must pass these checks on the current app server before any turn
   runs on it, so after a restart every thread is resumed and checked again;
+- a thread that fails its checks stays refused on every later app server;
 - during a turn, every item must be a message, reasoning, a plan, a
-  compaction or one of Bokkie's own tools. Any other item, and any approval
-  request, interrupts the turn and refuses the thread from then on. Approval
-  requests are declined.
+  compaction or one of Bokkie's own tools. Any other item, any approval
+  request (declined), and any item or approval the gateway cannot decode
+  shows that the configuration did not hold. The gateway then refuses the
+  thread, stops every user's app server and serves no Codex at all until it
+  is restarted, which is the operator's decision. The refusals live in
+  memory, so a restart clears them; Bots record their own refusal in the
+  database.
 
 `tests/live_codex.rs` proves the result against the real pinned app server
 with a mock model: the only tools it offers are Bokkie's own and
 `request_user_input`, which the gateway answers with an error. Its control
 test shows that the same capture sees `apply_patch`, `exec_command` and
-`spawn_agent` without the gateway's configuration.
+`spawn_agent` without the gateway's configuration. Other live tests show
+that a thread runs with every Bubblewrap broken, and that one user's app
+server cannot load another user's thread.
+
+These results hold for the pinned release: the tool flags, the catalog
+fields and the static catalog are all Codex 0.163.0 behaviour. Moving the
+pin must rerun the live tests, including the control.

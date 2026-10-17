@@ -82,6 +82,24 @@ pub fn check_config(config: &Value, expected: &Expected) -> Result<(), Refusal> 
             )
         },
     )?;
+    require(
+        at(config, &["project_doc_max_bytes"]) == &Value::from(0),
+        || {
+            format!(
+                "project_doc_max_bytes is {}, so AGENTS.md files would be read",
+                at(config, &["project_doc_max_bytes"])
+            )
+        },
+    )?;
+    // A selected or defined config profile could override any of this.
+    require(at(config, &["profile"]).is_null(), || {
+        "a config profile is selected".into()
+    })?;
+    let profiles = at(config, &["profiles"]);
+    require(
+        profiles.is_null() || profiles.as_object().is_some_and(|p| p.is_empty()),
+        || "config profiles are defined".into(),
+    )?;
     for feature in DISABLED_FEATURES {
         let value = at(config, &["features", feature]);
         require(value == &Value::Bool(false), || {
@@ -228,6 +246,8 @@ mod tests {
             "approval_policy": "never",
             "web_search": "disabled",
             "model_catalog_json": "/data/codex/models.json",
+            "project_doc_max_bytes": 0,
+            "profile": null,
             "features": features,
             "mcp_servers": {},
             "permissions": {"bokkie": {

@@ -58,7 +58,11 @@ against the new version. To move it:
    Codex: copy the release's upstream `LICENSE` and `NOTICE` beside it and
    update the provenance `README.md` (tag, commit and command).
 3. Run `scripts/verify`, fix any type drift, and rerun the qualification
-   probe before relying on the new version.
+   probe before relying on the new version. The gateway's live tests
+   (`crates/bokkie-gateway/tests/live_codex.rs`) must pass too: they prove
+   that the gateway's configuration and model catalog leave no tool that acts
+   outside the conversation, and their control test must still see the
+   unsafe tools, so the capture is known to work.
 
 Use `--experimental`: experimental methods and fields such as `dynamicTools`
 appear only in that output, and they need `capabilities.experimentalApi` at

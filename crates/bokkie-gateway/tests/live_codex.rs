@@ -43,12 +43,32 @@ async fn supervisor(
     Supervisor,
     tokio::sync::mpsc::UnboundedReceiver<bokkie_gateway::codex::RuntimeEvent>,
 ) {
+    supervisor_with_env(program, data, overrides, Vec::new()).await
+}
+
+async fn supervisor_with_env(
+    program: PathBuf,
+    data: &std::path::Path,
+    overrides: Vec<String>,
+    env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+) -> (
+    Supervisor,
+    tokio::sync::mpsc::UnboundedReceiver<bokkie_gateway::codex::RuntimeEvent>,
+) {
     let bundled = catalog::export_bundled(&program, &data.join("codex/catalog-home"))
         .await
         .unwrap();
     let catalog = catalog::write(&data.join("codex/models.json"), bundled).unwrap();
     assert!(catalog.slugs.contains("gpt-6.1-sol"), "{:?}", catalog.slugs);
-    Supervisor::new(data, catalog, Launcher::Process { program, overrides })
+    Supervisor::new(
+        data,
+        catalog,
+        Launcher::Process {
+            program,
+            overrides,
+            env,
+        },
+    )
 }
 
 #[tokio::test]
@@ -225,4 +245,118 @@ async fn without_the_gateways_configuration_the_capture_sees_unsafe_tools() {
             "{unsafe_tool} in {offered:?}"
         );
     }
+}
+
+async fn run_turn(
+    runtime: &bokkie_gateway::codex::Runtime,
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<bokkie_gateway::codex::RuntimeEvent>,
+    thread: &str,
+) -> TurnStatus {
+    let turn = runtime.start_turn(thread, "hi").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            match events.recv().await.expect("events flow").kind {
+                RuntimeEventKind::Notification(ServerNotification::TurnCompleted(done))
+                    if done.turn.id == turn.id =>
+                {
+                    return done.turn.status;
+                }
+                RuntimeEventKind::Refused { reason, .. } => panic!("refused: {reason}"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("the turn completes")
+}
+
+/// Chat-only threads need no working sandbox, so a container without one
+/// (Docker's default confinement, or a CI runner that forbids user
+/// namespaces) still serves them. Here every Bubblewrap fails: a failing
+/// `bwrap` comes first on `PATH`, and the bundled copy is replaced by it.
+#[tokio::test]
+async fn chat_only_threads_run_without_a_working_sandbox() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(program) = codex() else {
+        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+        return;
+    };
+    // Lay out a package beside the real one, so the binary can be linked
+    // rather than copied, with a broken bundled bwrap.
+    let package = program.parent().unwrap().parent().unwrap();
+    let broken = tempfile::tempdir_in(package.parent().unwrap()).unwrap();
+    for dir in ["bin", "codex-resources", "stub"] {
+        std::fs::create_dir(broken.path().join(dir)).unwrap();
+    }
+    let linked = broken.path().join("bin/codex");
+    if std::fs::hard_link(&program, &linked).is_err() {
+        std::fs::copy(&program, &linked).unwrap();
+    }
+    std::fs::copy(
+        package.join("codex-package.json"),
+        broken.path().join("codex-package.json"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(package.join("codex-path"), broken.path().join("codex-path"))
+        .unwrap();
+    let stub = "#!/bin/sh\necho 'bwrap: no user namespaces here' >&2\nexit 1\n";
+    for path in ["codex-resources/bwrap", "stub/bwrap"] {
+        let path = broken.path().join(path);
+        std::fs::write(&path, stub).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!(
+        "{}:{}",
+        broken.path().join("stub").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let data = tempfile::tempdir().unwrap();
+    let (_mock, base_url) = MockModel::start(&["still here"]).await;
+    let (supervisor, mut events) = supervisor_with_env(
+        linked,
+        data.path(),
+        MockModel::overrides(&base_url),
+        vec![("PATH".into(), path.into())],
+    )
+    .await;
+    let runtime = supervisor
+        .runtime(UserId(1))
+        .await
+        .expect("the checks pass");
+    let thread = runtime
+        .start_thread("You are a test Bot.".into(), None)
+        .await
+        .expect("a thread starts without a sandbox");
+    assert_eq!(
+        run_turn(&runtime, &mut events, &thread.thread.id).await,
+        TurnStatus::Completed
+    );
+}
+
+/// One user's app server cannot load another user's thread: each has its
+/// own `CODEX_HOME`, which holds the threads.
+#[tokio::test]
+async fn one_users_app_server_cannot_resume_anothers_thread() {
+    let Some(program) = codex() else {
+        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+        return;
+    };
+    let data = tempfile::tempdir().unwrap();
+    let (_mock, base_url) = MockModel::start(&["private"]).await;
+    let (supervisor, mut events) =
+        supervisor(program, data.path(), MockModel::overrides(&base_url)).await;
+    let amy = supervisor.runtime(UserId(1)).await.unwrap();
+    let thread = amy.start_thread("Amy's Bot".into(), None).await.unwrap();
+    run_turn(&amy, &mut events, &thread.thread.id).await;
+
+    let ben = supervisor.runtime(UserId(2)).await.unwrap();
+    match ben
+        .resume_thread(&thread.thread.id, "Ben's Bot".into())
+        .await
+    {
+        Err(CodexError::AppServer(error)) => eprintln!("refused as expected: {error}"),
+        other => panic!("Ben's app server loaded Amy's thread: {other:?}"),
+    }
+    assert!(!ben.is_served(&thread.thread.id));
 }

@@ -74,6 +74,7 @@ async fn supervisor(config: &Config) -> Result<Arc<Supervisor>, String> {
         Launcher::Process {
             program: config.codex_program.clone(),
             overrides: Vec::new(),
+            env: Vec::new(),
         },
     );
     // Bots route these from a later increment; until then, record them.

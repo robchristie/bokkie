@@ -123,6 +123,8 @@ pub enum Launcher {
         /// `-c key=value` overrides placed before `app-server`. Tests use
         /// them to point Codex at a mock model provider.
         overrides: Vec<String>,
+        /// Extra environment for the child, such as a test's `PATH`.
+        env: Vec<(OsString, OsString)>,
     },
     /// Connect to something in-process, for tests.
     InProcess(Connect),
@@ -131,10 +133,15 @@ pub enum Launcher {
 impl std::fmt::Debug for Launcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Process { program, overrides } => f
+            Self::Process {
+                program,
+                overrides,
+                env,
+            } => f
                 .debug_struct("Process")
                 .field("program", program)
                 .field("overrides", overrides)
+                .field("env", env)
                 .finish(),
             Self::InProcess(_) => f.write_str("InProcess"),
         }
@@ -161,6 +168,57 @@ pub enum RuntimeEventKind {
     Exited,
 }
 
+/// Refusals that outlive any one app server.
+///
+/// A thread that fails its checks stays refused on every later app server.
+/// A safety rule broken mid-turn shows that the chat-only configuration did
+/// not hold, so it taints Codex for the whole gateway: every app server is
+/// stopped and none is served again until the gateway restarts, which is
+/// the operator's decision. Neither survives a gateway restart.
+#[derive(Debug)]
+pub struct Latch {
+    threads: std::sync::Mutex<HashMap<(UserId, String), String>>,
+    /// Set once, with the first reason. Every app server's watcher stops its
+    /// app server when it changes.
+    tainted: tokio::sync::watch::Sender<Option<String>>,
+}
+
+impl Default for Latch {
+    fn default() -> Self {
+        Self {
+            threads: Default::default(),
+            tainted: tokio::sync::watch::channel(None).0,
+        }
+    }
+}
+
+impl Latch {
+    fn refuse_thread(&self, user: UserId, thread_id: &str, reason: &str) {
+        lock(&self.threads).insert((user, thread_id.into()), reason.into());
+    }
+
+    fn thread_refusal(&self, user: UserId, thread_id: &str) -> Option<String> {
+        lock(&self.threads)
+            .get(&(user, thread_id.to_owned()))
+            .cloned()
+    }
+
+    fn taint(&self, reason: &str) {
+        self.tainted.send_if_modified(|tainted| {
+            if tainted.is_some() {
+                return false;
+            }
+            *tainted = Some(reason.to_owned());
+            true
+        });
+    }
+
+    /// Why Codex is refused for the whole gateway, if it is.
+    pub fn tainted(&self) -> Option<String> {
+        self.tainted.borrow().clone()
+    }
+}
+
 /// Starts, checks and stops each user's app server.
 #[derive(Debug)]
 pub struct Supervisor {
@@ -169,6 +227,7 @@ pub struct Supervisor {
     launcher: Launcher,
     events: mpsc::UnboundedSender<RuntimeEvent>,
     slots: std::sync::Mutex<HashMap<UserId, Slot>>,
+    latch: Arc<Latch>,
 }
 
 impl Supervisor {
@@ -186,6 +245,7 @@ impl Supervisor {
                 launcher,
                 events,
                 slots: Default::default(),
+                latch: Arc::default(),
             },
             receiver,
         )
@@ -204,8 +264,19 @@ impl Supervisor {
             .clone()
     }
 
+    /// Why Codex is refused for the whole gateway, if it is.
+    pub fn tainted(&self) -> Option<String> {
+        self.latch.tainted()
+    }
+
     /// The user's running app server, started and checked if needed.
     pub async fn runtime(&self, user: UserId) -> Result<Arc<Runtime>, CodexError> {
+        if let Some(reason) = self.latch.tainted() {
+            return Err(Refusal::new(format!(
+                "Codex is refused until the gateway restarts: {reason}"
+            ))
+            .into());
+        }
         let slot = self.slot(user);
         let mut slot = slot.lock().await;
         if let Some(runtime) = slot.as_ref().filter(|r| r.is_alive()) {
@@ -249,8 +320,13 @@ impl Supervisor {
         let expected = Expected::new(&self.data_dir, &catalog, &paths.workspace);
 
         let (client, incoming, server) = match &self.launcher {
-            Launcher::Process { program, overrides } => {
+            Launcher::Process {
+                program,
+                overrides,
+                env,
+            } => {
                 let mut command = AppServerCommand::new(program, &paths.codex_home);
+                command.env.extend(env.iter().cloned());
                 command.args = overrides
                     .iter()
                     .flat_map(|o| [OsString::from("-c"), OsString::from(o)])
@@ -273,7 +349,7 @@ impl Supervisor {
             expected,
             alive: Arc::new(AtomicBool::new(true)),
             served: Default::default(),
-            refused: Default::default(),
+            latch: self.latch.clone(),
         });
         tokio::spawn(watch(runtime.clone(), incoming, self.events.clone()));
         if let Err(error) = runtime.startup_checks().await {
@@ -297,8 +373,7 @@ pub struct Runtime {
     alive: Arc<AtomicBool>,
     /// Threads that passed their checks on this app server.
     served: std::sync::Mutex<HashSet<String>>,
-    /// Threads refused for breaking a safety rule, with the reason.
-    refused: std::sync::Mutex<HashMap<String, String>>,
+    latch: Arc<Latch>,
 }
 
 fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -408,11 +483,16 @@ impl Runtime {
 
     /// Whether the thread passed its checks on this app server.
     pub fn is_served(&self, thread_id: &str) -> bool {
-        lock(&self.served).contains(thread_id) && !lock(&self.refused).contains_key(thread_id)
+        self.is_alive()
+            && lock(&self.served).contains(thread_id)
+            && self.latch.thread_refusal(self.user, thread_id).is_none()
     }
 
     fn ensure_not_refused(&self, thread_id: &str) -> Result<(), CodexError> {
-        match lock(&self.refused).get(thread_id) {
+        if let Some(reason) = self.latch.tainted() {
+            return Err(Refusal::new(reason).into());
+        }
+        match self.latch.thread_refusal(self.user, thread_id) {
             Some(reason) => Err(Refusal::new(reason).into()),
             None => Ok(()),
         }
@@ -430,7 +510,7 @@ impl Runtime {
 
     fn refuse(&self, thread_id: &str, reason: &str) {
         lock(&self.served).remove(thread_id);
-        lock(&self.refused).insert(thread_id.into(), reason.into());
+        self.latch.refuse_thread(self.user, thread_id, reason);
     }
 
     /// Starts a turn on a served thread.
@@ -509,8 +589,22 @@ async fn watch(
     let weak = Arc::downgrade(&runtime);
     let client = runtime.client.clone();
     let alive = runtime.alive.clone();
+    let mut tainted = runtime.latch.tainted.subscribe();
     drop(runtime);
-    while let Some(message) = incoming.recv().await {
+    loop {
+        let message = tokio::select! {
+            message = incoming.recv() => message,
+            _ = tainted.wait_for(Option::is_some) => {
+                // Codex is refused gateway-wide: stop this app server too.
+                if let Some(runtime) = weak.upgrade() {
+                    runtime.stop();
+                }
+                break;
+            }
+        };
+        let Some(message) = message else {
+            break;
+        };
         let Some(runtime) = weak.upgrade() else {
             break;
         };
@@ -520,14 +614,7 @@ async fn watch(
                 | ServerNotification::ItemCompleted(item) = &notification
                     && let Err(refusal) = guard::check_item(&item.item)
                 {
-                    violation(
-                        &runtime,
-                        &item.thread_id,
-                        Some(&item.turn_id),
-                        &refusal,
-                        &send,
-                    )
-                    .await;
+                    violation(&runtime, Some(&item.thread_id), &refusal, &send).await;
                 }
                 send(RuntimeEventKind::Notification(notification));
             }
@@ -548,14 +635,7 @@ async fn watch(
                     }
                     ServerRequestKind::CommandExecutionApproval(params) => {
                         let refusal = Refusal::new("the app server asked to approve a command");
-                        violation(
-                            &runtime,
-                            &params.thread_id,
-                            Some(&params.turn_id),
-                            &refusal,
-                            &send,
-                        )
-                        .await;
+                        violation(&runtime, Some(&params.thread_id), &refusal, &send).await;
                         client
                             .respond(
                                 request.id,
@@ -567,14 +647,7 @@ async fn watch(
                     }
                     ServerRequestKind::FileChangeApproval(params) => {
                         let refusal = Refusal::new("the app server asked to approve a file change");
-                        violation(
-                            &runtime,
-                            &params.thread_id,
-                            Some(&params.turn_id),
-                            &refusal,
-                            &send,
-                        )
-                        .await;
+                        violation(&runtime, Some(&params.thread_id), &refusal, &send).await;
                         client
                             .respond(
                                 request.id,
@@ -593,7 +666,7 @@ async fn watch(
                                 .and_then(|t| t.as_str())
                             {
                                 let refusal = Refusal::new(format!("the app server sent {method}"));
-                                violation(&runtime, thread_id, None, &refusal, &send).await;
+                                violation(&runtime, Some(thread_id), &refusal, &send).await;
                             }
                         }
                         client
@@ -610,9 +683,27 @@ async fn watch(
                 let _ = client
                     .respond_error(id, RpcError::method_not_found(&method))
                     .await;
+                // Fail closed: an approval that cannot be read is still one.
+                if method.contains("pproval") {
+                    let refusal =
+                        Refusal::new(format!("the app server sent an unreadable {method}"));
+                    violation(&runtime, None, &refusal, &send).await;
+                }
             }
-            Incoming::Malformed { error, .. } => {
+            Incoming::Malformed { line, error } => {
                 tracing::warn!(user = %user, %error, "undecodable app-server message");
+                // Fail closed: an item that cannot be checked is refused.
+                let value: Option<serde_json::Value> = serde_json::from_str(&line).ok();
+                let method = value.as_ref().and_then(|v| v["method"].as_str());
+                if matches!(method, Some("item/started" | "item/completed")) {
+                    let thread = value
+                        .as_ref()
+                        .and_then(|v| v["params"]["threadId"].as_str())
+                        .map(str::to_owned);
+                    let refusal =
+                        Refusal::new("the app server sent an item that could not be checked");
+                    violation(&runtime, thread.as_deref(), &refusal, &send).await;
+                }
             }
         }
     }
@@ -621,27 +712,27 @@ async fn watch(
     send(RuntimeEventKind::Exited);
 }
 
+/// Handles a broken safety rule: refuses the thread, taints Codex for the
+/// whole gateway, which stops every app server, and reports it.
 async fn violation(
     runtime: &Runtime,
-    thread_id: &str,
-    turn_id: Option<&str>,
+    thread_id: Option<&str>,
     refusal: &Refusal,
     send: &impl Fn(RuntimeEventKind),
 ) {
-    tracing::error!(user = %runtime.user, thread = %thread_id, %refusal, "safety rule broken; refusing the thread");
-    runtime.refuse(thread_id, &refusal.0);
-    if let Some(turn_id) = turn_id {
-        // Do not wait on the answer here: the watcher must keep reading.
-        let client = runtime.client.clone();
-        let (thread_id, turn_id) = (thread_id.to_owned(), turn_id.to_owned());
-        tokio::spawn(async move {
-            let _ = client
-                .turn_interrupt(&TurnInterruptParams { thread_id, turn_id })
-                .await;
+    tracing::error!(
+        user = %runtime.user,
+        thread = thread_id.unwrap_or("-"),
+        %refusal,
+        "safety rule broken; stopping Codex for the whole gateway until it restarts"
+    );
+    if let Some(thread_id) = thread_id {
+        runtime.refuse(thread_id, &refusal.0);
+        send(RuntimeEventKind::Refused {
+            thread_id: thread_id.into(),
+            reason: refusal.0.clone(),
         });
     }
-    send(RuntimeEventKind::Refused {
-        thread_id: thread_id.into(),
-        reason: refusal.0.clone(),
-    });
+    runtime.latch.taint(&refusal.0);
+    runtime.stop();
 }

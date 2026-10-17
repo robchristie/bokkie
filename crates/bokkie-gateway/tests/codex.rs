@@ -204,12 +204,23 @@ async fn threads_must_be_resumed_on_a_new_app_server() {
     second.start_turn(&thread, "hi").await.unwrap();
 }
 
+async fn wait_until(mut condition: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !condition() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the condition holds in time");
+}
+
 #[tokio::test]
-async fn a_forbidden_item_mid_turn_interrupts_and_refuses_the_thread() {
+async fn a_forbidden_item_mid_turn_stops_codex_for_the_whole_gateway() {
     let gateway = Gateway::new().await;
-    let user = UserId(1);
+    let (amy, ben) = (UserId(1), UserId(2));
     gateway.fake.with(|b| b.finish_turns = false);
-    let runtime = gateway.state.supervisor.runtime(user).await.unwrap();
+    let runtime = gateway.state.supervisor.runtime(amy).await.unwrap();
+    let bens = gateway.state.supervisor.runtime(ben).await.unwrap();
     let thread = runtime
         .start_thread("x".into(), None)
         .await
@@ -218,7 +229,7 @@ async fn a_forbidden_item_mid_turn_interrupts_and_refuses_the_thread() {
         .id;
     let turn = runtime.start_turn(&thread, "hi").await.unwrap().id;
     gateway.fake.inject(
-        user,
+        amy,
         json!({"method": "item/started", "params": {"threadId": thread, "turnId": turn,
             "item": {"type": "commandExecution", "id": "c1", "command": "cat /data/bokkie.sqlite3",
                      "cwd": "/", "status": "inProgress", "aggregatedOutput": null, "exitCode": null}}}),
@@ -232,22 +243,44 @@ async fn a_forbidden_item_mid_turn_interrupts_and_refuses_the_thread() {
         !reason.contains("sqlite"),
         "the command is not repeated: {reason}"
     );
-    // The turn was interrupted and the thread is refused from now on, even
-    // after a resume.
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while gateway.fake.received("turn/interrupt").is_empty() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    assert!(!runtime.is_served(&thread));
+    // Every app server stops, and none is served until the gateway restarts.
+    wait_until(|| !runtime.is_alive() && !bens.is_alive()).await;
+    assert!(gateway.state.supervisor.tainted().is_some());
+    refused(gateway.state.supervisor.runtime(amy).await);
+    refused(gateway.state.supervisor.runtime(ben).await);
     refused(runtime.start_turn(&thread, "again").await);
     refused(runtime.resume_thread(&thread, "x".into()).await);
 }
 
 #[tokio::test]
-async fn approval_requests_are_declined_and_refuse_the_thread() {
+async fn a_refused_thread_stays_refused_on_the_next_app_server() {
+    let gateway = Gateway::new().await;
+    let user = UserId(1);
+    let first = gateway.state.supervisor.runtime(user).await.unwrap();
+    let good = first
+        .start_thread("x".into(), None)
+        .await
+        .unwrap()
+        .thread
+        .id;
+    gateway.fake.with(|b| b.profile = ":workspace".into());
+    refused(first.resume_thread("thr-bad", "x".into()).await);
+    gateway.fake.crash(user);
+    let _ = first.start_turn(&good, "hi").await;
+    next_event(&gateway, |k| matches!(k, RuntimeEventKind::Exited)).await;
+
+    // Even with the app server now reporting the right profile, the
+    // refused thread is not served again; the other thread is.
+    gateway.fake.with(|b| b.profile = "bokkie".into());
+    let second = gateway.state.supervisor.runtime(user).await.unwrap();
+    refused(second.resume_thread("thr-bad", "x".into()).await);
+    refused(second.start_turn("thr-bad", "hi").await);
+    second.resume_thread(&good, "x".into()).await.unwrap();
+    second.start_turn(&good, "hi").await.unwrap();
+}
+
+#[tokio::test]
+async fn approval_requests_are_declined_and_stop_codex() {
     let gateway = Gateway::new().await;
     let user = UserId(1);
     let runtime = gateway.state.supervisor.runtime(user).await.unwrap();
@@ -263,16 +296,23 @@ async fn approval_requests_are_declined_and_refuse_the_thread() {
             "threadId": thread, "turnId": "turn-1", "itemId": "f1", "reason": null}}),
     );
     next_event(&gateway, |k| matches!(k, RuntimeEventKind::Refused { .. })).await;
-    let responses = gateway.fake.received("<response>");
-    let answer = responses
-        .iter()
+    let answer = gateway
+        .fake
+        .received("<response>")
+        .into_iter()
         .find(|r| r.params["id"] == 900)
-        .expect("the request was answered");
+        .expect("the request was answered first");
     assert_eq!(answer.params["result"]["decision"], "decline");
+    assert!(gateway.state.supervisor.tainted().is_some());
     refused(runtime.start_turn(&thread, "hi").await);
+}
 
-    // An unknown approval kind is refused too, and answered with an error.
-    let other = runtime
+#[tokio::test]
+async fn unknown_approval_kinds_stop_codex_too() {
+    let gateway = Gateway::new().await;
+    let user = UserId(1);
+    let runtime = gateway.state.supervisor.runtime(user).await.unwrap();
+    let thread = runtime
         .start_thread("y".into(), None)
         .await
         .unwrap()
@@ -281,25 +321,75 @@ async fn approval_requests_are_declined_and_refuse_the_thread() {
     gateway.fake.inject(
         user,
         json!({"id": 901, "method": "item/permissions/requestApproval", "params": {
-            "threadId": other, "turnId": "turn-2", "itemId": "p1"}}),
+            "threadId": thread, "turnId": "turn-2", "itemId": "p1"}}),
     );
     next_event(
         &gateway,
-        |k| matches!(k, RuntimeEventKind::Refused { thread_id, .. } if *thread_id == other),
+        |k| matches!(k, RuntimeEventKind::Refused { thread_id, .. } if *thread_id == thread),
     )
     .await;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let responses = gateway.fake.received("<response>");
-            if let Some(answer) = responses.iter().find(|r| r.params["id"] == 901) {
-                assert!(answer.params["error"].is_object());
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+    let answer = gateway
+        .fake
+        .received("<response>")
+        .into_iter()
+        .find(|r| r.params["id"] == 901)
+        .expect("answered");
+    assert!(answer.params["error"].is_object());
+    assert!(gateway.state.supervisor.tainted().is_some());
+}
+
+#[tokio::test]
+async fn unreadable_items_and_approvals_fail_closed() {
+    // An item whose shape no longer decodes cannot be checked.
+    let gateway = Gateway::new().await;
+    let user = UserId(1);
+    let runtime = gateway.state.supervisor.runtime(user).await.unwrap();
+    gateway.fake.inject(
+        user,
+        json!({"method": "item/started", "params": {"threadId": "thr-1-1", "turnId": "t",
+            "item": {"type": "commandExecution", "id": 7}}}),
+    );
+    wait_until(|| gateway.state.supervisor.tainted().is_some()).await;
+    wait_until(|| !runtime.is_alive()).await;
+
+    // So can an approval request whose parameters do not decode.
+    let gateway = Gateway::new().await;
+    gateway.state.supervisor.runtime(user).await.unwrap();
+    gateway.fake.inject(
+        user,
+        json!({"id": 902, "method": "item/commandExecution/requestApproval", "params": {"x": 1}}),
+    );
+    wait_until(|| gateway.state.supervisor.tainted().is_some()).await;
+}
+
+#[tokio::test]
+async fn questions_to_the_user_are_answered_with_an_error() {
+    let gateway = Gateway::new().await;
+    let user = UserId(1);
+    let runtime = gateway.state.supervisor.runtime(user).await.unwrap();
+    let thread = runtime
+        .start_thread("x".into(), None)
+        .await
+        .unwrap()
+        .thread
+        .id;
+    gateway.fake.inject(
+        user,
+        json!({"id": 903, "method": "item/tool/requestUserInput", "params": {
+            "threadId": thread, "turnId": "t", "itemId": "q", "isBlocking": true,
+            "questions": []}}),
+    );
+    wait_until(|| {
+        gateway
+            .fake
+            .received("<response>")
+            .iter()
+            .any(|r| r.params["id"] == 903 && r.params["error"].is_object())
     })
-    .await
-    .unwrap();
+    .await;
+    // That is not a safety breach.
+    assert!(gateway.state.supervisor.tainted().is_none());
+    assert!(runtime.is_served(&thread));
 }
 
 #[tokio::test]

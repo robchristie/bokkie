@@ -67,6 +67,10 @@ pub fn render(data_dir: &Path, catalog: &Path) -> String {
         "model_catalog_json = {}\n",
         quote(&catalog.display().to_string())
     ));
+    // Codex reads AGENTS.md through its sandbox helper, which needs a working
+    // Bubblewrap. Chat-only threads need neither, and a workspace file must
+    // not add instructions.
+    out.push_str("project_doc_max_bytes = 0\n");
     out.push_str("check_for_update_on_startup = false\n\n");
     out.push_str("[features]\n");
     for feature in DISABLED_FEATURES {
@@ -95,6 +99,7 @@ mod tests {
         assert!(text.contains("default_permissions = \"bokkie\"\n"));
         assert!(text.contains("model_catalog_json = \"/data/codex/models.json\"\n"));
         assert!(text.contains("\"/data\" = \"deny\"\n"));
+        assert!(text.contains("project_doc_max_bytes = 0\n"));
         for feature in DISABLED_FEATURES {
             assert!(
                 text.contains(&format!("\n{feature} = false\n")),

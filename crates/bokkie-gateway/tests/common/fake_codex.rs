@@ -280,6 +280,8 @@ impl FakeCodex {
             "model_catalog_json": context.catalog.display().to_string(),
             "features": features,
             "mcp_servers": {},
+            "project_doc_max_bytes": 0,
+            "profile": null,
             "permissions": {"bokkie": {
                 "description": null, "extends": null,
                 "filesystem": {

@@ -107,7 +107,7 @@ pub fn write(path: &Path, bundled: Value) -> Result<Catalog, Refusal> {
     let stripped = strip_tools(bundled)?;
     let bytes = serde_json::to_vec_pretty(&stripped).map_err(Refusal::new)?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(Refusal::new)?;
+        private_dir(parent)?;
     }
     let temporary = path.with_extension("json.tmp");
     let mut file = std::fs::OpenOptions::new()
@@ -121,6 +121,16 @@ pub fn write(path: &Path, bundled: Value) -> Result<Catalog, Refusal> {
     file.sync_all().map_err(Refusal::new)?;
     std::fs::rename(&temporary, path).map_err(Refusal::new)?;
     load(path)
+}
+
+fn private_dir(path: &Path) -> Result<(), Refusal> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+        .map_err(Refusal::new)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(Refusal::new)
 }
 
 /// Reads back and checks the catalog at `path`.
@@ -137,7 +147,7 @@ pub fn load(path: &Path) -> Result<Catalog, Refusal> {
 /// empty environment and a scratch `CODEX_HOME`, so no user's configuration
 /// or credentials take part.
 pub async fn export_bundled(program: &Path, scratch_home: &Path) -> Result<Value, Refusal> {
-    std::fs::create_dir_all(scratch_home).map_err(Refusal::new)?;
+    private_dir(scratch_home)?;
     let mut command = tokio::process::Command::new(program);
     command
         .args(["debug", "models", "--bundled"])
