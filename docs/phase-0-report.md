@@ -11,8 +11,8 @@ code depends on them. They can, with conditions.
 
 | Question | Decision |
 | --- | --- |
-| Container profile | **B, targeted.** It passed every check that A passed and held unchanged across three Codex versions. It also keeps Docker's default seccomp denials and AppArmor confinement, which A gives up |
-| Mitigation for invariants 1, 3 and 4 | **A Codex permission profile** (`bokkie`). It is required: Codex's built-in `:workspace` profile fails invariants 1 and 3 and shares `/tmp`. A distinct UID per user is recommended defence in depth, decided in Phase 4 (see [Open items](#open-items-for-later-phases)). A container per user is not needed |
+| Container profile | **B, targeted.** It passed every check that A passed and held unchanged across three Codex versions. Unlike A, it keeps Docker's default seccomp policy, apart from the namespace and mount calls Bubblewrap needs, and keeps AppArmor confinement |
+| Mitigation for invariants 1, 3 and 4 | **A Codex permission profile** (`bokkie`) for invariants 1 and 3. It is required: Codex's built-in `:workspace` profile fails invariants 1 and 3 and shares `/tmp`. Invariant 4 held in every run; because Codex's fallback is silent, the defence for it is a procfs preflight before command execution is enabled (Phase 4). A distinct UID per user is recommended defence in depth, decided in Phase 4 (see [Open items](#open-items-for-later-phases)). A container per user is not needed |
 | Tool route | **`dynamicTools`**. "Message another Bot" worked, before and after a container restart |
 | Command path | **The app server only** (`thread`/`turn` and `command/exec`). The `codex sandbox` CLI leaves its sandbox running when it is killed, so Bokkie must not use it |
 
@@ -61,8 +61,9 @@ explicit go-ahead. Raw results stay on nostromo under
 | --- | --- | --- |
 | `control-2` | `fff3350` | Docker defaults |
 | `a-1` | `2dae5d5` | A, relaxed: `seccomp=unconfined`, `apparmor=unconfined`, `systempaths=unconfined` |
+| `b-1` | `bf06daa` | B before calibration; Bubblewrap blocked, see below |
 | `b-2` | `c94cebe` | B, targeted: [`seccomp-b.json`](../deploy/qualify/policy/seccomp-b.json), AppArmor [`bokkie-qualify-b`](../deploy/qualify/policy/bokkie-qualify-b.apparmor), `systempaths=unconfined` |
-| `b-extra` | `c94cebe` | B with Codex 0.162.1 and 0.164.0-alpha.3, plus `/proc` exposure checks |
+| `b-extra` | `c94cebe` | B with Codex 0.162.1 and 0.164.0-alpha.3, plus `/proc` exposure checks. Run by hand in `c94cebe`'s image, as described below |
 
 The probe harness is identical in `2dae5d5` and `c94cebe`. In between, only
 the run summary in `qualify.sh` and one AppArmor rule for profile B changed.
@@ -96,7 +97,9 @@ A and B produced identical results, check for check, on all 30 steps.
 ### Profile B calibration
 
 The first B run (`b-1`) created all its namespaces, so the seccomp change was
-enough. AppArmor then denied one mount:
+enough. Bubblewrap then failed with `mounting proc: Permission denied`. An
+`strace` of `codex sandbox` in the same container showed which mount
+AppArmor denied:
 
 ```text
 pivot_root("/tmp", "oldroot") = 0
@@ -109,7 +112,9 @@ the fresh procfs. One rule admits it:
 was needed.
 
 B's AppArmor rules confine mount targets to Bubblewrap's staging paths
-(`/newroot/**` and `/tmp/**`) instead of exact flag tuples. This is an
+(`/newroot/**` and `/tmp/**`) instead of exact flag tuples. They also allow
+three fixed operations: propagation changes on `/` (`rslave`) and
+`/oldroot/` (`rprivate`), and the `/oldroot/proc/` bind above. This is an
 accepted surface. Any source and filesystem type may be mounted onto those
 targets, and only inside a user namespace, which a process must create
 first. The fresh-procfs check catches a mount that leaks the container's
@@ -119,23 +124,40 @@ Codex also changes its mount list between releases.
 
 With B unchanged, the sandbox and orphan checks passed with:
 
-- Codex **0.162.1**;
+- Codex **0.162.1**, the previous release;
 - Codex **0.163.0**;
-- Codex **0.164.0-alpha.3**, the next release line.
+- Codex **0.164.0-alpha.3**, a pre-release of the next release line.
 
-That meets the plan's condition for preferring B: it held across a Codex
-version change without rework. Its rules depend on Bubblewrap's staging
+For the two other versions the image stayed at `c94cebe`. The npm Linux
+tarball was verified against npm's SHA-512 integrity and unpacked into
+`bob`'s workspace on the volume. The harness then ran with `--codex` pointing
+at it, as `bob`, so `alice`'s signed-in `CODEX_HOME` never saw another Codex
+version. These runs covered:
+
+- `bwrap`;
+- `sandbox` through `cli` and `exec`, two users, without live peer app servers;
+- `orphans` through `exec`.
+
+They did not cover model turns or the gateway kill. The JSON results name
+the version only in their file names. They are corroborated by a difference
+in behaviour: 0.162.1 does not add the `tmp/arg0-linux` read root that 0.163.0
+and 0.164.0-alpha.3 add.
+
+That meets the plan's condition for preferring B as far as a pre-release can
+show: it held across Codex versions in both directions without rework. Its rules depend on Bubblewrap's staging
 layout, so the Bubblewrap pin is what B must be requalified against.
 
 Both A and B need `systempaths=unconfined`. Docker's masked `/proc` paths
 stop any fresh procfs mount from a user namespace, as the previous iteration
-found. B replaces those masks with AppArmor denials:
+found. B replaces most of those masks with AppArmor denials. `/sys/firmware`
+names stay listable, as under A:
 
 | Read | Docker default | A | B |
 | --- | --- | --- | --- |
 | `/proc/keys`, `/proc/interrupts` in the container | Masked (empty) | Readable | Denied |
 | `/proc/keys`, `/proc/interrupts` in the sandbox | Not reached | Readable | Denied |
-| `/proc/timer_list`, `/proc/sched_debug`, `/proc/kcore` | Masked | Denied | Denied |
+| `/proc/timer_list`, `/proc/kcore` | Masked | Denied | Denied |
+| `/proc/sched_debug` | Denied | Denied | Denied |
 | `/proc/acpi` contents | Masked | Listed | Denied |
 | `/sys/firmware` names | Masked | Listed | Listed |
 
@@ -143,8 +165,8 @@ found. B replaces those masks with AppArmor denials:
 
 | Invariant | With `bokkie` | With built-in `:workspace` |
 | --- | --- | --- |
-| 1. No sandbox can read any `CODEX_HOME` | Pass for every user, including the sandbox's own `auth.json` | **Fail**: reads its own `auth.json`; with one UID it also reads every other user's |
-| 3. No sandbox can read another user's workspace, data or the database | Pass. `/data/users` lists only the sandbox's own user | **Fail** with one UID; with separate UIDs, file permissions still protect the other user's files, but the database and gateway state are readable |
+| 1. No sandbox can read any `CODEX_HOME` | Pass for every user, including the sandbox's own `auth.json` | **Fail**: reads its own `auth.json`; with one UID it also reads every other user's `CODEX_HOME` (tested with a canary file for users who were not signed in) |
+| 3. No sandbox can read another user's workspace, data or the database | Pass. `/data/users` lists only the sandbox's own user | **Fail** with one UID. With separate UIDs, file permissions still protect the other user's files, but the database and gateway state are readable and `/data/users` names the other user |
 | 4. Fresh procfs and only the sandbox's own processes | Pass: `/proc/1/cmdline` is `codex-linux-sandbox`, two processes visible, and none of the container's processes (identified by name and start time) | Pass |
 
 The `:workspace` result matters for the mitigation choice. **A distinct UID
@@ -254,14 +276,14 @@ not built.
 ## Open items for later phases
 
 - **The gateway must refuse to serve a thread unless the conditions below
-  hold.** Phase 2 adds this, alongside the existing check that tools are
+  hold.** Phase 2 adds these, alongside the existing check that tools are
   disabled until Phase 4:
   - `config/read` reports `default_permissions = "bokkie"`;
   - each `thread/start` and `thread/resume` response reports
-    `activePermissionProfile.id = "bokkie"`;
-  - a `command/exec` preflight of the sandbox probe, run on each app server
-    before command execution is enabled, shows a fresh procfs. This is the
-    only defence against Codex's silent fallback.
+    `activePermissionProfile.id = "bokkie"`.
+- **Procfs preflight.** Before Phase 4 enables command execution, each app
+  server must pass a `command/exec` preflight of the sandbox probe that shows
+  a fresh procfs. This is the only defence against Codex's silent fallback.
 - **In-process reads.** App-server features that read files themselves (for
   example `imageView`) run as the app server's UID, outside the sandbox and
   probably outside the permission profile. Phase 0 did not test them. Phase 4
