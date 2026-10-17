@@ -36,6 +36,11 @@ pub enum CodexError {
     /// A safety check failed. The thread or app server is not served.
     #[error("refused: {0}")]
     Refused(#[from] Refusal),
+    /// This thread failed its own checks. Unlike [`CodexError::Refused`],
+    /// which may concern the app server or the whole gateway, this is about
+    /// the thread alone, so its Bot may record it.
+    #[error("thread refused: {0}")]
+    ThreadRefused(Refusal),
     /// The app server failed or did not answer.
     #[error("app server: {0}")]
     AppServer(String),
@@ -434,7 +439,7 @@ impl Runtime {
         if let Err(refusal) = guard::check_thread(&response, &self.expected) {
             tracing::error!(user = %self.user, thread = %response.thread.id, %refusal, "refusing a thread");
             self.refuse(&response.thread.id, &refusal.0);
-            return Err(refusal.into());
+            return Err(CodexError::ThreadRefused(refusal));
         }
         lock(&self.served).insert(response.thread.id.clone());
         Ok(response)
@@ -500,7 +505,7 @@ impl Runtime {
             return Err(Refusal::new(reason).into());
         }
         match self.latch.thread_refusal(self.user, thread_id) {
-            Some(reason) => Err(Refusal::new(reason).into()),
+            Some(reason) => Err(CodexError::ThreadRefused(Refusal::new(reason))),
             None => Ok(()),
         }
     }

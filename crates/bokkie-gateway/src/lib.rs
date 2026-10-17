@@ -14,6 +14,7 @@ pub mod codex;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod events;
 pub mod routes;
 pub mod secrets;
 
@@ -30,6 +31,7 @@ use crate::bots::Conversations;
 use crate::clock::Clock;
 use crate::codex::Supervisor;
 use crate::config::Config;
+use crate::events::EventLog;
 
 /// State shared by every request.
 #[derive(Debug, Clone)]
@@ -42,17 +44,40 @@ pub struct AppState {
     pub hashing: Arc<Semaphore>,
     pub supervisor: Arc<Supervisor>,
     pub conversations: Arc<Conversations>,
+    pub events: Arc<EventLog>,
+    /// How often an open event socket rechecks its session.
+    pub session_check: std::time::Duration,
 }
 
 impl AppState {
     pub fn new(config: Config, db: SqlitePool, clock: Clock, supervisor: Arc<Supervisor>) -> Self {
+        Self::with_events(
+            config,
+            db.clone(),
+            clock.clone(),
+            supervisor,
+            Arc::new(EventLog::new(db, clock)),
+        )
+    }
+
+    /// Like [`AppState::new`], with a given event log.
+    pub fn with_events(
+        config: Config,
+        db: SqlitePool,
+        clock: Clock,
+        supervisor: Arc<Supervisor>,
+        events: Arc<EventLog>,
+    ) -> Self {
         let conversations = Arc::new(Conversations::new(
             db.clone(),
             clock.clone(),
             supervisor.clone(),
+            events.clone(),
         ));
         Self {
             conversations,
+            events,
+            session_check: std::time::Duration::from_secs(30),
             config: Arc::new(config),
             db,
             clock,
@@ -65,7 +90,7 @@ impl AppState {
 
 /// The gateway's routes, behind the request guard.
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, admin, bots, codex};
+    use routes::{accounts, admin, bots, codex, events};
     let api = Router::new()
         .route("/version", get(version))
         .route(
@@ -82,6 +107,7 @@ pub fn router(state: AppState) -> Router {
         .route("/bots/{id}", get(bots::get).patch(bots::update))
         .route("/bots/{id}/messages", get(bots::messages).post(bots::send))
         .route("/bots/{id}/stop", post(bots::stop))
+        .route("/events", get(events::events))
         .route("/codex/account", get(codex::account))
         .route("/codex/login", post(codex::login))
         .route("/admin/users", get(admin::list_users))

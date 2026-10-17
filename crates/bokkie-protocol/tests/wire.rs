@@ -230,11 +230,12 @@ fn events_are_tagged_by_type() {
             event: Event::MessageDelta {
                 bot_id: BotId(7),
                 message_id: MessageId(42),
+                offset: 3,
                 delta: "lo".into(),
             },
         },
         json!({"seq": 9, "at": 5, "event": {
-            "type": "message_delta", "bot_id": 7, "message_id": 42, "delta": "lo",
+            "type": "message_delta", "bot_id": 7, "message_id": 42, "offset": 3, "delta": "lo",
         }}),
     );
     pin(
@@ -449,4 +450,21 @@ fn more_request_and_response_shapes() {
         json!({"text": "hi"}),
     );
     pin(&StopResponse { stopped: true }, json!({"stopped": true}));
+    pin(
+        &BotList {
+            bots: vec![],
+            seq: Seq(4),
+        },
+        json!({"bots": [], "seq": 4}),
+    );
+    pin(
+        &MessagePage {
+            messages: vec![message()],
+            older: Some(MessageId(40)),
+            seq: Seq(5),
+        },
+        json!({"messages": [{"id": 42, "bot_id": 7, "author": "bot", "text": "Hello",
+                             "state": "streaming", "created_at": 3000, "updated_at": 3500}],
+               "older": 40, "seq": 5}),
+    );
 }

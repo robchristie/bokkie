@@ -8,6 +8,7 @@ use bokkie_protocol::api::{
     Bot, BotList, CreateBotRequest, MessagePage, SendMessageRequest, SendMessageResponse,
     StopResponse, UpdateBotRequest,
 };
+use bokkie_protocol::events::Event;
 use bokkie_protocol::{BotId, MessageId};
 use serde::Deserialize;
 
@@ -26,6 +27,9 @@ async fn to_api(state: &AppState, bot: &BotRow) -> Result<Bot> {
 
 /// `GET /api/v1/bots`.
 pub async fn list(State(state): State<AppState>, signed_in: SignedIn) -> Result<Json<BotList>> {
+    // Read the watermark first: the list then reflects at least every event
+    // up to it.
+    let seq = state.events.latest(signed_in.id()).await?;
     let mut previews = store::previews(&state.db, signed_in.id()).await?;
     let bots = store::list_bots(&state.db, signed_in.id())
         .await?
@@ -35,7 +39,7 @@ pub async fn list(State(state): State<AppState>, signed_in: SignedIn) -> Result<
             bot.to_api(state.conversations.is_working(bot.id), preview)
         })
         .collect();
-    Ok(Json(BotList { bots }))
+    Ok(Json(BotList { bots, seq }))
 }
 
 /// `POST /api/v1/bots`.
@@ -54,7 +58,12 @@ pub async fn create(
         request.avatar.as_deref(),
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(to_api(&state, &bot).await?)))
+    let bot = to_api(&state, &bot).await?;
+    state
+        .events
+        .append(signed_in.id(), Event::BotCreated { bot: bot.clone() })
+        .await?;
+    Ok((StatusCode::CREATED, Json(bot)))
 }
 
 /// `GET /api/v1/bots/{id}`.
@@ -91,7 +100,12 @@ pub async fn update(
         },
     )
     .await?;
-    Ok(Json(to_api(&state, &bot).await?))
+    let bot = to_api(&state, &bot).await?;
+    state
+        .events
+        .append(signed_in.id(), Event::BotUpdated { bot: bot.clone() })
+        .await?;
+    Ok(Json(bot))
 }
 
 #[derive(Debug, Deserialize)]
@@ -110,6 +124,7 @@ pub async fn messages(
     store::bot(&state.db, signed_in.id(), BotId(id))
         .await?
         .ok_or_else(Failure::not_found)?;
+    let seq = state.events.latest(signed_in.id()).await?;
     let (messages, older) = store::messages(
         &state.db,
         signed_in.id(),
@@ -118,7 +133,11 @@ pub async fn messages(
         query.limit.unwrap_or(50),
     )
     .await?;
-    Ok(Json(MessagePage { messages, older }))
+    Ok(Json(MessagePage {
+        messages,
+        older,
+        seq,
+    }))
 }
 
 /// `POST /api/v1/bots/{id}/messages`.

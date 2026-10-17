@@ -54,6 +54,8 @@ pub struct Behaviour {
     pub finish_turns: bool,
     /// Whether a turn streams and finishes before `turn/start` answers.
     pub finish_before_answer: bool,
+    /// Whether `turn/steer` fails, as it does once the turn has ended.
+    pub steer_fails: bool,
     pub signed_in: bool,
     /// The `account/rateLimits/read` result.
     pub rate_limits: Value,
@@ -70,6 +72,7 @@ impl Default for Behaviour {
             reply: vec!["Hello".into(), " there".into()],
             finish_turns: true,
             finish_before_answer: false,
+            steer_fails: false,
             signed_in: true,
             rate_limits: json!({
                 "rateLimits": {"limitId": "codex", "limitName": null, "planType": "pro",
@@ -244,6 +247,11 @@ impl FakeCodex {
                     self.stream_turn(out.clone(), thread, turn.clone());
                 }
                 json!({"turn": {"id": turn, "items": [], "status": "inProgress", "error": null}})
+            }
+            "turn/steer" if self.with(|b| b.steer_fails) => {
+                let _ = out.send(json!({"id": id, "error": {
+                    "code": -32600, "message": "no active turn to steer"}}));
+                return;
             }
             "turn/steer" => json!({"turnId": params["expectedTurnId"]}),
             "turn/interrupt" => {

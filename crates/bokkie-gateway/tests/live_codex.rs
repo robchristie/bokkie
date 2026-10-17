@@ -363,3 +363,113 @@ async fn one_users_app_server_cannot_resume_anothers_thread() {
     }
     assert!(!ben.is_served(&thread.thread.id));
 }
+
+fn requests_text(mock: &MockModel) -> Vec<String> {
+    mock.requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r["input"].to_string())
+        .collect()
+}
+
+/// Bokkie relies on this Codex behaviour: developer instructions are fixed
+/// when a thread starts, and `thread/resume` ignores new ones, warm or
+/// cold. A changed Bot profile therefore travels as turn context instead.
+#[tokio::test]
+async fn developer_instructions_are_fixed_at_thread_start() {
+    let Some(program) = codex() else {
+        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+        return;
+    };
+    let data = tempfile::tempdir().unwrap();
+    let (mock, base_url) = MockModel::start(&["ok"]).await;
+    let (supervisor, mut events) =
+        supervisor(program, data.path(), MockModel::overrides(&base_url)).await;
+    let user = UserId(1);
+    let runtime = supervisor.runtime(user).await.unwrap();
+    let thread = runtime
+        .start_thread("INSTRUCTIONS-ALPHA".into(), None)
+        .await
+        .unwrap()
+        .thread
+        .id;
+    run_turn(&runtime, &mut events, &thread).await;
+    // Warm resume with new instructions.
+    runtime
+        .resume_thread(&thread, "INSTRUCTIONS-BETA".into())
+        .await
+        .unwrap();
+    run_turn(&runtime, &mut events, &thread).await;
+    // Cold resume on a new app server.
+    supervisor.stop(user).await;
+    let runtime = supervisor.runtime(user).await.unwrap();
+    runtime
+        .resume_thread(&thread, "INSTRUCTIONS-GAMMA".into())
+        .await
+        .unwrap();
+    run_turn(&runtime, &mut events, &thread).await;
+    let requests = requests_text(&mock);
+    assert_eq!(requests.len(), 3);
+    for request in &requests {
+        assert!(request.contains("INSTRUCTIONS-ALPHA"));
+        assert!(!request.contains("INSTRUCTIONS-BETA"));
+        assert!(!request.contains("INSTRUCTIONS-GAMMA"));
+    }
+}
+
+/// And this: an application context fragment reaches the model as a
+/// tagged developer message and stays in the thread's history.
+#[tokio::test]
+async fn profile_context_reaches_the_model_and_stays_in_history() {
+    use bokkie_codex::protocol::{AdditionalContextEntry, AdditionalContextKind};
+    let Some(program) = codex() else {
+        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+        return;
+    };
+    let data = tempfile::tempdir().unwrap();
+    let (mock, base_url) = MockModel::start(&["ok"]).await;
+    let (supervisor, mut events) =
+        supervisor(program, data.path(), MockModel::overrides(&base_url)).await;
+    let user = UserId(1);
+    let runtime = supervisor.runtime(user).await.unwrap();
+    let thread = runtime
+        .start_thread("You are a test Bot.".into(), None)
+        .await
+        .unwrap()
+        .thread
+        .id;
+    let context = [(
+        "bokkie-profile".to_owned(),
+        AdditionalContextEntry {
+            kind: AdditionalContextKind::Application,
+            value: "PROFILE-DELTA".into(),
+        },
+    )]
+    .into();
+    let turn = runtime
+        .start_turn(&thread, "first", Some(context))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if let RuntimeEventKind::Notification(ServerNotification::TurnCompleted(done)) =
+                events.recv().await.unwrap().kind
+                && done.turn.id == turn.id
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    run_turn(&runtime, &mut events, &thread).await;
+    let requests = requests_text(&mock);
+    for request in &requests {
+        assert!(
+            request.contains("<bokkie-profile>PROFILE-DELTA</bokkie-profile>"),
+            "{request}"
+        );
+    }
+    assert_eq!(requests.len(), 2);
+}

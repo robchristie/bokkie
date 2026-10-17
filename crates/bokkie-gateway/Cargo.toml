@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 argon2 = { version = "0.5", features = ["std"] }
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log", "ws"] }
 base64 = "0.22"
 bokkie-codex = { path = "../bokkie-codex" }
 bokkie-protocol = { path = "../bokkie-protocol" }
@@ -24,6 +24,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+tokio-tungstenite = "0.27"
 http-body-util = "0.1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

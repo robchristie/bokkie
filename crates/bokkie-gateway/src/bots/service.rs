@@ -17,7 +17,10 @@ use std::time::Duration;
 use bokkie_codex::protocol::{
     AdditionalContextEntry, AdditionalContextKind, ServerNotification, ThreadItem, TurnStatus,
 };
-use bokkie_protocol::api::{Author, Delivery, Message, MessageState, SendMessageResponse};
+use bokkie_protocol::api::{
+    Author, BotStatus, Delivery, Message, MessageState, SendMessageResponse,
+};
+use bokkie_protocol::events::Event;
 use bokkie_protocol::{BotId, MessageId, UserId};
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
@@ -27,6 +30,7 @@ use crate::accounts::Account;
 use crate::clock::Clock;
 use crate::codex::{CodexError, RuntimeEvent, RuntimeEventKind, Supervisor};
 use crate::error::{Failure, Result};
+use crate::events::EventLog;
 
 /// How often streamed text is written out. Deltas arriving in between are
 /// coalesced into one write.
@@ -102,14 +106,18 @@ struct Reply {
     message: MessageId,
     /// Streamed text not yet written out.
     pending: String,
+    /// How much text is written out, in `char`s: the next delta's offset.
+    written: u64,
 }
 
 #[derive(Debug, Default)]
 struct Live {
     /// The running turn of each Bot.
     turns: HashMap<BotId, ActiveTurn>,
-    /// Bot replies still streaming, by the user and Codex item id.
-    replies: HashMap<(UserId, String), Reply>,
+    /// Bot replies still streaming, by the user, thread and Codex item id.
+    /// The item id alone is the model's message id, which a provider need
+    /// not keep unique across threads.
+    replies: HashMap<(UserId, String, String), Reply>,
     /// Recently finished turns. A turn can finish before `turn/start`
     /// answers, and must not then be recorded as running.
     finished: std::collections::VecDeque<String>,
@@ -132,6 +140,7 @@ pub struct Conversations {
     db: SqlitePool,
     clock: Clock,
     supervisor: Arc<Supervisor>,
+    events: Arc<EventLog>,
     live: std::sync::Mutex<Live>,
     /// Serialises sends to one Bot.
     sends: std::sync::Mutex<HashMap<BotId, Arc<tokio::sync::Mutex<()>>>>,
@@ -139,7 +148,7 @@ pub struct Conversations {
 
 fn unavailable(error: CodexError) -> Failure {
     match error {
-        CodexError::Refused(_) => Failure::unavailable(
+        CodexError::Refused(_) | CodexError::ThreadRefused(_) => Failure::unavailable(
             "This Bot is unavailable because a safety check failed. An admin has been told",
         ),
         CodexError::AppServer(_) => Failure::unavailable("The Bots' runtime is unavailable"),
@@ -147,11 +156,17 @@ fn unavailable(error: CodexError) -> Failure {
 }
 
 impl Conversations {
-    pub fn new(db: SqlitePool, clock: Clock, supervisor: Arc<Supervisor>) -> Self {
+    pub fn new(
+        db: SqlitePool,
+        clock: Clock,
+        supervisor: Arc<Supervisor>,
+        events: Arc<EventLog>,
+    ) -> Self {
         Self {
             db,
             clock,
             supervisor,
+            events,
             live: Default::default(),
             sends: Default::default(),
         }
@@ -161,6 +176,16 @@ impl Conversations {
         self.live
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Appends an event to the user's log. A failure, which means the
+    /// database failed, is logged: the change itself has happened, the event
+    /// is lost, and sequence numbers stay contiguous. Clients see the change
+    /// the next time they load it over HTTP.
+    async fn emit(&self, user: UserId, event: Event) {
+        if let Err(failure) = self.events.append(user, event).await {
+            tracing::error!(user = %user, message = %failure.message, "appending an event failed");
+        }
     }
 
     pub fn is_working(&self, bot: BotId) -> bool {
@@ -178,17 +203,27 @@ impl Conversations {
 
     /// Marks replies left streaming by a previous gateway run as failed.
     pub async fn recover(&self) -> Result<()> {
-        let done = sqlx::query(
-            "UPDATE messages SET state = 'failed', updated_at = ? WHERE state = 'streaming'",
-        )
-        .bind(self.clock.now().0)
-        .execute(&self.db)
-        .await?;
-        if done.rows_affected() > 0 {
-            tracing::warn!(
-                count = done.rows_affected(),
-                "marked interrupted replies as failed"
-            );
+        let left: Vec<(i64, i64)> =
+            sqlx::query_as("SELECT id, user_id FROM messages WHERE state = 'streaming'")
+                .fetch_all(&self.db)
+                .await?;
+        for (id, user) in &left {
+            let user = UserId(*user);
+            if let Some(message) = store::finish_message(
+                &self.db,
+                self.clock.now(),
+                user,
+                MessageId(*id),
+                None,
+                MessageState::Failed,
+            )
+            .await?
+            {
+                self.emit(user, Event::MessageCompleted { message }).await;
+            }
+        }
+        if !left.is_empty() {
+            tracing::warn!(count = left.len(), "marked interrupted replies as failed");
         }
         Ok(())
     }
@@ -260,6 +295,13 @@ impl Conversations {
             },
         )
         .await?;
+        self.emit(
+            user,
+            Event::MessageCreated {
+                message: message.clone(),
+            },
+        )
+        .await;
 
         // Steer the running turn, if there is one.
         let active = self.live().turns.get(&bot.id).cloned();
@@ -279,7 +321,7 @@ impl Conversations {
                 Err(CodexError::AppServer(error)) => {
                     tracing::info!(bot = %bot.id, %error, "steer missed the turn; starting one");
                 }
-                Err(refused @ CodexError::Refused(_)) => {
+                Err(refused @ (CodexError::Refused(_) | CodexError::ThreadRefused(_))) => {
                     return Err(self
                         .refusing::<()>(user, &bot, Err(refused))
                         .await
@@ -290,17 +332,24 @@ impl Conversations {
         let turn = runtime.start_turn(&thread_id, &text, profile).await;
         let turn = self.refusing(user, &bot, turn).await?;
         store::set_profile_sent(&self.db, user, bot.id, bot.profile_revision).await?;
-        {
+        // Whichever of this and the router's `turn/started` records the turn
+        // first announces that the Bot is working.
+        let started = {
             let mut live = self.live();
-            if !live.finished.contains(&turn.id) {
-                live.turns.insert(
-                    bot.id,
-                    ActiveTurn {
-                        thread_id,
-                        turn_id: turn.id,
-                    },
-                );
-            }
+            !live.finished.contains(&turn.id)
+                && live
+                    .turns
+                    .insert(
+                        bot.id,
+                        ActiveTurn {
+                            thread_id,
+                            turn_id: turn.id,
+                        },
+                    )
+                    .is_none()
+        };
+        if started {
+            self.status(user, bot.id, BotStatus::Working).await;
         }
         Ok(SendMessageResponse {
             message,
@@ -317,10 +366,21 @@ impl Conversations {
     ) -> Result<T> {
         match result {
             Ok(value) => Ok(value),
-            Err(CodexError::Refused(refusal)) => {
+            // Only a refusal of this Bot's own thread is recorded on the
+            // Bot. A refusal of the app server or the whole gateway is not
+            // the Bot's, and must not outlive it.
+            Err(CodexError::ThreadRefused(refusal)) => {
                 tracing::error!(user = %user, bot = %bot.id, %refusal, "refusing a Bot");
                 store::set_refused(&self.db, self.clock.now(), user, bot.id, &refusal.0).await?;
-                Err(unavailable(CodexError::Refused(refusal)))
+                self.emit(
+                    user,
+                    Event::BotStatusChanged {
+                        bot_id: bot.id,
+                        status: BotStatus::Refused,
+                    },
+                )
+                .await;
+                Err(unavailable(CodexError::ThreadRefused(refusal)))
             }
             Err(error) => {
                 tracing::warn!(user = %user, bot = %bot.id, %error, "Codex failed");
@@ -376,15 +436,30 @@ impl Conversations {
 
     /// Writes out every reply's pending streamed text.
     pub async fn flush(&self) -> Result<()> {
-        let pending: Vec<(UserId, MessageId, String)> = self
+        let pending: Vec<(UserId, BotId, MessageId, u64, String)> = self
             .live()
             .replies
             .values_mut()
             .filter(|r| !r.pending.is_empty())
-            .map(|r| (r.user, r.message, std::mem::take(&mut r.pending)))
+            .map(|r| {
+                let text = std::mem::take(&mut r.pending);
+                let offset = r.written;
+                r.written += text.chars().count() as u64;
+                (r.user, r.bot, r.message, offset, text)
+            })
             .collect();
-        for (user, message, text) in pending {
-            store::append_text(&self.db, self.clock.now(), user, message, &text).await?;
+        for (user, bot_id, message_id, offset, delta) in pending {
+            store::append_text(&self.db, self.clock.now(), user, message_id, &delta).await?;
+            self.emit(
+                user,
+                Event::MessageDelta {
+                    bot_id,
+                    message_id,
+                    offset,
+                    delta,
+                },
+            )
+            .await;
         }
         Ok(())
     }
@@ -399,13 +474,20 @@ impl Conversations {
                     if let Some(bot) =
                         store::bot_by_thread(&self.db, user, &started.thread_id).await?
                     {
-                        self.live().turns.insert(
-                            bot.id,
-                            ActiveTurn {
-                                thread_id: started.thread_id,
-                                turn_id: started.turn.id,
-                            },
-                        );
+                        let was_idle = self
+                            .live()
+                            .turns
+                            .insert(
+                                bot.id,
+                                ActiveTurn {
+                                    thread_id: started.thread_id,
+                                    turn_id: started.turn.id,
+                                },
+                            )
+                            .is_none();
+                        if was_idle {
+                            self.status(user, bot.id, BotStatus::Working).await;
+                        }
                     }
                 }
                 ServerNotification::ItemStarted(item) => {
@@ -415,24 +497,32 @@ impl Conversations {
                     }
                 }
                 ServerNotification::AgentMessageDelta(delta) => {
-                    let known = self
-                        .live()
-                        .replies
-                        .contains_key(&(user, delta.item_id.clone()));
+                    let known = self.live().replies.contains_key(&(
+                        user,
+                        delta.thread_id.clone(),
+                        delta.item_id.clone(),
+                    ));
                     if !known {
                         self.reply(user, &delta.thread_id, &delta.turn_id, &delta.item_id, "")
                             .await?;
                     }
-                    if let Some(reply) = self.live().replies.get_mut(&(user, delta.item_id)) {
+                    if let Some(reply) =
+                        self.live()
+                            .replies
+                            .get_mut(&(user, delta.thread_id, delta.item_id))
+                    {
                         reply.pending.push_str(&delta.delta);
                     }
                 }
                 ServerNotification::ItemCompleted(item) => {
                     if let ThreadItem::AgentMessage { id, text } = &item.item {
-                        let reply = self.live().replies.remove(&(user, id.clone()));
+                        let reply =
+                            self.live()
+                                .replies
+                                .remove(&(user, item.thread_id.clone(), id.clone()));
                         if let Some(reply) = reply {
                             // The final text replaces whatever streamed.
-                            store::finish_message(
+                            let message = store::finish_message(
                                 &self.db,
                                 self.clock.now(),
                                 user,
@@ -441,23 +531,27 @@ impl Conversations {
                                 MessageState::Complete,
                             )
                             .await?;
+                            if let Some(message) = message {
+                                self.emit(user, Event::MessageCompleted { message }).await;
+                            }
                         }
                     }
                 }
                 ServerNotification::TurnCompleted(done) => {
                     if let Some(bot) = store::bot_by_thread(&self.db, user, &done.thread_id).await?
                     {
-                        {
+                        let ended = {
                             let mut live = self.live();
                             live.finished(&done.turn.id);
-                            if live
+                            let current = live
                                 .turns
                                 .get(&bot.id)
-                                .is_some_and(|t| t.turn_id == done.turn.id)
-                            {
+                                .is_some_and(|t| t.turn_id == done.turn.id);
+                            if current {
                                 live.turns.remove(&bot.id);
                             }
-                        }
+                            current
+                        };
                         let state = match done.turn.status {
                             TurnStatus::Completed | TurnStatus::InProgress => {
                                 MessageState::Complete
@@ -466,10 +560,26 @@ impl Conversations {
                             TurnStatus::Failed => MessageState::Failed,
                         };
                         self.finish_streaming(user, Some(bot.id), state).await?;
+                        if ended && bot.refused_reason.is_none() {
+                            self.status(user, bot.id, BotStatus::Idle).await;
+                        }
                     }
                 }
                 ServerNotification::Error(error) if !error.will_retry => {
                     tracing::warn!(user = %user, thread = %error.thread_id, message = %error.error.message, "turn error");
+                    if let Some(bot) =
+                        store::bot_by_thread(&self.db, user, &error.thread_id).await?
+                    {
+                        let message: String = error.error.message.chars().take(300).collect();
+                        self.emit(
+                            user,
+                            Event::BotError {
+                                bot_id: bot.id,
+                                message,
+                            },
+                        )
+                        .await;
+                    }
                 }
                 _ => {}
             },
@@ -479,6 +589,7 @@ impl Conversations {
                     self.live().turns.remove(&bot.id);
                     self.finish_streaming(user, Some(bot.id), MessageState::Failed)
                         .await?;
+                    self.status(user, bot.id, BotStatus::Refused).await;
                 }
             }
             RuntimeEventKind::Exited => {
@@ -487,14 +598,18 @@ impl Conversations {
                     .into_iter()
                     .map(|b| b.id)
                     .collect();
-                {
+                let stopped: Vec<BotId> = {
                     let mut live = self.live();
-                    for bot in &bots {
-                        live.turns.remove(bot);
-                    }
-                }
+                    bots.iter()
+                        .filter(|bot| live.turns.remove(bot).is_some())
+                        .copied()
+                        .collect()
+                };
                 self.finish_streaming(user, None, MessageState::Failed)
                     .await?;
+                for bot in stopped {
+                    self.status(user, bot, BotStatus::Idle).await;
+                }
             }
         }
         Ok(())
@@ -515,7 +630,7 @@ impl Conversations {
         if self
             .live()
             .replies
-            .contains_key(&(user, item_id.to_owned()))
+            .contains_key(&(user, thread_id.to_owned(), item_id.to_owned()))
         {
             return Ok(None);
         }
@@ -532,6 +647,13 @@ impl Conversations {
             },
         )
         .await?;
+        self.emit(
+            user,
+            Event::MessageCreated {
+                message: message.clone(),
+            },
+        )
+        .await;
         let mut live = self.live();
         if !live.finished.iter().any(|t| t == turn_id) {
             live.turns.entry(bot.id).or_insert_with(|| ActiveTurn {
@@ -540,12 +662,13 @@ impl Conversations {
             });
         }
         live.replies.insert(
-            (user, item_id.into()),
+            (user, thread_id.into(), item_id.into()),
             Reply {
                 user,
                 bot: bot.id,
                 message: message.id,
                 pending: String::new(),
+                written: text.chars().count() as u64,
             },
         );
         Ok(Some(message))
@@ -561,10 +684,20 @@ impl Conversations {
         self.flush().await?;
         self.live()
             .replies
-            .retain(|(owner, _), reply| *owner != user || bot.is_some_and(|b| b != reply.bot));
+            .retain(|(owner, _, _), reply| *owner != user || bot.is_some_and(|b| b != reply.bot));
         for message in store::streaming_messages(&self.db, user, bot).await? {
-            store::finish_message(&self.db, self.clock.now(), user, message, None, state).await?;
+            if let Some(message) =
+                store::finish_message(&self.db, self.clock.now(), user, message, None, state)
+                    .await?
+            {
+                self.emit(user, Event::MessageCompleted { message }).await;
+            }
         }
         Ok(())
+    }
+
+    async fn status(&self, user: UserId, bot_id: BotId, status: BotStatus) {
+        self.emit(user, Event::BotStatusChanged { bot_id, status })
+            .await;
     }
 }

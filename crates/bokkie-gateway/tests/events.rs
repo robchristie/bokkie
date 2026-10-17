@@ -1,0 +1,593 @@
+//! The event WebSocket over a real socket.
+
+mod common;
+
+use std::net::SocketAddr;
+use std::time::Duration;
+
+use axum::http::{Method, StatusCode};
+use bokkie_protocol::events::{ClientFrame, Event, EventEnvelope, Seq, ServerFrame};
+use common::{Call, Gateway, HOST, ORIGIN};
+use futures_util::{SinkExt, StreamExt};
+use serde_json::json;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::{self, Message};
+
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn connect(
+    address: SocketAddr,
+    cookie: Option<&str>,
+    origin: Option<&str>,
+) -> Result<Socket, Box<tungstenite::Error>> {
+    let mut request = format!("ws://{address}/api/v1/events")
+        .into_client_request()
+        .unwrap();
+    let headers = request.headers_mut();
+    headers.insert("host", HOST.parse().unwrap());
+    if let Some(origin) = origin {
+        headers.insert("origin", origin.parse().unwrap());
+    }
+    if let Some(cookie) = cookie {
+        headers.insert("cookie", cookie.parse().unwrap());
+    }
+    tokio_tungstenite::connect_async(request)
+        .await
+        .map(|(socket, _)| socket)
+        .map_err(Box::new)
+}
+
+async fn open(address: SocketAddr, cookie: &str, after: Option<Seq>) -> Socket {
+    let mut socket = connect(address, Some(cookie), Some(ORIGIN)).await.unwrap();
+    let frame = serde_json::to_string(&ClientFrame::Resume { after }).unwrap();
+    socket.send(Message::text(frame)).await.unwrap();
+    socket
+}
+
+/// The next frame, or `None` if the socket closed.
+async fn next(socket: &mut Socket) -> Option<ServerFrame> {
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("a frame arrives in time")?;
+        match message.ok()? {
+            Message::Text(text) => return Some(serde_json::from_str(&text).unwrap()),
+            Message::Close(_) => return None,
+            _ => {}
+        }
+    }
+}
+
+async fn event(socket: &mut Socket) -> EventEnvelope {
+    match next(socket).await {
+        Some(ServerFrame::Event(envelope)) => envelope,
+        other => panic!("expected an event, got {other:?}"),
+    }
+}
+
+/// Reads events until one matches.
+async fn until(socket: &mut Socket, want: impl Fn(&Event) -> bool) -> Vec<EventEnvelope> {
+    let mut seen = Vec::new();
+    loop {
+        let envelope = event(socket).await;
+        let done = want(&envelope.event);
+        seen.push(envelope);
+        if done {
+            return seen;
+        }
+    }
+}
+
+async fn create_bot(gateway: &Gateway, cookie: &str, name: &str) -> i64 {
+    let reply = gateway
+        .send(Call::post("/api/v1/bots").cookie(cookie).json(&json!({
+            "name": name, "label": "", "description": ""})))
+        .await;
+    assert_eq!(reply.status, StatusCode::CREATED);
+    reply.body["id"].as_i64().unwrap()
+}
+
+async fn say(gateway: &Gateway, cookie: &str, bot: i64, text: &str) {
+    let reply = gateway
+        .send(
+            Call::post(&format!("/api/v1/bots/{bot}/messages"))
+                .cookie(cookie)
+                .json(&json!({"text": text})),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+}
+
+async fn setup() -> (Gateway, SocketAddr, String) {
+    let gateway = Gateway::new().await;
+    gateway.route().await;
+    let admin = gateway.admin("rob").await;
+    let address = gateway.serve().await;
+    (gateway, address, admin)
+}
+
+#[tokio::test]
+async fn the_socket_needs_a_session_and_the_gateways_origin() {
+    let (_gateway, address, rob) = setup().await;
+    for (cookie, origin) in [
+        (None, Some(ORIGIN)),
+        (Some("__Host-bokkie_session=forged"), Some(ORIGIN)),
+        (Some(rob.as_str()), None),
+        (Some(rob.as_str()), Some("https://evil.test")),
+    ] {
+        match connect(address, cookie, origin).await {
+            Err(error) if matches!(*error, tungstenite::Error::Http(_)) => {
+                let tungstenite::Error::Http(response) = *error else {
+                    unreachable!()
+                };
+                assert!(
+                    [401, 403].contains(&response.status().as_u16()),
+                    "{cookie:?} {origin:?}: {}",
+                    response.status()
+                );
+            }
+            other => panic!("{cookie:?} {origin:?} connected: {:?}", other.map(|_| ())),
+        }
+    }
+    // A socket that never sends its resume frame is closed.
+    let mut silent = connect(address, Some(&rob), Some(ORIGIN)).await.unwrap();
+    silent
+        .send(Message::text(r#"{"type":"subscribe_all"}"#))
+        .await
+        .unwrap();
+    assert_eq!(next(&mut silent).await, None);
+}
+
+#[tokio::test]
+async fn a_conversation_streams_over_the_socket_in_order() {
+    let (gateway, address, rob) = setup().await;
+    let mut socket = open(address, &rob, None).await;
+    assert_eq!(
+        next(&mut socket).await,
+        Some(ServerFrame::Live { latest: Seq(0) })
+    );
+
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let created = event(&mut socket).await;
+    assert_eq!(created.seq, Seq(1));
+    assert!(matches!(created.event, Event::BotCreated { ref bot } if bot.id.0 == chef));
+
+    say(&gateway, &rob, chef, "Hello?").await;
+    let events = until(&mut socket, |e| {
+        matches!(e, Event::BotStatusChanged { status, .. } if *status == bokkie_protocol::api::BotStatus::Idle)
+    })
+    .await;
+    // Sequence numbers increase by one with no gaps.
+    for (i, envelope) in events.iter().enumerate() {
+        assert_eq!(envelope.seq, Seq(2 + i as u64));
+    }
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| match &e.event {
+            Event::MessageCreated { message }
+                if message.author == bokkie_protocol::api::Author::User =>
+            {
+                "user"
+            }
+            Event::MessageCreated { .. } => "reply",
+            Event::MessageDelta { .. } => "delta",
+            Event::MessageCompleted { .. } => "completed",
+            Event::BotStatusChanged { .. } => "status",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(kinds.first(), Some(&"user"), "{kinds:?}");
+    assert!(
+        kinds.contains(&"reply") && kinds.contains(&"completed"),
+        "{kinds:?}"
+    );
+    assert_eq!(
+        kinds.iter().filter(|k| **k == "status").count(),
+        2,
+        "{kinds:?}"
+    );
+
+    // The deltas, applied at their offsets, give the final text.
+    let mut text = String::new();
+    for envelope in &events {
+        if let Event::MessageDelta { offset, delta, .. } = &envelope.event {
+            assert_eq!(*offset, text.chars().count() as u64);
+            text.push_str(delta);
+        }
+    }
+    let completed = events
+        .iter()
+        .find_map(|e| match &e.event {
+            Event::MessageCompleted { message } => Some(message.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(completed.text, "Hello there");
+    // Deltas may stop short: the final text replaces what streamed.
+    assert!(completed.text.starts_with(&text), "{text}");
+}
+
+#[tokio::test]
+async fn streamed_deltas_are_coalesced() {
+    let (gateway, address, rob) = setup().await;
+    let pieces: Vec<String> = (0..200).map(|i| format!("{} ", i % 10)).collect();
+    let expected: String = pieces.concat();
+    gateway.fake.with(|b| {
+        b.reply = pieces.clone();
+        b.finish_turns = false;
+    });
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let mut socket = open(address, &rob, None).await;
+    next(&mut socket).await;
+    say(&gateway, &rob, chef, "Count").await;
+    let mut text = String::new();
+    let mut deltas = 0;
+    while text.len() < expected.len() {
+        if let Event::MessageDelta { offset, delta, .. } = event(&mut socket).await.event {
+            assert_eq!(offset, text.chars().count() as u64);
+            text.push_str(&delta);
+            deltas += 1;
+        }
+    }
+    assert_eq!(text, expected);
+    assert!(
+        deltas < 20,
+        "{deltas} delta events for 200 app-server deltas"
+    );
+}
+
+#[tokio::test]
+async fn a_reconnecting_client_replays_what_it_missed() {
+    let (gateway, address, rob) = setup().await;
+    let mut socket = open(address, &rob, None).await;
+    next(&mut socket).await;
+    create_bot(&gateway, &rob, "One").await;
+    let first = event(&mut socket).await;
+    drop(socket);
+
+    // While the client is away.
+    create_bot(&gateway, &rob, "Two").await;
+    create_bot(&gateway, &rob, "Three").await;
+
+    let mut socket = open(address, &rob, Some(first.seq)).await;
+    let replayed: Vec<u64> = vec![
+        event(&mut socket).await.seq.0,
+        event(&mut socket).await.seq.0,
+    ];
+    assert_eq!(replayed, [2, 3]);
+    assert_eq!(
+        next(&mut socket).await,
+        Some(ServerFrame::Live { latest: Seq(3) })
+    );
+    create_bot(&gateway, &rob, "Four").await;
+    assert_eq!(event(&mut socket).await.seq, Seq(4));
+}
+
+#[tokio::test]
+async fn resuming_outside_the_retained_log_resets() {
+    let gateway = Gateway::new().await;
+    let admin = gateway.admin("rob").await;
+    // Keep only a few events, so older ones drop out.
+    let state = gateway.state.clone();
+    let events = std::sync::Arc::new(bokkie_gateway::events::EventLog::with_limits(
+        state.db.clone(),
+        state.clock.clone(),
+        2,
+        16,
+    ));
+    let user = bokkie_protocol::UserId(1);
+    for _ in 0..300 {
+        events
+            .append(
+                user,
+                Event::BotError {
+                    bot_id: bokkie_protocol::BotId(1),
+                    message: "x".into(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    assert!(events.earliest(user).await.unwrap().unwrap() > Seq(2));
+    let app = bokkie_gateway::router(bokkie_gateway::AppState::with_events(
+        (*state.config).clone(),
+        state.db.clone(),
+        state.clock.clone(),
+        state.supervisor.clone(),
+        events,
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    // Too old: the events after 1 were dropped.
+    let mut socket = open(address, &admin, Some(Seq(1))).await;
+    assert_eq!(
+        next(&mut socket).await,
+        Some(ServerFrame::Reset { after: Seq(300) })
+    );
+    assert_eq!(
+        next(&mut socket).await,
+        Some(ServerFrame::Live { latest: Seq(300) })
+    );
+    // Beyond the end, for example after the database was replaced.
+    let mut socket = open(address, &admin, Some(Seq(900))).await;
+    assert_eq!(
+        next(&mut socket).await,
+        Some(ServerFrame::Reset { after: Seq(300) })
+    );
+    // Up to date: nothing to replay.
+    let mut socket = open(address, &admin, Some(Seq(300))).await;
+    assert_eq!(
+        next(&mut socket).await,
+        Some(ServerFrame::Live { latest: Seq(300) })
+    );
+}
+
+#[tokio::test]
+async fn sequence_numbers_survive_a_restart() {
+    let gateway = Gateway::new().await;
+    let user = bokkie_protocol::UserId(1);
+    gateway.admin("rob").await;
+    let state = &gateway.state;
+    state
+        .events
+        .append(
+            user,
+            Event::BotError {
+                bot_id: bokkie_protocol::BotId(1),
+                message: "a".into(),
+            },
+        )
+        .await
+        .unwrap();
+    // A fresh log on the same database carries on from the stored end.
+    let restarted = bokkie_gateway::events::EventLog::new(state.db.clone(), state.clock.clone());
+    assert_eq!(restarted.latest(user).await.unwrap(), Seq(1));
+    let next = restarted
+        .append(
+            user,
+            Event::BotError {
+                bot_id: bokkie_protocol::BotId(1),
+                message: "b".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(next.seq, Seq(2));
+}
+
+#[tokio::test]
+async fn snapshots_carry_their_watermark() {
+    let (gateway, _address, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let list = gateway.send(Call::get("/api/v1/bots").cookie(&rob)).await;
+    assert_eq!(list.body["seq"], 1);
+    say(&gateway, &rob, chef, "Hi").await;
+    let path = format!("/api/v1/bots/{chef}/messages");
+    let page = gateway
+        .wait_for(&rob, &path, |b| {
+            b["messages"].as_array().is_some_and(|m| {
+                m.iter()
+                    .any(|m| m["state"] == "complete" && m["author"] == "bot")
+            })
+        })
+        .await;
+    let latest = gateway
+        .state
+        .events
+        .latest(bokkie_protocol::UserId(1))
+        .await
+        .unwrap();
+    assert!(page["seq"].as_u64().unwrap() <= latest.0);
+    assert!(page["seq"].as_u64().unwrap() >= 2);
+}
+
+#[tokio::test]
+async fn one_users_socket_never_carries_anothers_events() {
+    let (gateway, address, rob) = setup().await;
+    let (amy, _) = gateway.member(&rob, "amy").await;
+    let (ben, _) = gateway.member(&rob, "ben").await;
+    let mut bens = open(address, &ben, None).await;
+    assert_eq!(
+        next(&mut bens).await,
+        Some(ServerFrame::Live { latest: Seq(0) })
+    );
+    let mut amys = open(address, &amy, None).await;
+    next(&mut amys).await;
+
+    let chef = create_bot(&gateway, &amy, "Chef").await;
+    say(&gateway, &amy, chef, "Amy's secret").await;
+    until(&mut amys, |e| matches!(e, Event::MessageCompleted { message } if message.author == bokkie_protocol::api::Author::Bot)).await;
+
+    // Ben's own first event is his seq 1, and nothing of Amy's came before.
+    create_bot(&gateway, &ben, "Mine").await;
+    let first = event(&mut bens).await;
+    assert_eq!(first.seq, Seq(1));
+    assert!(matches!(first.event, Event::BotCreated { ref bot } if bot.name == "Mine"));
+    // Replaying Ben's log from the start holds only his event.
+    let mut replay = open(address, &ben, Some(Seq(0))).await;
+    assert_eq!(event(&mut replay).await.seq, Seq(1));
+    assert_eq!(
+        next(&mut replay).await,
+        Some(ServerFrame::Live { latest: Seq(1) })
+    );
+    // Amy's log is untouched by Ben's.
+    let amy_latest = gateway
+        .state
+        .events
+        .latest(bokkie_protocol::UserId(2))
+        .await
+        .unwrap();
+    let amy_events = gateway
+        .state
+        .events
+        .since(bokkie_protocol::UserId(2), Seq(0), 1000)
+        .await
+        .unwrap();
+    assert_eq!(amy_events.len() as u64, amy_latest.0);
+    assert!(
+        amy_events
+            .iter()
+            .all(|e| !matches!(&e.event, Event::BotCreated { bot } if bot.name == "Mine"))
+    );
+}
+
+#[tokio::test]
+async fn signing_out_closes_the_socket() {
+    let gateway = Gateway::new().await;
+    let rob = gateway.admin("rob").await;
+    let mut state = gateway.state.clone();
+    state.session_check = Duration::from_millis(50);
+    let app = bokkie_gateway::router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    let mut socket = open(address, &rob, None).await;
+    next(&mut socket).await;
+    gateway
+        .send(Call::new(Method::DELETE, "/api/v1/session").cookie(&rob))
+        .await;
+    assert_eq!(next(&mut socket).await, None);
+}
+
+#[tokio::test]
+async fn the_client_can_ping() {
+    let (_gateway, address, rob) = setup().await;
+    let mut socket = open(address, &rob, None).await;
+    next(&mut socket).await;
+    socket
+        .send(Message::text(
+            serde_json::to_string(&ClientFrame::Ping).unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next(&mut socket).await, Some(ServerFrame::Pong));
+}
+
+/// Serves a gateway whose sockets recheck their session quickly.
+async fn serve_quick(gateway: &Gateway) -> SocketAddr {
+    let mut state = gateway.state.clone();
+    state.session_check = Duration::from_millis(50);
+    let app = bokkie_gateway::router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    address
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_append_neither_jams_the_log_nor_goes_unheard() {
+    let (gateway, address, rob) = setup().await;
+    let user = bokkie_protocol::UserId(1);
+    let mut socket = open(address, &rob, None).await;
+    assert_eq!(
+        next(&mut socket).await,
+        Some(ServerFrame::Live { latest: Seq(0) })
+    );
+    let noise = |message: &str| Event::BotError {
+        bot_id: bokkie_protocol::BotId(1),
+        message: message.into(),
+    };
+
+    // Prime the cached sequence number.
+    gateway
+        .state
+        .events
+        .append(user, noise("zero"))
+        .await
+        .unwrap();
+    assert_eq!(event(&mut socket).await.seq, Seq(1));
+
+    // Hold the write lock, so the append's insert waits.
+    let mut blocker = gateway.state.db.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let events = gateway.state.events.clone();
+    let first = noise("first");
+    let append = tokio::spawn(async move { events.append(user, first).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The caller goes away, as a disconnecting client's request does.
+    append.abort();
+    sqlx::query("COMMIT").execute(&mut *blocker).await.unwrap();
+    drop(blocker);
+
+    let second = gateway
+        .state
+        .events
+        .append(user, noise("second"))
+        .await
+        .expect("the log still takes events");
+    assert_eq!(second.seq, Seq(3));
+    let seqs = [event(&mut socket).await.seq, event(&mut socket).await.seq];
+    assert_eq!(seqs, [Seq(2), Seq(3)]);
+}
+
+#[tokio::test]
+async fn multibyte_deltas_carry_character_offsets() {
+    let (gateway, address, rob) = setup().await;
+    let pieces = ["héllo ", "🌍🌏", " wörld", " ✓"];
+    gateway.fake.with(|b| {
+        b.reply = pieces.iter().map(|p| p.to_string()).collect();
+        b.finish_turns = false;
+    });
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let mut socket = open(address, &rob, None).await;
+    next(&mut socket).await;
+    say(&gateway, &rob, chef, "Greet").await;
+    let expected: String = pieces.concat();
+    let mut text = String::new();
+    while text != expected {
+        if let Event::MessageDelta { offset, delta, .. } = event(&mut socket).await.event {
+            assert_eq!(offset, text.chars().count() as u64, "{text:?}");
+            text.push_str(&delta);
+        }
+    }
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}/messages")).cookie(&rob))
+        .await;
+    let stored = page.body["messages"][1]["text"].as_str().unwrap();
+    assert_eq!(stored, expected);
+}
+
+#[tokio::test]
+async fn disabling_an_account_closes_its_socket() {
+    let gateway = Gateway::new().await;
+    let rob = gateway.admin("rob").await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    let address = serve_quick(&gateway).await;
+    let mut socket = open(address, &amy, None).await;
+    next(&mut socket).await;
+    let reply = gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/admin/users/{amy_id}"))
+                .cookie(&rob)
+                .json(&json!({"disabled": true})),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(next(&mut socket).await, None);
+}

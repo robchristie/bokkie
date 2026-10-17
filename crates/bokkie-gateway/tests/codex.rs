@@ -30,7 +30,7 @@ async fn next_event(
 
 fn refused(result: Result<impl std::fmt::Debug, CodexError>) -> String {
     match result {
-        Err(CodexError::Refused(refusal)) => refusal.0,
+        Err(CodexError::Refused(refusal) | CodexError::ThreadRefused(refusal)) => refusal.0,
         other => panic!("expected a refusal, got {other:?}"),
     }
 }

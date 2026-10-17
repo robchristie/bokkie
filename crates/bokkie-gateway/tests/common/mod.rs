@@ -155,6 +155,48 @@ impl Gateway {
         }
     }
 
+    /// A gateway whose app servers are the real `codex` binary, pointed at
+    /// a mock model by `overrides`.
+    pub async fn live(program: std::path::PathBuf, overrides: Vec<String>) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            data_dir: dir.path().to_owned(),
+            listen: "127.0.0.1:0".parse().unwrap(),
+            origin: PublicOrigin::parse(ORIGIN).unwrap(),
+            extra_hosts: Vec::new(),
+            trust_forwarded_for: false,
+            codex_program: program.clone(),
+        };
+        let pool = db::open(&config.database_path()).await.unwrap();
+        let bundled =
+            catalog::export_bundled(&program, &config.data_dir.join("codex/catalog-home"))
+                .await
+                .unwrap();
+        let catalog = catalog::write(&config.catalog_path(), bundled).unwrap();
+        let (supervisor, events) = Supervisor::new(
+            &config.data_dir,
+            catalog,
+            bokkie_gateway::codex::Launcher::Process {
+                program,
+                overrides,
+                env: Vec::new(),
+            },
+        );
+        let state = AppState::new(
+            config,
+            pool,
+            Clock::system(),
+            std::sync::Arc::new(supervisor),
+        );
+        Self {
+            app: router(state.clone()),
+            state,
+            fake: fake_codex::FakeCodex::default(),
+            events: tokio::sync::Mutex::new(events),
+            dir,
+        }
+    }
+
     pub async fn send(&self, call: Call) -> Reply {
         send(self.app.clone(), call).await
     }
@@ -170,6 +212,22 @@ impl Gateway {
             replies.push(task.await.unwrap());
         }
         replies
+    }
+
+    /// Serves the gateway on a local port, as `bokkie-gateway serve` does.
+    pub async fn serve(&self) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = self.app.clone();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        address
     }
 
     /// Routes app-server events into conversations, as the gateway does.
