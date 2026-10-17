@@ -1,8 +1,9 @@
 # Bokkie foundation
 
 Status: active
-Next action: Phase 0. Qualify `codex app-server` and the Codex Linux sandbox
-inside a container on nostromo. See [Phase 0](#phase-0-codex-runtime-qualification).
+Next action: Phase 1, the Stobie prerequisites, and in parallel Phase 2's
+gateway work. Phase 0 is complete; see the
+[Phase 0 report](../phase-0-report.md).
 
 This plan takes Bokkie from an empty repository to a household assistant that
 can be installed as a PWA. Each phase below has its own acceptance criteria and
@@ -43,6 +44,9 @@ These were agreed with the owner on 2026-10-17.
 | Web access | LAN and tailnet only, through the existing Traefik with TLS. Bokkie issues its own long-lived session cookie. Basic auth is unreliable in an iOS standalone PWA |
 | Users | Multiple users on one Bokkie: an administrator plus accounts for household members, including children |
 | UI | Stobie. Missing framework capability lands in Stobie first, and Bokkie then moves its pinned revision |
+| Container profile | Profile B, targeted: Docker's default seccomp plus Bubblewrap's namespace and mount calls, a custom AppArmor profile, and `systempaths=unconfined`. Decided by Phase 0 |
+| Sandbox permissions | A Codex permission profile, `bokkie`: system read, write to the thread's workspace, no other `/data` access, network per user. Decided by Phase 0 |
+| Bokkie's tools | Experimental app-server `dynamicTools`. Decided by Phase 0 |
 | Licence, Codex and Stobie pins | See [Open decisions](#open-decisions) |
 
 ## Architecture
@@ -98,11 +102,10 @@ These crates appear as each phase needs them:
   Bot is mid-turn maps to `turn/steer`.
 - Bokkie's own capabilities are tools the Bot can call. The first is
   "message another Bot". A memory note and a routine follow later.
-- Two routes are possible for those tools:
-  - experimental app-server `dynamicTools`, served through `item/tool/call`;
-  - a small MCP server that Bokkie provides.
-
-  Phase 0 chooses between them.
+- Those tools are experimental app-server `dynamicTools`, served through
+  `item/tool/call`. Phase 0 chose them over an MCP server: the call names the
+  calling thread and turn, needs no extra process, and survives
+  `thread/resume`.
 - Approvals arrive as app-server server-to-client requests:
   `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`
   and `item/permissions/requestApproval`. They are shown only to the owning
@@ -200,7 +203,9 @@ Phase 0 compares two profiles:
   allowing only what Codex's Bubblewrap invocation uses.
 
 Prefer B if it holds across a Codex upgrade without rework. Otherwise accept A,
-and record that as a security decision. Applying either profile on nostromo
+and record that as a security decision. **Phase 0 chose B.** It passed every
+check A passed, and held unchanged with Codex 0.162.1, 0.163.0 and
+0.164.0-alpha.3. See the [Phase 0 report](../phase-0-report.md). Applying either profile on nostromo
 weakens the default container confinement. Applying one, including Phase 0's
 qualification runs on nostromo, needs the owner's explicit go-ahead each time.
 
@@ -223,7 +228,10 @@ and Codex silently drops the fresh procfs.
    container runs an init process.
 
 If invariant 1, 3 or 4 fails under a profile, Phase 0 must find a mitigation
-before command execution ships. Candidates:
+before command execution ships. Phase 0 found that Codex's built-in
+`:workspace` profile fails invariants 1 and 3, and chose the first candidate,
+a Codex permission profile. A distinct UID per user is still open: Phase 4
+decides it with evidence about in-process reads. The candidates were:
 
 - a Codex permission profile that denies the reads;
 - a distinct UID for each user;
@@ -303,6 +311,11 @@ on them.
 - Choose the route for Bokkie's tools (`dynamicTools` or MCP) with a working
   "message another Bot" call.
 
+Outcome: done on 17 October 2026. The [Phase 0 report](../phase-0-report.md)
+records the per-profile results, the choice of profile B, the `bokkie`
+permission profile as the mitigation, and `dynamicTools` as the tool route.
+The probe is in [`deploy/qualify/`](../../deploy/qualify/README.md).
+
 Acceptance:
 
 - A short report in `docs/` that records, for each profile, what passed and
@@ -327,6 +340,12 @@ spike's device checklist applies.
 - Bot create, edit, pin and hide. One conversation per Bot. Streaming replies,
   stop and steer.
 - A gateway WebSocket with a resumable event log.
+- Startup and per-thread checks from Phase 0. The gateway refuses to serve a
+  thread unless all of these hold:
+  - `config/read` reports `default_permissions = "bokkie"`;
+  - every `thread/start` and `thread/resume` reports
+    `activePermissionProfile.id = "bokkie"`;
+  - the existing tools-disabled check holds.
 - A conversation list with avatar, name, preview and time.
 - The usage meter and the limit-reached banner.
 - PWA install. Deploy behind Traefik with a LAN and tailnet allowlist under a
@@ -358,7 +377,19 @@ Acceptance:
 
 ### Phase 4: The Bots' computer
 
-- Command execution in the per-user workspace under the qualified sandbox.
+- Command execution in the per-user workspace under the qualified sandbox,
+  only through the app server. The `codex sandbox` CLI leaves its sandbox
+  running when it is killed.
+- A `command/exec` procfs preflight on each app server before command
+  execution is enabled. Codex's procfs fallback is silent, so this check is
+  the only way to detect it.
+- In-process reads, such as `imageView`, tested for cross-user access. That
+  evidence decides whether each user's app server also runs under a distinct
+  UID.
+- Nested user-namespace creation inside the sandbox closed if possible,
+  for example with AppArmor `userns` mediation.
+- Profile B's AppArmor profile loaded persistently on nostromo, with the
+  owner's go-ahead.
 - Approval requests in the UI: allow once, allow for the session, deny.
   Admin policy can deny approvals for some users.
 - A file browser for the workspace, read-only at first.
@@ -400,8 +431,6 @@ Acceptance:
   member's conversations, or only see usage and settings, and whether members
   are told which applies.
 - **Licence** for the public repository.
-- **Container profile:** A or B, decided by Phase 0.
-- **Tool route:** `dynamicTools` or MCP, decided by Phase 0.
 - **Codex upgrade policy.** The pinned version moves only after the Phase 0
   probe passes against the new version.
 - **Stobie pin.** Start from Stobie `main` at
