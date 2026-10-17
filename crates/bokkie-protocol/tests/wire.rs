@@ -319,3 +319,134 @@ fn unknown_frames_are_rejected() {
     assert!(serde_json::from_value::<ClientFrame>(json!({"type": "subscribe_all"})).is_err());
     assert!(serde_json::from_value::<Event>(json!({"type": "approval_requested"})).is_err());
 }
+
+#[test]
+fn secrets_do_not_print() {
+    let secret = "hunter2-secret-value";
+    let printed = [
+        format!(
+            "{:?}",
+            LoginRequest {
+                username: "rob".into(),
+                password: secret.into(),
+            }
+        ),
+        format!(
+            "{:?}",
+            ChangePasswordRequest {
+                current_password: secret.into(),
+                new_password: secret.into(),
+            }
+        ),
+        format!(
+            "{:?}",
+            AcceptInvitationRequest {
+                code: secret.into(),
+                username: "amy".into(),
+                password: secret.into(),
+                display_name: "Amy".into(),
+            }
+        ),
+        format!(
+            "{:?}",
+            ResetPasswordRequest {
+                new_password: secret.into(),
+            }
+        ),
+        format!(
+            "{:?}",
+            CreatedInvitation {
+                id: 1,
+                code: secret.into(),
+                role: Role::Member,
+                expires_at: Timestamp(1),
+            }
+        ),
+    ];
+    for line in printed {
+        assert!(!line.contains(secret), "{line}");
+        assert!(line.contains("<redacted>"), "{line}");
+    }
+}
+
+#[test]
+fn more_request_and_response_shapes() {
+    pin(
+        &AcceptInvitationRequest {
+            code: "c".into(),
+            username: "amy".into(),
+            password: "p".into(),
+            display_name: "Amy".into(),
+        },
+        json!({"code": "c", "username": "amy", "password": "p", "display_name": "Amy"}),
+    );
+    pin(
+        &ChangePasswordRequest {
+            current_password: "a".into(),
+            new_password: "b".into(),
+        },
+        json!({"current_password": "a", "new_password": "b"}),
+    );
+    pin(
+        &ResetPasswordRequest {
+            new_password: "b".into(),
+        },
+        json!({"new_password": "b"}),
+    );
+    pin(
+        &CreatedInvitation {
+            id: 3,
+            code: "c".into(),
+            role: Role::Member,
+            expires_at: Timestamp(9),
+        },
+        json!({"id": 3, "code": "c", "role": "member", "expires_at": 9}),
+    );
+    pin(
+        &InvitationList {
+            invitations: vec![InvitationSummary {
+                id: 3,
+                role: Role::Admin,
+                display_name: None,
+                created_at: Timestamp(1),
+                expires_at: Timestamp(9),
+            }],
+        },
+        json!({"invitations": [{"id": 3, "role": "admin", "display_name": null,
+                                 "created_at": 1, "expires_at": 9}]}),
+    );
+    pin(
+        &SessionList {
+            sessions: vec![SessionSummary {
+                id: 4,
+                current: true,
+                created_at: Timestamp(1),
+                last_seen_at: Timestamp(2),
+                user_agent: Some("Safari".into()),
+            }],
+        },
+        json!({"sessions": [{"id": 4, "current": true, "created_at": 1, "last_seen_at": 2,
+                              "user_agent": "Safari"}]}),
+    );
+    pin(
+        &VersionResponse {
+            protocol: 1,
+            gateway: "0.1.0".into(),
+        },
+        json!({"protocol": 1, "gateway": "0.1.0"}),
+    );
+    pin(
+        &CreateBotRequest {
+            name: "Chef".into(),
+            label: "Cook".into(),
+            description: "d".into(),
+            avatar: None,
+        },
+        json!({"name": "Chef", "label": "Cook", "description": "d"}),
+    );
+    pin(
+        &SendMessageRequest { text: "hi".into() },
+        json!({"text": "hi"}),
+    );
+    pin(&StopResponse { stopped: true }, json!({"stopped": true}));
+}
