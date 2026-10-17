@@ -1,0 +1,4 @@
+/target/
+# Downloaded tools (the pinned Codex release), runtime captures, qualification
+# logs and local probe state. Never commit them.
+/.tools/

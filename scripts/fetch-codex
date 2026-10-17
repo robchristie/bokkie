@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Downloads the pinned Codex Linux x64 release, verifies its SHA-256 and
+# unpacks it. Prints the path of the `codex` binary.
+#
+# Usage: scripts/fetch-codex [destination]   (default: .tools/codex)
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../deploy/codex-release.env
+source "$root/deploy/codex-release.env"
+dest="${1:-$root/.tools/codex}"
+release="$dest/$CODEX_VERSION"
+binary="$release/package/vendor/x86_64-unknown-linux-musl/bin/codex"
+
+if [[ ! -x "$binary" ]]; then
+  mkdir -p "$release"
+  tarball="$release/codex.tgz"
+  curl --fail --silent --show-error --location --retry 3 \
+    --output "$tarball" "$CODEX_TARBALL_URL"
+  echo "$CODEX_TARBALL_SHA256  $tarball" | sha256sum --check --quiet
+  tar --extract --gzip --file "$tarball" --directory "$release"
+  rm "$tarball"
+fi
+
+version="$("$binary" --version)"
+if [[ "$version" != "codex-cli $CODEX_VERSION" ]]; then
+  echo "fetch-codex: expected codex-cli $CODEX_VERSION, found $version" >&2
+  exit 1
+fi
+echo "$binary"
