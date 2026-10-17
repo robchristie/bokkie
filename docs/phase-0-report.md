@@ -270,7 +270,9 @@ not built.
   nostromo's other stacks do. The deployment will need the same.
 - **Container state.** No qualification container or AppArmor profile
   remains loaded. The `bokkie-qualify-data` volume still holds the
-  qualification sign-in. Remove it when it is no longer needed for reruns.
+  qualification sign-in, and the image `bokkie-qualify:c94cebe67cf1` remains.
+  Both stay for reruns until Phase 4's requalification, which removes them
+  (see the plan's Phase 4).
 - **No Stobie friction.** Phase 0 involved no Stobie work.
 
 ## Open items for later phases
