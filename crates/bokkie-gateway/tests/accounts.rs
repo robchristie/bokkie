@@ -71,7 +71,7 @@ async fn wrong_passwords_and_unknown_users_look_the_same() {
 async fn sign_in_is_rate_limited_per_username() {
     let gateway = Gateway::new().await;
     gateway.admin("rob").await;
-    for _ in 0..LoginLimiter::PER_USERNAME {
+    for _ in 0..LoginLimiter::PER_ACCOUNT {
         assert_eq!(
             gateway.login("rob", "guess").await.status,
             StatusCode::UNAUTHORIZED
@@ -455,4 +455,140 @@ async fn weak_passwords_and_bad_usernames_are_refused() {
             .await;
         assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{username}");
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_sign_in_bursts_cannot_overrun_the_limit() {
+    let gateway = Gateway::new().await;
+    gateway.admin("rob").await;
+    let mut calls: Vec<Call> = (0..30)
+        .map(|_| {
+            Call::post("/api/v1/session")
+                .json(&json!({"username": "rob", "password": "a wrong guess"}))
+        })
+        .collect();
+    calls.push(
+        Call::post("/api/v1/session").json(&json!({"username": "rob", "password": PASSWORD})),
+    );
+    let replies = gateway.send_all(calls).await;
+    let checked = replies
+        .iter()
+        .filter(|r| r.status != StatusCode::TOO_MANY_REQUESTS)
+        .count();
+    assert!(
+        checked <= LoginLimiter::PER_ACCOUNT,
+        "{checked} attempts were checked"
+    );
+    assert!(
+        replies
+            .iter()
+            .all(|r| r.status == StatusCode::TOO_MANY_REQUESTS
+                || r.status == StatusCode::UNAUTHORIZED
+                || r.status == StatusCode::OK)
+    );
+}
+
+#[tokio::test]
+async fn an_invitation_accepted_twice_at_once_makes_one_account() {
+    let gateway = Gateway::new().await;
+    let admin = gateway.admin("rob").await;
+    let code = gateway
+        .send(
+            Call::post("/api/v1/admin/invitations")
+                .cookie(&admin)
+                .json(&json!({"role": "member"})),
+        )
+        .await
+        .body["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let calls = ["amy", "ben", "cat", "dan"]
+        .iter()
+        .map(|username| {
+            Call::post("/api/v1/invitations/accept").json(&json!({
+                "code": code, "username": username, "password": PASSWORD, "display_name": username,
+            }))
+        })
+        .collect();
+    let replies = gateway.send_all(calls).await;
+    let accepted = replies
+        .iter()
+        .filter(|r| r.status == StatusCode::OK)
+        .count();
+    assert_eq!(accepted, 1, "{replies:?}");
+    let users = gateway
+        .send(Call::get("/api/v1/admin/users").cookie(&admin))
+        .await;
+    assert_eq!(users.body["users"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn websocket_upgrades_need_the_gateways_origin() {
+    let gateway = Gateway::new().await;
+    for origin in [None, Some("https://evil.test")] {
+        let reply = gateway
+            .send(
+                Call::get("/api/v1/events")
+                    .origin(origin)
+                    .header("connection", "upgrade")
+                    .header("upgrade", "websocket"),
+            )
+            .await;
+        assert_eq!(reply.status, StatusCode::FORBIDDEN, "{origin:?}");
+    }
+}
+
+#[tokio::test]
+async fn wrong_current_passwords_are_rate_limited() {
+    let gateway = Gateway::new().await;
+    let cookie = gateway.admin("rob").await;
+    let change = |current: &str| {
+        gateway.send(
+            Call::new(Method::PUT, "/api/v1/session/password")
+                .cookie(&cookie)
+                .json(&json!({"current_password": current, "new_password": "a new long password"})),
+        )
+    };
+    for _ in 0..LoginLimiter::PER_ACCOUNT {
+        assert_eq!(change("a wrong guess").await.status, StatusCode::FORBIDDEN);
+    }
+    assert_eq!(change(PASSWORD).await.status, StatusCode::TOO_MANY_REQUESTS);
+    gateway.state.clock.advance(LoginLimiter::WINDOW_MS);
+    assert_eq!(change(PASSWORD).await.status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn refused_invitation_codes_do_not_block_other_addresses() {
+    let gateway = Gateway::new().await;
+    let admin = gateway.admin("rob").await;
+    let accept = |code: &str| {
+        gateway.send(Call::post("/api/v1/invitations/accept").json(&json!({
+            "code": code, "username": "amy", "password": PASSWORD, "display_name": "Amy",
+        })))
+    };
+    // Refused codes count against the client address.
+    for _ in 0..LoginLimiter::PER_ADDRESS {
+        assert_eq!(accept("guess").await.status, StatusCode::FORBIDDEN);
+    }
+    assert_eq!(accept("guess").await.status, StatusCode::TOO_MANY_REQUESTS);
+    // The limit is the address's sign-in limit, not a household-wide one,
+    // and it slides.
+    assert_eq!(
+        gateway.login("rob", "a wrong guess").await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    gateway.state.clock.advance(LoginLimiter::WINDOW_MS);
+    let code = gateway
+        .send(
+            Call::post("/api/v1/admin/invitations")
+                .cookie(&admin)
+                .json(&json!({"role": "member"})),
+        )
+        .await
+        .body["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(accept(&code).await.status, StatusCode::OK);
 }

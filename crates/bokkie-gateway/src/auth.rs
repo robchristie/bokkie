@@ -158,31 +158,70 @@ pub fn client_address(parts: &Parts, trust_forwarded_for: bool) -> String {
 // ---------------------------------------------------------------------------
 // Sign-in rate limiting
 
-/// Counts failed sign-ins per username and per client address over a
-/// sliding window, and refuses further attempts once either is over its
-/// limit. Refused attempts are not checked against the password at all, so
-/// they cost no hashing work.
+/// Counts password and invitation-code attempts per key over a sliding
+/// window, and refuses further attempts once a key is at its limit. Refused
+/// attempts are not checked at all, so they cost no hashing work.
+///
+/// Checking and counting happen together under one lock: [`LoginLimiter::begin`]
+/// counts the attempt as a failure up front, and [`LoginLimiter::succeeded`]
+/// takes it back. Concurrent attempts therefore cannot all slip past a limit
+/// before any of them fails.
 #[derive(Debug, Default)]
 pub struct LoginLimiter {
     failures: Mutex<HashMap<String, VecDeque<i64>>>,
 }
 
+/// What an attempt is limited by.
+#[derive(Debug, Clone, Copy)]
+pub enum Attempting<'a> {
+    /// A sign-in: limited per username and per client address.
+    SignIn { username: &'a str, address: &'a str },
+    /// An invitation code: limited per client address, sharing the sign-in
+    /// address limit.
+    Invitation { address: &'a str },
+    /// The current-password check of a password change: limited per user.
+    PasswordChange { user: bokkie_protocol::UserId },
+}
+
+/// One counted attempt. Pass it to [`LoginLimiter::succeeded`] if it
+/// succeeds; dropping it leaves it counted as a failure.
+#[derive(Debug)]
+#[must_use]
+pub struct Attempt {
+    /// Each key, and whether success clears the key entirely (an account's
+    /// own key) or only takes back this attempt (a shared address key).
+    keys: Vec<(String, bool)>,
+    at: i64,
+}
+
 impl LoginLimiter {
     pub const WINDOW_MS: i64 = 15 * MINUTE_MS;
-    pub const PER_USERNAME: usize = 5;
+    pub const PER_ACCOUNT: usize = 5;
     pub const PER_ADDRESS: usize = 20;
     /// Bounds memory: beyond this many tracked keys, expired keys are
     /// dropped, and if none are expired the oldest key goes.
     const MAX_KEYS: usize = 10_000;
 
-    fn keys(username: &str, address: &str) -> [(String, usize); 2] {
-        [
-            (
-                format!("u:{}", username.trim().to_ascii_lowercase()),
-                Self::PER_USERNAME,
-            ),
-            (format!("a:{address}"), Self::PER_ADDRESS),
-        ]
+    /// Each key with its limit, and whether success clears it.
+    fn keys(attempting: Attempting<'_>) -> Vec<(String, usize, bool)> {
+        let address = |a: &str| (format!("a:{a}"), Self::PER_ADDRESS, false);
+        match attempting {
+            Attempting::SignIn {
+                username,
+                address: a,
+            } => vec![
+                (
+                    format!("u:{}", username.trim().to_ascii_lowercase()),
+                    Self::PER_ACCOUNT,
+                    true,
+                ),
+                address(a),
+            ],
+            Attempting::Invitation { address: a } => vec![address(a)],
+            Attempting::PasswordChange { user } => {
+                vec![(format!("p:{user}"), Self::PER_ACCOUNT, true)]
+            }
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, VecDeque<i64>>> {
@@ -191,44 +230,59 @@ impl LoginLimiter {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Whether another attempt is allowed now.
-    pub fn allows(&self, username: &str, address: &str, now: i64) -> bool {
+    /// Counts an attempt, or refuses it when any of its keys is at its limit.
+    pub fn begin(&self, attempting: Attempting<'_>, now: i64) -> Option<Attempt> {
+        let keys = Self::keys(attempting);
         let mut failures = self.lock();
-        Self::keys(username, address).iter().all(|(key, limit)| {
-            let Some(times) = failures.get_mut(key) else {
-                return true;
-            };
-            while times.front().is_some_and(|t| now - t >= Self::WINDOW_MS) {
-                times.pop_front();
+        for (key, limit, _) in &keys {
+            if let Some(times) = failures.get_mut(key) {
+                while times.front().is_some_and(|t| now - t >= Self::WINDOW_MS) {
+                    times.pop_front();
+                }
+                if times.len() >= *limit {
+                    return None;
+                }
             }
-            times.len() < *limit
-        })
-    }
-
-    pub fn record_failure(&self, username: &str, address: &str, now: i64) {
-        let mut failures = self.lock();
-        if failures.len() >= Self::MAX_KEYS {
+        }
+        if failures.len() + keys.len() > Self::MAX_KEYS {
             failures.retain(|_, times| times.back().is_some_and(|t| now - t < Self::WINDOW_MS));
-            if failures.len() >= Self::MAX_KEYS
-                && let Some(oldest) = failures
+            while failures.len() + keys.len() > Self::MAX_KEYS {
+                let Some(oldest) = failures
                     .iter()
                     .min_by_key(|(_, times)| times.back().copied())
                     .map(|(key, _)| key.clone())
-            {
+                else {
+                    break;
+                };
                 failures.remove(&oldest);
             }
         }
-        for (key, _) in Self::keys(username, address) {
-            failures.entry(key).or_default().push_back(now);
+        for (key, _, _) in &keys {
+            failures.entry(key.clone()).or_default().push_back(now);
         }
+        Some(Attempt {
+            keys: keys
+                .into_iter()
+                .map(|(key, _, clear)| (key, clear))
+                .collect(),
+            at: now,
+        })
     }
 
-    /// Forgets the username's failures after a successful sign-in. The
-    /// address's failures stay, so one good account cannot reset guessing
-    /// against others.
-    pub fn record_success(&self, username: &str) {
-        let [(key, _), _] = Self::keys(username, "");
-        self.lock().remove(&key);
+    /// Takes back a successful attempt. An account's own key forgets all
+    /// its failures; a shared address key forgets only this attempt, so one
+    /// good sign-in cannot reset guessing against other accounts.
+    pub fn succeeded(&self, attempt: Attempt) {
+        let mut failures = self.lock();
+        for (key, clear) in attempt.keys {
+            if clear {
+                failures.remove(&key);
+            } else if let Some(times) = failures.get_mut(&key)
+                && let Some(index) = times.iter().position(|t| *t == attempt.at)
+            {
+                times.remove(index);
+            }
+        }
     }
 }
 
@@ -244,40 +298,87 @@ pub fn rate_limited() -> Failure {
 mod tests {
     use super::*;
 
+    fn sign_in<'a>(username: &'a str, address: &'a str) -> Attempting<'a> {
+        Attempting::SignIn { username, address }
+    }
+
     #[test]
     fn the_limiter_counts_per_username_and_per_address() {
         let limiter = LoginLimiter::default();
         let now = 1_000_000;
-        for _ in 0..LoginLimiter::PER_USERNAME {
-            assert!(limiter.allows("Rob", "10.0.0.1", now));
-            limiter.record_failure("Rob", "10.0.0.1", now);
+        for _ in 0..LoginLimiter::PER_ACCOUNT {
+            drop(limiter.begin(sign_in("Rob", "10.0.0.1"), now).unwrap());
         }
         // The username is locked, from any address, case-insensitively.
-        assert!(!limiter.allows("rob", "10.0.0.2", now));
+        assert!(limiter.begin(sign_in("rob", "10.0.0.2"), now).is_none());
         // Other usernames from the same address still work for now.
-        assert!(limiter.allows("amy", "10.0.0.1", now));
+        assert!(limiter.begin(sign_in("amy", "10.0.0.1"), now).is_some());
         // The window slides.
-        assert!(limiter.allows("rob", "10.0.0.1", now + LoginLimiter::WINDOW_MS));
+        let later = now + LoginLimiter::WINDOW_MS;
+        assert!(limiter.begin(sign_in("rob", "10.0.0.1"), later).is_some());
     }
 
     #[test]
-    fn an_address_is_limited_across_usernames() {
+    fn an_address_is_limited_across_usernames_and_invitations() {
         let limiter = LoginLimiter::default();
-        for i in 0..LoginLimiter::PER_ADDRESS {
-            limiter.record_failure(&format!("user{i}"), "10.0.0.9", 0);
+        for i in 0..LoginLimiter::PER_ADDRESS - 1 {
+            drop(limiter.begin(sign_in(&format!("user{i}"), "10.0.0.9"), 0));
         }
-        assert!(!limiter.allows("someone-else", "10.0.0.9", 1));
-        assert!(limiter.allows("someone-else", "10.0.0.10", 1));
+        drop(limiter.begin(
+            Attempting::Invitation {
+                address: "10.0.0.9",
+            },
+            0,
+        ));
+        assert!(
+            limiter
+                .begin(sign_in("someone-else", "10.0.0.9"), 1)
+                .is_none()
+        );
+        assert!(
+            limiter
+                .begin(
+                    Attempting::Invitation {
+                        address: "10.0.0.9"
+                    },
+                    1
+                )
+                .is_none()
+        );
+        assert!(
+            limiter
+                .begin(sign_in("someone-else", "10.0.0.10"), 1)
+                .is_some()
+        );
     }
 
     #[test]
-    fn success_clears_only_the_username() {
+    fn attempts_count_before_they_finish() {
+        // Concurrent attempts each hold a counted attempt while they hash,
+        // so the limit holds even if none has failed yet.
         let limiter = LoginLimiter::default();
-        for _ in 0..LoginLimiter::PER_USERNAME {
-            limiter.record_failure("rob", "10.0.0.1", 0);
+        let held: Vec<_> = (0..LoginLimiter::PER_ACCOUNT)
+            .map(|_| limiter.begin(sign_in("rob", "10.0.0.1"), 0).unwrap())
+            .collect();
+        assert!(limiter.begin(sign_in("rob", "10.0.0.1"), 0).is_none());
+        drop(held);
+    }
+
+    #[test]
+    fn success_clears_the_account_but_only_its_own_address_attempt() {
+        let limiter = LoginLimiter::default();
+        for _ in 0..LoginLimiter::PER_ACCOUNT - 1 {
+            drop(limiter.begin(sign_in("rob", "10.0.0.1"), 0));
         }
-        limiter.record_success("rob");
-        assert!(limiter.allows("rob", "10.0.0.1", 1));
+        let good = limiter.begin(sign_in("rob", "10.0.0.1"), 1).unwrap();
+        limiter.succeeded(good);
+        for _ in 0..LoginLimiter::PER_ACCOUNT {
+            limiter.succeeded(limiter.begin(sign_in("rob", "10.0.0.1"), 2).unwrap());
+        }
+        // The four failures still count against the address.
+        let failures = limiter.lock();
+        assert_eq!(failures.get("a:10.0.0.1").map(VecDeque::len), Some(4));
+        assert!(!failures.contains_key("u:rob"));
     }
 
     #[test]
@@ -298,7 +399,10 @@ mod tests {
     fn cookies_parse_from_any_cookie_header() {
         let mut headers = HeaderMap::new();
         headers.append(COOKIE, HeaderValue::from_static("a=1; theme=dark"));
-        headers.append(COOKIE, HeaderValue::from_static("bokkie_session=tok; b=2"));
+        headers.append(
+            COOKIE,
+            HeaderValue::from_static("bokkie_session=old; __Host-bokkie_session=tok; b=2"),
+        );
         assert_eq!(session_token(&headers).as_deref(), Some("tok"));
         let cookie = session_cookie("tok");
         let cookie = cookie.to_str().unwrap();

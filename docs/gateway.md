@@ -37,14 +37,21 @@ per-user limits; disabling or resetting revokes that account's sessions.
 
 ## Sessions and request checks
 
-- Sign-in sets `bokkie_session`, a random token that the database stores only
+- Sign-in sets `__Host-bokkie_session`, a random token that the database stores only
   as a SHA-256 hash. The cookie is `HttpOnly`, `Secure` and `SameSite=Lax`,
   and lives 400 days from last use, so an iOS home-screen launch stays signed
   in. Users can list and revoke their own sessions; changing a password
   revokes the others.
 - Failed sign-ins are limited to 5 per username and 20 per client address in
-  any 15 minutes. While a limit holds, attempts are refused without checking
-  the password. Invitation codes share the address limit.
+  any 15 minutes. Each attempt counts from the moment it starts, so
+  concurrent attempts cannot overrun a limit. While a limit holds, attempts
+  are refused without checking the password. Refused invitation codes count
+  against the address limit, and wrong current passwords in a password change
+  are limited to 5 per account.
+- Behind the reverse proxy, set `BOKKIE_TRUST_FORWARDED_FOR=1` so that the
+  address limit applies per client, and publish no container port, so that
+  every request comes through the proxy and `X-Forwarded-For` cannot be
+  forged.
 - Passwords need at least 10 characters and are hashed with Argon2id.
 - Every request whose `Host` is not the gateway's is refused with 403, as is
   every state-changing request or WebSocket upgrade whose `Origin` is not

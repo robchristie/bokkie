@@ -1,7 +1,6 @@
 //! The SQLite database and its migrations.
 
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
@@ -16,7 +15,8 @@ pub async fn open(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     if !path.exists() {
         create_private(path)?;
     }
-    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
+    let options = SqliteConnectOptions::new()
+        .filename(path)
         .create_if_missing(true)
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal)

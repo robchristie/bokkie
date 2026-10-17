@@ -25,8 +25,10 @@ pub const API_PREFIX: &str = "/api/v1";
 /// The path of the event WebSocket.
 pub const EVENTS_PATH: &str = "/api/v1/events";
 
-/// The name of the session cookie.
-pub const SESSION_COOKIE: &str = "bokkie_session";
+/// The name of the session cookie. The `__Host-` prefix makes browsers
+/// accept it only when it is `Secure`, has `Path=/` and names no `Domain`,
+/// so a sibling host cannot plant a session cookie for the gateway.
+pub const SESSION_COOKIE: &str = "__Host-bokkie_session";
 
 /// Milliseconds since the Unix epoch, in UTC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

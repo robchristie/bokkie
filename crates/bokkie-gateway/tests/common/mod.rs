@@ -132,46 +132,20 @@ impl Gateway {
     }
 
     pub async fn send(&self, call: Call) -> Reply {
-        let mut request = Request::builder().method(call.method).uri(&call.path);
-        if let Some(host) = &call.host {
-            request = request.header(header::HOST, host);
+        send(self.app.clone(), call).await
+    }
+
+    /// Sends every call at once and returns the replies in call order.
+    pub async fn send_all(&self, calls: Vec<Call>) -> Vec<Reply> {
+        let tasks: Vec<_> = calls
+            .into_iter()
+            .map(|call| tokio::spawn(send(self.app.clone(), call)))
+            .collect();
+        let mut replies = Vec::new();
+        for task in tasks {
+            replies.push(task.await.unwrap());
         }
-        if let Some(origin) = &call.origin {
-            request = request.header(header::ORIGIN, origin);
-        }
-        if let Some(cookie) = &call.cookie {
-            request = request.header(header::COOKIE, cookie);
-        }
-        for (name, value) in &call.headers {
-            request = request.header(name, value);
-        }
-        let body = match call.body {
-            Some(body) => {
-                request = request.header(header::CONTENT_TYPE, "application/json");
-                Body::from(body)
-            }
-            None => Body::empty(),
-        };
-        let response = self
-            .app
-            .clone()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let headers = response.headers().clone();
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let body = if bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&bytes)
-                .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
-        };
-        Reply {
-            status,
-            headers,
-            body,
-        }
+        replies
     }
 
     /// Creates the first admin and signs in. Returns the cookie.
@@ -226,5 +200,43 @@ impl Gateway {
         assert_eq!(accepted.status, StatusCode::OK, "{:?}", accepted.body);
         let session: SessionResponse = serde_json::from_value(accepted.body.clone()).unwrap();
         (accepted.cookie(), session.user.id.0)
+    }
+}
+
+async fn send(app: Router, call: Call) -> Reply {
+    let mut request = Request::builder().method(call.method).uri(&call.path);
+    if let Some(host) = &call.host {
+        request = request.header(header::HOST, host);
+    }
+    if let Some(origin) = &call.origin {
+        request = request.header(header::ORIGIN, origin);
+    }
+    if let Some(cookie) = &call.cookie {
+        request = request.header(header::COOKIE, cookie);
+    }
+    for (name, value) in &call.headers {
+        request = request.header(name, value);
+    }
+    let body = match call.body {
+        Some(body) => {
+            request = request.header(header::CONTENT_TYPE, "application/json");
+            Body::from(body)
+        }
+        None => Body::empty(),
+    };
+    let response = app.oneshot(request.body(body).unwrap()).await.unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
+    };
+    Reply {
+        status,
+        headers,
+        body,
     }
 }

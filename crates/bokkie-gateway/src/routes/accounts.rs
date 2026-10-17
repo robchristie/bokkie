@@ -12,7 +12,7 @@ use bokkie_protocol::api::{
 
 use crate::AppState;
 use crate::accounts;
-use crate::auth::{self, SignedIn};
+use crate::auth::{self, Attempting, SignedIn};
 use crate::error::{Body, Failure, Result};
 
 /// The client's address, for rate limiting.
@@ -53,25 +53,30 @@ pub async fn login(
     Body(request): Body<LoginRequest>,
 ) -> Result<Response> {
     let now = state.clock.now();
-    if !state.limiter.allows(&request.username, &address, now.0) {
-        return Err(auth::rate_limited());
-    }
+    let attempt = state
+        .limiter
+        .begin(
+            Attempting::SignIn {
+                username: &request.username,
+                address: &address,
+            },
+            now.0,
+        )
+        .ok_or_else(auth::rate_limited)?;
     let account = {
         // Bound concurrent hashing work.
         let _permit = state.hashing.acquire().await.map_err(Failure::internal)?;
         accounts::check_credentials(&state.db, &request.username, &request.password).await?
     };
     let Some(account) = account else {
-        state
-            .limiter
-            .record_failure(&request.username, &address, now.0);
+        // The attempt stays counted.
         tracing::info!(%address, "failed sign-in");
         return Err(Failure::new(
             bokkie_protocol::api::ErrorCode::Unauthenticated,
             "The username or password is wrong",
         ));
     };
-    state.limiter.record_success(&request.username);
+    state.limiter.succeeded(attempt);
     let token =
         accounts::create_session(&state.db, now, account.user.id, user_agent(&headers)).await?;
     tracing::info!(user = %account.user.id, "signed in");
@@ -140,21 +145,36 @@ pub async fn change_password(
     signed_in: SignedIn,
     Body(request): Body<ChangePasswordRequest>,
 ) -> Result<StatusCode> {
+    let now = state.clock.now();
+    let attempt = state
+        .limiter
+        .begin(
+            Attempting::PasswordChange {
+                user: signed_in.id(),
+            },
+            now.0,
+        )
+        .ok_or_else(auth::rate_limited)?;
     let _permit = state.hashing.acquire().await.map_err(Failure::internal)?;
-    accounts::change_own_password(
+    let result = accounts::change_own_password(
         &state.db,
-        state.clock.now(),
+        now,
         signed_in.id(),
         signed_in.session_id,
         &request.current_password,
         &request.new_password,
     )
-    .await?;
+    .await;
+    // Only a wrong current password counts against the limit.
+    if !matches!(&result, Err(f) if f.code == bokkie_protocol::api::ErrorCode::Forbidden) {
+        state.limiter.succeeded(attempt);
+    }
+    result?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/v1/invitations/accept`. Rate-limited like sign-in, by client
-/// address, so codes cannot be guessed quickly.
+/// `POST /api/v1/invitations/accept`. Refused codes count against the
+/// client address's sign-in limit, so codes cannot be guessed quickly.
 pub async fn accept_invitation(
     State(state): State<AppState>,
     ClientAddress(address): ClientAddress,
@@ -162,12 +182,10 @@ pub async fn accept_invitation(
     Body(request): Body<AcceptInvitationRequest>,
 ) -> Result<Response> {
     let now = state.clock.now();
-    // Invitation attempts share the address limit under a key no username
-    // can take.
-    let key = "#invitation";
-    if !state.limiter.allows(key, &address, now.0) {
-        return Err(auth::rate_limited());
-    }
+    let attempt = state
+        .limiter
+        .begin(Attempting::Invitation { address: &address }, now.0)
+        .ok_or_else(auth::rate_limited)?;
     let result = {
         let _permit = state.hashing.acquire().await.map_err(Failure::internal)?;
         accounts::accept_invitation(
@@ -180,15 +198,11 @@ pub async fn accept_invitation(
         )
         .await
     };
-    let user = match result {
-        Ok(user) => user,
-        Err(failure) => {
-            if failure.code == bokkie_protocol::api::ErrorCode::Forbidden {
-                state.limiter.record_failure(key, &address, now.0);
-            }
-            return Err(failure);
-        }
-    };
+    // Only a refused code counts against the limit.
+    if !matches!(&result, Err(f) if f.code == bokkie_protocol::api::ErrorCode::Forbidden) {
+        state.limiter.succeeded(attempt);
+    }
+    let user = result?;
     let account = accounts::account(&state.db, user)
         .await?
         .ok_or_else(Failure::not_found)?;
