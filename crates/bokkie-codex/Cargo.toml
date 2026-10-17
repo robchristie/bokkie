@@ -1,0 +1,21 @@
+[package]
+name = "bokkie-codex"
+description = "A minimal JSON-RPC client for the Codex app server, checked against the pinned Codex schema"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+jsonschema = { version = "0.59", default-features = false }
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

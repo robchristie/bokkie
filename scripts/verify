@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# The canonical verification. CI runs exactly this.
+#
+# Set BOKKIE_SKIP_LIVE=1 to skip downloading Codex and the live checks.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+if [[ "${BOKKIE_SKIP_LIVE:-}" != 1 ]]; then
+  BOKKIE_CODEX_BIN="$(scripts/fetch-codex)"
+  export BOKKIE_CODEX_BIN
+fi
+
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- --deny warnings
+cargo test --workspace --locked
+if command -v shellcheck >/dev/null; then
+  mapfile -t shell_scripts < <(git ls-files 'scripts/*' '*.sh')
+  shellcheck "${shell_scripts[@]}"
+elif [[ -n "${CI:-}" ]]; then
+  echo "verify: shellcheck is required in CI" >&2
+  exit 1
+else
+  echo "verify: shellcheck is not installed; skipping shell lint" >&2
+fi
+git diff --exit-code -- Cargo.lock
