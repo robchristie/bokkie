@@ -194,7 +194,8 @@ pub struct AcceptInvitationRequest {
 /// Limits an admin sets for an account. `None` means unlimited.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
-    /// Turns the user may start per calendar day, in the gateway's time zone.
+    /// Turns the user may start in any 24 hours. Steering a running turn
+    /// does not count.
     pub daily_turns: Option<u32>,
     /// Tokens the user's turns may use per rolling seven days, measured from
     /// `thread/tokenUsage/updated`.
@@ -441,7 +442,9 @@ pub struct RateLimitWindow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Allowance {
     pub limits: Limits,
+    /// Turns started in the last 24 hours.
     pub turns_today: u32,
+    /// Tokens used in the last seven days.
     pub tokens_this_week: u64,
     /// Set when a limit is reached; new turns are refused until it resets.
     pub exhausted: bool,

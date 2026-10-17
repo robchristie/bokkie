@@ -18,7 +18,8 @@ use bokkie_codex::protocol::{
     AdditionalContextEntry, AdditionalContextKind, ServerNotification, ThreadItem, TurnStatus,
 };
 use bokkie_protocol::api::{
-    Author, BotStatus, Delivery, Message, MessageState, SendMessageResponse,
+    Allowance, Author, BotStatus, Delivery, ErrorCode, Message, MessageState, SendMessageResponse,
+    Usage,
 };
 use bokkie_protocol::events::Event;
 use bokkie_protocol::{BotId, MessageId, UserId};
@@ -31,6 +32,7 @@ use crate::clock::Clock;
 use crate::codex::{CodexError, RuntimeEvent, RuntimeEventKind, Supervisor};
 use crate::error::{Failure, Result};
 use crate::events::EventLog;
+use crate::usage::{self, SubscriptionCache};
 
 /// How often streamed text is written out. Deltas arriving in between are
 /// coalesced into one write.
@@ -141,9 +143,17 @@ pub struct Conversations {
     clock: Clock,
     supervisor: Arc<Supervisor>,
     events: Arc<EventLog>,
+    subscription: SubscriptionCache,
     live: std::sync::Mutex<Live>,
     /// Serialises sends to one Bot.
     sends: std::sync::Mutex<HashMap<BotId, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+fn limit_reached() -> Failure {
+    Failure::new(
+        ErrorCode::LimitReached,
+        "You have used your allowance for now. It refills over the next day or week",
+    )
 }
 
 fn unavailable(error: CodexError) -> Failure {
@@ -167,6 +177,7 @@ impl Conversations {
             clock,
             supervisor,
             events,
+            subscription: Default::default(),
             live: Default::default(),
             sends: Default::default(),
         }
@@ -246,6 +257,17 @@ impl Conversations {
             return Err(unavailable(CodexError::Refused(
                 crate::codex::guard::Refusal::new("refused"),
             )));
+        }
+        // The user's own allowance. A new turn needs both turns and tokens
+        // left; steering a running turn needs only tokens.
+        let allowance = self.allowance(user).await?;
+        let steering = self.live().turns.contains_key(&bot.id);
+        let out_of_tokens = allowance
+            .limits
+            .weekly_tokens
+            .is_some_and(|limit| allowance.tokens_this_week >= limit);
+        if out_of_tokens || (!steering && allowance.exhausted) {
+            return Err(limit_reached());
         }
         let runtime = self.supervisor.runtime(user).await.map_err(unavailable)?;
 
@@ -329,8 +351,14 @@ impl Conversations {
                 }
             }
         }
+        if allowance.exhausted {
+            // The steer missed, and there is no allowance for a new turn.
+            return Err(limit_reached());
+        }
         let turn = runtime.start_turn(&thread_id, &text, profile).await;
         let turn = self.refusing(user, &bot, turn).await?;
+        usage::record_turn(&self.db, self.clock.now(), user, bot.id).await?;
+        self.usage_changed(user).await;
         store::set_profile_sent(&self.db, user, bot.id, bot.profile_revision).await?;
         // Whichever of this and the router's `turn/started` records the turn
         // first announces that the Bot is working.
@@ -565,6 +593,21 @@ impl Conversations {
                         }
                     }
                 }
+                ServerNotification::ThreadTokenUsageUpdated(update) => {
+                    if let Some(bot) =
+                        store::bot_by_thread(&self.db, user, &update.thread_id).await?
+                    {
+                        let total =
+                            u64::try_from(update.token_usage.total.total_tokens).unwrap_or(0);
+                        usage::record_tokens(&self.db, self.clock.now(), user, bot.id, total)
+                            .await?;
+                        self.usage_changed(user).await;
+                    }
+                }
+                ServerNotification::AccountRateLimitsUpdated(update) => {
+                    self.subscription.update(user, &update.rate_limits);
+                    self.usage_changed(user).await;
+                }
                 ServerNotification::Error(error) if !error.will_retry => {
                     tracing::warn!(user = %user, thread = %error.thread_id, message = %error.error.message, "turn error");
                     if let Some(bot) =
@@ -694,6 +737,56 @@ impl Conversations {
             }
         }
         Ok(())
+    }
+
+    /// The user's allowance now, with their current limits.
+    pub async fn allowance(&self, user: UserId) -> Result<Allowance> {
+        let limits = crate::accounts::account(&self.db, user)
+            .await?
+            .map(|a| a.limits)
+            .unwrap_or_default();
+        usage::allowance(&self.db, self.clock.now(), user, limits).await
+    }
+
+    /// The user's usage meter. Reads the subscription's windows from the
+    /// user's app server when none have been reported yet.
+    pub async fn usage(&self, user: UserId) -> Result<Usage> {
+        let subscription = match self.subscription.get(user) {
+            Some(buckets) => buckets,
+            None => match self.supervisor.runtime(user).await {
+                Ok(runtime) => match runtime.rate_limits().await {
+                    Ok(response) => {
+                        let buckets = usage::buckets(&response);
+                        self.subscription.set(user, buckets.clone());
+                        buckets
+                    }
+                    Err(error) => {
+                        tracing::warn!(user = %user, %error, "reading rate limits failed");
+                        Vec::new()
+                    }
+                },
+                Err(_) => Vec::new(),
+            },
+        };
+        Ok(usage::usage(subscription, self.allowance(user).await?))
+    }
+
+    async fn usage_changed(&self, user: UserId) {
+        let allowance = match self.allowance(user).await {
+            Ok(allowance) => allowance,
+            Err(failure) => {
+                tracing::error!(user = %user, message = %failure.message, "reading usage failed");
+                return;
+            }
+        };
+        let subscription = self.subscription.get(user).unwrap_or_default();
+        self.emit(
+            user,
+            Event::UsageUpdated {
+                usage: usage::usage(subscription, allowance),
+            },
+        )
+        .await;
     }
 
     async fn status(&self, user: UserId, bot_id: BotId, status: BotStatus) {

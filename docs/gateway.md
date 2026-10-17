@@ -187,3 +187,26 @@ user's event log. The upgrade needs the session cookie and the gateway's
   sequence number.
 - An open socket rechecks its session every 30 seconds, so signing out, a
   revoked session or a disabled account closes it.
+
+## Usage and allowances
+
+`GET /api/v1/usage` is the usage meter: the shared subscription's
+rate-limit windows and the signed-in user's own allowance. Usage changes
+also arrive on the event socket as `usage_updated`.
+
+- **Subscription.** Each user's app server reports the ChatGPT
+  subscription's windows (`account/rateLimits/read` when the meter is first
+  read, then `account/rateLimits/updated`). A bucket is `reached` when Codex
+  says a limit is reached or a window is full, which drives the
+  limit-reached banner. Codex reports reset times in seconds; the wire
+  carries milliseconds.
+- **Allowances.** An admin sets each account's limits
+  (`PATCH /api/v1/admin/users/{id}` with `limits`, replaced whole): turns per
+  rolling 24 hours, and tokens per rolling seven days. A turn counts when the
+  gateway starts one; steering a running turn does not. Tokens are the growth
+  of each thread's total from `thread/tokenUsage/updated`, because the
+  subscription's own limits are shared by everyone. A message that would
+  start a turn beyond the allowance, or any message once the tokens are used
+  up, is refused with `limit_reached` and is not stored.
+- `GET /api/v1/admin/users/{id}/usage` shows an admin another account's
+  counts, never its conversations.
