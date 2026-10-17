@@ -2,7 +2,8 @@
 
 Status: active
 Next action: Phase 1, the Stobie prerequisites, then Phase 2's client and
-deployment. Phase 0 is complete; see the
+deployment. Independently: pin CI's Actions by commit SHA, and the owner's
+decision on ChatGPT credentials for other household members. Phase 0 is complete; see the
 [Phase 0 report](../phase-0-report.md). Phase 2's gateway has landed; see
 [Phase 2 progress](#phase-2-progress).
 
@@ -365,22 +366,26 @@ operator reference is [docs/gateway.md](../gateway.md).
 
 | Item | State |
 | --- | --- |
-| Wire types shared with the WASM client (`crates/bokkie-protocol`) | Done (#6) |
-| Accounts: admin bootstrap, invitation-only signup, password sign-in with rate limiting, revocable `__Host-` session cookies, `Origin` and `Host` checks, admin user management and limits | Done (#7) |
-| Startup and per-thread checks, a supervisor with one app server and `CODEX_HOME` per user, `turn/steer`, the line bound | Done (#8) |
-| Bot create, edit, pin and hide; one conversation per Bot; start, resume, steer and stop | Done (#9) |
-| The WebSocket with a durable, resumable per-user event log and coalesced deltas | Done (#10) |
-| Usage: the subscription's windows and per-user allowances, enforced for a member account | Done (#11) |
-| A scripted end-to-end check on the qualified image ([`deploy/e2e/`](../../deploy/e2e/README.md)) | Done (#12) |
+| Wire types shared with the WASM client (`crates/bokkie-protocol`) | Done (#6, `5e29467`) |
+| Accounts: admin bootstrap, invitation-only signup, password sign-in with rate limiting, revocable `__Host-` session cookies, `Origin` and `Host` checks, admin user management and limits | Done (#7, `02fd61e`) |
+| Startup and per-thread checks, a supervisor with one app server and `CODEX_HOME` per user, `turn/steer`, the line bound | Done (#8, `7c9cd8d`) |
+| Bot create, edit, pin and hide; one conversation per Bot; start, resume, steer and stop | Done (#9, `1b5d4d6`) |
+| The WebSocket with a durable, resumable per-user event log and coalesced deltas | Done (#10, `7a1370f`) |
+| Usage: the subscription's windows and per-user allowances, enforced for a member account | Done (#11, `5d9a908`) |
+| A scripted end-to-end check on the qualified image ([`deploy/e2e/`](../../deploy/e2e/README.md)) | Done (#12, `d8b6229`) |
 | CI pins GitHub Actions by commit SHA | Not started |
 | The conversation list, usage meter and limit-reached banner in the client | Waits for Phase 1 |
 | PWA install, and deployment behind Traefik under a temporary hostname | Not started; deployment needs the owner's go-ahead |
 
-The end-to-end check ran on nostromo against the exact commit it landed
-with. A Bot reply streamed over the event WebSocket from a real Codex app
-server, through the gateway, in the qualified image under Docker's default
-confinement. Each PR's description records its own validation and
-independent review.
+The end-to-end check ran on nostromo against `86a8567`, whose tree is the
+landed `d8b6229`. A Bot reply streamed over the event WebSocket from a real
+Codex app server, through the gateway, in the qualified image under Docker's
+default confinement. Each PR's description records its validation; its
+comments record each independent review verdict, on the exact head
+reviewed. Isolation tests cover reading and acting on another user's
+accounts, sessions, Bots, conversations, threads, events and usage. Phase 2
+has no approval route (every approval is declined), so approval isolation is
+Phase 4's acceptance.
 
 What the gateway work found, now recorded in docs/gateway.md:
 
@@ -397,6 +402,40 @@ What the gateway work found, now recorded in docs/gateway.md:
   turn context fragment instead.
 - **Refusals.** A safety rule broken mid-turn stops Codex for the whole
   gateway until it restarts, and refuses that Bot's thread for good.
+
+Gateway follow-ups, accepted when the PRs landed. They belong to Phase 2's
+remaining work unless a later phase is named:
+
+- **Robustness:**
+  - A request dropped between its database change and its event append
+    keeps the change without an event, until clients reload.
+  - Concurrent edits to one Bot can emit their events out of order.
+  - A turn goes uncounted if recording it fails after Codex started it.
+- **Usage:**
+  - No `usage_updated` event is sent when an admin changes limits or a
+    window rolls over.
+  - A token allowance can be overshot by one turn.
+  - One user's sends are serialised, so a hung Codex call delays that
+    user's other sends for up to 120 seconds.
+  - The usage tables are never pruned.
+- **Small gaps:**
+  - `Path` rejections return plain-text 400s rather than the API error
+    shape.
+  - The sign-in limiter is in memory, so a restart resets it.
+- **Tests not yet written:**
+  - a lagged WebSocket client;
+  - a prune during replay;
+  - an admin revoking a session with a socket open;
+  - a live test of profile context on `turn/steer`. The PR #9 review
+    checked it by hand against the pinned binary.
+- **End-to-end check:**
+  - The binaries are built on the operator's machine and need glibc 2.39 at
+    most; build them in the image if that stops holding.
+  - Nothing stops the check while a qualification container shares the
+    sign-in.
+  - Each run keeps a copy of the binaries in `~/.local/state/bokkie-e2e/`.
+- **Phase 4:** command execution, approvals and their isolation tests, and
+  the per-UID decision, all as already listed there.
 
 Still open before Phase 2's acceptance:
 
