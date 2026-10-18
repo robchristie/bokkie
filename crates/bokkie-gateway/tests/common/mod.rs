@@ -122,6 +122,11 @@ impl Call {
 
 impl Gateway {
     pub async fn new() -> Self {
+        Self::with_web_root(None).await
+    }
+
+    /// A gateway that serves `web_root` as its web package.
+    pub async fn with_web_root(web_root: Option<bokkie_gateway::web::WebRoot>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let config = Config {
             data_dir: dir.path().to_owned(),
@@ -130,6 +135,7 @@ impl Gateway {
             extra_hosts: vec!["bokkie.tailnet.test".into()],
             trust_forwarded_for: false,
             codex_program: "/nonexistent/codex".into(),
+            web_root,
         };
         let pool = db::open(&config.database_path()).await.unwrap();
         let catalog =
@@ -168,6 +174,7 @@ impl Gateway {
             extra_hosts: Vec::new(),
             trust_forwarded_for: false,
             codex_program: program.clone(),
+            web_root: None,
         };
         let pool = db::open(&config.database_path()).await.unwrap();
         let bundled =

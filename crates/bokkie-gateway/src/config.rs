@@ -3,6 +3,8 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use crate::web::WebRoot;
+
 /// The gateway's settings.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -23,6 +25,9 @@ pub struct Config {
     pub trust_forwarded_for: bool,
     /// The pinned `codex` binary.
     pub codex_program: PathBuf,
+    /// The production web package's application directory, served at the
+    /// origin's root. `None` serves no static files.
+    pub web_root: Option<WebRoot>,
 }
 
 /// An `https://host[:port]` or `http://host[:port]` origin, normalised to
@@ -61,8 +66,10 @@ impl PublicOrigin {
 impl Config {
     /// Reads `BOKKIE_DATA` (default `/data`), `BOKKIE_LISTEN` (default
     /// `0.0.0.0:8080`), `BOKKIE_ORIGIN` (required), `BOKKIE_EXTRA_HOSTS`
-    /// (comma-separated), `BOKKIE_TRUST_FORWARDED_FOR` (`1` to enable) and
-    /// `BOKKIE_CODEX_BIN` (default `/usr/local/bin/codex`).
+    /// (comma-separated), `BOKKIE_TRUST_FORWARDED_FOR` (`1` to enable),
+    /// `BOKKIE_CODEX_BIN` (default `/usr/local/bin/codex`) and
+    /// `BOKKIE_WEB_ROOT` (unset by default), which must name a readable
+    /// directory holding `index.html`.
     pub fn from_env() -> Result<Self, String> {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
         let origin = var("BOKKIE_ORIGIN").ok_or("BOKKIE_ORIGIN is required")?;
@@ -86,6 +93,9 @@ impl Config {
             codex_program: var("BOKKIE_CODEX_BIN")
                 .unwrap_or_else(|| "/usr/local/bin/codex".into())
                 .into(),
+            web_root: var("BOKKIE_WEB_ROOT")
+                .map(|root| WebRoot::open(root.as_ref()))
+                .transpose()?,
         })
     }
 

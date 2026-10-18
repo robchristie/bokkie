@@ -18,8 +18,65 @@ The gateway reads its settings from the environment.
 | `BOKKIE_TRUST_FORWARDED_FOR` | off | Set to `1` behind a proxy that appends the client address to `X-Forwarded-For`, so sign-in rate limits apply per client rather than per proxy |
 | `BOKKIE_CODEX_BIN` | `/usr/local/bin/codex` | The pinned `codex` binary |
 | `BOKKIE_LOG` | `info` | A `tracing` filter |
+| `BOKKIE_WEB_ROOT` | none | The web client's production package directory, served at the origin's root. Unset or empty, the gateway serves no static files |
 
-`GET /healthz` answers `ok` for any `Host`, for container health checks.
+A blank value counts as unset. `GET /healthz` answers `ok` for any `Host`,
+for container health checks.
+
+## The web client
+
+With `BOKKIE_WEB_ROOT` set, the gateway serves the web client itself, at
+the same origin as the API, so the session cookie, the `Origin` check and
+the service worker need no cross-origin setup. Point it at one application
+directory of a Stobie production package (`stobie build-web --production`):
+the directory that holds `index.html`, `manifest.webmanifest`, `sw.js` and
+`assets/<64 hex>/`. The gateway refuses to start if the directory is
+missing, unreadable or has no readable `index.html`.
+
+- `GET` and `HEAD` of `/` serve `index.html`; any other path names the file
+  at that path under the root. Other methods on a file get `405`.
+- Files under `assets/<64 hex>/`, which change name whenever they change,
+  get `Cache-Control: public, max-age=31536000, immutable`, with ranges and
+  conditional requests on the file's size and time. HTML files there are
+  the exception. A failed range or precondition there gets
+  `Cache-Control: no-store`.
+- Every other file, including the page, the manifest and the service
+  worker, gets `Cache-Control: no-cache` and a strong `ETag` hashed from
+  the bytes sent, so a browser revalidates it on every load and gets `304`
+  when nothing changed. The hash, rather than the file's size and time,
+  means a rebuilt page whose only change is its asset hash still gets a new
+  `ETag`, even with normalised timestamps.
+- `Accept-Encoding`, with its q-values, chooses among the `.br` and `.gz`
+  files beside a file and the file itself, preferring Brotli, then gzip, at
+  equal quality. The response carries `Content-Encoding` for a compressed
+  representation, the original file's media type, and `Vary:
+  Accept-Encoding` always. Each representation of a `no-cache` file has its
+  own `ETag`. A header that accepts no coding (`identity;q=0`) still gets
+  the file itself rather than `406`, and `*` alone counts as identity;
+  browsers send neither.
+- Media types follow Stobie's reference server: `application/wasm`,
+  `application/manifest+json` for `.webmanifest`, `text/javascript`,
+  `text/css` and `text/html` (UTF-8), PNG, JPEG, SVG, icons and fonts;
+  anything else is `application/octet-stream`. Every static response
+  carries `X-Content-Type-Options: nosniff`.
+- Static files are the router's fallback, so no route is shadowed: the API,
+  `/healthz` and the event WebSocket always answer for themselves, and no
+  path under `/api`, however it is percent-encoded, is ever served from the
+  root, so an unknown API path is still the API's 404.
+- A missing file is the API's ordinary 404. So is every path that names a
+  directory (there are no listings), contains `.` or `..` segments, plain or
+  percent-encoded, an empty segment, a backslash or a NUL, or any segment
+  starting with `.` (dotfiles), or names a `.br` or `.gz` file directly. A
+  symbolic link is followed only when it resolves inside the root; a file
+  whose `.br` or `.gz` representation resolves outside it is refused too.
+- The `Host` check applies to static files as to everything else.
+
+There is no `Content-Security-Policy` yet. To publish a new package, build
+it into a new directory and point `BOKKIE_WEB_ROOT` at it; the `no-cache`
+page and service worker move each client to the new package on its next
+load. The gateway serves one package and does not retain the previous
+one's assets, so a page left open on the old package that then needs a
+file it has not cached gets a 404 until it is reloaded.
 
 ## Accounts
 

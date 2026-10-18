@@ -5,6 +5,10 @@
 //! request and `Origin` on every state-changing request. Routes that act
 //! for a user take the [`auth::SignedIn`] extractor and pass its user id to
 //! every query, so one user can never name another user's data.
+//!
+//! With `BOKKIE_WEB_ROOT` set, [`web::serve`] is the fallback and serves the
+//! production web package at the same origin; otherwise every unrouted path
+//! is the API's 404.
 
 pub mod accounts;
 pub mod auth;
@@ -18,6 +22,7 @@ pub mod events;
 pub mod routes;
 pub mod secrets;
 pub mod usage;
+pub mod web;
 
 use std::sync::Arc;
 
@@ -124,15 +129,20 @@ pub fn router(state: AppState) -> Router {
             "/admin/invitations/{id}",
             delete(admin::withdraw_invitation),
         );
-    Router::new()
+    let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
-        .nest(bokkie_protocol::API_PREFIX, api)
-        .fallback(|| async { error::Failure::not_found() })
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            auth::guard,
-        ))
-        .with_state(state)
+        .nest(bokkie_protocol::API_PREFIX, api);
+    let app = match state.config.web_root.clone() {
+        Some(root) => {
+            app.fallback(move |request: axum::extract::Request| web::serve(root.clone(), request))
+        }
+        None => app.fallback(|| async { error::Failure::not_found() }),
+    };
+    app.layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        auth::guard,
+    ))
+    .with_state(state)
 }
 
 async fn version() -> axum::Json<VersionResponse> {

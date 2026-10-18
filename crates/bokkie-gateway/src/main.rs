@@ -59,6 +59,9 @@ async fn serve() -> Result<(), String> {
             .run_rollovers(bokkie_gateway::bots::service::ROLLOVER_INTERVAL),
     );
     tracing::info!(listen = %state.config.listen, origin = state.config.origin.as_str(), "serving");
+    if let Some(root) = &state.config.web_root {
+        tracing::info!(web_root = %root.path().display(), "serving the web package");
+    }
     let listener_address = state.config.listen;
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(listener_address)

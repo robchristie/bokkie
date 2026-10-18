@@ -1,5 +1,6 @@
 //! Phase 0 qualification: probe specifications, sandbox observations and
-//! their evaluation against the sandbox invariants in the foundation plan.
+//! their evaluation against the sandbox invariants in
+//! `docs/architecture.md#sandbox-invariants`.
 //!
 //! The harness (`bokkie-qualify`) builds a [`ProbeSpec`] from the outside,
 //! runs `bokkie-sandbox-probe` inside the Codex sandbox, and evaluates the
