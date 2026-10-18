@@ -12,7 +12,8 @@ itself runs entirely on the owner's own hardware.
 - **Client:** a web application and iOS home-screen PWA built with
   [Stobie](https://github.com/robchristie/stobie). Bokkie is Stobie's first
   real consumer application. Framework friction found while building Bokkie
-  is recorded for Stobie to fix; until it does, Bokkie works around it.
+  is fixed in Stobie; until a fix lands, Bokkie records it and works around
+  it.
 - **Access:** LAN and tailnet only. An administrator creates the accounts, for
   example for family members.
 
