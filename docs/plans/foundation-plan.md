@@ -2,8 +2,8 @@
 
 Status: active
 Next action: Phase 1, the Stobie prerequisites, then Phase 2's client and
-deployment. Independently: pin CI's Actions by commit SHA, and the owner's
-decision on ChatGPT credentials for other household members. Phase 0 is complete; see the
+deployment. Independently: the owner's decision on ChatGPT credentials for
+other household members. Phase 0 is complete; see the
 [Phase 0 report](../phase-0-report.md). Phase 2's gateway has landed; see
 [Phase 2 progress](#phase-2-progress).
 
@@ -374,10 +374,11 @@ operator reference is [docs/gateway.md](../gateway.md).
 | Usage: the subscription's windows and per-user allowances, enforced for a member account | Done (#11, `5d9a908`) |
 | A scripted end-to-end check on the qualified image ([`deploy/e2e/`](../../deploy/e2e/README.md)) | Done (#12, `d8b6229`) |
 | CI pins GitHub Actions by commit SHA, checked by `scripts/verify` | Done (#14, `ae7c967`) |
-| Robustness follow-ups: a change and its events commit together, in the order changes took effect; a turn is counted before Codex starts it | Done (#15) |
-| Usage follow-ups: `usage_updated` on limit changes and window rollover; usage pruned | Done (#16) |
-| Usage follow-ups: token overshoot stopped mid-turn; sends serialised per Bot, not per user | Done (#17) |
-| Small gaps: API-shaped `Path` and query rejections; sign-in limits survive a restart | Done (#18) |
+| Robustness follow-ups: a change and its events commit together, in the order changes took effect; a turn is counted before Codex starts it | Done (#15, `615d793`) |
+| Usage follow-ups: `usage_updated` on limit changes and window rollover; usage pruned | Done (#16, `06a79d1`) |
+| Usage follow-ups: token overshoot bounded to one model response per running turn; sends serialised per Bot, not per user | Done (#17, `d4536d4`) |
+| Small gaps: API-shaped `Path` and query rejections; sign-in limits survive a restart | Done (#18, `5af2d10`) |
+| The gateway tests the PR reviews asked for: a lagged socket, a prune during replay, an admin revoking sessions, profile context on a live steer | Done (#19) |
 | The conversation list, usage meter and limit-reached banner in the client | Waits for Phase 1 |
 | PWA install, and deployment behind Traefik under a temporary hostname | Not started; deployment needs the owner's go-ahead |
 
@@ -442,18 +443,25 @@ remaining work unless a later phase is named:
     shape.~~ Paths and queries now use the gateway's own extractors.
   - ~~The sign-in limiter is in memory, so a restart resets it.~~ It now
     writes its counts through to the database and starts from them.
-- **Tests not yet written:**
-  - a lagged WebSocket client;
-  - a prune during replay;
-  - an admin revoking a session with a socket open;
-  - a live test of profile context on `turn/steer`. The PR #9 review
-    checked it by hand against the pinned binary.
-- **End-to-end check:**
+- **Tests not yet written,** all added in #19:
+  - ~~a lagged WebSocket client;~~
+  - ~~a prune during replay;~~
+  - ~~an admin revoking a session with a socket open;~~
+  - ~~a live test of profile context on `turn/steer`.~~ It runs against
+    the pinned binary in `tests/live_codex.rs`.
+- **End-to-end check,** deferred to the next change to `deploy/e2e/`, and
+  listed below as still open before Phase 2's acceptance. Each
+  item changes the check itself, and a change to it is proven only by
+  running it on nostromo, which the gateway follow-up work (#14 to #19)
+  left out of scope:
   - The binaries are built on the operator's machine and need glibc 2.39 at
-    most; build them in the image if that stops holding.
+    most; build them in the image if that stops holding. It held for the
+    run on `86a8567`, so nothing is due until it does not.
   - Nothing stops the check while a qualification container shares the
-    sign-in.
+    sign-in. The fix is a guard in `remote.sh` that refuses to start while
+    a container of a `bokkie-qualify-<profile>` Compose project runs.
   - Each run keeps a copy of the binaries in `~/.local/state/bokkie-e2e/`.
+    The fix is to delete them after a run and keep only the results.
 - **Phase 4:** command execution, approvals and their isolation tests, and
   the per-UID decision, all as already listed there.
 
@@ -464,7 +472,10 @@ Still open before Phase 2's acceptance:
   created for a real person;
 - the client work, which waits for Phase 1, and deployment, which needs the
   owner's go-ahead;
-- the acceptance checks themselves, on devices after deployment.
+- the acceptance checks themselves, on devices after deployment;
+- the deferred end-to-end check items in the follow-up list above, which
+  fall to whoever next changes `deploy/e2e/` and runs it on nostromo with
+  the owner's go-ahead.
 
 Acceptance:
 
