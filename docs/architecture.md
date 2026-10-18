@@ -38,7 +38,7 @@ These crates appear as each phase needs them:
 | `crates/bokkie-gateway` | The axum server: authentication, persistence, the supervisor and routing |
 | `crates/bokkie-qualify`, `crates/bokkie-e2e` | The Phase 0 qualification probe ([`deploy/qualify/`](../deploy/qualify/README.md)) and the end-to-end check's client ([`deploy/e2e/`](../deploy/e2e/README.md)) |
 | `apps/bokkie-web` | The web client, a Stobie application built with the `stobie` CLI from the same Stobie revision it pins, with its platform-independent core: decoding, the snapshot and event merge, the reconnect policy and the event socket's driver. In the browser it sends commands with `fetch` and keeps one event WebSocket open while signed in |
-| `deploy/` | The image, the Compose file, container security profiles and the operator procedure |
+| `deploy/` | The image, the Compose file, container security profiles and the operator procedure: the temporary `bokkie-next` deployment ([`deploy/next/`](../deploy/next/README.md)), the Phase 0 probe and the end-to-end check |
 
 ### Data ownership
 

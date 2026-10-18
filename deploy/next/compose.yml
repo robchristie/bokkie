@@ -1,0 +1,85 @@
+# The temporary bokkie-next deployment: the gateway serving the web client,
+# behind the host's existing Traefik on the external `proxy` network. See
+# README.md. Never use the project name `bokkie`.
+#
+# Host facts come from the untracked .env beside this file (env.example
+# lists them). No port is published, so every request comes through
+# Traefik, which admits only the LAN and the tailnet. The container runs
+# under Docker's default seccomp and AppArmor confinement: no profile is
+# named here, and none may be.
+name: bokkie-next
+
+services:
+  gateway:
+    image: bokkie-next:${BOKKIE_NEXT_REVISION:?set BOKKIE_NEXT_REVISION in .env}
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: 2
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    environment:
+      BOKKIE_ORIGIN: https://${BOKKIE_NEXT_HOST:?set BOKKIE_NEXT_HOST in .env}
+      # Traefik appends the client's address; nothing else can reach the
+      # gateway except other containers on `proxy` (see README.md).
+      BOKKIE_TRUST_FORWARDED_FOR: "1"
+      BOKKIE_WEB_ROOT: /usr/local/share/bokkie/web
+      BOKKIE_DATA: /data
+      BOKKIE_LISTEN: 0.0.0.0:8080
+      BOKKIE_CODEX_BIN: /usr/local/bin/codex
+      BOKKIE_LOG: info
+      # Plain log lines for `docker compose logs`.
+      NO_COLOR: "1"
+    volumes:
+      - data:/data
+    networks:
+      - proxy
+    expose:
+      - "8080"
+    healthcheck:
+      # The image has no HTTP client; bash's /dev/tcp asks /healthz.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8080
+          && printf 'GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3
+          && grep -qx ok <&3
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      start_interval: 2s
+      retries: 3
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.bokkie-next.rule=Host(`${BOKKIE_NEXT_HOST:?set BOKKIE_NEXT_HOST in .env}`)
+      - traefik.http.routers.bokkie-next.entrypoints=websecure
+      - traefik.http.routers.bokkie-next.tls=true
+      - traefik.http.routers.bokkie-next.middlewares=bokkie-next-allowlist
+      # The LAN and the tailnet only, matched against the address Traefik
+      # sees; no X-Forwarded-For is consulted.
+      - traefik.http.middlewares.bokkie-next-allowlist.ipallowlist.sourcerange=192.168.50.0/24,100.64.0.0/10
+      - traefik.http.services.bokkie-next.loadbalancer.server.port=8080
+
+volumes:
+  data:
+    name: bokkie-next-data
+
+networks:
+  proxy:
+    external: true

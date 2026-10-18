@@ -95,8 +95,11 @@ To publish a new package, build
 it into a new directory and point `BOKKIE_WEB_ROOT` at it; the `no-cache`
 page and service worker move each client to the new package on its next
 load. The gateway serves one package and does not retain the previous
-one's assets, so a page left open on the old package that then needs a
-file it has not cached gets a 404 until it is reloaded.
+one's assets. Stobie's new service worker deletes the previous package's
+cache as it takes over open pages, so a page left open on the old package
+that then needs one of its files gets a 404 until it is reloaded;
+[deploy/next](../deploy/next/README.md#pages-left-open-across-an-update)
+says why the deployment accepts that.
 
 ## Accounts
 

@@ -34,5 +34,8 @@ socket, a Stop action, the usage meter, the limit-reached banner, a New Bot
 form and the ChatGPT device-code sign-in for the user's own app server. It
 builds as an installable web application named Bokkie, which the gateway
 serves with a Content-Security-Policy, and verification drives it in
-Chromium against the real gateway and a mock model. The owner keeps the
-phase plan privately.
+Chromium against the real gateway and a mock model.
+[`deploy/next/`](deploy/next/README.md) builds the gateway, the web client
+and the pinned Codex into one image from an exact merged commit, and runs it
+as a temporary instance behind the LAN host's reverse proxy. The owner keeps
+the phase plan privately.
