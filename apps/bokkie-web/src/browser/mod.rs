@@ -11,6 +11,8 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestCredentials, RequestInit, Response};
 
 use crate::BokkieIntent;
+use bokkie_protocol::Timestamp;
+
 use crate::api::{Api, ApiRequest, Generation};
 
 /// Sends each command with `fetch` and reports its reply as an intent, and
@@ -60,6 +62,13 @@ impl Api for BrowserApi {
         if let Some(window) = web_sys::window() {
             let _ = window.location().reload();
         }
+    }
+
+    fn now(&self) -> Timestamp {
+        let millis = web_sys::window()
+            .and_then(|window| window.performance())
+            .map_or(0.0, |clock| clock.time_origin() + clock.now());
+        Timestamp(millis as i64)
     }
 }
 

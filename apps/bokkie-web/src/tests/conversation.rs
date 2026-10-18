@@ -15,10 +15,10 @@ use crate::api::SocketControl;
 use crate::connection::{CLOSE_SIGNED_OUT, Input};
 use crate::socket::Link;
 
-const TUTOR: BotId = BotId(1);
+pub(super) const TUTOR: BotId = BotId(1);
 
 impl Fixture {
-    fn deliver(&mut self, step: Step) {
+    pub(super) fn deliver(&mut self, step: Step) {
         self.io.extend(step.io);
         for update in step.updates {
             let generation = self.socket_generation;
@@ -26,17 +26,17 @@ impl Fixture {
         }
     }
 
-    fn socket(&mut self, input: Input) {
+    pub(super) fn socket(&mut self, input: Input) {
         let step = self.driver.handle(input);
         self.deliver(step);
     }
 
-    fn frame(&mut self, frame: ServerFrame) {
+    pub(super) fn frame(&mut self, frame: ServerFrame) {
         let step = self.driver.receive(&serde_json::to_string(&frame).unwrap());
         self.deliver(step);
     }
 
-    fn event(&mut self, seq: u64, event: Event) {
+    pub(super) fn event(&mut self, seq: u64, event: Event) {
         self.frame(ServerFrame::Event(EventEnvelope {
             seq: Seq(seq),
             at: Timestamp(5_000 + seq as i64),
@@ -44,13 +44,13 @@ impl Fixture {
         }));
     }
 
-    fn io(&mut self) -> Vec<Io> {
+    pub(super) fn io(&mut self) -> Vec<Io> {
         std::mem::take(&mut self.io)
     }
 
     /// The application asked for the socket: start it as the transport
     /// does, with a fresh driver.
-    fn socket_started(&mut self) {
+    pub(super) fn socket_started(&mut self) {
         let generation = self.app().generation();
         assert_eq!(
             self.sent.take_socket(),
@@ -66,23 +66,26 @@ impl Fixture {
 
     /// Signed in as Ada with her Tutor listed, and the socket live after
     /// event `latest`. The first live reloads the list.
-    fn signed_in_and_live(&mut self, latest: u64) {
+    pub(super) fn signed_in_and_live(&mut self, latest: u64) {
         let _ = self.sent();
         self.sign_in();
         self.socket_started();
         self.reply(ApiReply::Bots(Ok(tutor_list(BotStatus::Idle, latest))));
+        // The sign-in's meter request fails; the first live asks again, and
+        // that request stays out for the test to answer.
+        self.reply(ApiReply::Usage(Err(CommandError::unreachable())));
         assert!(self.sent().is_empty());
         self.frame(ServerFrame::Live {
             latest: Seq(latest),
         });
-        assert_eq!(self.sent(), [ApiRequest::ListBots]);
+        assert_eq!(self.sent(), [ApiRequest::ListBots, ApiRequest::LoadUsage]);
         self.reply(ApiReply::Bots(Ok(tutor_list(BotStatus::Idle, latest))));
         assert_eq!(self.fact("connection"), "live".into());
         assert_eq!(self.fact("bots"), "loaded".into());
     }
 
     /// Open the Tutor's conversation, holding `messages`, as of `seq`.
-    fn open_tutor(&mut self, messages: Vec<Message>, seq: u64) {
+    pub(super) fn open_tutor(&mut self, messages: Vec<Message>, seq: u64) {
         self.click("Open Tutor");
         assert_eq!(self.sent(), [ApiRequest::LoadMessages(TUTOR)]);
         assert_eq!(self.fact("screen"), "conversation".into());
@@ -98,19 +101,19 @@ impl Fixture {
         assert_eq!(self.fact("conversation"), "loaded".into());
     }
 
-    fn write(&mut self, draft: &str) {
+    pub(super) fn write(&mut self, draft: &str) {
         self.send(BokkieIntent::EditDraft(draft.into()));
     }
 }
 
-fn tutor_list(status: BotStatus, seq: u64) -> BotList {
+pub(super) fn tutor_list(status: BotStatus, seq: u64) -> BotList {
     BotList {
         bots: vec![bot(1, "Tutor", "Maths help", status, Some("Hi"))],
         seq: Seq(seq),
     }
 }
 
-fn message(id: i64, author: Author, text: &str, state: MessageState) -> Message {
+pub(super) fn message(id: i64, author: Author, text: &str, state: MessageState) -> Message {
     Message {
         id: MessageId(id),
         bot_id: TUTOR,
@@ -122,7 +125,7 @@ fn message(id: i64, author: Author, text: &str, state: MessageState) -> Message 
     }
 }
 
-fn hello() -> Vec<Message> {
+pub(super) fn hello() -> Vec<Message> {
     vec![
         message(1, Author::User, "Hi", MessageState::Complete),
         message(
@@ -134,14 +137,14 @@ fn hello() -> Vec<Message> {
     ]
 }
 
-fn sent_message(id: i64, text: &str, delivery: Delivery) -> SendMessageResponse {
+pub(super) fn sent_message(id: i64, text: &str, delivery: Delivery) -> SendMessageResponse {
     SendMessageResponse {
         message: message(id, Author::User, text, MessageState::Complete),
         delivery,
     }
 }
 
-fn delta(offset: u64, text: &str) -> Event {
+pub(super) fn delta(offset: u64, text: &str) -> Event {
     Event::MessageDelta {
         bot_id: TUTOR,
         message_id: MessageId(4),
@@ -153,7 +156,7 @@ fn delta(offset: u64, text: &str) -> Event {
 /// The events of one exchange after event 10: the user's message 3, the
 /// Bot working, its reply 4 streaming in three deltas, then complete and
 /// idle. Seq 11 to 18.
-fn exchange() -> Vec<Event> {
+pub(super) fn exchange() -> Vec<Event> {
     vec![
         Event::MessageCreated {
             message: message(3, Author::User, "Explain fractions", MessageState::Complete),
@@ -247,7 +250,7 @@ fn opening_a_bot_shows_its_conversation_and_back_returns_to_the_list() {
 }
 
 impl Fixture {
-    fn store_has_no_conversation(&self) -> bool {
+    pub(super) fn store_has_no_conversation(&self) -> bool {
         self.app().store().conversation(TUTOR).is_none()
     }
 }
@@ -449,8 +452,50 @@ fn a_bot_error_shows_until_the_next_message() {
     assert!(fixture.shows(said));
     fixture.write("Try again");
     fixture.click("Send");
+    let _ = fixture.sent();
+    // A send that fails keeps the error.
+    fixture.reply(ApiReply::Sent(
+        TUTOR,
+        Err(error(
+            503,
+            ErrorCode::Unavailable,
+            "The Bots' runtime is unavailable",
+        )),
+    ));
+    assert_eq!(fixture.fact("bot_error"), said.into());
+    fixture.click("Send");
+    fixture.reply(ApiReply::Sent(
+        TUTOR,
+        Ok(sent_message(3, "Try again", Delivery::NewTurn)),
+    ));
     assert_eq!(fixture.fact("bot_error"), "".into());
     assert!(!fixture.shows(said));
+}
+
+#[test]
+fn a_conversation_that_failed_to_load_can_be_refreshed() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.click("Open Tutor");
+    let _ = fixture.sent();
+    fixture.reply(ApiReply::Messages(
+        TUTOR,
+        Err(error(500, ErrorCode::Internal, "Something went wrong")),
+    ));
+    assert!(fixture.shows("Something went wrong"));
+    fixture.click("Refresh");
+    assert_eq!(fixture.sent(), [ApiRequest::LoadMessages(TUTOR)]);
+    assert!(!fixture.enabled(BokkieAction::Refresh), "already loading");
+    fixture.reply(ApiReply::Messages(
+        TUTOR,
+        Ok(MessagePage {
+            messages: hello(),
+            older: None,
+            seq: Seq(10),
+        }),
+    ));
+    assert_eq!(fixture.fact("conversation"), "loaded".into());
+    assert!(!fixture.shows("Refresh"), "only while it has failed");
 }
 
 #[test]
@@ -556,6 +601,7 @@ fn a_reload_asked_for_while_a_load_is_in_flight_follows_it() {
     fixture.socket(Input::RetryDue);
     fixture.socket(Input::Opened);
     fixture.frame(ServerFrame::Reset { after: Seq(20) });
+    // The meter's request from the first live is still out.
     assert_eq!(fixture.sent(), [ApiRequest::ListBots]);
     fixture.reply(ApiReply::Messages(
         TUTOR,

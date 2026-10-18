@@ -7,8 +7,9 @@
 
 use bokkie_protocol::api::{
     BotList, LoginRequest, MessagePage, SendMessageRequest, SendMessageResponse, SessionResponse,
+    StopResponse, Usage,
 };
-use bokkie_protocol::{API_PREFIX, BotId};
+use bokkie_protocol::{API_PREFIX, BotId, Timestamp};
 
 use crate::wire::{self, CommandError};
 
@@ -28,6 +29,10 @@ pub enum ApiRequest {
     /// `POST /api/v1/bots/{id}/messages`: send a message, which starts a
     /// turn or steers the running one.
     SendMessage(BotId, SendMessageRequest),
+    /// `POST /api/v1/bots/{id}/stop`: interrupt the running reply.
+    StopBot(BotId),
+    /// `GET /api/v1/usage`: the usage meter.
+    LoadUsage,
 }
 
 // The password must never reach a log line.
@@ -44,6 +49,8 @@ impl std::fmt::Debug for ApiRequest {
                 .field(bot)
                 .field(message)
                 .finish(),
+            Self::StopBot(bot) => f.debug_tuple("StopBot").field(bot).finish(),
+            Self::LoadUsage => f.write_str("LoadUsage"),
         }
     }
 }
@@ -75,13 +82,17 @@ pub enum ApiReply {
     Bots(Result<BotList, CommandError>),
     Messages(BotId, Result<MessagePage, CommandError>),
     Sent(BotId, Result<SendMessageResponse, CommandError>),
+    Stopped(BotId, Result<StopResponse, CommandError>),
+    Usage(Result<Usage, CommandError>),
 }
 
 impl ApiRequest {
     pub fn method(&self) -> Method {
         match self {
-            Self::CheckSession | Self::ListBots | Self::LoadMessages(_) => Method::Get,
-            Self::SignIn(_) | Self::SendMessage(..) => Method::Post,
+            Self::CheckSession | Self::ListBots | Self::LoadMessages(_) | Self::LoadUsage => {
+                Method::Get
+            }
+            Self::SignIn(_) | Self::SendMessage(..) | Self::StopBot(_) => Method::Post,
             Self::SignOut => Method::Delete,
         }
     }
@@ -92,6 +103,8 @@ impl ApiRequest {
             Self::CheckSession | Self::SignIn(_) | Self::SignOut => "/session".into(),
             Self::ListBots => "/bots".into(),
             Self::LoadMessages(bot) | Self::SendMessage(bot, _) => format!("/bots/{bot}/messages"),
+            Self::StopBot(bot) => format!("/bots/{bot}/stop"),
+            Self::LoadUsage => "/usage".into(),
         };
         format!("{API_PREFIX}{route}")
     }
@@ -116,6 +129,8 @@ impl ApiRequest {
                 ApiReply::Messages(*bot, wire::decode_response(status, body))
             }
             Self::SendMessage(bot, _) => ApiReply::Sent(*bot, wire::decode_response(status, body)),
+            Self::StopBot(bot) => ApiReply::Stopped(*bot, wire::decode_response(status, body)),
+            Self::LoadUsage => ApiReply::Usage(wire::decode_response(status, body)),
         }
     }
 
@@ -129,6 +144,8 @@ impl ApiRequest {
             Self::ListBots => ApiReply::Bots(Err(error)),
             Self::LoadMessages(bot) => ApiReply::Messages(*bot, Err(error)),
             Self::SendMessage(bot, _) => ApiReply::Sent(*bot, Err(error)),
+            Self::StopBot(bot) => ApiReply::Stopped(*bot, Err(error)),
+            Self::LoadUsage => ApiReply::Usage(Err(error)),
         }
     }
 }
@@ -160,6 +177,9 @@ pub trait Api {
 
     /// Reload the page, to fetch the client that matches the gateway.
     fn reload_page(&self);
+
+    /// The time now, for saying how long until a limit resets.
+    fn now(&self) -> Timestamp;
 }
 
 /// What the application asked of the event socket, as a [`Recorder`] keeps
@@ -177,12 +197,18 @@ pub enum SocketControl {
 pub struct Recorder {
     sent: std::rc::Rc<std::cell::RefCell<Vec<ApiRequest>>>,
     socket: std::rc::Rc<std::cell::RefCell<Vec<SocketControl>>>,
+    now: std::rc::Rc<std::cell::Cell<i64>>,
 }
 
 impl Recorder {
     /// Every command sent so far, which is then forgotten.
     pub fn take(&self) -> Vec<ApiRequest> {
         std::mem::take(&mut self.sent.borrow_mut())
+    }
+
+    /// Set the time [`Api::now`] reports.
+    pub fn set_now(&self, now: Timestamp) {
+        self.now.set(now.0);
     }
 
     /// Everything asked of the event socket so far, which is then forgotten.
@@ -208,6 +234,10 @@ impl Api for Recorder {
 
     fn reload_page(&self) {
         self.socket.borrow_mut().push(SocketControl::ReloadPage);
+    }
+
+    fn now(&self) -> Timestamp {
+        Timestamp(self.now.get())
     }
 }
 
@@ -235,6 +265,8 @@ mod tests {
                     text: "Hello".into(),
                 },
             ),
+            ApiRequest::StopBot(BotId(3)),
+            ApiRequest::LoadUsage,
         ]
         .iter()
         .map(|request| (request.method().as_str(), request.path()))
@@ -248,6 +280,8 @@ mod tests {
                 ("GET", "/api/v1/bots".to_owned()),
                 ("GET", "/api/v1/bots/3/messages".to_owned()),
                 ("POST", "/api/v1/bots/3/messages".to_owned()),
+                ("POST", "/api/v1/bots/3/stop".to_owned()),
+                ("GET", "/api/v1/usage".to_owned()),
             ]
         );
         assert_eq!(
