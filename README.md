@@ -22,9 +22,9 @@ commercial service.
 ## Status
 
 Phase 0 is complete. The [Phase 0 report](docs/phase-0-report.md) qualifies
-the Codex app server and its sandbox in a container on the LAN host. The
-[foundation plan](docs/plans/foundation-plan.md) records the agreed decisions,
-the architecture, the phases and the open questions. Build, test and
+the Codex app server and its sandbox in a container on the LAN host.
+[docs/architecture.md](docs/architecture.md) describes the architecture, the
+multi-user model and the container and sandbox posture. Build, test and
 verification rules are in [CONTRIBUTING.md](CONTRIBUTING.md). Phase 2's
 gateway has landed; [docs/gateway.md](docs/gateway.md) is its operator
-reference, and the plan records what remains.
+reference. The owner keeps the phase plan privately.

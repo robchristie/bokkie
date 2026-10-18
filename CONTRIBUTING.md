@@ -1,8 +1,9 @@
 # Contributing to Bokkie
 
-These rules apply to every change. The
-[foundation plan](docs/plans/foundation-plan.md) owns the agreed decisions,
-the architecture and the phases; read it before product work.
+These rules apply to every change. [docs/architecture.md](docs/architecture.md)
+owns the architecture, the multi-user model and the container and sandbox
+posture, including the sandbox invariants and the chat-only rule; read it
+before product work.
 
 ## Build and test
 

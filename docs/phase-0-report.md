@@ -2,10 +2,12 @@
 
 Status: complete, 17 October 2026.
 
-Phase 0 of the [foundation plan](plans/foundation-plan.md#phase-0-codex-runtime-qualification)
-asked whether `codex app-server` and the Codex Linux sandbox can run inside a
-container on nostromo with the isolation Bokkie needs, before any product
-code depends on them. They can, with conditions.
+Phase 0 asked whether `codex app-server` and the Codex Linux sandbox can run
+inside a container on nostromo with the isolation Bokkie needs, before any
+product code depends on them. They can, with conditions. The
+[architecture](architecture.md#container-and-sandbox-posture) sets out the
+profiles compared and the [sandbox invariants](architecture.md#sandbox-invariants)
+that this report numbers.
 
 ## Decisions
 
@@ -143,8 +145,8 @@ the version only in their file names. They are corroborated by a difference
 in behaviour: 0.162.1 does not add the `tmp/arg0-linux` read root that 0.163.0
 and 0.164.0-alpha.3 add.
 
-That meets the plan's condition for preferring B as far as a pre-release can
-show: it held across Codex versions in both directions without rework. Its rules depend on Bubblewrap's staging
+That meets the [condition for preferring B](architecture.md#container-and-sandbox-posture)
+as far as a pre-release can show: it held across Codex versions in both directions without rework. Its rules depend on Bubblewrap's staging
 layout, so the Bubblewrap pin is what B must be requalified against.
 
 Both A and B need `systempaths=unconfined`. Docker's masked `/proc` paths
@@ -272,7 +274,7 @@ not built.
   remains loaded. The `bokkie-qualify-data` volume still holds the
   qualification sign-in, and the image `bokkie-qualify:c94cebe67cf1` remains.
   Both stay for reruns until Phase 4's requalification, which removes them
-  (see the plan's Phase 4).
+  with the owner's go-ahead.
 - **No Stobie friction.** Phase 0 involved no Stobie work.
 
 ## Open items for later phases
