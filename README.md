@@ -28,5 +28,6 @@ the Codex app server and its sandbox in a container on the LAN host.
 multi-user model and the container and sandbox posture. Build, test and
 verification rules are in [CONTRIBUTING.md](CONTRIBUTING.md). Phase 2's
 gateway has landed; [docs/gateway.md](docs/gateway.md) is its operator
-reference. The web client (`apps/bokkie-web`) signs in and lists the user's
-Bots; conversations come next. The owner keeps the phase plan privately.
+reference. The web client (`apps/bokkie-web`) signs in, lists the user's
+Bots and holds one Bot's conversation, with replies streaming over the event
+socket; stopping a reply and the usage meter come next. The owner keeps the phase plan privately.
