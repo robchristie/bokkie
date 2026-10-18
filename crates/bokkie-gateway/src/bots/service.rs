@@ -103,6 +103,7 @@ fn context(text: String) -> BTreeMap<String, AdditionalContextEntry> {
 
 #[derive(Debug, Clone)]
 struct ActiveTurn {
+    user: UserId,
     thread_id: String,
     turn_id: String,
 }
@@ -129,6 +130,9 @@ struct Live {
     /// Recently finished turns. A turn can finish before `turn/start`
     /// answers, and must not then be recorded as running.
     finished: std::collections::VecDeque<String>,
+    /// Turns interrupted because the user's token allowance ran out, by the
+    /// user and Codex turn id, until they end.
+    token_stops: std::collections::HashSet<(UserId, String)>,
 }
 
 impl Live {
@@ -142,6 +146,9 @@ impl Live {
     }
 }
 
+/// Held while a message to one Bot is sent.
+type SendLock = Arc<tokio::sync::Mutex<()>>;
+
 /// The conversation service shared by the routes and the event router.
 #[derive(Debug)]
 pub struct Conversations {
@@ -151,8 +158,8 @@ pub struct Conversations {
     events: Arc<EventLog>,
     subscription: SubscriptionCache,
     live: std::sync::Mutex<Live>,
-    /// Serialises each user's sends.
-    sends: std::sync::Mutex<HashMap<UserId, Arc<tokio::sync::Mutex<()>>>>,
+    /// Serialises the sends to each Bot.
+    sends: std::sync::Mutex<HashMap<(UserId, BotId), SendLock>>,
 }
 
 fn limit_reached() -> Failure {
@@ -220,11 +227,11 @@ impl Conversations {
         self.live().turns.contains_key(&bot)
     }
 
-    fn send_lock(&self, user: UserId) -> Arc<tokio::sync::Mutex<()>> {
+    fn send_lock(&self, user: UserId, bot: BotId) -> SendLock {
         self.sends
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entry(user)
+            .entry((user, bot))
             .or_default()
             .clone()
     }
@@ -267,10 +274,11 @@ impl Conversations {
     ) -> Result<SendMessageResponse> {
         let user = owner.user.id;
         let text = store::check_message(text)?;
-        // One send per user at a time: the allowance is checked here and
-        // counted once the turn starts, and concurrent sends to several
-        // Bots must not all pass the check first.
-        let lock = self.send_lock(user);
+        // One send per Bot at a time, so that a Bot's thread starts once and
+        // each message either steers its running turn or starts one. Sends
+        // to other Bots do not wait, even on a Codex call that hangs: the
+        // allowance is checked and counted in one transaction instead.
+        let lock = self.send_lock(user, bot_id);
         let _sending = lock.lock().await;
         let bot = store::bot(&self.db, user, bot_id)
             .await?
@@ -283,12 +291,8 @@ impl Conversations {
         // The user's own allowance. A new turn needs both turns and tokens
         // left; steering a running turn needs only tokens.
         let allowance = self.allowance(user).await?;
-        let steering = self.live().turns.contains_key(&bot.id);
-        let out_of_tokens = allowance
-            .limits
-            .weekly_tokens
-            .is_some_and(|limit| allowance.tokens_this_week >= limit);
-        if out_of_tokens || (!steering && allowance.exhausted) {
+        let active = self.live().turns.get(&bot.id).cloned();
+        if tokens_used_up(&allowance) || (active.is_none() && allowance.exhausted) {
             return Err(limit_reached());
         }
         let runtime = self.supervisor.runtime(user).await.map_err(unavailable)?;
@@ -326,29 +330,29 @@ impl Conversations {
         let profile = (bot.profile_sent_revision < bot.profile_revision)
             .then(|| context(profile_update(&bot)));
 
-        let mut batch = self.events.begin(user).await?;
-        let message = store::insert_message(
-            &mut *batch,
-            self.clock.now(),
-            user,
-            NewMessage {
-                bot: bot.id,
-                author: Author::User,
-                text: &text,
-                state: MessageState::Complete,
-                turn: None,
-            },
-        )
-        .await?;
-        batch
-            .emit(Event::MessageCreated {
-                message: message.clone(),
-            })
-            .await?;
-        batch.commit().await?;
+        // A message that starts a turn counts it before it is stored, so
+        // that of several sent at once, only those with a turn left are
+        // stored. Counting before Codex starts the turn also means a turn
+        // that runs is always counted.
+        let reserved = match active {
+            Some(_) => None,
+            None => Some(
+                self.reserve_turn(user, bot.id)
+                    .await?
+                    .ok_or_else(limit_reached)?,
+            ),
+        };
+        let message = match self.store_message(user, bot.id, &text).await {
+            Ok(message) => message,
+            Err(failure) => {
+                if let Some(turn) = reserved {
+                    self.release_turn(user, turn).await;
+                }
+                return Err(failure);
+            }
+        };
 
         // Steer the running turn, if there is one.
-        let active = self.live().turns.get(&bot.id).cloned();
         if let Some(active) = active {
             match runtime
                 .steer_turn(&thread_id, &active.turn_id, &text, profile.clone())
@@ -373,11 +377,14 @@ impl Conversations {
                 }
             }
         }
-        // Count the turn before Codex starts it, so that a started turn is
-        // always counted. If there is no allowance for it, the steer missed
-        // and the message stays without a reply.
-        let Some(reserved) = self.reserve_turn(user, bot.id).await? else {
-            return Err(limit_reached());
+        // If the steer missed and there is no turn left for a new one, the
+        // message stays without a reply.
+        let reserved = match reserved {
+            Some(turn) => turn,
+            None => self
+                .reserve_turn(user, bot.id)
+                .await?
+                .ok_or_else(limit_reached)?,
         };
         let turn = match runtime.start_turn(&thread_id, &text, profile).await {
             Ok(turn) => turn,
@@ -403,6 +410,7 @@ impl Conversations {
                     .insert(
                         bot.id,
                         ActiveTurn {
+                            user,
                             thread_id,
                             turn_id: turn.id,
                         },
@@ -416,6 +424,31 @@ impl Conversations {
             message,
             delivery: Delivery::NewTurn,
         })
+    }
+
+    /// Stores a user's message and announces it.
+    async fn store_message(&self, user: UserId, bot: BotId, text: &str) -> Result<Message> {
+        let mut batch = self.events.begin(user).await?;
+        let message = store::insert_message(
+            &mut *batch,
+            self.clock.now(),
+            user,
+            NewMessage {
+                bot,
+                author: Author::User,
+                text,
+                state: MessageState::Complete,
+                turn: None,
+            },
+        )
+        .await?;
+        batch
+            .emit(Event::MessageCreated {
+                message: message.clone(),
+            })
+            .await?;
+        batch.commit().await?;
+        Ok(message)
     }
 
     /// Passes a result through, recording a safety refusal on the Bot.
@@ -466,19 +499,23 @@ impl Conversations {
 
     // -- Rollover -----------------------------------------------------------
 
-    /// Announces rolled-over windows every [`ROLLOVER_INTERVAL`], until the
-    /// gateway stops.
-    pub async fn run_rollovers(self: Arc<Self>) {
+    /// Announces rolled-over windows at each interval ([`ROLLOVER_INTERVAL`]
+    /// in the gateway), until the gateway stops.
+    pub async fn run_rollovers(self: Arc<Self>, every: Duration) {
         let mut since = self.clock.now();
-        let mut tick = tokio::time::interval(ROLLOVER_INTERVAL);
+        let mut tick = tokio::time::interval(every);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tick.tick().await;
             let now = self.clock.now();
-            if let Err(failure) = self.roll_over(since, now).await {
-                tracing::error!(message = %failure.message, "rolling usage windows over failed");
+            // A failed pass is retried from the same start, so nothing that
+            // rolled over in it goes unannounced.
+            match self.roll_over(since, now).await {
+                Ok(_) => since = now,
+                Err(failure) => {
+                    tracing::error!(message = %failure.message, "rolling usage windows over failed");
+                }
             }
-            since = now;
         }
     }
 
@@ -584,6 +621,7 @@ impl Conversations {
                             .insert(
                                 bot.id,
                                 ActiveTurn {
+                                    user,
                                     thread_id: started.thread_id,
                                     turn_id: started.turn.id,
                                 },
@@ -646,9 +684,11 @@ impl Conversations {
                 ServerNotification::TurnCompleted(done) => {
                     if let Some(bot) = store::bot_by_thread(&self.db, user, &done.thread_id).await?
                     {
-                        let ended = {
+                        let (ended, stopped_for_tokens) = {
                             let mut live = self.live();
                             live.finished(&done.turn.id);
+                            let stopped_for_tokens =
+                                live.token_stops.remove(&(user, done.turn.id.clone()));
                             let current = live
                                 .turns
                                 .get(&bot.id)
@@ -656,7 +696,7 @@ impl Conversations {
                             if current {
                                 live.turns.remove(&bot.id);
                             }
-                            current
+                            (current, stopped_for_tokens)
                         };
                         let state = match done.turn.status {
                             TurnStatus::Completed | TurnStatus::InProgress => {
@@ -666,6 +706,21 @@ impl Conversations {
                             TurnStatus::Failed => MessageState::Failed,
                         };
                         self.finish_streaming(user, Some(bot.id), state).await?;
+                        // Only a turn the token stop actually cut short is
+                        // announced as stopped. A chat-only turn usually
+                        // reports its tokens after its reply is complete.
+                        if stopped_for_tokens && done.turn.status == TurnStatus::Interrupted {
+                            self.emit(
+                                user,
+                                Event::BotError {
+                                    bot_id: bot.id,
+                                    message: "Your token allowance is used up, so this turn was \
+                                              stopped"
+                                        .into(),
+                                },
+                            )
+                            .await;
+                        }
                         if ended {
                             self.status(user, bot.id).await;
                         }
@@ -680,8 +735,16 @@ impl Conversations {
                         let mut batch = self.events.begin(user).await?;
                         usage::record_tokens(&mut batch, self.clock.now(), user, bot.id, total)
                             .await?;
-                        self.emit_usage(&mut batch).await?;
-                        self.commit(batch).await;
+                        let allowance = self.emit_usage(&mut batch).await?;
+                        match batch.commit().await {
+                            Ok(_) if tokens_used_up(&allowance) => {
+                                self.stop_for_tokens(user).await;
+                            }
+                            Ok(_) => {}
+                            Err(failure) => {
+                                tracing::error!(user = %user, message = %failure.message, "recording tokens failed");
+                            }
+                        }
                     }
                 }
                 ServerNotification::AccountRateLimitsUpdated(update) => {
@@ -726,6 +789,7 @@ impl Conversations {
                     .collect();
                 let stopped: Vec<BotId> = {
                     let mut live = self.live();
+                    live.token_stops.retain(|(owner, _)| *owner != user);
                     bots.iter()
                         .filter(|bot| live.turns.remove(bot).is_some())
                         .copied()
@@ -783,6 +847,7 @@ impl Conversations {
         let mut live = self.live();
         if !live.finished.iter().any(|t| t == turn_id) {
             live.turns.entry(bot.id).or_insert_with(|| ActiveTurn {
+                user,
                 thread_id: thread_id.into(),
                 turn_id: turn_id.into(),
             });
@@ -856,22 +921,62 @@ impl Conversations {
         Ok(usage::usage(subscription, self.allowance(user).await?))
     }
 
-    /// Adds the user's usage meter to a batch, as the batch sees it.
-    pub async fn emit_usage(&self, batch: &mut Batch) -> Result<()> {
+    /// Adds the user's usage meter to a batch, as the batch sees it, and
+    /// returns the allowance it shows.
+    pub async fn emit_usage(&self, batch: &mut Batch) -> Result<Allowance> {
         let user = batch.user();
         let allowance = allowance(batch, self.clock.now(), user).await?;
         let subscription = self.subscription.get(user).unwrap_or_default();
         batch
             .emit(Event::UsageUpdated {
-                usage: usage::usage(subscription, allowance),
+                usage: usage::usage(subscription, allowance.clone()),
             })
-            .await
+            .await?;
+        Ok(allowance)
+    }
+
+    /// Interrupts the user's running turns once their token allowance is
+    /// used up, each turn once. Codex reports a turn's tokens as each model
+    /// response completes, so the allowance is overshot by at most one
+    /// response per running turn: a chat-only turn has usually finished its
+    /// reply by then, and a turn that would ask the model again is cut
+    /// short. The interrupts run in their own task, which also finds the
+    /// user's app server, so routing never waits on the supervisor.
+    async fn stop_for_tokens(&self, user: UserId) {
+        let running: Vec<(BotId, ActiveTurn)> = {
+            let mut live = self.live();
+            let running: Vec<(BotId, ActiveTurn)> = live
+                .turns
+                .iter()
+                .filter(|(_, turn)| turn.user == user)
+                .map(|(bot, turn)| (*bot, turn.clone()))
+                .collect();
+            running
+                .into_iter()
+                .filter(|(_, turn)| live.token_stops.insert((user, turn.turn_id.clone())))
+                .collect()
+        };
+        if running.is_empty() {
+            return;
+        }
+        let supervisor = self.supervisor.clone();
+        tokio::spawn(async move {
+            let Some(runtime) = supervisor.running(user).await else {
+                return;
+            };
+            for (bot_id, turn) in running {
+                tracing::info!(user = %user, bot = %bot_id, "token allowance used up; stopping the turn");
+                if let Err(error) = runtime.interrupt_turn(&turn.thread_id, &turn.turn_id).await {
+                    tracing::info!(user = %user, bot = %bot_id, %error, "the turn was not stopped");
+                }
+            }
+        });
     }
 
     async fn usage_changed(&self, user: UserId) {
         match self.events.begin(user).await {
             Ok(mut batch) => match self.emit_usage(&mut batch).await {
-                Ok(()) => self.commit(batch).await,
+                Ok(_) => self.commit(batch).await,
                 Err(failure) => {
                     tracing::error!(user = %user, message = %failure.message, "reading usage failed");
                 }
@@ -935,6 +1040,15 @@ impl Conversations {
             }
         }
     }
+}
+
+/// Whether the user's weekly tokens are used up. Then nothing more runs:
+/// no new turn, no steer, and running turns are stopped.
+fn tokens_used_up(allowance: &Allowance) -> bool {
+    allowance
+        .limits
+        .weekly_tokens
+        .is_some_and(|limit| allowance.tokens_this_week >= limit)
 }
 
 /// The user's allowance at `now`, with their current limits.

@@ -174,10 +174,12 @@ async fn a_conversation_streams_over_the_socket_in_order() {
             Event::MessageDelta { .. } => "delta",
             Event::MessageCompleted { .. } => "completed",
             Event::BotStatusChanged { .. } => "status",
+            Event::UsageUpdated { .. } => "usage",
             _ => "other",
         })
         .collect();
-    assert_eq!(kinds.first(), Some(&"user"), "{kinds:?}");
+    // The turn is counted before the message that starts it is stored.
+    assert_eq!(kinds[..2], ["usage", "user"], "{kinds:?}");
     assert!(
         kinds.contains(&"reply") && kinds.contains(&"completed"),
         "{kinds:?}"

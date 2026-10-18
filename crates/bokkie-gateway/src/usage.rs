@@ -61,6 +61,8 @@ pub async fn release_turn(db: impl SqliteExecutor<'_>, user: UserId, turn: i64) 
 
 /// Records a thread's reported token total, storing its growth since the
 /// last report. A total lower than the last one becomes the new baseline.
+/// It reads and then writes, so `conn` must be in a write transaction, such
+/// as an event batch.
 pub async fn record_tokens(
     conn: &mut SqliteConnection,
     now: Timestamp,

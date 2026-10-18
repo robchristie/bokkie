@@ -61,7 +61,13 @@ impl CodexError {
 impl From<bokkie_codex::Error> for CodexError {
     fn from(error: bokkie_codex::Error) -> Self {
         match error {
-            bokkie_codex::Error::Rpc(error) => Self::Rejected(error.to_string()),
+            // The client reports an answer it could not decode as a parse
+            // error of its own; the request may have taken effect.
+            bokkie_codex::Error::Rpc(error)
+                if error.code != bokkie_codex::RpcError::PARSE_ERROR =>
+            {
+                Self::Rejected(error.to_string())
+            }
             error => Self::AppServer(error.to_string()),
         }
     }
