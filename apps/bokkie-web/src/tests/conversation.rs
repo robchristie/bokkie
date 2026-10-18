@@ -71,6 +71,9 @@ impl Fixture {
         self.sign_in();
         self.socket_started();
         self.reply(ApiReply::Bots(Ok(tutor_list(BotStatus::Idle, latest))));
+        // The sign-in's meter request fails; the first live asks again, and
+        // that request stays out for the test to answer.
+        self.reply(ApiReply::Usage(Err(CommandError::unreachable())));
         assert!(self.sent().is_empty());
         self.frame(ServerFrame::Live {
             latest: Seq(latest),
@@ -568,11 +571,7 @@ fn reset_reloads_the_list_and_the_open_conversation() {
     sent.sort_by_key(|request| format!("{request:?}"));
     assert_eq!(
         sent,
-        [
-            ApiRequest::ListBots,
-            ApiRequest::LoadMessages(TUTOR),
-            ApiRequest::LoadUsage
-        ]
+        [ApiRequest::ListBots, ApiRequest::LoadMessages(TUTOR)]
     );
     // Events after the reset are held for the snapshots loading.
     fixture.event(6_001, exchange()[0].clone());
@@ -602,10 +601,8 @@ fn a_reload_asked_for_while_a_load_is_in_flight_follows_it() {
     fixture.socket(Input::RetryDue);
     fixture.socket(Input::Opened);
     fixture.frame(ServerFrame::Reset { after: Seq(20) });
-    assert_eq!(
-        fixture.sent(),
-        [ApiRequest::ListBots, ApiRequest::LoadUsage]
-    );
+    // The meter's request from the first live is still out.
+    assert_eq!(fixture.sent(), [ApiRequest::ListBots]);
     fixture.reply(ApiReply::Messages(
         TUTOR,
         Ok(MessagePage {

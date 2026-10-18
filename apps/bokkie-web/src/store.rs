@@ -194,9 +194,21 @@ impl Store {
 
     /// The usage meter from HTTP. It has no sequence number, so it applies
     /// only if no `usage_updated` event arrived since it was requested,
-    /// which would be at least as new. Returns whether it changed.
+    /// which would be at least as new. The exception is the subscription's
+    /// windows: the gateway may read them afresh for this request without
+    /// announcing them, so they fill a meter whose events have none yet.
+    /// Returns whether the meter changed.
     pub fn load_usage(&mut self, usage: Usage) -> bool {
-        if self.usage_event_seen || self.usage.as_ref() == Some(&usage) {
+        if self.usage_event_seen {
+            return match &mut self.usage {
+                Some(held) if held.subscription.is_empty() && !usage.subscription.is_empty() => {
+                    held.subscription = usage.subscription;
+                    true
+                }
+                _ => false,
+            };
+        }
+        if self.usage.as_ref() == Some(&usage) {
             return false;
         }
         self.usage = Some(usage);

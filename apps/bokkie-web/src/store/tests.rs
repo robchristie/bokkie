@@ -1,5 +1,5 @@
 use bokkie_protocol::Timestamp;
-use bokkie_protocol::api::{Allowance, Author, BotStatus, Limits};
+use bokkie_protocol::api::{Allowance, Author, BotStatus, Limits, RateLimitBucket};
 
 use super::*;
 
@@ -465,4 +465,42 @@ fn a_usage_reply_older_than_an_event_is_ignored() {
     store.request_usage();
     assert!(store.load_usage(usage(4)));
     assert_eq!(store.usage(), Some(&usage(4)));
+}
+
+#[test]
+fn a_late_usage_reply_still_fills_subscription_windows_no_event_has_shown() {
+    let mut store = Store::new();
+    let usage = |windows: bool| Usage {
+        subscription: if windows {
+            vec![RateLimitBucket {
+                id: "codex".into(),
+                name: None,
+                primary: None,
+                secondary: None,
+                reached: true,
+            }]
+        } else {
+            Vec::new()
+        },
+        allowance: Allowance {
+            limits: Limits::default(),
+            turns_today: 2,
+            tokens_this_week: 0,
+            exhausted: false,
+        },
+    };
+    store.request_usage();
+    let _ = store.apply(&at(
+        1,
+        Event::UsageUpdated {
+            usage: usage(false),
+        },
+    ));
+    // The reply read the windows afresh; the event had none yet.
+    assert!(store.load_usage(usage(true)));
+    assert_eq!(store.usage(), Some(&usage(true)));
+    // Once the meter holds windows, an older reply changes nothing.
+    store.request_usage();
+    let _ = store.apply(&at(2, Event::UsageUpdated { usage: usage(true) }));
+    assert!(!store.load_usage(usage(false)));
 }

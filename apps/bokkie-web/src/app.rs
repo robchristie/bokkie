@@ -202,6 +202,10 @@ pub struct App {
     /// Snapshots to load again as soon as their load in flight answers,
     /// because something asked for them meanwhile.
     again: BTreeSet<Snapshot>,
+    /// A usage meter request is in flight.
+    usage_in_flight: bool,
+    /// Load the meter again once the request in flight answers.
+    usage_again: bool,
     make_api: Option<ApiFactory>,
     api: Option<Box<dyn Api>>,
 }
@@ -224,6 +228,8 @@ impl App {
             store: Store::new(),
             in_flight: BTreeSet::new(),
             again: BTreeSet::new(),
+            usage_in_flight: false,
+            usage_again: false,
             make_api: Some(make_api),
             api: None,
         }
@@ -345,6 +351,8 @@ impl App {
         self.store = Store::new();
         self.in_flight.clear();
         self.again.clear();
+        self.usage_in_flight = false;
+        self.usage_again = false;
     }
 
     fn signed_out(&mut self, message: Option<String>) {
@@ -385,7 +393,14 @@ impl App {
         }
     }
 
+    /// Load the usage meter. As with snapshots, one request is in flight at
+    /// a time, and one asked for meanwhile follows it.
     fn load_usage(&mut self) {
+        if self.usage_in_flight {
+            self.usage_again = true;
+            return;
+        }
+        self.usage_in_flight = true;
         self.store.request_usage();
         self.send(ApiRequest::LoadUsage);
     }
@@ -565,13 +580,23 @@ impl App {
                     Err(error) => open.stop_note = Some(error.message),
                 }
             }
-            (ApiReply::Usage(result), Session::SignedIn(_)) => match result {
-                Ok(usage) => return self.store.load_usage(usage),
-                Err(error) if error.is_unauthenticated() => self.session_ended(),
-                // The meter stays as it was; events or the next reload
-                // bring it up to date.
-                Err(_) => return false,
-            },
+            (ApiReply::Usage(result), Session::SignedIn(_)) if self.usage_in_flight => {
+                self.usage_in_flight = false;
+                let changed = match result {
+                    Ok(usage) => self.store.load_usage(usage),
+                    Err(error) if error.is_unauthenticated() => {
+                        self.session_ended();
+                        return true;
+                    }
+                    // The meter stays as it was; events or the next reload
+                    // bring it up to date.
+                    Err(_) => false,
+                };
+                if std::mem::take(&mut self.usage_again) {
+                    self.load_usage();
+                }
+                return changed;
+            }
             // A reply to a command whose screen has gone, such as a Bot list
             // that arrives after signing out.
             _ => return false,
@@ -824,6 +849,7 @@ impl Application for App {
                 open.sending = true;
                 open.delivery = None;
                 open.send_error = None;
+                open.stop_note = None;
                 let bot = open.bot;
                 let text = open.draft.trim().to_owned();
                 self.send(ApiRequest::SendMessage(bot, SendMessageRequest { text }));

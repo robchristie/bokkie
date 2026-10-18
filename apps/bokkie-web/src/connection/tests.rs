@@ -436,3 +436,17 @@ fn the_gateway_refusing_the_clients_frames_again_and_again_asks_for_a_page_reloa
     );
     assert_eq!(connection.state(), State::Outdated);
 }
+
+#[test]
+fn refusals_separated_by_a_live_socket_do_not_add_up() {
+    let mut connection = live(10);
+    for _ in 0..UNREADABLE_LIMIT * 2 {
+        let _ = connection.handle(Input::Closed {
+            code: Some(CLOSE_PROTOCOL),
+        });
+        let _ = connection.handle(Input::RetryDue);
+        let _ = connection.handle(Input::Opened);
+        let _ = frame(&mut connection, ServerFrame::Live { latest: Seq(10) });
+        assert_eq!(connection.state(), State::Live);
+    }
+}

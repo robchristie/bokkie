@@ -18,9 +18,10 @@
 //!   because the session ended. Nothing reconnects.
 //! - **Outdated.** Frames this client cannot read kept arriving, or the
 //!   gateway kept closing the socket because it could not read the client's
-//!   ([`UNREADABLE_LIMIT`] in a row without an event in between), so the
-//!   two speak different protocols. Nothing reconnects; the page must be
-//!   reloaded to fetch the client that matches it.
+//!   ([`UNREADABLE_LIMIT`] in a row, with no event passed on and no live
+//!   socket in between), so the two speak different protocols. Nothing
+//!   reconnects; the page must be reloaded to fetch the client that matches
+//!   it.
 //!
 //! A page that becomes visible again pings a live socket, which may have died
 //! while the page was hidden, and gives up on it if no frame arrives within
@@ -331,6 +332,9 @@ impl Connection {
                 self.last = Some(latest);
                 self.state = State::Live;
                 self.failures = 0;
+                // Only refusals in a row, with no live socket between them,
+                // show an outdated client.
+                self.unreadable = 0;
                 if !self.synced || replaced {
                     self.synced = true;
                     vec![Command::Reload]

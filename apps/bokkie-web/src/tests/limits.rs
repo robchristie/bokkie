@@ -269,3 +269,29 @@ impl Fixture {
         }
     }
 }
+
+#[test]
+fn one_meter_request_is_in_flight_at_a_time_and_a_later_one_follows_it() {
+    let mut fixture = Fixture::new();
+    let _ = fixture.sent();
+    fixture.sign_in();
+    fixture.socket_started();
+    fixture.reply(ApiReply::Bots(Ok(BotList {
+        bots: Vec::new(),
+        seq: Seq(3),
+    })));
+    // The first live asks for the meter again while the sign-in's request
+    // is still out: it waits.
+    fixture.frame(bokkie_protocol::events::ServerFrame::Live { latest: Seq(3) });
+    assert_eq!(fixture.sent(), [ApiRequest::ListBots]);
+    fixture.reply(ApiReply::Usage(Ok(usage(false, false))));
+    assert_eq!(fixture.sent(), [ApiRequest::LoadUsage]);
+    let mut newer = usage(false, false);
+    newer.allowance.turns_today = 7;
+    fixture.reply(ApiReply::Usage(Ok(newer)));
+    assert_eq!(fixture.fact("turns_today"), 7_u64.into());
+    // No request is out now: a stray reply is dropped.
+    fixture.reply(ApiReply::Usage(Ok(usage(false, false))));
+    assert_eq!(fixture.fact("turns_today"), 7_u64.into());
+    assert!(fixture.sent().is_empty());
+}

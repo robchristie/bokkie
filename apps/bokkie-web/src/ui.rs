@@ -158,7 +158,7 @@ fn bots_ui(
     if signed_in.link == Link::Outdated {
         frame.action(ui, p, BokkieAction::ReloadPage, ActionEmphasis::Primary);
     }
-    limit_ui(ui, p, app);
+    limit_ui(ui, p, frame, app);
     meter_ui(ui, p, frame, app);
     ui.separator();
     p.heading(ui, "bots-title", "Bots");
@@ -248,7 +248,7 @@ fn conversation_ui(
     if signed_in.link == Link::Outdated {
         frame.action(ui, p, BokkieAction::ReloadPage, ActionEmphasis::Primary);
     }
-    limit_ui(ui, p, app);
+    limit_ui(ui, p, frame, app);
     // A conversation that failed to load can be loaded again here.
     if open.error.is_some() && store.conversation(open.bot).is_none() {
         frame.action(ui, p, BokkieAction::Refresh, ActionEmphasis::Normal);
@@ -263,9 +263,31 @@ fn conversation_ui(
 }
 
 /// The limit-reached banner: a plain error line.
-fn limit_ui(ui: &mut egui::Ui, p: &mut PresentationContext, app: &App) {
+fn limit_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
+) {
     if let Some(banner) = app.limit_banner() {
         p.status(ui, "limit", &banner, true);
+        refresh_reset_times(frame, app);
+    }
+}
+
+/// While reset times are on screen, show them again each minute so they
+/// stay true.
+fn refresh_reset_times(frame: &mut BokkieFrame<'_, '_>, app: &App) {
+    let resets = app.store().usage().is_some_and(|usage| {
+        usage
+            .subscription
+            .iter()
+            .flat_map(|bucket| [&bucket.primary, &bucket.secondary])
+            .flatten()
+            .any(|window| window.resets_at.is_some())
+    });
+    if resets {
+        frame.request_repaint_after("usage reset times", METER_REFRESH);
     }
 }
 
@@ -287,15 +309,7 @@ fn meter_ui(
     {
         p.content(ui, ("usage", index), text, line(TextRole::Secondary, 2));
     }
-    let resets = usage
-        .subscription
-        .iter()
-        .flat_map(|bucket| [&bucket.primary, &bucket.secondary])
-        .flatten()
-        .any(|window| window.resets_at.is_some());
-    if resets {
-        frame.request_repaint_after("usage meter reset times", METER_REFRESH);
-    }
+    refresh_reset_times(frame, app);
 }
 
 fn messages_ui(
@@ -405,7 +419,12 @@ fn composer_ui(
     frame.action(ui, p, BokkieAction::Send, ActionEmphasis::Primary);
     if open.sending {
         p.status(ui, "send-status", "Sending…", false);
-    } else if let Some(error) = &open.send_error {
+    } else if let Some(error) = open
+        .send_error
+        .as_ref()
+        // The banner already says it.
+        .filter(|error| app.limit_banner().as_ref() != Some(*error))
+    {
         p.status(ui, "send-status", error, true);
     } else if open.delivery == Some(Delivery::Steered) {
         p.status(
