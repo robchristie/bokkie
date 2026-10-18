@@ -95,3 +95,49 @@ where
         }
     }
 }
+
+/// A path parameter. Unlike `axum::extract::Path`, a malformed one is
+/// rejected with the gateway's own error shape.
+#[derive(Debug, Clone)]
+pub struct Path<T>(pub T);
+
+impl<S, T> axum::extract::FromRequestParts<S> for Path<T>
+where
+    S: Send + Sync,
+    T: serde::de::DeserializeOwned + Send,
+{
+    type Rejection = Failure;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Failure> {
+        match axum::extract::Path::<T>::from_request_parts(parts, state).await {
+            Ok(axum::extract::Path(value)) => Ok(Self(value)),
+            Err(rejection) => Err(Failure::invalid(rejection.body_text())),
+        }
+    }
+}
+
+/// A query string. Unlike `axum::extract::Query`, a malformed one is
+/// rejected with the gateway's own error shape.
+#[derive(Debug, Clone)]
+pub struct Query<T>(pub T);
+
+impl<S, T> axum::extract::FromRequestParts<S> for Query<T>
+where
+    S: Send + Sync,
+    T: serde::de::DeserializeOwned,
+{
+    type Rejection = Failure;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Failure> {
+        match axum::extract::Query::<T>::from_request_parts(parts, state).await {
+            Ok(axum::extract::Query(value)) => Ok(Self(value)),
+            Err(rejection) => Err(Failure::invalid(rejection.body_text())),
+        }
+    }
+}

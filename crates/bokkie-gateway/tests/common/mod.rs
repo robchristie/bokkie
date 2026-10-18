@@ -140,11 +140,13 @@ impl Gateway {
             catalog.clone(),
             fake.launcher(&config.data_dir, &catalog.path),
         );
-        let state = AppState::new(
-            config,
-            pool,
-            Clock::manual(1_800_000_000_000),
-            std::sync::Arc::new(supervisor),
+        let clock = Clock::manual(1_800_000_000_000);
+        let mut state = AppState::new(config, pool, clock.clone(), std::sync::Arc::new(supervisor));
+        // As `serve` does.
+        state.limiter = std::sync::Arc::new(
+            bokkie_gateway::auth::LoginLimiter::persistent(state.db.clone(), clock.now_ms())
+                .await
+                .unwrap(),
         );
         Self {
             app: router(state.clone()),

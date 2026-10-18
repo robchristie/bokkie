@@ -377,6 +377,7 @@ operator reference is [docs/gateway.md](../gateway.md).
 | Robustness follow-ups: a change and its events commit together, in the order changes took effect; a turn is counted before Codex starts it | Done (#15) |
 | Usage follow-ups: `usage_updated` on limit changes and window rollover; usage pruned | Done (#16) |
 | Usage follow-ups: token overshoot stopped mid-turn; sends serialised per Bot, not per user | Done (#17) |
+| Small gaps: API-shaped `Path` and query rejections; sign-in limits survive a restart | Done (#18) |
 | The conversation list, usage meter and limit-reached banner in the client | Waits for Phase 1 |
 | PWA install, and deployment behind Traefik under a temporary hostname | Not started; deployment needs the owner's go-ahead |
 
@@ -436,10 +437,11 @@ remaining work unless a later phase is named:
     transaction.
   - ~~The usage tables are never pruned.~~ Done in #16: the same pass
     deletes usage outside its window.
-- **Small gaps:**
-  - `Path` rejections return plain-text 400s rather than the API error
-    shape.
-  - The sign-in limiter is in memory, so a restart resets it.
+- **Small gaps,** both done in #18:
+  - ~~`Path` rejections return plain-text 400s rather than the API error
+    shape.~~ Paths and queries now use the gateway's own extractors.
+  - ~~The sign-in limiter is in memory, so a restart resets it.~~ It now
+    writes its counts through to the database and starts from them.
 - **Tests not yet written:**
   - a lagged WebSocket client;
   - a prune during replay;

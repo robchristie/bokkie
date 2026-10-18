@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use bokkie_gateway::auth::LoginLimiter;
 use bokkie_gateway::clock::Clock;
 use bokkie_gateway::codex::{Launcher, RuntimeEvent, Supervisor, catalog};
 use bokkie_gateway::config::Config;
@@ -42,7 +43,13 @@ async fn serve() -> Result<(), String> {
         .await
         .map_err(|e| format!("database: {e}"))?;
     let (supervisor, events) = supervisor(&config).await?;
-    let state = AppState::new(config, pool, Clock::system(), supervisor);
+    let clock = Clock::system();
+    let mut state = AppState::new(config, pool, clock.clone(), supervisor);
+    state.limiter = Arc::new(
+        LoginLimiter::persistent(state.db.clone(), clock.now_ms())
+            .await
+            .map_err(|e| format!("loading sign-in limits: {e}"))?,
+    );
     state.conversations.recover().await.map_err(|f| f.message)?;
     tokio::spawn(state.conversations.clone().run(events));
     tokio::spawn(

@@ -2,7 +2,7 @@
 //! user's own Bots; another user's Bot reads as not found.
 
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use bokkie_protocol::api::{
     Bot, BotList, CreateBotRequest, MessagePage, SendMessageRequest, SendMessageResponse,
@@ -15,7 +15,7 @@ use serde::Deserialize;
 use crate::AppState;
 use crate::auth::SignedIn;
 use crate::bots::store::{self, BotChanges, BotRow};
-use crate::error::{Body, Failure, Result};
+use crate::error::{Body, Failure, Path, Query, Result};
 use sqlx::sqlite::SqliteExecutor;
 
 async fn to_api(state: &AppState, db: impl SqliteExecutor<'_>, bot: &BotRow) -> Result<Bot> {

@@ -4,7 +4,7 @@
 //! conversations: whether they should is an open decision in the plan.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use bokkie_protocol::UserId;
 use bokkie_protocol::api::{
@@ -15,7 +15,7 @@ use bokkie_protocol::api::{
 use crate::AppState;
 use crate::accounts;
 use crate::auth::SignedInAdmin;
-use crate::error::{Body, Failure, Result};
+use crate::error::{Body, Failure, Path, Result};
 
 /// `GET /api/v1/admin/users`.
 pub async fn list_users(

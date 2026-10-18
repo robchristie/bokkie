@@ -147,6 +147,26 @@ async fn malformed_bodies_get_the_api_error_shape() {
 }
 
 #[tokio::test]
+async fn malformed_paths_and_queries_get_the_api_error_shape() {
+    let gateway = Gateway::new().await;
+    let cookie = gateway.admin("rob").await;
+    for path in [
+        "/api/v1/bots/chef",
+        "/api/v1/bots/1.5/messages",
+        "/api/v1/admin/users/rob/usage",
+        "/api/v1/bots/1/messages?limit=lots",
+    ] {
+        let reply = gateway.send(Call::get(path).cookie(&cookie)).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{path}");
+        assert_eq!(reply.code(), "invalid_request", "{path}: {:?}", reply.body);
+    }
+    let reply = gateway
+        .send(Call::new(Method::DELETE, "/api/v1/sessions/latest").cookie(&cookie))
+        .await;
+    assert_eq!(reply.code(), "invalid_request", "{:?}", reply.body);
+}
+
+#[tokio::test]
 async fn signing_out_revokes_the_session() {
     let gateway = Gateway::new().await;
     let cookie = gateway.admin("rob").await;
@@ -591,4 +611,58 @@ async fn refused_invitation_codes_do_not_block_other_addresses() {
         .unwrap()
         .to_owned();
     assert_eq!(accept(&code).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn sign_in_limits_survive_a_restart() {
+    let gateway = Gateway::new().await;
+    gateway.admin("rob").await;
+    for _ in 0..LoginLimiter::PER_ACCOUNT {
+        assert_eq!(
+            gateway.login("rob", "guess").await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    let db = gateway.state.db.clone();
+    let stored = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM login_failures WHERE key = 'u:rob'")
+            .fetch_one(&db)
+            .await
+            .unwrap()
+    };
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while stored().await < LoginLimiter::PER_ACCOUNT as i64 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the attempts are stored"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // A restarted gateway still refuses Rob, until the window passes.
+    let now = gateway.state.clock.now_ms();
+    let restarted = LoginLimiter::persistent(db.clone(), now).await.unwrap();
+    let attempt = |limiter: &LoginLimiter, at: i64| {
+        limiter.begin(
+            bokkie_gateway::auth::Attempting::SignIn {
+                username: "Rob",
+                address: "10.0.0.7",
+            },
+            at,
+        )
+    };
+    assert!(attempt(&restarted, now).is_none());
+    let later = now + LoginLimiter::WINDOW_MS;
+    let restarted = LoginLimiter::persistent(db.clone(), later).await.unwrap();
+    let fresh = attempt(&restarted, later).expect("the window has passed");
+    // A success clears the account's stored failures too.
+    restarted.succeeded(fresh);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while stored().await > 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the success is stored"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 }

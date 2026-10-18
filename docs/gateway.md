@@ -48,7 +48,8 @@ per-user limits; disabling or resetting revokes that account's sessions.
   concurrent attempts cannot overrun a limit. While a limit holds, attempts
   are refused without checking the password. Refused invitation codes count
   against the address limit, and wrong current passwords in a password change
-  are limited to 5 per account.
+  are limited to 5 per account. The counts are also kept in the database
+  (`login_failures`), so a restart does not reset them.
 - Behind the reverse proxy, set `BOKKIE_TRUST_FORWARDED_FOR=1` so that the
   address limit applies per client, and publish no container port, so that
   every request comes through the proxy and `X-Forwarded-For` cannot be
@@ -57,6 +58,8 @@ per-user limits; disabling or resetting revokes that account's sessions.
 - Every request whose `Host` is not the gateway's is refused with 403, as is
   every state-changing request or WebSocket upgrade whose `Origin` is not
   `BOKKIE_ORIGIN`.
+- A malformed body, path or query gets the API's JSON error shape
+  (`invalid_request`, 400).
 - Every query for a user's data is scoped to the signed-in user. Another
   user's resources read as not found.
 

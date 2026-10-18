@@ -13,6 +13,8 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use bokkie_protocol::SESSION_COOKIE;
 use bokkie_protocol::api::{ErrorCode, Role};
+use sqlx::SqlitePool;
+use tokio::sync::mpsc;
 
 use crate::AppState;
 use crate::accounts::{self, Account, SESSION_IDLE_MS};
@@ -169,9 +171,59 @@ pub fn client_address(parts: &Parts, trust_forwarded_for: bool) -> String {
 /// counts the attempt as a failure up front, and [`LoginLimiter::succeeded`]
 /// takes it back. Concurrent attempts therefore cannot all slip past a limit
 /// before any of them fails.
+///
+/// The counts live in memory. A [persistent](LoginLimiter::persistent)
+/// limiter also writes every change, in order, to the database and starts
+/// from what is stored there, so a restart does not reset the limits.
 #[derive(Debug, Default)]
 pub struct LoginLimiter {
     failures: Mutex<HashMap<String, VecDeque<i64>>>,
+    journal: Option<mpsc::UnboundedSender<Change>>,
+}
+
+/// One change to the counts, as written to the database.
+#[derive(Debug)]
+enum Change {
+    Counted { keys: Vec<String>, at: i64 },
+    Cleared { key: String },
+    TakenBack { key: String, at: i64 },
+}
+
+async fn record(db: &SqlitePool, change: Change) -> Result<(), sqlx::Error> {
+    match change {
+        Change::Counted { keys, at } => {
+            let mut tx = crate::db::write(db).await?;
+            for key in keys {
+                sqlx::query("INSERT INTO login_failures (key, at) VALUES (?, ?)")
+                    .bind(key)
+                    .bind(at)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            sqlx::query("DELETE FROM login_failures WHERE at <= ?")
+                .bind(at - LoginLimiter::WINDOW_MS)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+        }
+        Change::Cleared { key } => {
+            sqlx::query("DELETE FROM login_failures WHERE key = ?")
+                .bind(key)
+                .execute(db)
+                .await?;
+        }
+        Change::TakenBack { key, at } => {
+            sqlx::query(
+                "DELETE FROM login_failures WHERE id =
+                     (SELECT min(id) FROM login_failures WHERE key = ? AND at = ?)",
+            )
+            .bind(key)
+            .bind(at)
+            .execute(db)
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 /// What an attempt is limited by.
@@ -227,6 +279,41 @@ impl LoginLimiter {
         }
     }
 
+    /// A limiter that starts from the attempts stored in the database
+    /// within the window, and stores every change it makes.
+    pub async fn persistent(db: SqlitePool, now: i64) -> Result<Self, sqlx::Error> {
+        sqlx::query("DELETE FROM login_failures WHERE at <= ?")
+            .bind(now - Self::WINDOW_MS)
+            .execute(&db)
+            .await?;
+        let rows: Vec<(String, i64)> =
+            sqlx::query_as("SELECT key, at FROM login_failures ORDER BY at, id")
+                .fetch_all(&db)
+                .await?;
+        let mut failures: HashMap<String, VecDeque<i64>> = HashMap::new();
+        for (key, at) in rows {
+            failures.entry(key).or_default().push_back(at);
+        }
+        let (journal, mut changes) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(change) = changes.recv().await {
+                if let Err(error) = record(&db, change).await {
+                    tracing::warn!(%error, "storing a sign-in attempt failed");
+                }
+            }
+        });
+        Ok(Self {
+            failures: Mutex::new(failures),
+            journal: Some(journal),
+        })
+    }
+
+    fn journal(&self, change: Change) {
+        if let Some(journal) = &self.journal {
+            let _ = journal.send(change);
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, VecDeque<i64>>> {
         self.failures
             .lock()
@@ -248,6 +335,7 @@ impl LoginLimiter {
             }
         }
         if failures.len() + keys.len() > Self::MAX_KEYS {
+            // Expired keys go from memory; the journal prunes them by age.
             failures.retain(|_, times| times.back().is_some_and(|t| now - t < Self::WINDOW_MS));
             while failures.len() + keys.len() > Self::MAX_KEYS {
                 let Some(oldest) = failures
@@ -258,11 +346,17 @@ impl LoginLimiter {
                     break;
                 };
                 failures.remove(&oldest);
+                self.journal(Change::Cleared { key: oldest });
             }
         }
         for (key, _, _) in &keys {
             failures.entry(key.clone()).or_default().push_back(now);
         }
+        // Journalled under the lock, so the stored order is this order.
+        self.journal(Change::Counted {
+            keys: keys.iter().map(|(key, _, _)| key.clone()).collect(),
+            at: now,
+        });
         Some(Attempt {
             keys: keys
                 .into_iter()
@@ -280,10 +374,15 @@ impl LoginLimiter {
         for (key, clear) in attempt.keys {
             if clear {
                 failures.remove(&key);
+                self.journal(Change::Cleared { key });
             } else if let Some(times) = failures.get_mut(&key)
                 && let Some(index) = times.iter().position(|t| *t == attempt.at)
             {
                 times.remove(index);
+                self.journal(Change::TakenBack {
+                    key,
+                    at: attempt.at,
+                });
             }
         }
     }
