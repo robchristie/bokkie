@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""Renders the web client's PNG icons from the mark, apps/bokkie-web/icons/bokkie.svg.
+
+Usage: scripts/render-icons [--check]
+
+Writes apps/bokkie-web/web/icons/icon-192.png and icon-512.png (the mark as
+drawn, rounded corners transparent) and apple-touch-icon.png (180 pixels,
+square and opaque, because iOS rounds the icon itself and fills transparency
+with black). With --check it writes nothing and fails unless the committed
+icons hold exactly the pixels this script renders; `scripts/verify` runs that.
+
+The rasteriser is plain Python with no dependencies, so the pixels depend only
+on this script and the SVG: it understands the subset the mark uses, a
+`<rect>` with `rx` and a `<path>` of M, L, H, V, C and Z commands (absolute or
+relative) under the nonzero rule. Pixels are compared rather than files,
+because zlib builds may compress the same pixels differently.
+"""
+import argparse
+import pathlib
+import re
+import struct
+import sys
+import xml.etree.ElementTree as ET
+import zlib
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SOURCE = ROOT / "apps/bokkie-web/icons/bokkie.svg"
+ICONS = ROOT / "apps/bokkie-web/web/icons"
+# (file, size, rounded corners)
+OUTPUTS = [
+    ("icon-192.png", 192, True),
+    ("icon-512.png", 512, True),
+    ("apple-touch-icon.png", 180, False),
+]
+NS = "{http://www.w3.org/2000/svg}"
+# Sub-scanlines per pixel row; each is covered exactly along x.
+SUBSAMPLES = 16
+# Line segments per cubic Bézier.
+CURVE_STEPS = 32
+# A quarter circle as one cubic: control points at this fraction of the radius.
+KAPPA = 0.5522847498307936
+
+
+def colour(value):
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", value or ""):
+        raise SystemExit(f"render-icons: unsupported colour {value!r}")
+    return tuple(int(value[i : i + 2], 16) / 255 for i in (1, 3, 5))
+
+
+def cubic(points, p0, p1, p2, p3):
+    for step in range(1, CURVE_STEPS + 1):
+        t = step / CURVE_STEPS
+        u = 1 - t
+        a, b, c, d = u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t
+        points.append(
+            (
+                a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0],
+                a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1],
+            )
+        )
+
+
+def path_polygons(d):
+    """Flattens a path's subpaths into closed polygons."""
+    tokens = re.findall(r"[MmLlHhVvCcZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?", d)
+    leftover = re.sub(r"[MmLlHhVvCcZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?|[\s,]", "", d)
+    if leftover:
+        raise SystemExit(f"render-icons: unsupported path data {leftover!r}")
+    polygons, points = [], []
+    x = y = start_x = start_y = 0.0
+    command = None
+    i = 0
+
+    def numbers(count):
+        nonlocal i
+        values = [float(v) for v in tokens[i : i + count]]
+        if len(values) != count or any(re.fullmatch(r"[A-Za-z]", v) for v in tokens[i : i + count]):
+            raise SystemExit(f"render-icons: {command} needs {count} numbers")
+        i += count
+        return values
+
+    while i < len(tokens):
+        if re.fullmatch(r"[A-Za-z]", tokens[i]):
+            command = tokens[i]
+            i += 1
+        elif command is None or command in "Zz":
+            raise SystemExit("render-icons: path data must start with a command")
+        relative = command.islower()
+        kind = command.upper()
+        if kind == "Z":
+            if points:
+                polygons.append(points)
+            points = []
+            x, y = start_x, start_y
+            continue
+        if kind == "M":
+            if points:
+                polygons.append(points)
+            dx, dy = numbers(2)
+            x, y = (x + dx, y + dy) if relative else (dx, dy)
+            start_x, start_y = x, y
+            points = [(x, y)]
+            # Further pairs after a move are lines.
+            command = "l" if relative else "L"
+        elif kind == "L":
+            dx, dy = numbers(2)
+            x, y = (x + dx, y + dy) if relative else (dx, dy)
+            points.append((x, y))
+        elif kind == "H":
+            (dx,) = numbers(1)
+            x = x + dx if relative else dx
+            points.append((x, y))
+        elif kind == "V":
+            (dy,) = numbers(1)
+            y = y + dy if relative else dy
+            points.append((x, y))
+        elif kind == "C":
+            values = numbers(6)
+            if relative:
+                values = [v + (x if n % 2 == 0 else y) for n, v in enumerate(values)]
+            p1, p2, p3 = (values[0], values[1]), (values[2], values[3]), (values[4], values[5])
+            cubic(points, (x, y), p1, p2, p3)
+            x, y = p3
+        else:
+            raise SystemExit(f"render-icons: unsupported path command {command}")
+    if points:
+        polygons.append(points)
+    return polygons
+
+
+def rounded_rect(width, height, radius):
+    r, k = radius, radius * KAPPA
+    points = [(r, 0.0), (width - r, 0.0)]
+    cubic(points, (width - r, 0), (width - r + k, 0), (width, r - k), (width, r))
+    points.append((width, height - r))
+    cubic(points, (width, height - r), (width, height - r + k), (width - r + k, height), (width - r, height))
+    points.append((r, height))
+    cubic(points, (r, height), (r - k, height), (0, height - r + k), (0, height - r))
+    points.append((0.0, r))
+    cubic(points, (0, r), (0, r - k), (r - k, 0), (r, 0))
+    return [points]
+
+
+def read_mark():
+    svg = ET.parse(SOURCE).getroot()
+    if svg.tag != NS + "svg" or svg.get("viewBox") != "0 0 512 512":
+        raise SystemExit(f"render-icons: {SOURCE} must be an SVG with viewBox 0 0 512 512")
+    shapes = []
+    for element in svg:
+        if element.tag == NS + "rect":
+            if set(element.attrib) != {"width", "height", "rx", "fill"}:
+                raise SystemExit("render-icons: a rect needs exactly width, height, rx and fill")
+            shapes.append(
+                (
+                    "rect",
+                    float(element.get("width")),
+                    float(element.get("height")),
+                    float(element.get("rx")),
+                    colour(element.get("fill")),
+                )
+            )
+        elif element.tag == NS + "path":
+            if set(element.attrib) != {"d", "fill"}:
+                raise SystemExit("render-icons: a path needs exactly d and fill")
+            shapes.append(("path", path_polygons(element.get("d")), colour(element.get("fill"))))
+        else:
+            raise SystemExit(f"render-icons: unsupported element {element.tag}")
+    if not shapes or shapes[0][0] != "rect":
+        raise SystemExit("render-icons: the mark starts with its background rect")
+    return shapes
+
+
+def coverage(polygons, size, scale):
+    """Each pixel's covered fraction, row by row, under the nonzero rule."""
+    edges = []
+    for polygon in polygons:
+        for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1]):
+            if y0 != y1:
+                x0, y0, x1, y1 = x0 * scale, y0 * scale, x1 * scale, y1 * scale
+                direction = 1 if y1 > y0 else -1
+                if y0 > y1:
+                    x0, y0, x1, y1 = x1, y1, x0, y0
+                edges.append((y0, y1, x0, (x1 - x0) / (y1 - y0), direction))
+    rows = []
+    weight = 1 / SUBSAMPLES
+    for row in range(size):
+        active = [e for e in edges if e[0] < row + 1 and e[1] > row]
+        delta, partial = [0.0] * (size + 1), [0.0] * size
+        for sub in range(SUBSAMPLES):
+            sample_y = row + (sub + 0.5) / SUBSAMPLES
+            crossings = sorted(
+                (x0 + (sample_y - y0) * slope, direction)
+                for y0, y1, x0, slope, direction in active
+                if y0 <= sample_y < y1
+            )
+            winding = 0
+            for x, direction in crossings:
+                before = winding
+                winding += direction
+                if before == 0 and winding != 0:
+                    span_start = x
+                elif before != 0 and winding == 0:
+                    add_span(delta, partial, max(0.0, span_start), min(float(size), x), weight)
+        covered, running = [], 0.0
+        for column in range(size):
+            running += delta[column]
+            covered.append(min(1.0, max(0.0, running + partial[column])))
+        rows.append(covered)
+    return rows
+
+
+def add_span(delta, partial, start, end, weight):
+    """Adds `weight` times the covered part of each pixel in [start, end).
+
+    Whole pixels go into the running difference `delta` (an entry at c counts
+    for column c onwards); partly covered end pixels go into `partial`.
+    """
+    if end <= start:
+        return
+    first, last = int(start), int(end)
+    if first == last:
+        partial[first] += (end - start) * weight
+        return
+    partial[first] += (first + 1 - start) * weight
+    delta[first + 1] += weight
+    delta[last] -= weight
+    if last < len(partial):
+        partial[last] += (end - last) * weight
+
+
+def render(shapes, size, rounded):
+    """Straight-alpha RGBA rows for one icon."""
+    scale = size / 512
+    pixels = [[(0.0, 0.0, 0.0, 0.0)] * size for _ in range(size)]
+    for shape in shapes:
+        if shape[0] == "rect":
+            _, width, height, radius, fill = shape
+            if rounded:
+                polygons = rounded_rect(width, height, radius)
+            else:
+                polygons = [[(0.0, 0.0), (width, 0.0), (width, height), (0.0, height)]]
+        else:
+            _, polygons, fill = shape
+        for y, row in enumerate(coverage(polygons, size, scale)):
+            for x, alpha in enumerate(row):
+                if alpha <= 0:
+                    continue
+                r, g, b, a = pixels[y][x]
+                out = alpha + a * (1 - alpha)
+                pixels[y][x] = tuple(
+                    (fill[c] * alpha + (r, g, b)[c] * a * (1 - alpha)) / out for c in range(3)
+                ) + (out,)
+    return [
+        bytes(round(channel * 255) for pixel in row for channel in pixel) for row in pixels
+    ]
+
+
+def chunk(kind, body):
+    return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+
+
+def encode(rows, size):
+    header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+    data = zlib.compress(b"".join(b"\0" + row for row in rows), 9)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", data) + chunk(b"IEND", b"")
+
+
+def decode(png):
+    """The rows of an 8-bit RGBA, non-interlaced PNG."""
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    offset, data, header = 8, b"", None
+    while offset < len(png):
+        (length,) = struct.unpack(">I", png[offset : offset + 4])
+        kind = png[offset + 4 : offset + 8]
+        body = png[offset + 8 : offset + 8 + length]
+        if kind == b"IHDR":
+            header = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            data += body
+        offset += 12 + length
+    width, height, depth, colour_type, _, _, interlace = header
+    if (depth, colour_type, interlace) != (8, 6, 0):
+        raise ValueError(f"expected 8-bit RGBA without interlace, found {header}")
+    raw = zlib.decompress(data)
+    stride, rows, previous = width * 4, [], bytes(width * 4)
+    for y in range(height):
+        kind, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1 : (y + 1) * (stride + 1)])
+        for i in range(stride):
+            left = line[i - 4] if i >= 4 else 0
+            up = previous[i]
+            corner = previous[i - 4] if i >= 4 else 0
+            if kind == 1:
+                line[i] = (line[i] + left) & 255
+            elif kind == 2:
+                line[i] = (line[i] + up) & 255
+            elif kind == 3:
+                line[i] = (line[i] + (left + up) // 2) & 255
+            elif kind == 4:
+                p = left + up - corner
+                pa, pb, pc = abs(p - left), abs(p - up), abs(p - corner)
+                line[i] = (line[i] + (left if pa <= pb and pa <= pc else up if pb <= pc else corner)) & 255
+            elif kind != 0:
+                raise ValueError(f"unknown filter {kind}")
+        rows.append(bytes(line))
+        previous = rows[-1]
+    return (width, height), rows
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--check", action="store_true", help="compare the committed icons, write nothing")
+    check = parser.parse_args().check
+    shapes = read_mark()
+    stale = []
+    for name, size, rounded in OUTPUTS:
+        rows = render(shapes, size, rounded)
+        path = ICONS / name
+        if check:
+            try:
+                found = decode(path.read_bytes())
+            except (OSError, ValueError, zlib.error) as error:
+                stale.append(f"{name} ({error})")
+                continue
+            if found != ((size, size), rows):
+                stale.append(name)
+        else:
+            path.write_bytes(encode(rows, size))
+            print(f"render-icons: wrote {path.relative_to(ROOT)}")
+    if stale:
+        sys.exit(
+            "render-icons: these icons do not match "
+            f"{SOURCE.relative_to(ROOT)}; run scripts/render-icons: {', '.join(stale)}"
+        )
+
+
+if __name__ == "__main__":
+    main()

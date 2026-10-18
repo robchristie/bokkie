@@ -56,7 +56,8 @@ missing, unreadable or has no readable `index.html`.
   browsers send neither.
 - Media types follow Stobie's reference server: `application/wasm`,
   `application/manifest+json` for `.webmanifest`, `text/javascript`,
-  `text/css` and `text/html` (UTF-8), PNG, JPEG, SVG, icons and fonts;
+  `text/css`, `text/html` and `text/plain` (UTF-8), so the font notices
+  display rather than download, PNG, JPEG, SVG, icons and fonts;
   anything else is `application/octet-stream`. Every static response
   carries `X-Content-Type-Options: nosniff`.
 - Static files are the router's fallback, so no route is shadowed: the API,

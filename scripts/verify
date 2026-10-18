@@ -30,8 +30,18 @@ PATH="$web_tools:$PATH" stobie build-web --manifest-path apps/bokkie-web/Cargo.t
 PATH="$web_tools:$PATH" stobie build-web --manifest-path apps/bokkie-web/Cargo.toml \
   --package bokkie-web --locked --production --output "$web_package" >/dev/null
 scripts/check-web-notices apps/bokkie-web/web "$web_package"/bokkie-web/assets/*/
+# The committed icons are the mark's rendering.
+scripts/render-icons --check
 if command -v shellcheck >/dev/null; then
-  mapfile -t shell_scripts < <(git ls-files 'scripts/*' '*.sh')
+  # Shell scripts: every *.sh, and the scripts/ files with a shell shebang.
+  mapfile -t shell_scripts < <(
+    git ls-files '*.sh'
+    git ls-files 'scripts/*' | while read -r script; do
+      if head -n 1 "$script" | grep -qE '^#!(/usr/bin/env |/bin/)(ba)?sh$'; then
+        echo "$script"
+      fi
+    done
+  )
   shellcheck "${shell_scripts[@]}"
 elif [[ -n "${CI:-}" ]]; then
   echo "verify: shellcheck is required in CI" >&2
