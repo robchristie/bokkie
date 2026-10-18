@@ -53,12 +53,14 @@ pub async fn login(
     Body(request): Body<LoginRequest>,
 ) -> Result<Response> {
     let now = state.clock.now();
+    let account_exists = accounts::username_exists(&state.db, &request.username).await?;
     let attempt = state
         .limiter
         .begin(
             Attempting::SignIn {
                 username: &request.username,
                 address: &address,
+                account_exists,
             },
             now.0,
         )

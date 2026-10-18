@@ -114,6 +114,11 @@ where
     ) -> Result<Self, Failure> {
         match axum::extract::Path::<T>::from_request_parts(parts, state).await {
             Ok(axum::extract::Path(value)) => Ok(Self(value)),
+            // A route that declares the wrong parameters is the gateway's
+            // fault, not the client's.
+            Err(rejection) if rejection.status().is_server_error() => {
+                Err(Failure::internal(rejection.body_text()))
+            }
             Err(rejection) => Err(Failure::invalid(rejection.body_text())),
         }
     }

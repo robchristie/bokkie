@@ -181,6 +181,16 @@ pub struct LoginLimiter {
     journal: Option<mpsc::UnboundedSender<Change>>,
 }
 
+/// One limited thing.
+struct Key {
+    name: String,
+    limit: usize,
+    /// Whether success clears the key entirely.
+    clear: bool,
+    /// Whether the key's count is stored in the database.
+    stored: bool,
+}
+
 /// One change to the counts, as written to the database.
 #[derive(Debug)]
 enum Change {
@@ -191,6 +201,7 @@ enum Change {
 
 async fn record(db: &SqlitePool, change: Change) -> Result<(), sqlx::Error> {
     match change {
+        Change::Counted { keys, .. } if keys.is_empty() => {}
         Change::Counted { keys, at } => {
             let mut tx = crate::db::write(db).await?;
             for key in keys {
@@ -229,8 +240,15 @@ async fn record(db: &SqlitePool, change: Change) -> Result<(), sqlx::Error> {
 /// What an attempt is limited by.
 #[derive(Debug, Clone, Copy)]
 pub enum Attempting<'a> {
-    /// A sign-in: limited per username and per client address.
-    SignIn { username: &'a str, address: &'a str },
+    /// A sign-in: limited per username and per client address. A
+    /// username's count is stored only when it names an account, so that
+    /// nothing typed into the field by mistake, such as a password, is
+    /// written to disk.
+    SignIn {
+        username: &'a str,
+        address: &'a str,
+        account_exists: bool,
+    },
     /// An invitation code: limited per client address, sharing the sign-in
     /// address limit.
     Invitation { address: &'a str },
@@ -243,9 +261,10 @@ pub enum Attempting<'a> {
 #[derive(Debug)]
 #[must_use]
 pub struct Attempt {
-    /// Each key, and whether success clears the key entirely (an account's
-    /// own key) or only takes back this attempt (a shared address key).
-    keys: Vec<(String, bool)>,
+    /// Each key, whether success clears the key entirely (an account's
+    /// own key) or only takes back this attempt (a shared address key), and
+    /// whether the key is stored.
+    keys: Vec<(String, bool, bool)>,
     at: i64,
 }
 
@@ -257,25 +276,36 @@ impl LoginLimiter {
     /// dropped, and if none are expired the oldest key goes.
     const MAX_KEYS: usize = 10_000;
 
-    /// Each key with its limit, and whether success clears it.
-    fn keys(attempting: Attempting<'_>) -> Vec<(String, usize, bool)> {
-        let address = |a: &str| (format!("a:{a}"), Self::PER_ADDRESS, false);
+    /// Each key with its limit, whether success clears it, and whether it
+    /// is stored.
+    fn keys(attempting: Attempting<'_>) -> Vec<Key> {
+        let address = |a: &str| Key {
+            name: format!("a:{a}"),
+            limit: Self::PER_ADDRESS,
+            clear: false,
+            stored: true,
+        };
         match attempting {
             Attempting::SignIn {
                 username,
                 address: a,
+                account_exists,
             } => vec![
-                (
-                    format!("u:{}", username.trim().to_ascii_lowercase()),
-                    Self::PER_ACCOUNT,
-                    true,
-                ),
+                Key {
+                    name: format!("u:{}", username.trim().to_ascii_lowercase()),
+                    limit: Self::PER_ACCOUNT,
+                    clear: true,
+                    stored: account_exists,
+                },
                 address(a),
             ],
             Attempting::Invitation { address: a } => vec![address(a)],
-            Attempting::PasswordChange { user } => {
-                vec![(format!("p:{user}"), Self::PER_ACCOUNT, true)]
-            }
+            Attempting::PasswordChange { user } => vec![Key {
+                name: format!("p:{user}"),
+                limit: Self::PER_ACCOUNT,
+                clear: true,
+                stored: true,
+            }],
         }
     }
 
@@ -324,7 +354,10 @@ impl LoginLimiter {
     pub fn begin(&self, attempting: Attempting<'_>, now: i64) -> Option<Attempt> {
         let keys = Self::keys(attempting);
         let mut failures = self.lock();
-        for (key, limit, _) in &keys {
+        for Key {
+            name: key, limit, ..
+        } in &keys
+        {
             if let Some(times) = failures.get_mut(key) {
                 while times.front().is_some_and(|t| now - t >= Self::WINDOW_MS) {
                     times.pop_front();
@@ -349,18 +382,22 @@ impl LoginLimiter {
                 self.journal(Change::Cleared { key: oldest });
             }
         }
-        for (key, _, _) in &keys {
-            failures.entry(key.clone()).or_default().push_back(now);
+        for key in &keys {
+            failures.entry(key.name.clone()).or_default().push_back(now);
         }
         // Journalled under the lock, so the stored order is this order.
         self.journal(Change::Counted {
-            keys: keys.iter().map(|(key, _, _)| key.clone()).collect(),
+            keys: keys
+                .iter()
+                .filter(|key| key.stored)
+                .map(|key| key.name.clone())
+                .collect(),
             at: now,
         });
         Some(Attempt {
             keys: keys
                 .into_iter()
-                .map(|(key, _, clear)| (key, clear))
+                .map(|key| (key.name, key.clear, key.stored))
                 .collect(),
             at: now,
         })
@@ -371,18 +408,22 @@ impl LoginLimiter {
     /// good sign-in cannot reset guessing against other accounts.
     pub fn succeeded(&self, attempt: Attempt) {
         let mut failures = self.lock();
-        for (key, clear) in attempt.keys {
+        for (key, clear, stored) in attempt.keys {
             if clear {
                 failures.remove(&key);
-                self.journal(Change::Cleared { key });
+                if stored {
+                    self.journal(Change::Cleared { key });
+                }
             } else if let Some(times) = failures.get_mut(&key)
                 && let Some(index) = times.iter().position(|t| *t == attempt.at)
             {
                 times.remove(index);
-                self.journal(Change::TakenBack {
-                    key,
-                    at: attempt.at,
-                });
+                if stored {
+                    self.journal(Change::TakenBack {
+                        key,
+                        at: attempt.at,
+                    });
+                }
             }
         }
     }
@@ -401,7 +442,11 @@ mod tests {
     use super::*;
 
     fn sign_in<'a>(username: &'a str, address: &'a str) -> Attempting<'a> {
-        Attempting::SignIn { username, address }
+        Attempting::SignIn {
+            username,
+            address,
+            account_exists: true,
+        }
     }
 
     #[test]
