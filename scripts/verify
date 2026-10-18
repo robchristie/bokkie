@@ -55,6 +55,15 @@ elif [[ -n "${CI:-}" ]]; then
 else
   echo "verify: shellcheck is not installed; skipping shell lint" >&2
 fi
+# The bokkie-next Compose file keeps its confinement and allowlist.
+if docker compose version >/dev/null 2>&1; then
+  deploy/next/check-compose.sh
+elif [[ -n "${CI:-}" ]]; then
+  echo "verify: docker compose is required in CI" >&2
+  exit 1
+else
+  echo "verify: docker compose is not installed; skipping the bokkie-next Compose check" >&2
+fi
 # Every action is pinned by full commit SHA, with its version in a comment.
 if unpinned="$(git ls-files -z '.github/workflows/*' |
   xargs -0 grep -nE '^[[:space:]-]*uses:' |

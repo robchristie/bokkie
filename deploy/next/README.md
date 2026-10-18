@@ -22,7 +22,9 @@ Compose project name `bokkie`.
   - user 10001 (`bokkie`) with a real passwd entry and its own home.
 
   The commit is the image's `org.opencontainers.image.revision` label.
-  There is no moving tag: the image is `bokkie-next:<full commit>`.
+  There is no moving tag: the image is `bokkie-next:<full commit>`, and
+  the Dockerfile names no `syntax` frontend, so BuildKit parses it with its
+  own built-in one rather than pulling `docker/dockerfile`.
 - `build.sh [commit]` builds that image from the commit's own tree, exported
   with `git archive`, so nothing uncommitted reaches it. It refuses a commit
   that is not on `origin/main`.
@@ -42,6 +44,12 @@ Compose project name `bokkie`.
   hostname and the deployed commit.
 - `check.sh` checks a running deployment and changes nothing (see
   [Check](#check)).
+- `check-compose.sh`, which `scripts/verify` runs, resolves `compose.yml`
+  with `docker compose config` and fails if the posture above weakens: a
+  published port, a security option other than `no-new-privileges`, a
+  kept capability, another network or mount, or a Traefik router or
+  middleware other than the allowlisted one. Any setting it does not know
+  fails too, until the check covers it.
 
 The `proxy` network is the container's only network, and also its way out
 to ChatGPT. The host's other containers on `proxy` can reach the gateway's
@@ -119,10 +127,13 @@ container on another Docker network, is refused with `403 Forbidden`.
 ## The owner's admin account
 
 The deployment starts with no account. The owner creates their own admin
-once, typing the password (at least 10 characters) on standard input:
+once. The gateway reads the password (at least 10 characters) from
+standard input and does not turn echo off, so read it without echo first:
 
 ```sh
-docker compose exec -T gateway bokkie-gateway bootstrap-admin rob "Rob"
+bash -c 'read -rsp "Password: " password && echo &&
+  printf "%s\n" "$password" |
+  docker compose exec -T gateway bokkie-gateway bootstrap-admin rob Rob'
 ```
 
 It refuses once an admin exists. The owner then signs in at the origin and

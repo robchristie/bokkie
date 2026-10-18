@@ -51,7 +51,9 @@ gateway, the web client's production package and the pinned Codex, from the
 Compose project `bokkie-next` behind the LAN host's Traefik. Its
 [README](deploy/next/README.md) is the operator procedure, and
 `deploy/next/check.sh` checks a running deployment's confinement and
-responses. After changing the files it uses, build the image from the
+responses. `scripts/verify` runs `deploy/next/check-compose.sh`, which fails
+when the Compose file's confinement or allowlist weakens; it needs
+`docker compose` but no daemon. After changing the files it uses, build the image from the
 commit under test (`BOKKIE_NEXT_ALLOW_UNMERGED=1` until it merges) and start
 it locally to see the gateway healthy and the page served.
 

@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-#
 # The bokkie-next image: the gateway, the web client's production package
 # and the pinned Codex, built from one exact Bokkie commit. See README.md.
 #
