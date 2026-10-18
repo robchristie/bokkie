@@ -16,6 +16,14 @@
 //!   again connects at once. Reaching live resets the delay.
 //! - **Signed out.** A request answered 401, or the gateway closed the socket
 //!   because the session ended. Nothing reconnects.
+//! - **Outdated.** Frames this client cannot read kept arriving
+//!   ([`UNREADABLE_LIMIT`] in a row without an event in between), so the
+//!   gateway speaks a newer protocol. Nothing reconnects; the page must be
+//!   reloaded to fetch the client that matches it.
+//!
+//! A page that becomes visible again pings a live socket, which may have died
+//! while the page was hidden, and gives up on it if no frame arrives within
+//! [`PONG_DEADLINE`].
 //!
 //! On the first connection, and whenever the gateway sends
 //! [`ServerFrame::Reset`], the client must reload its snapshots over HTTP
@@ -35,6 +43,13 @@ pub const LAST_RETRY: Duration = Duration::from_secs(8);
 /// The close code the gateway sends when the socket's session ends.
 pub const CLOSE_SIGNED_OUT: u16 = 4002;
 
+/// How long a ping waits for any frame before the socket counts as dead.
+pub const PONG_DEADLINE: Duration = Duration::from_secs(5);
+
+/// Unreadable frames in a row, with no event between them, after which the
+/// client stops reconnecting and asks for the page to be reloaded.
+pub const UNREADABLE_LIMIT: u32 = 3;
+
 /// Where the connection is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -50,6 +65,8 @@ pub enum State {
         delay: Duration,
     },
     SignedOut,
+    /// The gateway sends frames this client cannot read.
+    Outdated,
 }
 
 /// What happened, as the transport or the application reports it.
@@ -71,6 +88,8 @@ pub enum Input {
     RetryDue,
     /// The page became visible again.
     Visible,
+    /// The deadline from [`Command::AwaitPong`] for ping `ping` passed.
+    PongOverdue { ping: u32 },
     /// An HTTP request answered 401: the session is gone.
     Unauthenticated,
     /// Stop for good, as on sign-out.
@@ -90,6 +109,9 @@ pub enum Command {
     RetryAfter(Duration),
     /// Forget the pending [`Command::RetryAfter`].
     CancelRetry,
+    /// Report [`Input::PongOverdue`] for this ping after this delay. A later
+    /// frame makes the report harmless, so it needs no cancelling.
+    AwaitPong { ping: u32, after: Duration },
     /// Apply this event to the store.
     Apply(EventEnvelope),
     /// Reload every snapshot over HTTP (see [`crate::store::Store::reload_all`]).
@@ -100,6 +122,9 @@ pub enum Command {
     CheckSession,
     /// The session is gone: show the signed-out screen.
     SignedOut,
+    /// The gateway speaks a protocol this client cannot read: ask for the
+    /// page to be reloaded.
+    Outdated,
 }
 
 /// The reconnecting event connection.
@@ -112,6 +137,12 @@ pub struct Connection {
     last: Option<Seq>,
     /// Whether the snapshots have been asked for since this user signed in.
     synced: bool,
+    /// Pings sent so far, which number them.
+    pings: u32,
+    /// The ping still waiting for a frame, if any.
+    awaiting: Option<u32>,
+    /// Unreadable frames since the last event passed on.
+    unreadable: u32,
 }
 
 impl Default for Connection {
@@ -128,6 +159,9 @@ impl Connection {
             failures: 0,
             last: None,
             synced: false,
+            pings: 0,
+            awaiting: None,
+            unreadable: 0,
         }
     }
 
@@ -153,6 +187,11 @@ impl Connection {
         use State::*;
         match (self.state, input) {
             (SignedOut, _) => Vec::new(),
+            (Outdated, Input::Stop) => {
+                self.state = Stopped;
+                Vec::new()
+            }
+            (Outdated, _) => Vec::new(),
             (_, Input::Unauthenticated) => {
                 self.state = SignedOut;
                 vec![Command::Close, Command::CancelRetry, Command::SignedOut]
@@ -169,8 +208,22 @@ impl Connection {
                 commands
             }
             // A socket that may have died while the page was hidden answers
-            // a ping, or fails and closes.
-            (Live, Input::Visible) => vec![Command::Send(ClientFrame::Ping)],
+            // a ping, or is given up when nothing arrives in time.
+            (Live, Input::Visible) => {
+                self.pings = self.pings.wrapping_add(1);
+                self.awaiting = Some(self.pings);
+                vec![
+                    Command::Send(ClientFrame::Ping),
+                    Command::AwaitPong {
+                        ping: self.pings,
+                        after: PONG_DEADLINE,
+                    },
+                ]
+            }
+            (Live, Input::PongOverdue { ping }) if self.awaiting == Some(ping) => {
+                self.awaiting = None;
+                self.resync()
+            }
             (Connecting, Input::Opened) => {
                 self.state = Resuming;
                 vec![Command::Send(ClientFrame::Resume { after: self.last })]
@@ -183,10 +236,24 @@ impl Connection {
                 commands
             }
             (Resuming | Replaying | Live, Input::Closed { code }) => self.closed(code),
-            (Resuming | Replaying | Live, Input::Frame(frame)) => self.frame(frame),
+            (Resuming | Replaying | Live, Input::Frame(frame)) => {
+                // Any frame shows the socket is alive.
+                self.awaiting = None;
+                self.frame(frame)
+            }
             // A frame the gateway would never send means the two disagree;
-            // start again from the last event processed.
-            (Resuming | Replaying | Live, Input::Unreadable) => self.resync(),
+            // start again from the last event processed, unless that keeps
+            // happening.
+            (Resuming | Replaying | Live, Input::Unreadable) => {
+                self.awaiting = None;
+                self.unreadable = self.unreadable.saturating_add(1);
+                if self.unreadable >= UNREADABLE_LIMIT {
+                    self.state = Outdated;
+                    vec![Command::Close, Command::Outdated]
+                } else {
+                    self.resync()
+                }
+            }
             // Late callbacks from a socket already given up, or a repeated
             // start: nothing to do.
             _ => Vec::new(),
@@ -195,6 +262,7 @@ impl Connection {
 
     fn connect(&mut self) -> Vec<Command> {
         self.state = State::Connecting;
+        self.awaiting = None;
         vec![Command::Connect]
     }
 
@@ -231,6 +299,7 @@ impl Connection {
                     _ => {}
                 }
                 self.last = Some(envelope.seq);
+                self.unreadable = 0;
                 if self.state == State::Resuming {
                     self.state = State::Replaying;
                 }

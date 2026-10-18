@@ -1,20 +1,28 @@
-//! The application: sign-in, sign-out and the signed-in user's Bot list.
+//! The application: sign-in and sign-out, the signed-in user's Bot list, and
+//! one Bot's conversation at a time, kept current by the event socket.
 //!
 //! State changes only in `apply` and `perform`. Commands go out through an
-//! [`Api`], and their replies come back as [`BokkieIntent::Reply`], so tests
-//! drive the same transitions with a [`Recorder`](crate::api::Recorder).
+//! [`Api`], and their replies come back as [`BokkieIntent::Reply`]; the event
+//! socket's updates come back as [`BokkieIntent::Socket`]. Tests drive the
+//! same transitions with a [`Recorder`](crate::api::Recorder) and a
+//! [`Driver`](crate::socket::Driver).
 
-use bokkie_protocol::api::{Bot, BotStatus, LoginRequest, User};
+use std::collections::BTreeSet;
+
+use bokkie_protocol::BotId;
+use bokkie_protocol::api::{
+    Author, BotStatus, Delivery, LoginRequest, Message, MessageState, SendMessageRequest, User,
+};
 use serde::Serialize;
 use stobie_ui_egui::{
-    Action, ActionEmphasis, ActionTarget, Application, ApplicationIdentity, Availability,
-    ContentTextSpec, Frame, IntentSender, NativeTextControlKind, Observation, PresentationContext,
-    PresentationScope, SemanticUiId, TextInteraction, TextOverflow, TextRole, UiNode, UiRole,
-    application_identity, observe_visible_only,
+    Action, ActionArgument, ActionKey, ActionTarget, Application, ApplicationIdentity,
+    Availability, Frame, IntentSender, Observation, application_identity,
 };
 
 use crate::api::{Api, ApiReply, ApiRequest, Generation};
+use crate::socket::{Link, SocketUpdate};
 use crate::store::{Snapshot, Store};
+use crate::ui;
 
 /// The application's name, as the page and the host report it.
 pub const APPLICATION_NAME: &str = "Bokkie";
@@ -23,6 +31,12 @@ pub const APPLICATION_NAME: &str = "Bokkie";
 pub const USERNAME_ID: &str = "bokkie.username";
 /// The password field's stable ID.
 pub const PASSWORD_ID: &str = "bokkie.password";
+/// The message field's stable ID.
+pub const DRAFT_ID: &str = "bokkie.draft";
+
+/// The largest Bot ID the Open action accepts: the largest integer a JSON
+/// number carries exactly.
+const MAX_BOT_ID: f64 = 9_007_199_254_740_991.0;
 
 /// Every user action, declared once. Buttons, shortcuts and agents share
 /// them; IDs are `bokkie.<kebab-case variant>`.
@@ -38,16 +52,43 @@ pub enum BokkieAction {
     SignOut,
     #[action(label = "Refresh", description = "Load the list of Bots again")]
     Refresh,
+    #[action(
+        label = "Open",
+        description = "Open the conversation of the Bot with this ID",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    OpenBot,
+    #[action(label = "Back", description = "Return to the list of Bots")]
+    Back,
+    #[action(
+        label = "Send",
+        description = "Send the message to the Bot; while it replies, the message steers the reply"
+    )]
+    Send,
+    #[action(
+        label = "Reload page",
+        description = "Reload the page to fetch the client that matches Bokkie's server"
+    )]
+    ReloadPage,
 }
 
-/// Data changes from the UI and replies from the transport.
+/// Data changes from the UI, and replies and updates from the transport.
 pub enum BokkieIntent {
     EditUsername(String),
     EditPassword(String),
+    EditDraft(String),
     /// A command's reply, with the generation it was sent in.
     Reply {
         generation: Generation,
         reply: ApiReply,
+    },
+    /// An update from the event socket opened for `generation`.
+    Socket {
+        generation: Generation,
+        update: SocketUpdate,
     },
 }
 
@@ -57,10 +98,16 @@ impl std::fmt::Debug for BokkieIntent {
         match self {
             Self::EditUsername(username) => f.debug_tuple("EditUsername").field(username).finish(),
             Self::EditPassword(_) => f.write_str("EditPassword(<redacted>)"),
+            Self::EditDraft(draft) => f.debug_tuple("EditDraft").field(draft).finish(),
             Self::Reply { generation, reply } => f
                 .debug_struct("Reply")
                 .field("generation", generation)
                 .field("reply", reply)
+                .finish(),
+            Self::Socket { generation, update } => f
+                .debug_struct("Socket")
+                .field("generation", generation)
+                .field("update", update)
                 .finish(),
         }
     }
@@ -71,7 +118,7 @@ pub type ApiFactory = Box<dyn FnOnce(IntentSender<BokkieIntent>) -> Box<dyn Api>
 
 /// Where the user is.
 #[derive(Debug)]
-enum Session {
+pub(crate) enum Session {
     /// Asking the gateway whether the browser's cookie is still a session.
     Checking,
     SignedOut(SignInForm),
@@ -79,39 +126,71 @@ enum Session {
 }
 
 #[derive(Debug, Default)]
-struct SignInForm {
-    username: String,
-    password: String,
+pub(crate) struct SignInForm {
+    pub(crate) username: String,
+    pub(crate) password: String,
     /// A sign-in is under way.
-    busy: bool,
+    pub(crate) busy: bool,
     /// Why the last attempt failed, or why the user is signed out.
-    message: Option<String>,
+    pub(crate) message: Option<String>,
 }
 
 #[derive(Debug)]
-struct SignedIn {
-    user: User,
-    bots: BotsState,
+pub(crate) struct SignedIn {
+    pub(crate) user: User,
+    /// Why the Bot list last failed to load, until it loads.
+    pub(crate) bots_error: Option<String>,
     /// A sign-out is under way.
-    signing_out: bool,
+    pub(crate) signing_out: bool,
     /// The last command error, such as a failed sign-out.
-    message: Option<String>,
+    pub(crate) message: Option<String>,
+    /// The event socket's state.
+    pub(crate) link: Link,
+    /// The conversation shown, if any; otherwise the Bot list is.
+    pub(crate) open: Option<Open>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BotsState {
-    Loading,
-    Loaded,
-    Failed(String),
+/// One Bot's conversation, open on screen.
+#[derive(Debug)]
+pub(crate) struct Open {
+    pub(crate) bot: BotId,
+    /// Why the conversation last failed to load, until it loads.
+    pub(crate) error: Option<String>,
+    pub(crate) draft: String,
+    /// A send is under way.
+    pub(crate) sending: bool,
+    /// How the last message sent reached the Bot.
+    pub(crate) delivery: Option<Delivery>,
+    /// Why the last send failed.
+    pub(crate) send_error: Option<String>,
+}
+
+impl Open {
+    fn new(bot: BotId) -> Self {
+        Self {
+            bot,
+            error: None,
+            draft: String::new(),
+            sending: false,
+            delivery: None,
+            send_error: None,
+        }
+    }
 }
 
 /// The application state. The UI only reads it.
 pub struct App {
-    session: Session,
-    /// Moves on at every sign-in and sign-out; replies from before are
-    /// dropped.
+    pub(crate) session: Session,
+    /// Moves on at every sign-in and sign-out; replies and socket updates
+    /// from before are dropped.
     generation: Generation,
-    store: Store,
+    pub(crate) store: Store,
+    /// Snapshot loads sent and not yet answered. At most one of each is in
+    /// flight.
+    in_flight: BTreeSet<Snapshot>,
+    /// Snapshots to load again as soon as their load in flight answers,
+    /// because something asked for them meanwhile.
+    again: BTreeSet<Snapshot>,
     make_api: Option<ApiFactory>,
     api: Option<Box<dyn Api>>,
 }
@@ -132,6 +211,8 @@ impl App {
             session: Session::Checking,
             generation: Generation::default(),
             store: Store::new(),
+            in_flight: BTreeSet::new(),
+            again: BTreeSet::new(),
             make_api: Some(make_api),
             api: None,
         }
@@ -144,6 +225,7 @@ impl App {
             Session::SignedOut(form) if form.busy => "signing_in",
             Session::SignedOut(_) => "signed_out",
             Session::SignedIn(signed_in) if signed_in.signing_out => "signing_out",
+            Session::SignedIn(signed_in) if signed_in.open.is_some() => "conversation",
             Session::SignedIn(_) => "signed_in",
         }
     }
@@ -161,22 +243,50 @@ impl App {
         match &self.session {
             Session::Checking => None,
             Session::SignedOut(form) => form.message.as_deref(),
-            Session::SignedIn(signed_in) => match &signed_in.bots {
-                BotsState::Failed(message) => Some(message),
-                _ => signed_in.message.as_deref(),
-            },
+            Session::SignedIn(signed_in) => signed_in
+                .message
+                .as_deref()
+                .or(signed_in.bots_error.as_deref()),
         }
     }
 
     /// The Bot list's state, as the `bots` fact names it.
     pub fn bots_state(&self) -> &'static str {
         match &self.session {
-            Session::SignedIn(signed_in) => match signed_in.bots {
-                BotsState::Loading => "loading",
-                BotsState::Loaded => "loaded",
-                BotsState::Failed(_) => "failed",
-            },
+            Session::SignedIn(_) if self.in_flight.contains(&Snapshot::Bots) => "loading",
+            Session::SignedIn(signed_in) if signed_in.bots_error.is_some() => "failed",
+            Session::SignedIn(_) if self.store.bots_loaded() => "loaded",
             _ => "",
+        }
+    }
+
+    /// The open conversation's state, as the `conversation` fact names it.
+    pub fn conversation_state(&self) -> &'static str {
+        let Some(open) = self.open() else {
+            return "";
+        };
+        let snapshot = Snapshot::Messages(open.bot);
+        if self.store.conversation(open.bot).is_some() {
+            "loaded"
+        } else if self.in_flight.contains(&snapshot) {
+            "loading"
+        } else if open.error.is_some() {
+            "failed"
+        } else {
+            "loading"
+        }
+    }
+
+    /// The Bot whose conversation is open, if any.
+    pub fn open_bot(&self) -> Option<BotId> {
+        self.open().map(|open| open.bot)
+    }
+
+    /// The event socket's state.
+    pub fn link(&self) -> Link {
+        match &self.session {
+            Session::SignedIn(signed_in) => signed_in.link,
+            _ => Link::Stopped,
         }
     }
 
@@ -189,6 +299,30 @@ impl App {
         self.generation
     }
 
+    pub(crate) fn open(&self) -> Option<&Open> {
+        match &self.session {
+            Session::SignedIn(signed_in) => signed_in.open.as_ref(),
+            _ => None,
+        }
+    }
+
+    fn open_mut(&mut self) -> Option<&mut Open> {
+        match &mut self.session {
+            Session::SignedIn(signed_in) => signed_in.open.as_mut(),
+            _ => None,
+        }
+    }
+
+    /// The open conversation's latest Bot reply, if it holds one.
+    pub(crate) fn latest_reply(&self) -> Option<&Message> {
+        let bot = self.open_bot()?;
+        self.store
+            .conversation(bot)?
+            .messages()
+            .rev()
+            .find(|message| message.author == Author::Bot)
+    }
+
     fn send(&self, request: ApiRequest) {
         if let Some(api) = &self.api {
             api.send(self.generation, request);
@@ -197,6 +331,9 @@ impl App {
 
     fn next_generation(&mut self) {
         self.generation = Generation(self.generation.0 + 1);
+        self.store = Store::new();
+        self.in_flight.clear();
+        self.again.clear();
     }
 
     fn signed_out(&mut self, message: Option<String>) {
@@ -205,8 +342,12 @@ impl App {
             Session::SignedIn(signed_in) => signed_in.user.username.clone(),
             Session::Checking => String::new(),
         };
+        if matches!(self.session, Session::SignedIn(_))
+            && let Some(api) = &self.api
+        {
+            api.disconnect_events();
+        }
         self.next_generation();
-        self.store = Store::new();
         self.session = Session::SignedOut(SignInForm {
             username,
             message,
@@ -216,23 +357,57 @@ impl App {
 
     fn signed_in(&mut self, user: User) {
         self.next_generation();
-        self.store = Store::new();
         self.session = Session::SignedIn(SignedIn {
             user,
-            bots: BotsState::Loading,
+            bots_error: None,
             signing_out: false,
             message: None,
+            link: Link::Stopped,
+            open: None,
         });
-        self.load_bots();
+        // The list shows at once. Once the socket is live it is loaded again,
+        // so that no event can fall between the list and the socket.
+        self.load(Snapshot::Bots);
+        if let Some(api) = &self.api {
+            api.connect_events(self.generation);
+        }
     }
 
-    fn load_bots(&mut self) {
-        if let Session::SignedIn(signed_in) = &mut self.session {
-            signed_in.bots = BotsState::Loading;
-            // The store holds any event that arrives meanwhile.
-            let _ = self.store.request(Snapshot::Bots);
-            self.send(ApiRequest::ListBots);
+    /// Load a snapshot over HTTP. The store holds any event that arrives
+    /// meanwhile. A snapshot already loading is loaded again once that load
+    /// answers, because it may predate whatever asked for it now.
+    fn load(&mut self, snapshot: Snapshot) {
+        let _ = self.store.request(snapshot);
+        if !self.in_flight.insert(snapshot) {
+            self.again.insert(snapshot);
+            return;
         }
+        self.send(match snapshot {
+            Snapshot::Bots => ApiRequest::ListBots,
+            Snapshot::Messages(bot) => ApiRequest::LoadMessages(bot),
+        });
+    }
+
+    fn load_all(&mut self, snapshots: impl IntoIterator<Item = Snapshot>) {
+        for snapshot in snapshots {
+            self.load(snapshot);
+        }
+    }
+
+    /// Reload everything shown, as after `reset` or the first time live.
+    fn reload_everything(&mut self) {
+        let mut all = self.store.reload_all();
+        // A conversation still on its first load is not in the store yet.
+        if let Some(bot) = self.open_bot() {
+            all.insert(Snapshot::Messages(bot));
+        }
+        self.load_all(all);
+    }
+
+    /// A load answered. Returns whether to load it again at once.
+    fn answered(&mut self, snapshot: Snapshot) -> bool {
+        self.in_flight.remove(&snapshot);
+        self.again.remove(&snapshot)
     }
 
     /// A signed-in command answered 401: the session is gone.
@@ -248,6 +423,10 @@ impl App {
                 // worth saying.
                 let message = (!error.is_unauthenticated()).then_some(error.message);
                 self.signed_out(message);
+            }
+            // The socket asked whether the session still holds.
+            (ApiReply::Session(Err(error)), Session::SignedIn(_)) if error.is_unauthenticated() => {
+                self.session_ended()
             }
             (ApiReply::SignedIn(result), Session::SignedOut(form)) if form.busy => match result {
                 Ok(session) => self.signed_in(session.user),
@@ -269,19 +448,83 @@ impl App {
                     }
                 }
             }
-            (ApiReply::Bots(result), Session::SignedIn(signed_in))
-                if signed_in.bots == BotsState::Loading =>
+            (ApiReply::Bots(result), Session::SignedIn(_))
+                if self.in_flight.contains(&Snapshot::Bots) =>
             {
+                let again = self.answered(Snapshot::Bots);
                 match result {
                     Ok(list) => {
-                        signed_in.bots = BotsState::Loaded;
-                        let _ = self.store.load_bots(list);
+                        if let Session::SignedIn(signed_in) = &mut self.session {
+                            signed_in.bots_error = None;
+                        }
+                        let applied = self.store.load_bots(list);
+                        self.load_all(applied.reload);
                     }
-                    Err(error) if error.is_unauthenticated() => self.session_ended(),
+                    Err(error) if error.is_unauthenticated() => {
+                        self.session_ended();
+                        return true;
+                    }
+                    Err(_) if again => {}
                     Err(error) => {
-                        signed_in.bots = BotsState::Failed(error.message);
+                        if let Session::SignedIn(signed_in) = &mut self.session {
+                            signed_in.bots_error = Some(error.message);
+                        }
                         self.store.load_failed(Snapshot::Bots);
                     }
+                }
+                if again {
+                    self.load(Snapshot::Bots);
+                }
+            }
+            (ApiReply::Messages(bot, result), Session::SignedIn(_))
+                if self.in_flight.contains(&Snapshot::Messages(bot)) =>
+            {
+                let snapshot = Snapshot::Messages(bot);
+                let again = self.answered(snapshot);
+                if self.open_bot() != Some(bot) {
+                    // Closed meanwhile; the store has already let it go.
+                    return false;
+                }
+                match result {
+                    Ok(page) => {
+                        if let Some(open) = self.open_mut() {
+                            open.error = None;
+                        }
+                        let applied = self.store.load_messages(bot, page);
+                        self.load_all(applied.reload);
+                    }
+                    Err(error) if error.is_unauthenticated() => {
+                        self.session_ended();
+                        return true;
+                    }
+                    Err(_) if again => {}
+                    Err(error) => {
+                        if let Some(open) = self.open_mut() {
+                            open.error = Some(error.message);
+                        }
+                        self.store.load_failed(snapshot);
+                    }
+                }
+                if again {
+                    self.load(snapshot);
+                }
+            }
+            (ApiReply::Sent(bot, result), Session::SignedIn(_)) => {
+                let Some(open) = self
+                    .open_mut()
+                    .filter(|open| open.bot == bot && open.sending)
+                else {
+                    return false;
+                };
+                open.sending = false;
+                match result {
+                    Ok(sent) => {
+                        open.draft.clear();
+                        open.delivery = Some(sent.delivery);
+                    }
+                    Err(error) if error.is_unauthenticated() => self.session_ended(),
+                    // The draft stays, to send again.
+                    Err(error) => open.send_error = Some(error.message),
                 }
             }
             // A reply to a command whose screen has gone, such as a Bot list
@@ -289,6 +532,79 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    fn socket(&mut self, update: SocketUpdate) -> bool {
+        let Session::SignedIn(signed_in) = &mut self.session else {
+            return false;
+        };
+        match update {
+            SocketUpdate::Event(envelope) => {
+                let applied = self.store.apply(&envelope);
+                self.load_all(applied.reload);
+                applied.changed
+            }
+            SocketUpdate::Reload => {
+                self.reload_everything();
+                true
+            }
+            SocketUpdate::CheckSession => {
+                self.send(ApiRequest::CheckSession);
+                false
+            }
+            SocketUpdate::SignedOut => {
+                self.session_ended();
+                true
+            }
+            SocketUpdate::Link(link) => {
+                signed_in.link = link;
+                if link == Link::Live {
+                    // Retry what failed to load, now that the server answers.
+                    let mut failed = Vec::new();
+                    if signed_in.bots_error.is_some() {
+                        failed.push(Snapshot::Bots);
+                    }
+                    if let Some(open) = &signed_in.open
+                        && open.error.is_some()
+                    {
+                        failed.push(Snapshot::Messages(open.bot));
+                    }
+                    self.load_all(failed);
+                }
+                true
+            }
+        }
+    }
+
+    fn open_conversation(&mut self, bot: BotId) -> Result<bool, String> {
+        let Session::SignedIn(signed_in) = &mut self.session else {
+            return Ok(false);
+        };
+        if self.store.bot(bot).is_none() {
+            return Err(format!("There is no Bot {bot}"));
+        }
+        if let Some(open) = signed_in.open.take() {
+            self.store.close_conversation(open.bot);
+        }
+        signed_in.open = Some(Open::new(bot));
+        self.load(Snapshot::Messages(bot));
+        Ok(true)
+    }
+
+    fn can_send(&self) -> Result<(), &'static str> {
+        let Some(open) = self.open() else {
+            return Err("No conversation is open");
+        };
+        if open.sending {
+            return Err("Sending");
+        }
+        if open.draft.trim().is_empty() {
+            return Err("Write a message");
+        }
+        match self.store.bot(open.bot).map(|bot| bot.status) {
+            Some(BotStatus::Refused) => Err("This Bot accepts no messages"),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -302,6 +618,10 @@ impl Application for App {
     }
 
     fn availability(&self, target: ActionTarget<BokkieAction>) -> Availability {
+        let signed_in = match &self.session {
+            Session::SignedIn(signed_in) => Some(signed_in),
+            _ => None,
+        };
         let reason = match (target.action, &self.session) {
             (BokkieAction::SignIn, Session::SignedOut(form)) => {
                 if form.busy {
@@ -315,17 +635,23 @@ impl Application for App {
                 }
             }
             (BokkieAction::SignIn, _) => Some("Already signed in"),
-            (BokkieAction::SignOut, Session::SignedIn(signed_in)) if signed_in.signing_out => {
+            (BokkieAction::ReloadPage, _) => {
+                (self.link() != Link::Outdated).then_some("This page matches Bokkie's server")
+            }
+            (_, _) if signed_in.is_none() => Some("Not signed in"),
+            (BokkieAction::SignOut, _) if signed_in.is_some_and(|s| s.signing_out) => {
                 Some("Signing out")
             }
-            (BokkieAction::SignOut, Session::SignedIn(_)) => None,
-            (BokkieAction::Refresh, Session::SignedIn(signed_in))
-                if signed_in.bots == BotsState::Loading =>
-            {
+            (BokkieAction::SignOut, _) => None,
+            (BokkieAction::Refresh, _) if self.in_flight.contains(&Snapshot::Bots) => {
                 Some("Loading the Bots")
             }
-            (BokkieAction::Refresh, Session::SignedIn(_)) => None,
-            (BokkieAction::SignOut | BokkieAction::Refresh, _) => Some("Not signed in"),
+            (BokkieAction::Refresh, _) => None,
+            (BokkieAction::OpenBot, _) if !self.store.bots_loaded() => Some("Loading the Bots"),
+            (BokkieAction::OpenBot, _) => None,
+            (BokkieAction::Back, _) if self.open().is_none() => Some("No conversation is open"),
+            (BokkieAction::Back, _) => None,
+            (BokkieAction::Send, _) => self.can_send().err(),
         };
         reason.map_or(Availability::Enabled, |reason| Availability::Disabled {
             reason: reason.into(),
@@ -340,18 +666,7 @@ impl Application for App {
     }
 
     fn ui(&self, ui: &mut egui::Ui, _: &mut (), frame: &mut Frame<'_, BokkieAction, BokkieIntent>) {
-        egui::CentralPanel::default().show(ui, |ui| {
-            let mut p =
-                frame.presentation(ui, PresentationScope::new("bokkie"), SemanticUiId::root());
-            match &self.session {
-                Session::Checking => {
-                    p.heading(ui, "title", APPLICATION_NAME);
-                    p.status(ui, "status", "Checking your session…", false);
-                }
-                Session::SignedOut(form) => sign_in_ui(ui, &mut p, frame, form),
-                Session::SignedIn(signed_in) => bots_ui(ui, &mut p, frame, signed_in, &self.store),
-            }
-        });
+        ui::present(self, ui, frame);
     }
 
     fn apply(&mut self, intent: BokkieIntent, _: &mut ()) -> Result<bool, String> {
@@ -370,8 +685,18 @@ impl Application for App {
                 }
                 _ => false,
             },
+            BokkieIntent::EditDraft(draft) => match self.open_mut() {
+                Some(open) if !open.sending => {
+                    open.draft = draft;
+                    true
+                }
+                _ => false,
+            },
             BokkieIntent::Reply { generation, reply } => {
                 generation == self.generation && self.reply(reply)
+            }
+            BokkieIntent::Socket { generation, update } => {
+                generation == self.generation && self.socket(update)
             }
         })
     }
@@ -393,10 +718,56 @@ impl Application for App {
                 signed_in.message = None;
                 self.send(ApiRequest::SignOut);
             }
-            (BokkieAction::Refresh, Session::SignedIn(_)) => self.load_bots(),
+            (BokkieAction::Refresh, Session::SignedIn(_)) => self.load(Snapshot::Bots),
+            (BokkieAction::Back, Session::SignedIn(signed_in)) => {
+                let Some(open) = signed_in.open.take() else {
+                    return Ok(false);
+                };
+                self.store.close_conversation(open.bot);
+            }
+            (BokkieAction::Send, Session::SignedIn(signed_in)) => {
+                let Some(open) = &mut signed_in.open else {
+                    return Ok(false);
+                };
+                open.sending = true;
+                open.delivery = None;
+                open.send_error = None;
+                let bot = open.bot;
+                let text = open.draft.trim().to_owned();
+                // A new message moves on from the Bot's last error.
+                let _ = self.store.clear_error(bot);
+                self.send(ApiRequest::SendMessage(bot, SendMessageRequest { text }));
+            }
+            (BokkieAction::ReloadPage, _) => {
+                if let Some(api) = &self.api {
+                    api.reload_page();
+                }
+            }
             _ => return Ok(false),
         }
         Ok(true)
+    }
+
+    fn perform_with(
+        &mut self,
+        target: ActionTarget<BokkieAction>,
+        argument: ActionArgument,
+        state: &mut (),
+    ) -> Result<bool, String> {
+        match (target.action, argument) {
+            (BokkieAction::OpenBot, ActionArgument::Number(id))
+                if id.fract() == 0.0 && (1.0..=MAX_BOT_ID).contains(&id) =>
+            {
+                // Exact: the contract admits only integers in range.
+                self.open_conversation(BotId(id as i64))
+            }
+            (BokkieAction::OpenBot, _) => Err("Open needs a Bot ID".into()),
+            (_, ActionArgument::None) => self.perform(target, state),
+            (action, _) => Err(format!(
+                "{} takes no argument",
+                action.specification().label
+            )),
+        }
     }
 
     fn report_error(&mut self, message: String) {
@@ -411,6 +782,10 @@ impl Application for App {
         match (target.action, &self.session) {
             // Never the password.
             (BokkieAction::SignIn, Session::SignedOut(form)) => format!("user:{}", form.username),
+            (BokkieAction::Send, _) => match self.open() {
+                Some(open) => format!("send:{}:{}", open.bot, open.draft),
+                None => self.screen().into(),
+            },
             _ => self.screen().into(),
         }
     }
@@ -425,151 +800,73 @@ impl Application for App {
         );
         observation.fact("bots", self.bots_state());
         observation.fact("bot_count", self.store.visible_bots().len());
-        let message: String = self.message().unwrap_or("").chars().take(200).collect();
-        observation.fact("message", message);
-    }
-}
-
-fn line(role: TextRole, max_lines: u8) -> ContentTextSpec {
-    ContentTextSpec {
-        role,
-        overflow: TextOverflow::Wrap,
-        max_lines,
-        interaction: TextInteraction::Selectable,
-    }
-}
-
-/// A text field observed as a text input, so agents can fill it with
-/// `stobie set-text`. Returns the edited copy and the field's response.
-fn text_field(
-    ui: &mut egui::Ui,
-    p: &mut PresentationContext,
-    id: &'static str,
-    label: &str,
-    value: &str,
-    password: bool,
-) -> (String, egui::Response) {
-    let mut edited = value.to_owned();
-    let caption = ui.label(label);
-    let (field, ()) = p.native(ui, NativeTextControlKind::TextEdit, |ui| {
-        let edit = egui::TextEdit::singleline(&mut edited)
-            .password(password)
-            .desired_width(f32::INFINITY);
-        // Name the field after its caption for assistive technology.
-        (ui.add(edit).labelled_by(caption.id), ())
-    });
-    let mut node = UiNode::container(
-        SemanticUiId::new(id),
-        Some(SemanticUiId::root()),
-        UiRole::TextInput,
-        field.rect.into(),
-    );
-    node.name = label.into();
-    node.focused = field.has_focus();
-    p.observe_node(ui, node);
-    (edited, field)
-}
-
-fn sign_in_ui(
-    ui: &mut egui::Ui,
-    p: &mut PresentationContext,
-    frame: &mut Frame<'_, BokkieAction, BokkieIntent>,
-    form: &SignInForm,
-) {
-    p.heading(ui, "title", APPLICATION_NAME);
-    ui.add_enabled_ui(!form.busy, |ui| {
-        let (username, _) = text_field(ui, p, USERNAME_ID, "Username", &form.username, false);
-        if username != form.username {
-            frame.emit(BokkieIntent::EditUsername(username));
-        }
-        let (password, field) = text_field(ui, p, PASSWORD_ID, "Password", &form.password, true);
-        if password != form.password {
-            frame.emit(BokkieIntent::EditPassword(password));
-        }
-        // Enter in the password field signs in. The host rechecks
-        // availability, after this pass's edits apply.
-        if field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-            frame.trigger(BokkieAction::SignIn);
-        }
-    });
-    frame.action(ui, p, BokkieAction::SignIn, ActionEmphasis::Primary);
-    if form.busy {
-        p.status(ui, "status", "Signing in…", false);
-    } else if let Some(message) = &form.message {
-        p.status(ui, "status", message, true);
-    }
-}
-
-fn status_text(status: BotStatus) -> &'static str {
-    match status {
-        BotStatus::Idle => "Idle",
-        BotStatus::Working => "Working",
-        BotStatus::Refused => "Unavailable",
-    }
-}
-
-fn bots_ui(
-    ui: &mut egui::Ui,
-    p: &mut PresentationContext,
-    frame: &mut Frame<'_, BokkieAction, BokkieIntent>,
-    signed_in: &SignedIn,
-    store: &Store,
-) {
-    // Stobie's headings and content lines take the whole row, so controls
-    // go on rows of their own.
-    p.heading(ui, "title", APPLICATION_NAME);
-    let who = format!("Signed in as {}", signed_in.user.display_name);
-    p.content(ui, "user", &who, line(TextRole::Secondary, 1));
-    frame.action(ui, p, BokkieAction::SignOut, ActionEmphasis::Normal);
-    if signed_in.signing_out {
-        p.status(ui, "status", "Signing out…", false);
-    } else if let Some(message) = &signed_in.message {
-        p.status(ui, "status", message, true);
-    }
-    ui.separator();
-    p.heading(ui, "bots-title", "Bots");
-    frame.action(ui, p, BokkieAction::Refresh, ActionEmphasis::Normal);
-    match &signed_in.bots {
-        BotsState::Loading if !store.bots_loaded() => {
-            p.status(ui, "bots-status", "Loading Bots…", false);
-            return;
-        }
-        BotsState::Failed(message) => {
-            p.status(ui, "bots-status", message, true);
-        }
-        _ => {}
-    }
-    let bots = store.visible_bots();
-    if bots.is_empty() && store.bots_loaded() {
-        p.content(ui, "no-bots", "No Bots yet", line(TextRole::Secondary, 1));
-        return;
-    }
-    // The list scrolls, so publish only what is visible.
-    observe_visible_only(ui, |ui| {
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                let mut rows =
-                    frame.presentation(ui, PresentationScope::new("bots"), SemanticUiId::root());
-                for bot in bots {
-                    bot_row(ui, &mut rows, bot);
-                }
-            });
-    });
-}
-
-fn bot_row(ui: &mut egui::Ui, p: &mut PresentationContext, bot: &Bot) {
-    let key = bot.id.0;
-    p.content(ui, ("name", key), &bot.name, line(TextRole::Body, 1));
-    let details = format!("{} · {}", bot.label, status_text(bot.status));
-    p.content(ui, ("details", key), &details, line(TextRole::Secondary, 1));
-    if let Some(preview) = &bot.last_message {
-        p.content(
-            ui,
-            ("preview", key),
-            &preview.text,
-            line(TextRole::Caption, 2),
+        observation.fact("message", bounded(self.message().unwrap_or("")));
+        observation.fact("connection", self.link().name());
+        observation.fact("bot", self.open_bot().map_or(0, |bot| bot.0));
+        observation.fact("conversation", self.conversation_state());
+        let open = self.open();
+        let bot = open.and_then(|open| self.store.bot(open.bot));
+        observation.fact("bot_status", bot.map_or("", |bot| status_name(bot.status)));
+        observation.fact(
+            "bot_error",
+            bounded(
+                open.and_then(|open| self.store.error(open.bot))
+                    .unwrap_or(""),
+            ),
+        );
+        let conversation = open.and_then(|open| self.store.conversation(open.bot));
+        observation.fact(
+            "message_count",
+            conversation.map_or(0, |conversation| conversation.messages().count()),
+        );
+        let reply = self.latest_reply();
+        observation.fact("reply", bounded(reply.map_or("", |reply| &reply.text)));
+        observation.fact(
+            "reply_chars",
+            reply.map_or(0, |reply| reply.text.chars().count()),
+        );
+        observation.fact(
+            "reply_state",
+            reply.map_or("", |reply| state_name(reply.state)),
+        );
+        observation.fact("draft", bounded(open.map_or("", |open| &open.draft)));
+        observation.fact("sending", open.is_some_and(|open| open.sending));
+        observation.fact(
+            "delivery",
+            match open.and_then(|open| open.delivery) {
+                Some(Delivery::NewTurn) => "new_turn",
+                Some(Delivery::Steered) => "steered",
+                None => "",
+            },
+        );
+        observation.fact(
+            "send_error",
+            bounded(
+                open.and_then(|open| open.send_error.as_deref())
+                    .unwrap_or(""),
+            ),
         );
     }
-    ui.separator();
+}
+
+/// At most 200 characters of a text, for a fact.
+fn bounded(text: &str) -> String {
+    text.chars().take(200).collect()
+}
+
+fn status_name(status: BotStatus) -> &'static str {
+    match status {
+        BotStatus::Idle => "idle",
+        BotStatus::Working => "working",
+        BotStatus::Refused => "refused",
+    }
+}
+
+fn state_name(state: MessageState) -> &'static str {
+    match state {
+        MessageState::Streaming => "streaming",
+        MessageState::Complete => "complete",
+        MessageState::Interrupted => "interrupted",
+        MessageState::Failed => "failed",
+    }
 }

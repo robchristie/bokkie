@@ -12,9 +12,9 @@ use bokkie_gateway::events::EventLog;
 use bokkie_gateway::{accounts, auth, db};
 use bokkie_protocol::api::{
     Allowance, Author, Bot, BotList, BotStatus, ErrorCode, Limits, Message, MessagePage,
-    MessageState, SessionResponse, Usage,
+    MessageState, RateLimitBucket, RateLimitWindow, SessionResponse, Usage,
 };
-use bokkie_protocol::events::{Event, EventEnvelope, Seq, ServerFrame};
+use bokkie_protocol::events::{ClientFrame, Event, EventEnvelope, Seq, ServerFrame};
 use bokkie_protocol::{BotId, MessageId, Timestamp, UserId};
 use bokkie_web::connection::{Command, Connection, Input, State};
 use bokkie_web::store::{Snapshot, Store};
@@ -436,6 +436,100 @@ async fn every_server_frame_the_gateway_sends_decodes() {
     assert!(
         first.contains(r#""event":{"type":"bot_created","bot":{"id":1,"#),
         "{first}"
+    );
+}
+
+/// Events the exchange does not cover, stored in and replayed from the
+/// gateway's log: a profile edit, a Bot error and a meter with the
+/// subscription's windows. And the client's ping, read as the event route
+/// reads a client frame.
+#[tokio::test]
+async fn profile_edits_bot_errors_subscription_usage_and_pings_reach_the_client() {
+    let gateway = Gateway::new().await;
+    let _ = exchange(&gateway).await;
+    let mut renamed = bot(BotStatus::Idle);
+    renamed.name = "Ada Lovelace".into();
+    renamed.pinned = true;
+    let usage = Usage {
+        subscription: vec![
+            RateLimitBucket {
+                id: "codex".into(),
+                name: Some("Codex".into()),
+                primary: Some(RateLimitWindow {
+                    used_percent: 42,
+                    window_minutes: Some(300),
+                    resets_at: Some(Timestamp(1_800_000_600_000)),
+                }),
+                secondary: Some(RateLimitWindow {
+                    used_percent: 100,
+                    window_minutes: Some(10_080),
+                    resets_at: Some(Timestamp(1_800_400_000_000)),
+                }),
+                reached: true,
+            },
+            RateLimitBucket {
+                id: "other".into(),
+                name: None,
+                primary: None,
+                secondary: None,
+                reached: false,
+            },
+        ],
+        allowance: Allowance {
+            limits: Limits {
+                daily_turns: Some(20),
+                weekly_tokens: Some(100_000),
+            },
+            turns_today: 20,
+            tokens_this_week: 99_000,
+            exhausted: true,
+        },
+    };
+    let error = "Your weekly token allowance is used up, so the reply was stopped";
+    let tail = [
+        gateway
+            .append(Event::BotUpdated {
+                bot: renamed.clone(),
+            })
+            .await,
+        gateway
+            .append(Event::BotError {
+                bot_id: BOT,
+                message: error.into(),
+            })
+            .await,
+        gateway
+            .append(Event::UsageUpdated {
+                usage: usage.clone(),
+            })
+            .await,
+    ];
+
+    // The client is live with the exchange loaded, and the tail arrives.
+    let before = Seq(tail[0].seq.0 - 1);
+    let mut client = Client::new();
+    client.connect();
+    client.receive(&text(&ServerFrame::Live { latest: before }));
+    let _ = client.store.load_bots(BotList {
+        bots: vec![bot(BotStatus::Idle)],
+        seq: before,
+    });
+    for envelope in gateway.since(before).await {
+        client.receive(&text(&ServerFrame::Event(envelope)));
+    }
+    assert_eq!(client.store.bot(BOT), Some(&renamed));
+    assert_eq!(client.store.error(BOT), Some(error));
+    assert_eq!(client.store.usage(), Some(&usage));
+    assert_eq!(client.connection.last(), Some(tail[2].seq));
+
+    let ping = wire::encode_frame(&ClientFrame::Ping);
+    assert_eq!(
+        serde_json::from_str::<ClientFrame>(&ping).unwrap(),
+        ClientFrame::Ping
+    );
+    assert_eq!(
+        wire::decode_frame(&text(&ServerFrame::Pong)),
+        Ok(ServerFrame::Pong)
     );
 }
 

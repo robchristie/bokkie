@@ -2,11 +2,13 @@
 //!
 //! Each [`ApiRequest`] knows its method, path and body, and how to decode
 //! its response into an [`ApiReply`]. The browser transport
-//! ([`crate::browser`]) sends them with `fetch`; tests record them and reply
-//! by hand.
+//! (`crate::browser`) sends them with `fetch` and runs the event socket;
+//! tests record them and reply by hand.
 
-use bokkie_protocol::API_PREFIX;
-use bokkie_protocol::api::{BotList, LoginRequest, SessionResponse};
+use bokkie_protocol::api::{
+    BotList, LoginRequest, MessagePage, SendMessageRequest, SendMessageResponse, SessionResponse,
+};
+use bokkie_protocol::{API_PREFIX, BotId};
 
 use crate::wire::{self, CommandError};
 
@@ -21,6 +23,11 @@ pub enum ApiRequest {
     SignOut,
     /// `GET /api/v1/bots`: the signed-in user's Bots.
     ListBots,
+    /// `GET /api/v1/bots/{id}/messages`: the newest page of a conversation.
+    LoadMessages(BotId),
+    /// `POST /api/v1/bots/{id}/messages`: send a message, which starts a
+    /// turn or steers the running one.
+    SendMessage(BotId, SendMessageRequest),
 }
 
 // The password must never reach a log line.
@@ -31,6 +38,12 @@ impl std::fmt::Debug for ApiRequest {
             Self::SignIn(login) => f.debug_tuple("SignIn").field(login).finish(),
             Self::SignOut => f.write_str("SignOut"),
             Self::ListBots => f.write_str("ListBots"),
+            Self::LoadMessages(bot) => f.debug_tuple("LoadMessages").field(bot).finish(),
+            Self::SendMessage(bot, message) => f
+                .debug_tuple("SendMessage")
+                .field(bot)
+                .field(message)
+                .finish(),
         }
     }
 }
@@ -60,13 +73,15 @@ pub enum ApiReply {
     SignedIn(Result<SessionResponse, CommandError>),
     SignedOut(Result<(), CommandError>),
     Bots(Result<BotList, CommandError>),
+    Messages(BotId, Result<MessagePage, CommandError>),
+    Sent(BotId, Result<SendMessageResponse, CommandError>),
 }
 
 impl ApiRequest {
     pub fn method(&self) -> Method {
         match self {
-            Self::CheckSession | Self::ListBots => Method::Get,
-            Self::SignIn(_) => Method::Post,
+            Self::CheckSession | Self::ListBots | Self::LoadMessages(_) => Method::Get,
+            Self::SignIn(_) | Self::SendMessage(..) => Method::Post,
             Self::SignOut => Method::Delete,
         }
     }
@@ -74,8 +89,9 @@ impl ApiRequest {
     /// The path, relative to the page's origin.
     pub fn path(&self) -> String {
         let route = match self {
-            Self::CheckSession | Self::SignIn(_) | Self::SignOut => "/session",
-            Self::ListBots => "/bots",
+            Self::CheckSession | Self::SignIn(_) | Self::SignOut => "/session".into(),
+            Self::ListBots => "/bots".into(),
+            Self::LoadMessages(bot) | Self::SendMessage(bot, _) => format!("/bots/{bot}/messages"),
         };
         format!("{API_PREFIX}{route}")
     }
@@ -83,9 +99,8 @@ impl ApiRequest {
     /// The JSON body, if the command has one.
     pub fn body(&self) -> Option<String> {
         match self {
-            Self::SignIn(login) => {
-                Some(serde_json::to_string(login).expect("a login request serialises"))
-            }
+            Self::SignIn(login) => Some(json(login)),
+            Self::SendMessage(_, message) => Some(json(message)),
             _ => None,
         }
     }
@@ -97,6 +112,10 @@ impl ApiRequest {
             Self::SignIn(_) => ApiReply::SignedIn(wire::decode_response(status, body)),
             Self::SignOut => ApiReply::SignedOut(wire::decode_empty(status, body)),
             Self::ListBots => ApiReply::Bots(wire::decode_response(status, body)),
+            Self::LoadMessages(bot) => {
+                ApiReply::Messages(*bot, wire::decode_response(status, body))
+            }
+            Self::SendMessage(bot, _) => ApiReply::Sent(*bot, wire::decode_response(status, body)),
         }
     }
 
@@ -108,8 +127,14 @@ impl ApiRequest {
             Self::SignIn(_) => ApiReply::SignedIn(Err(error)),
             Self::SignOut => ApiReply::SignedOut(Err(error)),
             Self::ListBots => ApiReply::Bots(Err(error)),
+            Self::LoadMessages(bot) => ApiReply::Messages(*bot, Err(error)),
+            Self::SendMessage(bot, _) => ApiReply::Sent(*bot, Err(error)),
         }
     }
+}
+
+fn json(body: &impl serde::Serialize) -> String {
+    serde_json::to_string(body).expect("request bodies serialise")
 }
 
 /// Which sign-in a command belongs to. It changes whenever the user signs in
@@ -120,9 +145,30 @@ pub struct Generation(pub u64);
 
 /// Something that carries commands to the gateway and reports each reply
 /// back to the application as an intent, tagged with the command's
-/// generation.
+/// generation. It also runs the event socket
+/// ([`crate::socket::Driver`]), whose updates arrive as intents tagged the
+/// same way.
 pub trait Api {
     fn send(&self, generation: Generation, request: ApiRequest);
+
+    /// Open the event socket for the sign-in `generation`, replacing any
+    /// other, with a connection that has never been live.
+    fn connect_events(&self, generation: Generation);
+
+    /// Close the event socket for good, as on signing out.
+    fn disconnect_events(&self);
+
+    /// Reload the page, to fetch the client that matches the gateway.
+    fn reload_page(&self);
+}
+
+/// What the application asked of the event socket, as a [`Recorder`] keeps
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketControl {
+    Connect(Generation),
+    Disconnect,
+    ReloadPage,
 }
 
 /// An [`Api`] that only records what it was asked to send, for tests and for
@@ -130,18 +176,38 @@ pub trait Api {
 #[derive(Debug, Clone, Default)]
 pub struct Recorder {
     sent: std::rc::Rc<std::cell::RefCell<Vec<ApiRequest>>>,
+    socket: std::rc::Rc<std::cell::RefCell<Vec<SocketControl>>>,
 }
 
 impl Recorder {
-    /// Everything sent so far, which is then forgotten.
+    /// Every command sent so far, which is then forgotten.
     pub fn take(&self) -> Vec<ApiRequest> {
         std::mem::take(&mut self.sent.borrow_mut())
+    }
+
+    /// Everything asked of the event socket so far, which is then forgotten.
+    pub fn take_socket(&self) -> Vec<SocketControl> {
+        std::mem::take(&mut self.socket.borrow_mut())
     }
 }
 
 impl Api for Recorder {
     fn send(&self, _generation: Generation, request: ApiRequest) {
         self.sent.borrow_mut().push(request);
+    }
+
+    fn connect_events(&self, generation: Generation) {
+        self.socket
+            .borrow_mut()
+            .push(SocketControl::Connect(generation));
+    }
+
+    fn disconnect_events(&self) {
+        self.socket.borrow_mut().push(SocketControl::Disconnect);
+    }
+
+    fn reload_page(&self) {
+        self.socket.borrow_mut().push(SocketControl::ReloadPage);
     }
 }
 
@@ -162,6 +228,13 @@ mod tests {
             login.clone(),
             ApiRequest::SignOut,
             ApiRequest::ListBots,
+            ApiRequest::LoadMessages(BotId(3)),
+            ApiRequest::SendMessage(
+                BotId(3),
+                SendMessageRequest {
+                    text: "Hello".into(),
+                },
+            ),
         ]
         .iter()
         .map(|request| (request.method().as_str(), request.path()))
@@ -173,7 +246,20 @@ mod tests {
                 ("POST", "/api/v1/session".to_owned()),
                 ("DELETE", "/api/v1/session".to_owned()),
                 ("GET", "/api/v1/bots".to_owned()),
+                ("GET", "/api/v1/bots/3/messages".to_owned()),
+                ("POST", "/api/v1/bots/3/messages".to_owned()),
             ]
+        );
+        assert_eq!(
+            ApiRequest::SendMessage(
+                BotId(3),
+                SendMessageRequest {
+                    text: "Hello".into()
+                }
+            )
+            .body()
+            .as_deref(),
+            Some(r#"{"text":"Hello"}"#)
         );
         assert_eq!(
             login.body().as_deref(),
