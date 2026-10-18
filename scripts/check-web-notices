@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
-# Checks the web client's third-party notices: every font licence text that
-# the locked dependencies ship appears verbatim in
-# apps/bokkie-web/web/third-party-notices.txt, and each built web root given
-# as an argument carries that file unchanged.
+# Checks the web client's third-party notices against every font that the
+# client's locked browser dependencies ship, wherever it sits:
+#
+# - every font file (.ttf, .otf, .ttc, .woff, .woff2) in a package that
+#   bokkie-web depends on for wasm32 must be readable here;
+# - the licence texts beside each font (the .txt and .md files in its
+#   directory, other than a README) appear verbatim in
+#   apps/bokkie-web/web/third-party-notices.txt;
+# - the copyright notice in each font's name table (name ID 0) appears there
+#   too, with runs of white space counted as one space; a notice that joins
+#   several holders with " / " is checked holder by holder;
+# - each built web root given as an argument carries that file unchanged.
+#
+# Before checking, it proves itself: the notices with any one required text
+# removed must fail.
 #
 # Usage: scripts/check-web-notices [built web root...]
 set -euo pipefail
@@ -13,29 +24,112 @@ notices=apps/bokkie-web/web/third-party-notices.txt
 
 cargo metadata --format-version 1 --locked --filter-platform wasm32-unknown-unknown |
   python3 -I -c '
-import json, pathlib, sys
+import json, pathlib, re, struct, sys
 
-notices = pathlib.Path(sys.argv[1]).read_bytes()
-packages = {p["name"]: pathlib.Path(p["manifest_path"]).parent
-            for p in json.load(sys.stdin)["packages"]}
-# The fonts each dependency embeds, and the licence files beside them.
-sources = {
-    "stobie-ui-egui": ("assets/fonts", ["LICENSE.md"]),
-    "epaint_default_fonts": ("fonts", None),
-}
-missing = []
-for package, (directory, names) in sources.items():
-    if package not in packages:
-        sys.exit(f"check-web-notices: {package} is not a dependency any more; update {sys.argv[1]}")
-    fonts = packages[package] / directory
-    texts = names or sorted(p.name for p in fonts.iterdir() if p.suffix in (".txt", ".md"))
-    if not texts:
-        sys.exit(f"check-web-notices: no licence texts found in {fonts}")
-    for name in texts:
-        if (fonts / name).read_bytes() not in notices:
-            missing.append(f"{package} {directory}/{name}")
-if missing:
-    sys.exit("check-web-notices: not reproduced verbatim in " + sys.argv[1] + ": " + ", ".join(missing))
+notices_path = sys.argv[1]
+notices = pathlib.Path(notices_path).read_bytes()
+metadata = json.load(sys.stdin)
+packages = {p["id"]: p for p in metadata["packages"]}
+nodes = {n["id"]: n for n in metadata["resolve"]["nodes"]}
+
+# The packages the client builds with for the browser: its normal
+# dependencies, transitively (development and build dependencies never
+# reach the WebAssembly module).
+client = next(p["id"] for p in metadata["packages"] if p["name"] == "bokkie-web")
+reached, queue = set(), [client]
+while queue:
+    package = queue.pop()
+    if package in reached:
+        continue
+    reached.add(package)
+    for dep in nodes[package]["deps"]:
+        if any(kind["kind"] is None for kind in dep["dep_kinds"]):
+            queue.append(dep["pkg"])
+
+FONT_SUFFIXES = {".ttf", ".otf", ".ttc", ".woff", ".woff2"}
+
+
+def copyright_notices(path):
+    """The name ID 0 strings of a TrueType or OpenType font (or collection)."""
+    data = path.read_bytes()
+    starts = [0]
+    if data[:4] == b"ttcf":
+        (count,) = struct.unpack(">I", data[8:12])
+        starts = list(struct.unpack(f">{count}I", data[12 : 12 + 4 * count]))
+    elif data[:4] in (b"wOFF", b"wOF2"):
+        sys.exit(f"check-web-notices: {path} is a compressed web font; teach this check to read it")
+    found = set()
+    for start in starts:
+        (tables,) = struct.unpack(">H", data[start + 4 : start + 6])
+        for i in range(tables):
+            tag, _, offset, _ = struct.unpack(">4sIII", data[start + 12 + 16 * i : start + 28 + 16 * i])
+            if tag != b"name":
+                continue
+            _, count, strings = struct.unpack(">HHH", data[offset : offset + 6])
+            for j in range(count):
+                record = data[offset + 6 + 12 * j : offset + 18 + 12 * j]
+                platform, _, _, name_id, length, at = struct.unpack(">HHHHHH", record)
+                if name_id != 0:
+                    continue
+                raw = data[offset + strings + at : offset + strings + at + length]
+                if platform in (0, 3):
+                    found.add(raw.decode("utf-16-be"))
+                elif platform == 1:
+                    found.add(raw.decode("mac_roman"))
+    return found
+
+
+def normal(text):
+    return " ".join(text.split())
+
+
+# What the notices must hold: (description, bytes to find verbatim) and
+# (description, text to find with white space normalised).
+verbatim, normalised = [], []
+fonts_seen = 0
+for package_id in sorted(reached):
+    package = packages[package_id]
+    name = package["name"]
+    directory = pathlib.Path(package["manifest_path"]).parent
+    fonts = sorted(p for p in directory.rglob("*") if p.suffix.lower() in FONT_SUFFIXES and p.is_file())
+    for font_directory in sorted({font.parent for font in fonts}):
+        texts = sorted(
+            p for p in font_directory.iterdir()
+            if p.suffix.lower() in (".txt", ".md") and not p.name.lower().startswith("readme")
+        )
+        if not texts:
+            sys.exit(f"check-web-notices: {name} ships fonts in {font_directory} with no licence text beside them")
+        for text in texts:
+            verbatim.append((f"{name} {text.relative_to(directory)}", text.read_bytes()))
+    for font in fonts:
+        fonts_seen += 1
+        for notice in sorted(copyright_notices(font)):
+            for holder in notice.split(" / "):
+                normalised.append((f"{name} {font.relative_to(directory)} name table: {holder!r}", normal(holder)))
+
+if fonts_seen == 0:
+    sys.exit("check-web-notices: found no fonts in the dependencies of bokkie-web; this check has gone blind")
+
+
+def missing(notices):
+    flat = normal(notices.decode("utf-8"))
+    return [what for what, text in verbatim if text not in notices] + [
+        what for what, text in normalised if text not in flat
+    ]
+
+
+# The check must notice each required text going missing.
+for what, text in verbatim:
+    if what not in missing(notices.replace(text, b"")):
+        sys.exit(f"check-web-notices: self-test failed: removing {what} went unnoticed")
+for what, text in normalised:
+    stripped = normal(notices.decode("utf-8")).replace(text, "").encode()
+    if what not in missing(stripped):
+        sys.exit(f"check-web-notices: self-test failed: removing {what} went unnoticed")
+
+gaps = missing(notices)
+if gaps:
+    sys.exit("check-web-notices: not reproduced in " + notices_path + ":\n  " + "\n  ".join(gaps))
 ' "$notices"
 
 for web_root in "$@"; do

@@ -72,6 +72,7 @@ fn package() -> Package {
         ("styles.css", "body {}"),
         ("icon.png", "png"),
         ("font.woff2", "woff2"),
+        ("third-party-notices.txt", "Licences"),
         ("page.html", "<p>an HTML file among the assets</p>"),
         ("nested/worker.js", "export {};"),
     ] {
@@ -251,6 +252,13 @@ async fn hashed_assets_are_immutable_with_their_media_types() {
         ("styles.css", "body {}", "text/css; charset=utf-8"),
         ("icon.png", "png", "image/png"),
         ("font.woff2", "woff2", "font/woff2"),
+        // The font notices, which a production package keeps among its
+        // assets, display as text rather than download.
+        (
+            "third-party-notices.txt",
+            "Licences",
+            "text/plain; charset=utf-8",
+        ),
     ] {
         let path = Package::asset(relative);
         let reply = gateway.send(Call::get(&path)).await;

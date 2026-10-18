@@ -18,6 +18,8 @@ own licence, reproduced here verbatim from the file its source ships.
 
 ================================================================================
 Source Sans 3 (SourceSans3-Regular.ttf, SourceSans3-Semibold.ttf)
+© 2023 Adobe (http://www.adobe.com/), with Reserved Font Name ‘Source’
+(from the fonts' name tables)
 From stobie-ui-egui, assets/fonts/LICENSE.md
 ================================================================================
 

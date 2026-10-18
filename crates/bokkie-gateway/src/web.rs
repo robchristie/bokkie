@@ -312,6 +312,7 @@ mod tests {
             ("icon.png", "image/png"),
             ("font.woff2", "font/woff2"),
             ("font.woff", "font/woff"),
+            ("third-party-notices.txt", "text/plain; charset=utf-8"),
             ("README", "application/octet-stream"),
         ] {
             assert_eq!(content_type(name), expected, "{name}");

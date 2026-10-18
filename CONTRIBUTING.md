@@ -68,6 +68,15 @@ stobie serve apps/bokkie-web/web
 `stobie build-web` writes `web/pkg/`, `web/browser-startup.js`,
 `web/manifest.webmanifest` and `web/sw.js`; they are generated and ignored.
 
+The client builds with the workspace's default release profile, without the
+thin LTO and single codegen unit that Stobie's template uses. `stobie
+build-web` takes no named Cargo profile, and LTO cannot be set for one
+package, so it would apply to the gateway too. Measured on 18 October 2026:
+it made the WebAssembly 14.5% smaller (12.6 MB to 10.8 MB) but its Brotli
+download only 2.7% smaller (2.82 MB to 2.74 MB), while the gateway's release
+build took 42% longer from clean and four times as long after a change.
+Revisit this when `stobie build-web` accepts a profile.
+
 `stobie serve` has no API behind it, so the client only signs in when the
 gateway serves it from the same origin. Build a production package and
 point a local gateway at it, with a synthetic admin in a temporary data
@@ -125,6 +134,26 @@ guide:
 Never commit a `.cargo/config.toml` that patches Stobie with a local
 checkout: Bokkie builds against the pinned revision only.
 
+### Identity and icons
+
+The page's head is the application's identity, as Stobie's
+[Installable web applications](https://github.com/robchristie/stobie/blob/main/docs/browser-startup.md#installable-web-applications)
+describes: `stobie build-web` derives `manifest.webmanifest` from it and fails
+the build when a tag it needs is missing. Bokkie is named "Bokkie", with
+theme colour `#295b50`, splash background `#f5f1e9` and language `en-AU`; the
+page's shell uses the same two colours.
+
+The mark's source is `apps/bokkie-web/icons/bokkie.svg`.
+`scripts/render-icons` draws the three PNG icons from it into
+`apps/bokkie-web/web/icons/`, which is where the repository keeps those
+generated binaries: `icon-192.png` and `icon-512.png` as drawn, with
+transparent corners, and a square, opaque 180-pixel `apple-touch-icon.png`,
+because iOS rounds icons itself and shows transparency as black. The script is
+plain Python with no dependencies and reads only the SVG subset the mark
+uses. After changing the SVG, run it and commit the PNGs;
+`scripts/render-icons --check`, which `scripts/verify` runs, fails when the
+committed icons' pixels differ from the rendering.
+
 ### Font notices
 
 Stobie's UI crate embeds Source Sans 3 (SIL Open Font License 1.1). egui's
@@ -135,10 +164,13 @@ must carry their licence texts and copyright notices, so
 `apps/bokkie-web/web/third-party-notices.txt` reproduces them verbatim and
 the page links it with `rel="license"`. `stobie build-web` serves it from
 the web root, and `--production` packages it as an asset.
-`scripts/check-web-notices`, which `scripts/verify` runs, fails when the
-file is missing a licence text that the locked dependencies ship, or when a
-built web root does not carry the file. After moving the Stobie pin or egui,
-rebuild the file from the new sources.
+`scripts/check-web-notices`, which `scripts/verify` runs, finds every font
+file in the packages the client depends on for the browser. It fails when
+the file is missing a licence text that sits beside one of those fonts, or
+the copyright notice in a font's own name table, or when a built web root
+does not carry the file. It first proves that removing any one of those texts
+would fail. After moving the Stobie pin or egui, rebuild the file from the new
+sources.
 
 ## Codex pin
 
