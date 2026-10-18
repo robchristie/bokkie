@@ -96,11 +96,15 @@ docker compose config --quiet
 docker compose up -d
 ```
 
-The gateway refuses to start unless its Codex checks pass: the chat-only
-configuration and Bokkie's model catalog
-([docs/gateway.md](../../docs/gateway.md#codex-app-servers)). The health
-check asks `/healthz`, and Traefik routes to the container once it is
-healthy.
+The gateway refuses to start unless it can make Bokkie's model catalog
+from the pinned Codex. The chat-only checks run later, per user: each
+user's app server starts on that user's first request that needs it, such
+as the client asking for the ChatGPT sign-in state just after signing in,
+and is refused unless its configuration passes
+([docs/gateway.md](../../docs/gateway.md#chat-only-until-phase-4)); the
+gateway logs why. So a deployment with no account has run only the
+catalog step. The health check asks `/healthz`, and Traefik routes to the
+container once it is healthy.
 
 ## Check
 
