@@ -911,7 +911,9 @@ async fn an_admin_revoking_a_members_sessions_closes_their_socket() {
     assert_eq!(reset.status, StatusCode::NO_CONTENT);
     let (_, _, code) = drain(&mut socket).await;
     assert_eq!(code, Some(4002), "closed as signed out");
-    // Rob's socket, open throughout and rechecked meanwhile, still answers.
+    // Rob's socket, open throughout, survives several rechecks after the
+    // reset and still answers; a fresh one opens too.
+    tokio::time::sleep(Duration::from_millis(200)).await;
     admin
         .send(Message::text(
             serde_json::to_string(&ClientFrame::Ping).unwrap(),
@@ -919,4 +921,9 @@ async fn an_admin_revoking_a_members_sessions_closes_their_socket() {
         .await
         .unwrap();
     assert_eq!(next(&mut admin).await, Some(ServerFrame::Pong));
+    let mut fresh = open(address, &rob, None).await;
+    assert!(matches!(
+        next(&mut fresh).await,
+        Some(ServerFrame::Live { .. })
+    ));
 }
