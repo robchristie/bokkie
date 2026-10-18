@@ -375,6 +375,7 @@ operator reference is [docs/gateway.md](../gateway.md).
 | A scripted end-to-end check on the qualified image ([`deploy/e2e/`](../../deploy/e2e/README.md)) | Done (#12, `d8b6229`) |
 | CI pins GitHub Actions by commit SHA, checked by `scripts/verify` | Done (#14, `ae7c967`) |
 | Robustness follow-ups: a change and its events commit together, in the order changes took effect; a turn is counted before Codex starts it | Done (#15) |
+| Usage follow-ups: `usage_updated` on limit changes and window rollover; usage pruned | Done (#16) |
 | The conversation list, usage meter and limit-reached banner in the client | Waits for Phase 1 |
 | PWA install, and deployment behind Traefik under a temporary hostname | Not started; deployment needs the owner's go-ahead |
 
@@ -417,12 +418,14 @@ remaining work unless a later phase is named:
     it.~~ The turn is counted first, and taken back only when Codex
     answers with an error.
 - **Usage:**
-  - No `usage_updated` event is sent when an admin changes limits or a
-    window rolls over.
+  - ~~No `usage_updated` event is sent when an admin changes limits or a
+    window rolls over.~~ Done in #16: the limit change commits with its
+    event, and a pass every minute announces rolled-over windows.
   - A token allowance can be overshot by one turn.
   - One user's sends are serialised, so a hung Codex call delays that
     user's other sends for up to 120 seconds.
-  - The usage tables are never pruned.
+  - ~~The usage tables are never pruned.~~ Done in #16: the same pass
+    deletes usage outside its window.
 - **Small gaps:**
   - `Path` rejections return plain-text 400s rather than the API error
     shape.

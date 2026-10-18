@@ -45,6 +45,7 @@ async fn serve() -> Result<(), String> {
     let state = AppState::new(config, pool, Clock::system(), supervisor);
     state.conversations.recover().await.map_err(|f| f.message)?;
     tokio::spawn(state.conversations.clone().run(events));
+    tokio::spawn(state.conversations.clone().run_rollovers());
     tracing::info!(listen = %state.config.listen, origin = state.config.origin.as_str(), "serving");
     let listener_address = state.config.listen;
     let app = router(state);

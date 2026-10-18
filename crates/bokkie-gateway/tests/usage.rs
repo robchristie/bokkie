@@ -423,3 +423,150 @@ async fn a_turn_codex_refuses_to_start_is_not_counted() {
         .unwrap();
     assert_eq!(last_usage.allowance.turns_today, 0);
 }
+
+/// The user's usage meter in their latest `usage_updated` event, if any.
+async fn last_usage_event(gateway: &Gateway, user: i64) -> Option<bokkie_protocol::api::Usage> {
+    let log = gateway
+        .state
+        .events
+        .since(UserId(user), bokkie_protocol::events::Seq(0), 10_000)
+        .await
+        .unwrap();
+    log.into_iter().rev().find_map(|e| match e.event {
+        bokkie_protocol::events::Event::UsageUpdated { usage } => Some(usage),
+        _ => None,
+    })
+}
+
+#[tokio::test]
+async fn an_admin_changing_limits_announces_the_new_allowance() {
+    let (gateway, rob) = setup().await;
+    let (_amy, amy_id) = gateway.member(&rob, "amy").await;
+    assert!(last_usage_event(&gateway, amy_id).await.is_none());
+    // A change that leaves the limits alone announces no usage.
+    let renamed = gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/admin/users/{amy_id}"))
+                .cookie(&rob)
+                .json(&json!({"display_name": "Amy"})),
+        )
+        .await;
+    assert_eq!(renamed.status, StatusCode::OK);
+    assert!(last_usage_event(&gateway, amy_id).await.is_none());
+
+    set_limits(
+        &gateway,
+        &rob,
+        amy_id,
+        json!({"daily_turns": 0, "weekly_tokens": 5000}),
+    )
+    .await;
+    let announced = last_usage_event(&gateway, amy_id).await.unwrap();
+    assert_eq!(announced.allowance.limits.daily_turns, Some(0));
+    assert_eq!(announced.allowance.limits.weekly_tokens, Some(5000));
+    assert!(announced.allowance.exhausted);
+    // Only Amy hears of it.
+    assert!(last_usage_event(&gateway, 1).await.is_none());
+}
+
+async fn rows(gateway: &Gateway, table: &str) -> i64 {
+    sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+        .fetch_one(&gateway.state.db)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn rolled_over_allowance_windows_are_announced_and_pruned() {
+    let (gateway, rob) = setup().await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    set_limits(
+        &gateway,
+        &rob,
+        amy_id,
+        json!({"daily_turns": 1, "weekly_tokens": null}),
+    )
+    .await;
+    let chef = create_bot(&gateway, &amy, "Chef").await;
+    turn(&gateway, &amy, chef).await;
+    assert!(
+        last_usage_event(&gateway, amy_id)
+            .await
+            .unwrap()
+            .allowance
+            .exhausted
+    );
+    let clock = &gateway.state.clock;
+    let conversations = &gateway.state.conversations;
+
+    // Nothing has left a window yet.
+    let start = clock.now();
+    clock.advance(DAY_MS - 1);
+    assert!(
+        conversations
+            .roll_over(start, clock.now())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // The turn leaves the day: Amy hears that she has turns again.
+    let before = clock.now();
+    clock.advance(1);
+    let announced = conversations.roll_over(before, clock.now()).await.unwrap();
+    assert_eq!(announced, [UserId(amy_id)]);
+    let usage = last_usage_event(&gateway, amy_id).await.unwrap();
+    assert_eq!(usage.allowance.turns_today, 0);
+    assert_eq!(usage.allowance.tokens_this_week, 120);
+    assert!(!usage.allowance.exhausted);
+    assert_eq!(
+        rows(&gateway, "turns").await,
+        0,
+        "a turn out of its window is pruned"
+    );
+    assert_eq!(rows(&gateway, "token_usage").await, 1);
+
+    // A week on, the tokens leave too.
+    let before = clock.now();
+    clock.advance(6 * DAY_MS);
+    let announced = conversations.roll_over(before, clock.now()).await.unwrap();
+    assert_eq!(announced, [UserId(amy_id)]);
+    let usage = last_usage_event(&gateway, amy_id).await.unwrap();
+    assert_eq!(usage.allowance.tokens_this_week, 0);
+    assert_eq!(rows(&gateway, "token_usage").await, 0);
+}
+
+#[tokio::test]
+async fn a_subscription_window_that_resets_is_read_again_and_announced() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    turn(&gateway, &rob, chef).await;
+    // The meter caches the window, which resets at 1_800_600_000 s.
+    let meter = usage(&gateway, &rob).await;
+    assert_eq!(meter["subscription"][0]["primary"]["used_percent"], 12);
+    gateway.fake.with(|b| {
+        b.rate_limits = json!({
+            "rateLimits": {"limitId": "codex", "limitName": null, "planType": "pro",
+                "primary": {"usedPercent": 0, "windowDurationMins": 10080, "resetsAt": 1_801_200_000},
+                "secondary": null, "rateLimitReachedType": null},
+            "rateLimitsByLimitId": null,
+        })
+    });
+    let clock = &gateway.state.clock;
+    let before = clock.now();
+    clock.advance(1_800_600_000_000 - before.0);
+    let announced = gateway
+        .state
+        .conversations
+        .roll_over(before, clock.now())
+        .await
+        .unwrap();
+    assert_eq!(announced, [UserId(1)]);
+    let usage = last_usage_event(&gateway, 1).await.unwrap();
+    let primary = usage.subscription[0].primary.as_ref().unwrap();
+    assert_eq!(primary.used_percent, 0);
+    assert_eq!(
+        primary.resets_at,
+        Some(bokkie_protocol::Timestamp(1_801_200_000_000))
+    );
+}
