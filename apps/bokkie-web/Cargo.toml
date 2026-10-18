@@ -30,7 +30,8 @@ serde_json.workspace = true
 wasm-bindgen = "=0.2.127"
 stobie-ui-egui = { git = "https://github.com/robchristie/stobie", rev = "0851f82dec94431e4810f09d43699c2c8e342ba4", default-features = false, features = ["eframe"] }
 eframe = { version = "=0.36.1", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
-web-sys = { version = "0.3.82", features = ["Location", "Window"] }
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3.82", features = ["Headers", "Request", "RequestCredentials", "RequestInit", "Response", "Window"] }
 
 [dev-dependencies]
 egui_kittest = "=0.36.1"
