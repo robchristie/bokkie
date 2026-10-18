@@ -72,7 +72,26 @@ missing, unreadable or has no readable `index.html`.
   whose `.br` or `.gz` representation resolves outside it is refused too.
 - The `Host` check applies to static files as to everything else.
 
-There is no `Content-Security-Policy` yet. To publish a new package, build
+Every static file carries a `Content-Security-Policy` that allows only what
+the package needs, all from the gateway's own origin (`BOKKIE_ORIGIN`):
+
+```text
+default-src 'none'; script-src 'self' 'wasm-unsafe-eval';
+style-src 'self' 'unsafe-inline'; img-src 'self';
+connect-src 'self' wss://<origin host>; manifest-src 'self'; worker-src 'self';
+base-uri 'self'; form-action 'none'; frame-ancestors 'none'; object-src 'none'
+```
+
+(on one line; `ws://` for an `http://` origin). Scripts come only from the
+package, and WebAssembly may be compiled, but nothing is evaluated.
+Inline styles are allowed because Stobie's accessibility layer adds `<style>`
+elements and `style` attributes while it runs. The event WebSocket is named
+explicitly as well as by `'self'`, which older browsers do not match against
+`ws:` URLs. `frame-ancestors 'none'` keeps the page out of frames. The service
+worker gets the same policy from its own script's response. API responses
+are not documents and carry none.
+
+To publish a new package, build
 it into a new directory and point `BOKKIE_WEB_ROOT` at it; the `no-cache`
 page and service worker move each client to the new package on its next
 load. The gateway serves one package and does not retain the previous

@@ -134,7 +134,10 @@ pub fn router(state: AppState) -> Router {
         .nest(bokkie_protocol::API_PREFIX, api);
     let app = match state.config.web_root.clone() {
         Some(root) => {
-            app.fallback(move |request: axum::extract::Request| web::serve(root.clone(), request))
+            let policy = web::ContentSecurityPolicy::for_origin(&state.config.origin);
+            app.fallback(move |request: axum::extract::Request| {
+                web::serve(root.clone(), policy.clone(), request)
+            })
         }
         None => app.fallback(|| async { error::Failure::not_found() }),
     };

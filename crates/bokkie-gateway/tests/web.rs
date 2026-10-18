@@ -206,6 +206,68 @@ async fn the_page_manifest_and_service_worker_revalidate() {
     }
 }
 
+/// The policy for `https://bokkie.test`, the test gateway's origin.
+const POLICY: &str = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; \
+    style-src 'self' 'unsafe-inline'; img-src 'self'; \
+    connect-src 'self' wss://bokkie.test; manifest-src 'self'; worker-src 'self'; \
+    base-uri 'self'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
+
+#[tokio::test]
+async fn every_file_carries_the_content_security_policy() {
+    let package = package();
+    let gateway = gateway(&package).await;
+    let wasm = Package::asset("app_bg.wasm");
+    for path in [
+        "/",
+        "/index.html",
+        "/manifest.webmanifest",
+        "/sw.js",
+        "/notes.txt",
+        &Package::asset("app.js"),
+        &wasm,
+        &Package::asset("page.html"),
+    ] {
+        let reply = gateway.send(Call::get(path)).await;
+        assert_eq!(reply.status, StatusCode::OK, "{path}");
+        assert_eq!(
+            header(&reply, header::CONTENT_SECURITY_POLICY),
+            Some(POLICY),
+            "{path}"
+        );
+        // A revalidated copy keeps it.
+        let etag = header(&reply, header::ETAG).unwrap();
+        let cached = gateway
+            .send(Call::get(path).header("if-none-match", etag))
+            .await;
+        assert_eq!(cached.status, StatusCode::NOT_MODIFIED, "{path}");
+        assert_eq!(
+            header(&cached, header::CONTENT_SECURITY_POLICY),
+            Some(POLICY),
+            "{path}"
+        );
+    }
+    // A compressed representation and a range carry it too.
+    let br = gateway
+        .send(Call::get(&wasm).header("accept-encoding", "br"))
+        .await;
+    assert_eq!(header(&br, header::CONTENT_ENCODING), Some("br"));
+    assert_eq!(header(&br, header::CONTENT_SECURITY_POLICY), Some(POLICY));
+    let range = gateway
+        .send(Call::get(&wasm).header("range", "bytes=0-1"))
+        .await;
+    assert_eq!(range.status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        header(&range, header::CONTENT_SECURITY_POLICY),
+        Some(POLICY)
+    );
+    // The API and the health check are not documents and carry none.
+    for path in ["/healthz", "/api/v1/version"] {
+        let reply = gateway.send(Call::get(path)).await;
+        assert_eq!(reply.status, StatusCode::OK, "{path}");
+        assert_eq!(header(&reply, header::CONTENT_SECURITY_POLICY), None);
+    }
+}
+
 #[tokio::test]
 async fn a_new_page_with_the_same_size_and_time_gets_a_new_etag() {
     // A rebuilt package's page differs only in its asset hash, so its size
