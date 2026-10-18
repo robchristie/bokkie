@@ -240,6 +240,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "bokkie-web"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bokkie-gateway",
+ "bokkie-protocol",
+ "http-body-util",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "borrow-or-share"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

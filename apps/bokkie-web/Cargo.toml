@@ -1,0 +1,24 @@
+[package]
+name = "bokkie-web"
+description = "Bokkie's web client. So far its platform-independent core: decoding, the event merge and the reconnect policy"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+bokkie-protocol = { path = "../../crates/bokkie-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+
+# The fixtures come from the gateway's own event log and error responses.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+axum = { version = "0.8", default-features = false }
+bokkie-gateway = { path = "../../crates/bokkie-gateway" }
+http-body-util = "0.1"
+tempfile = "3"
+tokio.workspace = true
+
+[lints]
+workspace = true
