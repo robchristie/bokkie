@@ -147,7 +147,8 @@ It never calls a real model or uses a ChatGPT credential:
 
 Its tools are pinned:
 
-- Node, in `tests/browser-smoke/.node-version`; the script refuses another.
+- Node, in `tests/browser-smoke/.node-version`; the smoke refuses another,
+  including under `BOKKIE_BROWSER_RUNNER`.
 - Playwright, exactly, in `tests/browser-smoke/package-lock.json`.
 - The Chromium build that this Playwright version names, which the script
   installs with `playwright install chromium`.

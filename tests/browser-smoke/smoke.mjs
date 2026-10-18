@@ -27,12 +27,17 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile, chmod } from 'node:fs/promises';
 import { createServer, connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright';
+
+// The pinned Node, wherever this runs (directly, in CI or through a runner).
+const pinned = readFileSync(new URL('.node-version', import.meta.url), 'utf8').trim();
+assert.equal(process.version, `v${pinned}`, `the smoke needs Node ${pinned}`);
 
 const [gatewayBin, mockBin, codexBin, webRootArgument, evidenceArgument] = process.argv.slice(2);
 assert(gatewayBin && mockBin && codexBin && webRootArgument && evidenceArgument,
@@ -166,10 +171,8 @@ let failed = true;
 try {
   // The mock model, and the pinned Codex pointed at it.
   const mock = start('mock-model', mockBin, ['127.0.0.1:0']);
-  const [line] = await Promise.race([
-    once(mock.child.stdout, 'data'),
-    wait(30000).then(() => { throw new Error('the mock model did not start'); }),
-  ]);
+  // The mock prints one JSON line once it serves.
+  const [line] = await once(mock.child.stdout, 'data', { signal: AbortSignal.timeout(30000) });
   const { overrides, control } = JSON.parse(String(line).split('\n')[0]);
   const controlRequest = async (path, body) => {
     const response = await fetch(`${control}/${path}`, {
@@ -303,7 +306,6 @@ try {
   };
   await typeInto('Username', USERNAME);
   await typeInto('Password', PASSWORD);
-  await app.until('the username typed', facts => facts.username === undefined || facts.screen === 'signed_out', 5000);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await app.until('signed in and live', facts => facts.bots === 'loaded' && facts.connection === 'live' && facts.user === USERNAME);
   step('signed in by typing');
@@ -356,7 +358,8 @@ try {
   }, 60000);
   const firstDeltas = deltas() - before;
   assert(firstDeltas > 1, `the reply arrived in ${firstDeltas} delta frames`);
-  assert(seen.size > 1, `the page showed the reply growing (${[...seen].join(', ')})`);
+  const growing = [...seen].filter(length => length > 0);
+  assert(growing.length > 1, `the page showed the reply growing (${[...seen].join(', ')})`);
   assert.equal(complete.reply, REPLY, 'the page holds the whole reply');
   assert.equal((await storedReply()).text, REPLY);
   step('reply streamed and completed', { delta_frames: firstDeltas, lengths_seen: [...seen].sort((a, b) => a - b) });
@@ -418,6 +421,7 @@ try {
   });
   await send('And now?');
   const reached = await app.until('the limit-reached banner', facts => facts.subscription_used === 100 && facts.limit !== '', 60000);
+  assert.match(reached.limit, /^The shared ChatGPT subscription has reached its limit\. Bots can reply again in /);
   step('subscription meter and banner', { used: meter.subscription_used, banner: reached.limit });
 
   // Nothing from the API reached the service worker's cache.
@@ -444,7 +448,12 @@ try {
   for (const { child } of children) {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGINT');
   }
+  // A process that ignores SIGINT is killed after 20 s.
+  const stubborn = setTimeout(() => {
+    for (const { child } of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  }, 20000);
   await Promise.all(children.map(({ exited }) => exited));
+  clearTimeout(stubborn);
   for (const { name, log } of children) await writeFile(join(evidence, `${name}.log`), log.join(''));
   await writeFile(join(evidence, 'smoke.json'), `${JSON.stringify(report, null, 2)}\n`);
   await rm(scratch, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });

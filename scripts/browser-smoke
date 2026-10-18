@@ -29,7 +29,7 @@ if [[ "$(node --version 2>/dev/null)" != "v$node_version" ]]; then
 fi
 # The pinned Playwright, and the Chromium build it names.
 npm ci --prefix "$smoke" --ignore-scripts --no-audit --no-fund --loglevel=error >&2
-"$smoke/node_modules/.bin/playwright" install chromium >&2
+"$smoke/node_modules/.bin/playwright" install --no-shell chromium >&2
 
 codex="${BOKKIE_CODEX_BIN:-$(scripts/fetch-codex)}"
 cargo build --locked --quiet -p bokkie-gateway -p bokkie-mock-model
