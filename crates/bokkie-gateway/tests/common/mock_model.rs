@@ -19,9 +19,18 @@ pub struct MockModel {
     pub requests: Arc<Mutex<Vec<Value>>>,
     /// The reply, streamed in these pieces.
     pub reply: Arc<Mutex<Vec<String>>>,
+    /// When set, the next request waits for this before it is answered.
+    pub gate: Arc<Mutex<Option<tokio::sync::oneshot::Receiver<()>>>>,
 }
 
 impl MockModel {
+    /// Holds the next request until the returned sender fires or drops.
+    pub fn hold_next(&self) -> tokio::sync::oneshot::Sender<()> {
+        let (release, gate) = tokio::sync::oneshot::channel();
+        *self.gate.lock().unwrap() = Some(gate);
+        release
+    }
+
     /// Serves on a free local port and returns the base URL (`.../v1`).
     pub async fn start(reply: &[&str]) -> (Self, String) {
         let mock = Self::default();
@@ -95,6 +104,10 @@ fn collect(tools: &Value, names: &mut BTreeSet<String>) {
 async fn respond(State(mock): State<MockModel>, body: axum::body::Bytes) -> impl IntoResponse {
     let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     mock.requests.lock().unwrap().push(request);
+    let gate = mock.gate.lock().unwrap().take();
+    if let Some(gate) = gate {
+        let _ = gate.await;
+    }
     let reply = mock.reply.lock().unwrap().clone();
     let text: String = reply.concat();
     let mut events = vec![

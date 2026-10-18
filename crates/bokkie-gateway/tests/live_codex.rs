@@ -473,3 +473,70 @@ async fn profile_context_reaches_the_model_and_stays_in_history() {
     }
     assert_eq!(requests.len(), 2);
 }
+
+/// And this: a context fragment sent with `turn/steer` reaches the model
+/// within the running turn, which is how a profile change made mid-turn
+/// travels.
+#[tokio::test]
+async fn profile_context_on_a_steer_reaches_the_model() {
+    use bokkie_codex::protocol::{AdditionalContextEntry, AdditionalContextKind};
+    let Some(program) = codex() else {
+        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+        return;
+    };
+    let data = tempfile::tempdir().unwrap();
+    let (mock, base_url) = MockModel::start(&["ok"]).await;
+    let (supervisor, mut events) =
+        supervisor(program, data.path(), MockModel::overrides(&base_url)).await;
+    let runtime = supervisor.runtime(UserId(1)).await.unwrap();
+    let thread = runtime
+        .start_thread("You are a test Bot.".into(), None)
+        .await
+        .unwrap()
+        .thread
+        .id;
+    // The model holds its first answer, so the turn is still running.
+    let release = mock.hold_next();
+    let turn = runtime.start_turn(&thread, "first", None).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while mock.requests.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the model is asked");
+    let context = [(
+        "bokkie-profile".to_owned(),
+        AdditionalContextEntry {
+            kind: AdditionalContextKind::Application,
+            value: "PROFILE-STEERED".into(),
+        },
+    )]
+    .into();
+    let steered = runtime
+        .steer_turn(&thread, &turn.id, "STEER-TEXT", Some(context))
+        .await
+        .unwrap();
+    assert_eq!(steered, turn.id);
+    release.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if let RuntimeEventKind::Notification(ServerNotification::TurnCompleted(done)) =
+                events.recv().await.unwrap().kind
+                && done.turn.id == turn.id
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the turn completes");
+    let requests = requests_text(&mock);
+    assert!(!requests[0].contains("PROFILE-STEERED"), "{}", requests[0]);
+    let later = &requests[1..];
+    assert!(
+        later.iter().any(|r| r.contains("STEER-TEXT")
+            && r.contains("<bokkie-profile>PROFILE-STEERED</bokkie-profile>")),
+        "{later:?}"
+    );
+}

@@ -747,3 +747,169 @@ async fn an_edit_waits_for_the_change_before_it_and_is_announced_after_it() {
         .collect();
     assert_eq!(labels, ["first", "second"]);
 }
+
+/// Reads frames until the socket closes. Returns the events seen, any
+/// other frames, and the close code.
+async fn drain(socket: &mut Socket) -> (Vec<EventEnvelope>, Vec<ServerFrame>, Option<u16>) {
+    let (mut events, mut others) = (Vec::new(), Vec::new());
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(30), socket.next())
+            .await
+            .expect("a frame arrives in time");
+        match message {
+            Some(Ok(Message::Text(text))) => match serde_json::from_str(&text).unwrap() {
+                ServerFrame::Event(envelope) => events.push(envelope),
+                other => others.push(other),
+            },
+            Some(Ok(Message::Close(frame))) => {
+                return (events, others, frame.map(|f| u16::from(f.code)));
+            }
+            Some(Ok(_)) => {}
+            Some(Err(_)) | None => return (events, others, None),
+        }
+    }
+}
+
+/// Serves the gateway with its own event log, so a test can set the log's
+/// limits. Events go to that log through the returned state.
+async fn serve_with_log(
+    gateway: &Gateway,
+    retention: u64,
+    capacity: usize,
+) -> (bokkie_gateway::AppState, SocketAddr) {
+    let mut state = gateway.state.clone();
+    state.events = std::sync::Arc::new(bokkie_gateway::events::EventLog::with_limits(
+        state.db.clone(),
+        state.clock.clone(),
+        retention,
+        capacity,
+    ));
+    let app = bokkie_gateway::router(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    (state, address)
+}
+
+/// An event big enough that a few hundred fill the socket's buffers.
+fn bulky(size: usize) -> Event {
+    Event::BotError {
+        bot_id: bokkie_protocol::BotId(1),
+        message: "x".repeat(size),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_client_that_falls_behind_is_closed_and_resumes_from_the_log() {
+    let gateway = Gateway::new().await;
+    let rob = gateway.admin("rob").await;
+    let user = bokkie_protocol::UserId(1);
+    let (state, address) = serve_with_log(&gateway, 5_000, 4).await;
+    let mut socket = open(address, &rob, None).await;
+    assert_eq!(
+        next(&mut socket).await,
+        Some(ServerFrame::Live { latest: Seq(0) })
+    );
+    // The client stops reading; the socket's buffers fill, and the log
+    // runs far more than four events ahead of the connection.
+    for _ in 0..100 {
+        state.events.append(user, bulky(256 * 1024)).await.unwrap();
+    }
+    let (seen, _, code) = drain(&mut socket).await;
+    assert_eq!(code, Some(4001), "closed as lagged");
+    let last = seen.last().map_or(Seq(0), |e| e.seq);
+    assert!(last < Seq(100), "it fell behind at {last:?}");
+    for (i, envelope) in seen.iter().enumerate() {
+        assert_eq!(envelope.seq, Seq(1 + i as u64), "no gaps before the close");
+    }
+
+    // It resumes from its last event and gets the rest from the log.
+    let mut socket = open(address, &rob, Some(last)).await;
+    let mut seqs = Vec::new();
+    loop {
+        match next(&mut socket).await.unwrap() {
+            ServerFrame::Event(envelope) => seqs.push(envelope.seq.0),
+            ServerFrame::Live { latest } => {
+                assert_eq!(latest, Seq(100));
+                break;
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert_eq!(seqs, ((last.0 + 1)..=100).collect::<Vec<_>>());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_prune_during_replay_resets_the_client() {
+    let gateway = Gateway::new().await;
+    let rob = gateway.admin("rob").await;
+    let user = bokkie_protocol::UserId(1);
+    let (state, address) = serve_with_log(&gateway, 600, 2_048).await;
+    // More than one replay page (500 events), too much to buffer.
+    for _ in 0..600 {
+        state.events.append(user, bulky(100 * 1024)).await.unwrap();
+    }
+    // The client resumes from the start, then stops reading: the replay
+    // stalls in its first page.
+    let mut socket = open(address, &rob, Some(Seq(0))).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Meanwhile the log grows and prunes everything up to 680, including
+    // events the replay has not read yet.
+    for _ in 600..1_280 {
+        state.events.append(user, bulky(16)).await.unwrap();
+    }
+    assert_eq!(state.events.earliest(user).await.unwrap(), Some(Seq(681)));
+    let mut replayed = Vec::new();
+    let reset = loop {
+        match next(&mut socket).await.unwrap() {
+            ServerFrame::Event(envelope) => replayed.push(envelope.seq.0),
+            ServerFrame::Reset { after } => break after,
+            other => panic!("unexpected {other:?}"),
+        }
+    };
+    // It replayed the page it had read, with no hole, and then reset
+    // rather than skip the pruned events.
+    assert_eq!(replayed, (1..=500).collect::<Vec<_>>());
+    assert_eq!(reset, Seq(600));
+}
+
+#[tokio::test]
+async fn an_admin_revoking_a_members_sessions_closes_their_socket() {
+    let gateway = Gateway::new().await;
+    gateway.route().await;
+    let rob = gateway.admin("rob").await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    let address = serve_quick(&gateway).await;
+    let mut socket = open(address, &amy, None).await;
+    assert!(matches!(
+        next(&mut socket).await,
+        Some(ServerFrame::Live { .. })
+    ));
+    // Resetting a password revokes every session of the account.
+    let reset = gateway
+        .send(
+            Call::new(
+                Method::PUT,
+                &format!("/api/v1/admin/users/{amy_id}/password"),
+            )
+            .cookie(&rob)
+            .json(&json!({"new_password": "another long password"})),
+        )
+        .await;
+    assert_eq!(reset.status, StatusCode::NO_CONTENT);
+    let (_, _, code) = drain(&mut socket).await;
+    assert_eq!(code, Some(4002), "closed as signed out");
+    // Rob's own socket is untouched.
+    let mut admin = open(address, &rob, None).await;
+    assert!(matches!(
+        next(&mut admin).await,
+        Some(ServerFrame::Live { .. })
+    ));
+}

@@ -378,6 +378,7 @@ operator reference is [docs/gateway.md](../gateway.md).
 | Usage follow-ups: `usage_updated` on limit changes and window rollover; usage pruned | Done (#16) |
 | Usage follow-ups: token overshoot stopped mid-turn; sends serialised per Bot, not per user | Done (#17) |
 | Small gaps: API-shaped `Path` and query rejections; sign-in limits survive a restart | Done (#18) |
+| The gateway tests the PR reviews asked for: a lagged socket, a prune during replay, an admin revoking sessions, profile context on a live steer | Done (#19) |
 | The conversation list, usage meter and limit-reached banner in the client | Waits for Phase 1 |
 | PWA install, and deployment behind Traefik under a temporary hostname | Not started; deployment needs the owner's go-ahead |
 
@@ -442,12 +443,12 @@ remaining work unless a later phase is named:
     shape.~~ Paths and queries now use the gateway's own extractors.
   - ~~The sign-in limiter is in memory, so a restart resets it.~~ It now
     writes its counts through to the database and starts from them.
-- **Tests not yet written:**
-  - a lagged WebSocket client;
-  - a prune during replay;
-  - an admin revoking a session with a socket open;
-  - a live test of profile context on `turn/steer`. The PR #9 review
-    checked it by hand against the pinned binary.
+- **Tests not yet written,** all added in #19:
+  - ~~a lagged WebSocket client;~~
+  - ~~a prune during replay;~~
+  - ~~an admin revoking a session with a socket open;~~
+  - ~~a live test of profile context on `turn/steer`.~~ It runs against
+    the pinned binary in `tests/live_codex.rs`.
 - **End-to-end check:**
   - The binaries are built on the operator's machine and need glibc 2.39 at
     most; build them in the image if that stops holding.
