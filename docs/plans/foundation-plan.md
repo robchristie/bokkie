@@ -2,8 +2,8 @@
 
 Status: active
 Next action: Phase 1, the Stobie prerequisites, then Phase 2's client and
-deployment. Independently: pin CI's Actions by commit SHA, and the owner's
-decision on ChatGPT credentials for other household members. Phase 0 is complete; see the
+deployment. Independently: the owner's decision on ChatGPT credentials for
+other household members. Phase 0 is complete; see the
 [Phase 0 report](../phase-0-report.md). Phase 2's gateway has landed; see
 [Phase 2 progress](#phase-2-progress).
 
@@ -449,7 +449,8 @@ remaining work unless a later phase is named:
   - ~~an admin revoking a session with a socket open;~~
   - ~~a live test of profile context on `turn/steer`.~~ It runs against
     the pinned binary in `tests/live_codex.rs`.
-- **End-to-end check,** deferred to the next change to `deploy/e2e/`. Each
+- **End-to-end check,** deferred to the next change to `deploy/e2e/`, and
+  listed below as still open before Phase 2's acceptance. Each
   item changes the check itself, and a change to it is proven only by
   running it on nostromo, which the gateway follow-up work (#14 to #19)
   left out of scope:
@@ -471,7 +472,10 @@ Still open before Phase 2's acceptance:
   created for a real person;
 - the client work, which waits for Phase 1, and deployment, which needs the
   owner's go-ahead;
-- the acceptance checks themselves, on devices after deployment.
+- the acceptance checks themselves, on devices after deployment;
+- the deferred end-to-end check items in the follow-up list above, which
+  fall to whoever next changes `deploy/e2e/` and runs it on nostromo with
+  the owner's go-ahead.
 
 Acceptance:
 
