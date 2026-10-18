@@ -36,8 +36,10 @@ missing, unreadable or has no readable `index.html`.
 - `GET` and `HEAD` of `/` serve `index.html`; any other path names the file
   at that path under the root. Other methods on a file get `405`.
 - Files under `assets/<64 hex>/`, which change name whenever they change,
-  get `Cache-Control: public, max-age=31536000, immutable`. HTML files there
-  are the exception.
+  get `Cache-Control: public, max-age=31536000, immutable`, with ranges and
+  conditional requests on the file's size and time. HTML files there are
+  the exception. A failed range or precondition there gets
+  `Cache-Control: no-store`.
 - Every other file, including the page, the manifest and the service
   worker, gets `Cache-Control: no-cache` and a strong `ETag` hashed from
   the bytes sent, so a browser revalidates it on every load and gets `304`
@@ -48,7 +50,10 @@ missing, unreadable or has no readable `index.html`.
   files beside a file and the file itself, preferring Brotli, then gzip, at
   equal quality. The response carries `Content-Encoding` for a compressed
   representation, the original file's media type, and `Vary:
-  Accept-Encoding` always. Each representation has its own `ETag`.
+  Accept-Encoding` always. Each representation of a `no-cache` file has its
+  own `ETag`. A header that accepts no coding (`identity;q=0`) still gets
+  the file itself rather than `406`, and `*` alone counts as identity;
+  browsers send neither.
 - Media types follow Stobie's reference server: `application/wasm`,
   `application/manifest+json` for `.webmanifest`, `text/javascript`,
   `text/css` and `text/html` (UTF-8), PNG, JPEG, SVG, icons and fonts;
@@ -56,8 +61,8 @@ missing, unreadable or has no readable `index.html`.
   carries `X-Content-Type-Options: nosniff`.
 - Static files are the router's fallback, so no route is shadowed: the API,
   `/healthz` and the event WebSocket always answer for themselves, and no
-  path under `/api` is ever served from the root, so an unknown API path is
-  still the API's 404.
+  path under `/api`, however it is percent-encoded, is ever served from the
+  root, so an unknown API path is still the API's 404.
 - A missing file is the API's ordinary 404. So is every path that names a
   directory (there are no listings), contains `.` or `..` segments, plain or
   percent-encoded, an empty segment, a backslash or a NUL, or any segment

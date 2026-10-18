@@ -81,12 +81,13 @@ impl WebRoot {
 
     /// The file that the request path `path` names, if it may be served.
     fn resolve(&self, path: &str) -> Option<Resolved> {
-        if path == "/api" || path.starts_with("/api/") {
-            return None;
-        }
         let decoded = percent_encoding::percent_decode_str(path)
             .decode_utf8()
             .ok()?;
+        // Checked after decoding, so `/%61pi/` and `/api%2F` are refused too.
+        if decoded == "/api" || decoded.starts_with("/api/") {
+            return None;
+        }
         let relative = decoded.strip_prefix('/')?;
         let relative = if relative.is_empty() {
             "index.html"
@@ -212,15 +213,15 @@ pub async fn serve(root: WebRoot, request: Request) -> Response {
             HeaderValue::from_static(resolved.content_type),
         );
     }
+    // Only a representation, or confirmation of one, is cached for a year;
+    // a range or precondition failure is not cached at all.
+    let cache_control = match response.status() {
+        _ if !resolved.immutable => MUTABLE,
+        StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED => IMMUTABLE,
+        _ => "no-store",
+    };
     let headers = response.headers_mut();
-    headers.insert(
-        CACHE_CONTROL,
-        HeaderValue::from_static(if resolved.immutable {
-            IMMUTABLE
-        } else {
-            MUTABLE
-        }),
-    );
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static(cache_control));
     headers.insert(VARY, HeaderValue::from_static("accept-encoding"));
     headers.insert(
         "x-content-type-options",

@@ -275,6 +275,23 @@ async fn hashed_assets_are_immutable_with_their_media_types() {
         assert_eq!(header(&head, header::CONTENT_TYPE), Some(content_type));
         assert_eq!(header(&head, header::CACHE_CONTROL), Some(IMMUTABLE));
     }
+
+    // A range is cached like the whole file; a failed range is not cached.
+    let path = Package::asset("app.js");
+    let range = gateway
+        .send(Call::get(&path).header("range", "bytes=0-5"))
+        .await;
+    assert_eq!(range.status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(range.body, "export");
+    assert_eq!(header(&range, header::CACHE_CONTROL), Some(IMMUTABLE));
+    let unsatisfiable = gateway
+        .send(Call::get(&path).header("range", "bytes=1000-2000"))
+        .await;
+    assert_eq!(unsatisfiable.status, StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(
+        header(&unsatisfiable, header::CACHE_CONTROL),
+        Some("no-store")
+    );
 }
 
 #[tokio::test]
@@ -413,6 +430,10 @@ async fn missing_files_directories_and_escapes_are_the_plain_404() {
         "/assets/.hidden",
         "/index.html.br",
         "/index.html.gz",
+        // Encoded spellings of `/api` are still the API's namespace.
+        "/%61pi/v1/nope",
+        "/api%2fv1/nope",
+        "/api%2Fv1/version",
     ] {
         let reply = gateway.send(Call::get(path)).await;
         assert_plain_404(&reply);
