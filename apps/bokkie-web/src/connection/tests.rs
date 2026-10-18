@@ -132,9 +132,86 @@ fn a_visible_page_probes_a_live_socket() {
     let mut connection = live(3);
     assert_eq!(
         connection.handle(Input::Visible),
-        [Command::Send(ClientFrame::Ping)]
+        [
+            Command::Send(ClientFrame::Ping),
+            Command::AwaitPong {
+                ping: 1,
+                after: PONG_DEADLINE
+            }
+        ]
     );
     assert!(frame(&mut connection, ServerFrame::Pong).is_empty());
+    assert_eq!(connection.state(), State::Live);
+    // The pong arrived, so the deadline passing changes nothing.
+    assert!(connection.handle(Input::PongOverdue { ping: 1 }).is_empty());
+    assert_eq!(connection.state(), State::Live);
+}
+
+#[test]
+fn a_socket_that_does_not_answer_its_ping_is_given_up() {
+    let mut connection = live(3);
+    let _ = connection.handle(Input::Visible);
+    let _ = connection.handle(Input::Visible);
+    // Only the latest ping's deadline counts.
+    assert!(connection.handle(Input::PongOverdue { ping: 1 }).is_empty());
+    assert_eq!(
+        connection.handle(Input::PongOverdue { ping: 2 }),
+        [Command::Close, Command::RetryAfter(FIRST_RETRY)]
+    );
+    assert!(matches!(connection.state(), State::BackingOff { .. }));
+    let _ = connection.handle(Input::RetryDue);
+    assert_eq!(
+        connection.handle(Input::Opened),
+        [Command::Send(ClientFrame::Resume {
+            after: Some(Seq(3))
+        })]
+    );
+    // A deadline from the old socket is ignored on the new one.
+    assert!(connection.handle(Input::PongOverdue { ping: 2 }).is_empty());
+}
+
+#[test]
+fn any_frame_answers_a_ping() {
+    let mut connection = live(3);
+    let _ = connection.handle(Input::Visible);
+    assert_eq!(frame(&mut connection, event(4)).len(), 1);
+    assert!(connection.handle(Input::PongOverdue { ping: 1 }).is_empty());
+    assert_eq!(connection.state(), State::Live);
+}
+
+#[test]
+fn a_socket_closed_mid_replay_resumes_after_the_last_replayed_event() {
+    let mut connection = live(10);
+    let _ = connection.handle(Input::Closed { code: None });
+    let _ = connection.handle(Input::RetryDue);
+    let _ = connection.handle(Input::Opened);
+    for seq in 11..=13 {
+        assert_eq!(
+            frame(&mut connection, event(seq)),
+            [Command::Apply(envelope(seq))]
+        );
+    }
+    assert_eq!(connection.state(), State::Replaying);
+    // The replay is cut off before `live`.
+    assert_eq!(
+        connection.handle(Input::Closed { code: Some(1006) }),
+        // Never live since the first failure: the delay keeps doubling.
+        [Command::RetryAfter(Connection::delay(2))]
+    );
+    let _ = connection.handle(Input::RetryDue);
+    assert_eq!(
+        connection.handle(Input::Opened),
+        [Command::Send(ClientFrame::Resume {
+            after: Some(Seq(13))
+        })]
+    );
+    // The gateway replays an overlap: only what is new passes on.
+    assert!(frame(&mut connection, event(13)).is_empty());
+    assert_eq!(
+        frame(&mut connection, event(14)),
+        [Command::Apply(envelope(14))]
+    );
+    assert!(frame(&mut connection, ServerFrame::Live { latest: Seq(14) }).is_empty());
     assert_eq!(connection.state(), State::Live);
 }
 
@@ -269,6 +346,45 @@ fn an_unreadable_frame_resumes_from_the_last_event() {
         [Command::Close, Command::RetryAfter(FIRST_RETRY)]
     );
     assert_eq!(connection.last(), Some(Seq(10)));
+}
+
+#[test]
+fn unreadable_frames_that_keep_coming_ask_for_a_page_reload() {
+    let mut connection = live(10);
+    for attempt in 1..UNREADABLE_LIMIT {
+        assert_eq!(
+            connection.handle(Input::Unreadable),
+            [
+                Command::Close,
+                Command::RetryAfter(Connection::delay(attempt))
+            ]
+        );
+        let _ = connection.handle(Input::RetryDue);
+        let _ = connection.handle(Input::Opened);
+    }
+    assert_eq!(
+        connection.handle(Input::Unreadable),
+        [Command::Close, Command::Outdated]
+    );
+    assert_eq!(connection.state(), State::Outdated);
+    for input in [Input::RetryDue, Input::Visible, Input::Start, Input::Opened] {
+        assert!(connection.handle(input).is_empty(), "outdated stays put");
+    }
+    // A new sign-in starts again.
+    assert!(connection.handle(Input::Stop).is_empty());
+    assert_eq!(connection.handle(Input::Start), [Command::Connect]);
+}
+
+#[test]
+fn an_event_between_unreadable_frames_starts_the_count_again() {
+    let mut connection = live(10);
+    for seq in 11..=(10 + u64::from(UNREADABLE_LIMIT) * 2) {
+        let _ = connection.handle(Input::Unreadable);
+        let _ = connection.handle(Input::RetryDue);
+        let _ = connection.handle(Input::Opened);
+        assert_eq!(frame(&mut connection, event(seq)).len(), 1);
+    }
+    assert_eq!(connection.state(), State::Replaying);
 }
 
 #[test]

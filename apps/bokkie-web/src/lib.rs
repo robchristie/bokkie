@@ -5,9 +5,10 @@
 //! repaint. The browser is the only transport target: a native build exists
 //! only so that host tests can run.
 //!
-//! - [`app`] is the application: sign-in, sign-out and the Bot list.
+//! - [`app`] is the application: sign-in and sign-out, the Bot list, and
+//!   one Bot's conversation, kept current by the event socket.
 //! - [`api`] describes each HTTP command and decodes its reply;
-//!   `browser` sends them with `fetch`.
+//!   `browser` sends them with `fetch` and runs the event WebSocket.
 //!
 //! Its platform-independent core performs no I/O and is tested natively:
 //!
@@ -17,14 +18,18 @@
 //!   replies by character offset;
 //! - [`connection`] is the event WebSocket's reconnect policy: resume from the
 //!   last event processed, back off from 250 ms to 8 s, retry at once when
-//!   the page is visible again, reload on `reset`, and stop when signed out.
+//!   the page is visible again, reload on `reset`, and stop when signed out;
+//! - [`socket`] drives that policy for a transport, which only performs its
+//!   I/O, and filters what reaches the application.
 
 pub mod api;
 pub mod app;
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
 pub mod connection;
+pub mod socket;
 pub mod store;
+mod ui;
 pub mod wire;
 
 pub use app::{APPLICATION_NAME, App, BokkieAction, BokkieIntent};

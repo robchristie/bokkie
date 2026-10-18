@@ -19,9 +19,11 @@ formatting, runs Clippy with warnings denied, runs every test and builds
 `crates/bokkie-protocol` and `apps/bokkie-web` for `wasm32-unknown-unknown`,
 because the web client shares those wire types. Keep that crate pure serde,
 with no I/O and no platform-specific dependencies. The web client's core
-(`apps/bokkie-web`: decoding, the snapshot and event merge, and the
-reconnect policy) performs no I/O either, so its tests run natively; they
-use the gateway as a library for real event-log and error fixtures. It also
+(`apps/bokkie-web`: decoding, the snapshot and event merge, the reconnect
+policy and the event socket's driver) performs no I/O either, so its tests
+run natively; they use the gateway as a library for real event-log and
+error fixtures, and drive the application on Stobie's host with the socket
+driver fed frames by hand. It also
 lints the client's browser-only code for that target and builds its web root
 and a production package (see [Web client](#web-client)), and it
 downloads the pinned Codex release (about 160 MB, cached under ignored
@@ -83,9 +85,17 @@ cargo run -p bokkie-gateway -- serve
 ```
 
 Then open <http://localhost:8787/>, adding `?automation=1` for
-`stobie attach`. The client's facts (`screen`, `user`, `bots`, `bot_count`
-and `message`) say where it is. Stobie offers no `set-text` on the password
-field, so type into it with the keyboard.
+`stobie attach`. The client's facts say where it is: `screen`, `user`,
+`bots`, `bot_count`, `message` and `connection` (the event socket), and for
+the open conversation `bot`, `conversation`, `bot_status`, `bot_error`,
+`message_count`, `reply`, `reply_chars` and `reply_state` (the latest Bot
+reply), `draft`, `sending`, `delivery` and `send_error`. Open a Bot with
+`stobie invoke bokkie.open-bot --value ID` and fill the message field with
+`stobie set-text bokkie.draft`. Stobie offers no `set-text` on the password
+field, so type into it with the keyboard. To watch a reply stream without a
+ChatGPT sign-in, point the app server at a mock model, as the gateway's
+live tests do (`MockModel::overrides` in
+`crates/bokkie-gateway/tests/common/mock_model.rs`).
 
 ### Stobie pin
 

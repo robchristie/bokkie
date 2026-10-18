@@ -1,6 +1,9 @@
-//! The browser transport for commands: `fetch` to the page's own origin,
+//! The browser transport: `fetch` to the page's own origin for commands,
 //! with same-origin credentials so the session cookie travels and the
-//! browser adds the `Origin` header the gateway checks.
+//! browser adds the `Origin` header the gateway checks, and the event
+//! WebSocket ([`socket`]).
+
+mod socket;
 
 use stobie_ui_egui::IntentSender;
 use wasm_bindgen::{JsCast, JsValue};
@@ -10,9 +13,11 @@ use web_sys::{Request, RequestCredentials, RequestInit, Response};
 use crate::BokkieIntent;
 use crate::api::{Api, ApiRequest, Generation};
 
-/// Sends each command with `fetch` and reports its reply as an intent.
+/// Sends each command with `fetch` and reports its reply as an intent, and
+/// runs the event socket.
 pub struct BrowserApi {
     intents: IntentSender<BokkieIntent>,
+    socket: socket::EventSocket,
 }
 
 impl std::fmt::Debug for BrowserApi {
@@ -23,7 +28,10 @@ impl std::fmt::Debug for BrowserApi {
 
 impl BrowserApi {
     pub fn new(intents: IntentSender<BokkieIntent>) -> Self {
-        Self { intents }
+        Self {
+            socket: socket::EventSocket::new(intents.clone()),
+            intents,
+        }
     }
 }
 
@@ -38,6 +46,20 @@ impl Api for BrowserApi {
             // A stopped host has nobody left to tell.
             let _ = intents.send(BokkieIntent::Reply { generation, reply });
         });
+    }
+
+    fn connect_events(&self, generation: Generation) {
+        self.socket.start(generation);
+    }
+
+    fn disconnect_events(&self) {
+        self.socket.stop();
+    }
+
+    fn reload_page(&self) {
+        if let Some(window) = web_sys::window() {
+            let _ = window.location().reload();
+        }
     }
 }
 

@@ -173,6 +173,12 @@ impl Store {
         self.errors.get(&bot).map(String::as_str)
     }
 
+    /// Forget a Bot's latest error, as when the user sends it a new message.
+    /// Returns whether there was one.
+    pub fn clear_error(&mut self, bot: BotId) -> bool {
+        self.errors.remove(&bot).is_some()
+    }
+
     /// The usage meter, once an event has reported it.
     pub fn usage(&self) -> Option<&Usage> {
         self.usage.as_ref()

@@ -18,11 +18,20 @@ use stobie_ui_egui::{
 
 use super::*;
 use crate::api::{ApiReply, ApiRequest, Generation, Recorder};
+use crate::socket::{Driver, Io, Step};
 use crate::wire::CommandError;
+
+mod conversation;
 
 struct Fixture {
     harness: Harness<'static, AppHost<App>>,
     sent: Recorder,
+    /// The event socket, driven by hand as the browser transport drives it.
+    driver: Driver,
+    /// The sign-in the socket was last connected for.
+    socket_generation: Generation,
+    /// What the driver asked the transport to do, in order.
+    io: Vec<Io>,
 }
 
 fn app(sent: &Recorder) -> App {
@@ -46,7 +55,13 @@ impl Fixture {
             .state_mut()
             .enable_inspection(Inspection::new("bokkie-test"));
         harness.run();
-        Self { harness, sent }
+        Self {
+            harness,
+            sent,
+            driver: Driver::new(),
+            socket_generation: Generation::default(),
+            io: Vec::new(),
+        }
     }
 
     fn host(&self) -> &AppHost<App> {
@@ -80,7 +95,7 @@ impl Fixture {
     /// Whether the page presents this text. Stobie's observation leaves
     /// content text out, so this reads egui's AccessKit tree.
     fn shows(&self, text: &str) -> bool {
-        self.harness.query_by_label(text).is_some()
+        self.harness.query_all_by_label(text).next().is_some()
     }
 
     /// One fact from the observation Stobie publishes to agents.
