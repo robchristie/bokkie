@@ -26,4 +26,12 @@ elif [[ -n "${CI:-}" ]]; then
 else
   echo "verify: shellcheck is not installed; skipping shell lint" >&2
 fi
+# Every action is pinned by full commit SHA, with its version in a comment.
+if unpinned="$(git ls-files -z '.github/workflows/*' |
+  xargs -0 grep -nE '^[[:space:]-]*uses:' |
+  grep -vE 'uses:[[:space:]]*(\./|[^@[:space:]]+@[0-9a-f]{40}[[:space:]]+#[[:space:]]*v[0-9])')"; then
+  echo "verify: pin every action by commit SHA with a version comment:" >&2
+  echo "$unpinned" >&2
+  exit 1
+fi
 git diff --exit-code -- Cargo.lock

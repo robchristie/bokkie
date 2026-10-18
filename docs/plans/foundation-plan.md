@@ -373,7 +373,7 @@ operator reference is [docs/gateway.md](../gateway.md).
 | The WebSocket with a durable, resumable per-user event log and coalesced deltas | Done (#10, `7a1370f`) |
 | Usage: the subscription's windows and per-user allowances, enforced for a member account | Done (#11, `5d9a908`) |
 | A scripted end-to-end check on the qualified image ([`deploy/e2e/`](../../deploy/e2e/README.md)) | Done (#12, `d8b6229`) |
-| CI pins GitHub Actions by commit SHA | Not started |
+| CI pins GitHub Actions by commit SHA, checked by `scripts/verify` | Done (#14) |
 | The conversation list, usage meter and limit-reached banner in the client | Waits for Phase 1 |
 | PWA install, and deployment behind Traefik under a temporary hostname | Not started; deployment needs the owner's go-ahead |
 
