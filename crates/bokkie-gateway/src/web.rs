@@ -16,6 +16,11 @@
 //! sent, because the `ETag` and `Last-Modified` that `ServeFile` derives from
 //! the file's size and modification time would stay the same when a package
 //! with normalised timestamps changes only its asset hash.
+//!
+//! Every file carries the [`ContentSecurityPolicy`] built from the
+//! gateway's origin, so the page, and the service worker, which takes its
+//! policy from its own script's response, may load and connect only to
+//! this origin.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,14 +28,15 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::header::{
-    ACCEPT_ENCODING, ACCEPT_RANGES, ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH,
-    LAST_MODIFIED, VARY,
+    ACCEPT_ENCODING, ACCEPT_RANGES, ALLOW, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE,
+    ETAG, IF_NONE_MATCH, LAST_MODIFIED, VARY,
 };
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use sha2::{Digest, Sha256};
 use tower_http::services::ServeFile;
 
+use crate::config::PublicOrigin;
 use crate::error::Failure;
 
 /// `Cache-Control` for the page, the manifest, the service worker and any
@@ -44,6 +50,45 @@ pub const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 /// The largest mutable file served. Mutable files are read whole to hash
 /// them; a package's page, manifest and service worker are a few kilobytes.
 const MUTABLE_LIMIT: usize = 16 * 1024 * 1024;
+
+/// The `Content-Security-Policy` sent with every static file: only what the
+/// production package needs, all from the gateway's own origin.
+///
+/// - `script-src 'self' 'wasm-unsafe-eval'`: the loader, the bindgen glue
+///   and compiling the client's WebAssembly; no inline or evaluated script.
+/// - `style-src 'self' 'unsafe-inline'`: the page's own `<style>`, and
+///   Stobie's accessibility layer, which adds `<style>` elements and `style`
+///   attributes at run time and so cannot be listed by hash.
+/// - `connect-src`: the API by `fetch` and the event WebSocket, named by
+///   its `ws:` or `wss:` origin as well as `'self'`, which older browsers
+///   do not match against a WebSocket URL.
+/// - `img-src`, `manifest-src` and `worker-src 'self'`: the icons, the web
+///   app manifest and the service worker.
+/// - `frame-ancestors 'none'`, `base-uri 'self'`, `form-action 'none'` and
+///   `object-src 'none'`; everything else falls to `default-src 'none'`.
+#[derive(Debug, Clone)]
+pub struct ContentSecurityPolicy(HeaderValue);
+
+impl ContentSecurityPolicy {
+    pub fn for_origin(origin: &PublicOrigin) -> Self {
+        let socket = match origin.as_str().strip_prefix("https://") {
+            Some(_) => format!("wss://{}", origin.authority()),
+            None => format!("ws://{}", origin.authority()),
+        };
+        let policy = format!(
+            "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; \
+             style-src 'self' 'unsafe-inline'; img-src 'self'; \
+             connect-src 'self' {socket}; manifest-src 'self'; worker-src 'self'; \
+             base-uri 'self'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+        );
+        Self(HeaderValue::from_str(&policy).expect("an origin is a valid header value"))
+    }
+
+    /// The header's value.
+    pub fn value(&self) -> &HeaderValue {
+        &self.0
+    }
+}
 
 /// A checked web root: an existing, readable directory with an
 /// `index.html`, held as its canonical path.
@@ -173,7 +218,7 @@ fn content_type(name: &str) -> &'static str {
 
 /// The router's fallback when a web root is configured: serves the file a
 /// `GET` or `HEAD` names, or the gateway's ordinary 404.
-pub async fn serve(root: WebRoot, request: Request) -> Response {
+pub async fn serve(root: WebRoot, policy: ContentSecurityPolicy, request: Request) -> Response {
     let path = request.uri().path().to_owned();
     // Resolving touches the file system, so keep it off the async workers.
     let resolved = match tokio::task::spawn_blocking(move || root.resolve(&path)).await {
@@ -227,6 +272,7 @@ pub async fn serve(root: WebRoot, request: Request) -> Response {
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
     );
+    headers.insert(CONTENT_SECURITY_POLICY, policy.0);
     response
 }
 
@@ -316,6 +362,33 @@ mod tests {
             ("README", "application/octet-stream"),
         ] {
             assert_eq!(content_type(name), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_policy_names_the_origins_websocket() {
+        for (origin, socket) in [
+            (
+                "https://bokkie.example.lan",
+                "connect-src 'self' wss://bokkie.example.lan;",
+            ),
+            (
+                "http://localhost:8787",
+                "connect-src 'self' ws://localhost:8787;",
+            ),
+        ] {
+            let policy = ContentSecurityPolicy::for_origin(&PublicOrigin::parse(origin).unwrap());
+            let policy = policy.value().to_str().unwrap();
+            assert!(policy.contains(socket), "{policy}");
+            assert!(policy.starts_with("default-src 'none'; "), "{policy}");
+            assert!(
+                policy.ends_with("frame-ancestors 'none'; object-src 'none'"),
+                "{policy}"
+            );
+            // Nothing from anywhere else, and no evaluated script.
+            assert!(!policy.contains("http"), "{policy}");
+            assert!(!policy.contains("*"), "{policy}");
+            assert!(!policy.contains("'unsafe-eval'"), "{policy}");
         }
     }
 
