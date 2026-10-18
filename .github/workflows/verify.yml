@@ -29,5 +29,14 @@ jobs:
         with:
           path: .tools/codex
           key: codex-${{ hashFiles('deploy/codex-release.env') }}
+      - name: Read the web client's tool versions
+        id: web-tools
+        run: scripts/fetch-stobie --versions >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .tools/stobie
+            .tools/wasm-bindgen
+          key: web-tools-${{ runner.os }}-stobie-${{ steps.web-tools.outputs.stobie }}-wasm-bindgen-${{ steps.web-tools.outputs.wasm-bindgen }}
       - name: Verify
         run: scripts/verify

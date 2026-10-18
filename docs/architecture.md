@@ -37,7 +37,7 @@ These crates appear as each phase needs them:
 | `crates/bokkie-codex` | An app-server JSON-RPC client. It covers only the methods Bokkie uses, checked against the schema generated from the pinned Codex version |
 | `crates/bokkie-gateway` | The axum server: authentication, persistence, the supervisor and routing |
 | `crates/bokkie-qualify`, `crates/bokkie-e2e` | The Phase 0 qualification probe ([`deploy/qualify/`](../deploy/qualify/README.md)) and the end-to-end check's client ([`deploy/e2e/`](../deploy/e2e/README.md)) |
-| `apps/bokkie-web` | The web client, a Stobie application built with the `stobie` CLI from the same Stobie revision it pins. So far it holds the platform-independent core: decoding, the snapshot and event merge, and the reconnect policy |
+| `apps/bokkie-web` | The web client, a Stobie application built with the `stobie` CLI from the same Stobie revision it pins, with its platform-independent core: decoding, the snapshot and event merge, and the reconnect policy |
 | `deploy/` | The image, the Compose file, container security profiles and the operator procedure |
 
 ### Data ownership

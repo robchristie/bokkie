@@ -2,6 +2,8 @@
 # The canonical verification. CI runs exactly this.
 #
 # Set BOKKIE_SKIP_LIVE=1 to skip downloading Codex and the live checks.
+# The web client's tools (the pinned `stobie` CLI and `wasm-bindgen`) are
+# always installed, into ignored `.tools/`.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,12 +13,23 @@ if [[ "${BOKKIE_SKIP_LIVE:-}" != 1 ]]; then
   BOKKIE_CODEX_BIN="$(scripts/fetch-codex)"
   export BOKKIE_CODEX_BIN
 fi
+web_tools="$(scripts/fetch-stobie)"
 
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- --deny warnings
 cargo test --workspace --locked
 # The wire types and the web client's core run in the browser too.
 cargo build -p bokkie-protocol -p bokkie-web --target wasm32-unknown-unknown --locked
+# The web client's browser-only code, then its web root and a production
+# package with the pinned tools. Both must carry the fonts' notices.
+cargo clippy -p bokkie-web --target wasm32-unknown-unknown --locked -- --deny warnings
+web_package="$(mktemp -d)"
+trap 'rm -rf -- "$web_package"' EXIT
+PATH="$web_tools:$PATH" stobie build-web --manifest-path apps/bokkie-web/Cargo.toml \
+  --package bokkie-web --locked
+PATH="$web_tools:$PATH" stobie build-web --manifest-path apps/bokkie-web/Cargo.toml \
+  --package bokkie-web --locked --production --output "$web_package" >/dev/null
+scripts/check-web-notices apps/bokkie-web/web "$web_package"/bokkie-web/assets/*/
 if command -v shellcheck >/dev/null; then
   mapfile -t shell_scripts < <(git ls-files 'scripts/*' '*.sh')
   shellcheck "${shell_scripts[@]}"

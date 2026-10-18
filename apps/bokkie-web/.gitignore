@@ -1,0 +1,5 @@
+# Written by `stobie build-web`.
+/web/pkg/
+/web/browser-startup.js
+/web/manifest.webmanifest
+/web/sw.js

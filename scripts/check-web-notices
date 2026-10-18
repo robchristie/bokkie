@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Checks the web client's third-party notices: every font licence text that
+# the locked dependencies ship appears verbatim in
+# apps/bokkie-web/web/third-party-notices.txt, and each built web root given
+# as an argument carries that file unchanged.
+#
+# Usage: scripts/check-web-notices [built web root...]
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+notices=apps/bokkie-web/web/third-party-notices.txt
+
+cargo metadata --format-version 1 --locked --filter-platform wasm32-unknown-unknown |
+  python3 -I -c '
+import json, pathlib, sys
+
+notices = pathlib.Path(sys.argv[1]).read_bytes()
+packages = {p["name"]: pathlib.Path(p["manifest_path"]).parent
+            for p in json.load(sys.stdin)["packages"]}
+# The fonts each dependency embeds, and the licence files beside them.
+sources = {
+    "stobie-ui-egui": ("assets/fonts", ["LICENSE.md"]),
+    "epaint_default_fonts": ("fonts", None),
+}
+missing = []
+for package, (directory, names) in sources.items():
+    if package not in packages:
+        sys.exit(f"check-web-notices: {package} is not a dependency any more; update {sys.argv[1]}")
+    fonts = packages[package] / directory
+    texts = names or sorted(p.name for p in fonts.iterdir() if p.suffix in (".txt", ".md"))
+    if not texts:
+        sys.exit(f"check-web-notices: no licence texts found in {fonts}")
+    for name in texts:
+        if (fonts / name).read_bytes() not in notices:
+            missing.append(f"{package} {directory}/{name}")
+if missing:
+    sys.exit("check-web-notices: not reproduced verbatim in " + sys.argv[1] + ": " + ", ".join(missing))
+' "$notices"
+
+for web_root in "$@"; do
+  if ! cmp --silent "$notices" "$web_root/third-party-notices.txt"; then
+    echo "check-web-notices: $web_root does not carry $notices unchanged" >&2
+    exit 1
+  fi
+done

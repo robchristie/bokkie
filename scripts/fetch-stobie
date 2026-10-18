@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Installs the `stobie` CLI from the exact Stobie revision that Cargo.lock
+# pins, and the `wasm-bindgen` CLI at the version Cargo.lock names, into
+# ignored `.tools/`. Prints a PATH fragment holding both binaries.
+#
+# Usage: scripts/fetch-stobie [--versions] [destination]   (default: .tools)
+#   --versions  print `stobie=<revision>` and `wasm-bindgen=<version>` lines
+#               and install nothing (CI keys its cache on them)
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+lock="$root/Cargo.lock"
+stobie_git="https://github.com/robchristie/stobie"
+
+versions_only=false
+if [[ "${1:-}" == --versions ]]; then
+  versions_only=true
+  shift
+fi
+dest="${1:-$root/.tools}"
+
+# Every Stobie package in the lock must come from one revision.
+mapfile -t revisions < <(
+  grep -E "^source = \"git\+$stobie_git(\?|#)" "$lock" |
+    sed -E 's/.*#([0-9a-f]+)"$/\1/' | sort -u
+)
+if [[ ${#revisions[@]} -ne 1 || ! "${revisions[0]}" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "fetch-stobie: Cargo.lock must pin exactly one full Stobie revision, found: ${revisions[*]:-none}" >&2
+  exit 1
+fi
+revision="${revisions[0]}"
+
+mapfile -t bindgen_versions < <(
+  awk '/^\[\[package\]\]/ { name = "" }
+       /^name = / { name = $3 }
+       /^version = / && name == "\"wasm-bindgen\"" { gsub(/"/, "", $3); print $3 }' "$lock" |
+    sort -u
+)
+if [[ ${#bindgen_versions[@]} -ne 1 ]]; then
+  echo "fetch-stobie: Cargo.lock must name exactly one wasm-bindgen version, found: ${bindgen_versions[*]:-none}" >&2
+  exit 1
+fi
+bindgen_version="${bindgen_versions[0]}"
+
+if [[ "$versions_only" == true ]]; then
+  echo "stobie=$revision"
+  echo "wasm-bindgen=$bindgen_version"
+  exit 0
+fi
+
+stobie_root="$dest/stobie/$revision"
+bindgen_root="$dest/wasm-bindgen/$bindgen_version"
+
+# Run from the repository so rustup uses its pinned toolchain. Logs go to
+# standard error; standard output carries only the PATH fragment.
+cd "$root"
+if [[ ! -x "$stobie_root/bin/stobie" ]]; then
+  cargo install --quiet --locked --git "$stobie_git" --rev "$revision" \
+    --root "$stobie_root" stobie-cli >&2
+fi
+if [[ ! -x "$bindgen_root/bin/wasm-bindgen" ]]; then
+  cargo install --quiet --locked wasm-bindgen-cli --version "$bindgen_version" \
+    --root "$bindgen_root" >&2
+fi
+
+stobie_version="$("$stobie_root/bin/stobie" --version)"
+if [[ "$stobie_version" != *"(commit $revision)" ]]; then
+  echo "fetch-stobie: expected stobie built from $revision, found $stobie_version" >&2
+  exit 1
+fi
+bindgen_found="$("$bindgen_root/bin/wasm-bindgen" --version)"
+if [[ "$bindgen_found" != "wasm-bindgen $bindgen_version" ]]; then
+  echo "fetch-stobie: expected wasm-bindgen $bindgen_version, found $bindgen_found" >&2
+  exit 1
+fi
+echo "$stobie_root/bin:$bindgen_root/bin"
