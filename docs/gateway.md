@@ -11,7 +11,7 @@ The gateway reads its settings from the environment.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `BOKKIE_ORIGIN` | required | The one origin clients use, for example `https://bokkie.example.lan`. Every request's `Host` must be its host and port, and state-changing requests must send it as `Origin` |
+| `BOKKIE_ORIGIN` | required | The one origin clients use, for example `https://bokkie.example.lan`. Every request's `Host` must be its host and port, and state-changing requests must send it as `Origin`. It must be written as browsers send it: an ASCII host name (punycode for an international name), an IPv4 address or a bracketed IPv6 address, and a port only when it is not the scheme's default, without leading zeros. The gateway refuses to start with any other value |
 | `BOKKIE_EXTRA_HOSTS` | none | Further `Host` values to accept, comma-separated. `Origin` must still be `BOKKIE_ORIGIN` |
 | `BOKKIE_DATA` | `/data` | The data directory. The database is `bokkie.sqlite3`, created mode 600 |
 | `BOKKIE_LISTEN` | `0.0.0.0:8080` | The listening address. The gateway speaks plain HTTP behind the reverse proxy, which terminates TLS |
