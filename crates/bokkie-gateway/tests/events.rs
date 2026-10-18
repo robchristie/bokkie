@@ -591,3 +591,157 @@ async fn disabling_an_account_closes_its_socket() {
     assert_eq!(reply.status, StatusCode::OK);
     assert_eq!(next(&mut socket).await, None);
 }
+
+#[tokio::test]
+async fn a_change_and_its_event_commit_together_or_not_at_all() {
+    let (gateway, address, rob) = setup().await;
+    let user = bokkie_protocol::UserId(1);
+    // The event cannot be stored, so the Bot is not created either.
+    sqlx::query(
+        "CREATE TRIGGER broken_events BEFORE INSERT ON events
+         BEGIN SELECT RAISE(ABORT, 'disk full'); END",
+    )
+    .execute(&gateway.state.db)
+    .await
+    .unwrap();
+    let failed = gateway
+        .send(Call::post("/api/v1/bots").cookie(&rob).json(&json!({
+            "name": "Chef", "label": "", "description": ""})))
+        .await;
+    assert_eq!(failed.status, StatusCode::INTERNAL_SERVER_ERROR);
+    sqlx::query("DROP TRIGGER broken_events")
+        .execute(&gateway.state.db)
+        .await
+        .unwrap();
+    let list = gateway.send(Call::get("/api/v1/bots").cookie(&rob)).await;
+    assert_eq!(list.body["bots"], json!([]), "no Bot without its event");
+
+    // A request dropped between its change and its commit leaves neither.
+    let mut batch = gateway.state.events.begin(user).await.unwrap();
+    let bot = bokkie_gateway::bots::store::create_bot(
+        &mut *batch,
+        gateway.state.clock.now(),
+        user,
+        "Tutor",
+        "",
+        "",
+        None,
+    )
+    .await
+    .unwrap();
+    batch
+        .emit(Event::BotCreated {
+            bot: bot.to_api(false, None),
+        })
+        .await
+        .unwrap();
+    drop(batch);
+    let list = gateway.send(Call::get("/api/v1/bots").cookie(&rob)).await;
+    assert_eq!(list.body["bots"], json!([]));
+    assert_eq!(list.body["seq"], 0);
+
+    // The log carries on from where it was.
+    let mut socket = open(address, &rob, None).await;
+    assert_eq!(
+        next(&mut socket).await,
+        Some(ServerFrame::Live { latest: Seq(0) })
+    );
+    create_bot(&gateway, &rob, "Tutor").await;
+    let created = event(&mut socket).await;
+    assert_eq!(created.seq, Seq(1));
+    assert!(matches!(created.event, Event::BotCreated { .. }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_edits_to_one_bot_are_announced_in_the_order_they_took_effect() {
+    let (gateway, _, rob) = setup().await;
+    let user = bokkie_protocol::UserId(1);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    for round in 0..20 {
+        let edits = (0..8)
+            .map(|edit| {
+                Call::new(Method::PATCH, &format!("/api/v1/bots/{chef}"))
+                    .cookie(&rob)
+                    .json(&json!({"label": format!("round {round} edit {edit}")}))
+            })
+            .collect();
+        for reply in gateway.send_all(edits).await {
+            assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+        }
+        let stored = gateway
+            .send(Call::get(&format!("/api/v1/bots/{chef}")).cookie(&rob))
+            .await;
+        let log = gateway
+            .state
+            .events
+            .since(user, Seq(0), 10_000)
+            .await
+            .unwrap();
+        let announced = log
+            .iter()
+            .rev()
+            .find_map(|e| match &e.event {
+                Event::BotUpdated { bot } => Some(bot.label.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            stored.body["label"], announced,
+            "the last event must show the Bot as stored"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_edit_waits_for_the_change_before_it_and_is_announced_after_it() {
+    let (gateway, _, rob) = setup().await;
+    let user = bokkie_protocol::UserId(1);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    // An earlier change to the Bot, still in flight.
+    let mut earlier = gateway.state.events.begin(user).await.unwrap();
+    let bot = bokkie_gateway::bots::store::update_bot(
+        &mut *earlier,
+        gateway.state.clock.now(),
+        user,
+        bokkie_protocol::BotId(chef),
+        bokkie_gateway::bots::store::BotChanges {
+            label: Some("first".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    earlier
+        .emit(Event::BotUpdated {
+            bot: bot.to_api(false, None),
+        })
+        .await
+        .unwrap();
+
+    let later = gateway.spawn(
+        Call::new(Method::PATCH, &format!("/api/v1/bots/{chef}"))
+            .cookie(&rob)
+            .json(&json!({"label": "second"})),
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !later.is_finished(),
+        "the edit waits for the earlier change"
+    );
+    earlier.commit().await.unwrap();
+    assert_eq!(later.await.unwrap().status, StatusCode::OK);
+
+    let labels: Vec<String> = gateway
+        .state
+        .events
+        .since(user, Seq(0), 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.event {
+            Event::BotUpdated { bot } => Some(bot.label),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, ["first", "second"]);
+}

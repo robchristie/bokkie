@@ -145,6 +145,7 @@ long-lived Codex thread in that user's app server.
   a `bokkie-profile` context fragment (`additionalContext`, kind
   `application`), which Codex adds to the thread as a developer message. It
   is sent once per change.
+- A send runs to completion even if the client disconnects midway.
 - A message to an idle Bot starts a turn (`turn/start`). A message to a Bot
   that is mid-turn steers it (`turn/steer`, naming the running turn); if the
   turn has just ended, it starts a new one. `POST /api/v1/bots/{id}/stop`
@@ -171,6 +172,12 @@ user's event log. The upgrade needs the session cookie and the gateway's
 - Every event the user should see is appended to their log in SQLite with
   the next sequence number: 1, 2, 3 and so on, per user, with no gaps. The
   numbers survive restarts. The log keeps the newest 5,000 events per user.
+- A change and the events that announce it are written in one transaction,
+  so they commit together or not at all: a request dropped midway, or an
+  event that cannot be stored, leaves neither. The transaction holds the
+  user's log from start to commit, so each event shows the state its change
+  left, in the order the changes took effect, and the latest status event
+  of a Bot is always its current status.
 - The client's first frame names the last sequence number it processed.
   The gateway replays everything after it and then sends `live`. If that
   number is older than the retained log, or beyond its end, the gateway
@@ -202,8 +209,11 @@ also arrive on the event socket as `usage_updated`.
   carries milliseconds.
 - **Allowances.** An admin sets each account's limits
   (`PATCH /api/v1/admin/users/{id}` with `limits`, replaced whole): turns per
-  rolling 24 hours, and tokens per rolling seven days. A turn counts when the
-  gateway starts one; steering a running turn does not. Tokens are the growth
+  rolling 24 hours, and tokens per rolling seven days. A turn is counted
+  just before the gateway asks Codex to start it, so a turn that runs is
+  always counted. If Codex answers with an error the count is taken back;
+  if the answer is lost, as when the app server exits, it stays.
+  Steering a running turn is not a turn. Tokens are the growth
   of each thread's total from `thread/tokenUsage/updated`, because the
   subscription's own limits are shared by everyone. A message that would
   start a turn beyond the allowance, or any message once the tokens are used

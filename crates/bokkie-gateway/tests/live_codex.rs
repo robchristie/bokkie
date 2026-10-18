@@ -358,7 +358,7 @@ async fn one_users_app_server_cannot_resume_anothers_thread() {
         .resume_thread(&thread.thread.id, "Ben's Bot".into())
         .await
     {
-        Err(CodexError::AppServer(error)) => eprintln!("refused as expected: {error}"),
+        Err(CodexError::Rejected(error)) => eprintln!("refused as expected: {error}"),
         other => panic!("Ben's app server loaded Amy's thread: {other:?}"),
     }
     assert!(!ben.is_served(&thread.thread.id));

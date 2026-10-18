@@ -162,7 +162,7 @@ async fn insert_user(
     }
 }
 
-pub async fn account(db: &SqlitePool, user: UserId) -> Result<Option<Account>> {
+pub async fn account(db: impl sqlx::SqliteExecutor<'_>, user: UserId) -> Result<Option<Account>> {
     let row = sqlx::query(&format!("SELECT {ACCOUNT_COLUMNS} FROM users WHERE id = ?"))
         .bind(user.0)
         .fetch_optional(db)

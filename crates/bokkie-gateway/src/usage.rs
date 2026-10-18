@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use bokkie_codex::protocol::{GetAccountRateLimitsResponse, RateLimitSnapshot};
 use bokkie_protocol::api::{Allowance, Limits, RateLimitBucket, RateLimitWindow, Usage};
 use bokkie_protocol::{BotId, Timestamp, UserId};
-use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnection, SqliteExecutor};
 
 use crate::clock::DAY_MS;
 use crate::error::{Failure, Result};
@@ -19,35 +19,59 @@ use crate::error::{Failure, Result};
 pub const TURN_WINDOW_MS: i64 = DAY_MS;
 pub const TOKEN_WINDOW_MS: i64 = 7 * DAY_MS;
 
-/// Records a turn the user started.
-pub async fn record_turn(db: &SqlitePool, now: Timestamp, user: UserId, bot: BotId) -> Result<()> {
-    sqlx::query(
+/// Counts a turn for the user, if their allowance has one left, before the
+/// gateway asks Codex to start it. Run inside a batch, so the check and the
+/// count cannot be split by another send. Returns the count's id, to
+/// [`release_turn`] if Codex refuses the turn.
+pub async fn reserve_turn(
+    conn: &mut SqliteConnection,
+    now: Timestamp,
+    user: UserId,
+    bot: BotId,
+) -> Result<Option<i64>> {
+    let limits = crate::accounts::account(&mut *conn, user)
+        .await?
+        .map(|a| a.limits)
+        .unwrap_or_default();
+    if allowance(&mut *conn, now, user, limits).await?.exhausted {
+        return Ok(None);
+    }
+    let id = sqlx::query_scalar(
         "INSERT INTO turns (user_id, bot_id, at)
-         SELECT user_id, id, ? FROM bots WHERE id = ? AND user_id = ?",
+         SELECT user_id, id, ? FROM bots WHERE id = ? AND user_id = ? RETURNING id",
     )
     .bind(now.0)
     .bind(bot.0)
     .bind(user.0)
-    .execute(db)
+    .fetch_optional(conn)
     .await?;
+    id.map(Some).ok_or_else(Failure::not_found)
+}
+
+/// Takes back a turn counted by [`reserve_turn`] that Codex refused.
+pub async fn release_turn(db: impl SqliteExecutor<'_>, user: UserId, turn: i64) -> Result<()> {
+    sqlx::query("DELETE FROM turns WHERE id = ? AND user_id = ?")
+        .bind(turn)
+        .bind(user.0)
+        .execute(db)
+        .await?;
     Ok(())
 }
 
 /// Records a thread's reported token total, storing its growth since the
 /// last report. A total lower than the last one becomes the new baseline.
 pub async fn record_tokens(
-    db: &SqlitePool,
+    conn: &mut SqliteConnection,
     now: Timestamp,
     user: UserId,
     bot: BotId,
     thread_total: u64,
 ) -> Result<u64> {
-    let mut tx = crate::db::write(db).await?;
     let reported: Option<i64> =
         sqlx::query_scalar("SELECT tokens_reported FROM bots WHERE id = ? AND user_id = ?")
             .bind(bot.0)
             .bind(user.0)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut *conn)
             .await?;
     let Some(reported) = reported else {
         return Err(Failure::not_found());
@@ -60,7 +84,7 @@ pub async fn record_tokens(
         .bind(total)
         .bind(bot.0)
         .bind(user.0)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
     if growth > 0 {
         sqlx::query("INSERT INTO token_usage (user_id, bot_id, at, tokens) VALUES (?, ?, ?, ?)")
@@ -68,29 +92,26 @@ pub async fn record_tokens(
             .bind(bot.0)
             .bind(now.0)
             .bind(growth)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await?;
     }
-    tx.commit().await?;
     Ok(growth as u64)
 }
 
 /// The user's allowance and what they have used of it.
 pub async fn allowance(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     now: Timestamp,
     user: UserId,
     limits: Limits,
 ) -> Result<Allowance> {
-    let turns: i64 = sqlx::query_scalar("SELECT count(*) FROM turns WHERE user_id = ? AND at > ?")
-        .bind(user.0)
-        .bind(now.0 - TURN_WINDOW_MS)
-        .fetch_one(db)
-        .await?;
-    let tokens: i64 = sqlx::query_scalar(
-        "SELECT coalesce(sum(tokens), 0) FROM token_usage WHERE user_id = ? AND at > ?",
+    let (turns, tokens): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM turns WHERE user_id = ?1 AND at > ?2),
+                (SELECT coalesce(sum(tokens), 0) FROM token_usage
+                 WHERE user_id = ?1 AND at > ?3)",
     )
     .bind(user.0)
+    .bind(now.0 - TURN_WINDOW_MS)
     .bind(now.0 - TOKEN_WINDOW_MS)
     .fetch_one(db)
     .await?;

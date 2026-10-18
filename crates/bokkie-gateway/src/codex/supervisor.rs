@@ -41,14 +41,29 @@ pub enum CodexError {
     /// the thread alone, so its Bot may record it.
     #[error("thread refused: {0}")]
     ThreadRefused(Refusal),
-    /// The app server failed or did not answer.
+    /// The app server failed or did not answer, so the request may or may
+    /// not have taken effect.
     #[error("app server: {0}")]
     AppServer(String),
+    /// The app server answered the request with an error: it had no effect.
+    #[error("app server rejected the request: {0}")]
+    Rejected(String),
+}
+
+impl CodexError {
+    /// Whether the request certainly had no effect on Codex.
+    pub fn had_no_effect(&self) -> bool {
+        // A refusal is decided before the request is sent.
+        !matches!(self, Self::AppServer(_))
+    }
 }
 
 impl From<bokkie_codex::Error> for CodexError {
     fn from(error: bokkie_codex::Error) -> Self {
-        Self::AppServer(error.to_string())
+        match error {
+            bokkie_codex::Error::Rpc(error) => Self::Rejected(error.to_string()),
+            error => Self::AppServer(error.to_string()),
+        }
     }
 }
 
