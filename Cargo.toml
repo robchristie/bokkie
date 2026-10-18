@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["apps/bokkie-web", "crates/*"]
 
 [workspace.package]
 edition = "2024"
