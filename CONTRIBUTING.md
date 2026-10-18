@@ -22,6 +22,8 @@ with no I/O and no platform-specific dependencies. The web client's core
 (`apps/bokkie-web`: decoding, the snapshot and event merge, and the
 reconnect policy) performs no I/O either, so its tests run natively; they
 use the gateway as a library for real event-log and error fixtures. It also
+lints the client's browser-only code for that target and builds its web root
+and a production package (see [Web client](#web-client)), and it
 downloads the pinned Codex release (about 160 MB, cached under ignored
 `.tools/codex/`) for the live checks. Set `BOKKIE_SKIP_LIVE=1` to skip the
 download and those checks during quick local iteration; a change is not
@@ -39,6 +41,68 @@ over the event WebSocket. It uses Docker's default confinement and the Phase 0
 qualification sign-in in place; see [its README](deploy/e2e/README.md). Run
 it from a clean checkout of the exact commit under test, after changes to
 the gateway's Codex path.
+
+## Web client
+
+`apps/bokkie-web` is the web client, a
+[Stobie](https://github.com/robchristie/stobie) application and a member of
+this Cargo workspace. The browser is its only transport target. Its native
+build exists only for host tests, so natively it depends on Stobie's UI crate
+without eframe, and it has no native entry point.
+
+`scripts/fetch-stobie` installs the two tools a browser build needs into
+ignored `.tools/`: the `stobie` CLI, built from the Stobie revision that
+`Cargo.lock` pins, and the `wasm-bindgen` CLI at the version `Cargo.lock`
+names. It checks both versions and prints a `PATH` fragment holding them.
+`scripts/verify` uses it, and CI caches the tools keyed on those versions
+(`scripts/fetch-stobie --versions`). To build and serve the client by hand:
+
+```sh
+PATH="$(scripts/fetch-stobie):$PATH"
+stobie build-web --manifest-path apps/bokkie-web/Cargo.toml --package bokkie-web
+stobie serve apps/bokkie-web/web
+```
+
+`stobie build-web` writes `web/pkg/`, `web/browser-startup.js`,
+`web/manifest.webmanifest` and `web/sw.js`; they are generated and ignored.
+
+### Stobie pin
+
+Stobie is not on crates.io and has no releases. Every Stobie dependency in
+`apps/bokkie-web/Cargo.toml` names the same full commit as its `rev`, and the
+`stobie` CLI must come from that same commit, so that its startup loader,
+service worker and inspection protocol match the crates. `scripts/fetch-stobie`
+refuses a lock that names more than one Stobie revision. To move the pin,
+following Stobie's
+[Upgrade Stobie](https://github.com/robchristie/stobie/blob/main/docs/start-a-new-app.md#upgrade-stobie)
+guide:
+
+1. Replace the `rev` in every Stobie dependency with the new full
+   40-character commit, which must be on Stobie's `main`.
+2. Run `cargo update -p stobie-core -p stobie-ui-egui`. If the new revision
+   pins a different `wasm-bindgen`, match the client's exact
+   `wasm-bindgen` requirement to it.
+3. Read Stobie's commits between the two revisions for API changes; Stobie is
+   pre-1.0.
+4. Run `scripts/verify`, which installs the CLI from the new revision.
+
+Never commit a `.cargo/config.toml` that patches Stobie with a local
+checkout: Bokkie builds against the pinned revision only.
+
+### Font notices
+
+Stobie's UI crate embeds Source Sans 3 (SIL Open Font License 1.1). egui's
+default fonts, which Stobie turns on, add Hack (MIT and the Bitstream Vera
+License), Noto Emoji (SIL Open Font License 1.1), Ubuntu Light (Ubuntu Font
+Licence 1.0) and an MIT emoji icon font. Every served copy of the client
+must carry their licence texts and copyright notices, so
+`apps/bokkie-web/web/third-party-notices.txt` reproduces them verbatim and
+the page links it with `rel="license"`. `stobie build-web` serves it from
+the web root, and `--production` packages it as an asset.
+`scripts/check-web-notices`, which `scripts/verify` runs, fails when the
+file is missing a licence text that the locked dependencies ship, or when a
+built web root does not carry the file. After moving the Stobie pin or egui,
+rebuild the file from the new sources.
 
 ## Codex pin
 

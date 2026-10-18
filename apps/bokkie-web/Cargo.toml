@@ -1,16 +1,39 @@
 [package]
 name = "bokkie-web"
-description = "Bokkie's web client. So far its platform-independent core: decoding, the event merge and the reconnect policy"
+description = "Bokkie's web client: a Stobie application for the browser and the iOS home-screen PWA"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+# `stobie build-web` builds the library for the browser; host tests use it
+# natively.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Stobie is not on crates.io. Every Stobie dependency names the same pinned
+# revision, and `scripts/fetch-stobie` installs the `stobie` CLI from it.
+# CONTRIBUTING.md says how to move it. The browser is the only transport
+# target: natively the UI crate builds without eframe, for host tests only.
 [dependencies]
 bokkie-protocol = { path = "../../crates/bokkie-protocol" }
+stobie-core = { git = "https://github.com/robchristie/stobie", rev = "0851f82dec94431e4810f09d43699c2c8e342ba4" }
+stobie-ui-egui = { git = "https://github.com/robchristie/stobie", rev = "0851f82dec94431e4810f09d43699c2c8e342ba4", default-features = false }
+egui = "=0.36.1"
 serde.workspace = true
 serde_json.workspace = true
+
+# The wasm-bindgen CLI must be exactly this version; `stobie build-web` checks,
+# and `scripts/fetch-stobie` installs the version Cargo.lock names.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.127"
+stobie-ui-egui = { git = "https://github.com/robchristie/stobie", rev = "0851f82dec94431e4810f09d43699c2c8e342ba4", default-features = false, features = ["eframe"] }
+eframe = { version = "=0.36.1", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
+web-sys = { version = "0.3.82", features = ["Location", "Window"] }
+
+[dev-dependencies]
+egui_kittest = "=0.36.1"
 
 # The fixtures come from the gateway's own event log and error responses.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
