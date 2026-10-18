@@ -17,7 +17,7 @@ use stobie_ui_egui::{
 };
 
 use super::*;
-use crate::api::{ApiReply, ApiRequest, Recorder};
+use crate::api::{ApiReply, ApiRequest, Generation, Recorder};
 use crate::wire::CommandError;
 
 struct Fixture {
@@ -62,8 +62,10 @@ impl Fixture {
         self.harness.run();
     }
 
+    /// A reply in the current generation, as for a command just sent.
     fn reply(&mut self, reply: ApiReply) {
-        self.send(BokkieIntent::Reply(reply));
+        let generation = self.app().generation();
+        self.send(BokkieIntent::Reply { generation, reply });
     }
 
     fn sent(&self) -> Vec<ApiRequest> {
@@ -490,4 +492,49 @@ fn typing_the_password_and_pressing_enter_signs_in() {
         })]
     );
     assert_eq!(fixture.fact("screen"), "signing_in".into());
+}
+
+#[test]
+fn a_reply_from_an_earlier_sign_in_is_never_shown_to_the_next_user() {
+    let mut fixture = Fixture::new();
+    let _ = fixture.sent();
+    fixture.sign_in();
+    let first: Generation = fixture.app().generation();
+    // Ada signs out with her list still on its way, and Grace signs in.
+    fixture.click("Sign out");
+    fixture.reply(ApiReply::SignedOut(Ok(())));
+    fixture.send(BokkieIntent::EditUsername("grace".into()));
+    fixture.send(BokkieIntent::EditPassword("another long password".into()));
+    fixture.click("Sign in");
+    let grace = User {
+        id: UserId(2),
+        username: "grace".into(),
+        display_name: "Grace".into(),
+        ..user()
+    };
+    fixture.reply(ApiReply::SignedIn(Ok(SessionResponse { user: grace })));
+    let _ = fixture.sent();
+    assert_eq!(fixture.fact("bots"), "loading".into());
+    // Ada's list arrives now: it is dropped, and Grace's still counts.
+    fixture.send(BokkieIntent::Reply {
+        generation: first,
+        reply: ApiReply::Bots(Ok(BotList {
+            bots: vec![bot(1, "Ada's Tutor", "Maths help", BotStatus::Idle, None)],
+            seq: Seq(4),
+        })),
+    });
+    assert_eq!(fixture.fact("bots"), "loading".into());
+    assert!(!fixture.shows("Ada's Tutor"));
+    fixture.reply(ApiReply::Bots(Ok(BotList {
+        bots: vec![bot(
+            7,
+            "Gardener",
+            "Plans the garden",
+            BotStatus::Idle,
+            None,
+        )],
+        seq: Seq(9),
+    })));
+    assert_eq!(fixture.fact("user"), "grace".into());
+    assert!(fixture.shows("Gardener") && !fixture.shows("Ada's Tutor"));
 }

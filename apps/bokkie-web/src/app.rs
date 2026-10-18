@@ -13,7 +13,7 @@ use stobie_ui_egui::{
     application_identity, observe_visible_only,
 };
 
-use crate::api::{Api, ApiReply, ApiRequest};
+use crate::api::{Api, ApiReply, ApiRequest, Generation};
 use crate::store::{Snapshot, Store};
 
 /// The application's name, as the page and the host report it.
@@ -44,7 +44,11 @@ pub enum BokkieAction {
 pub enum BokkieIntent {
     EditUsername(String),
     EditPassword(String),
-    Reply(ApiReply),
+    /// A command's reply, with the generation it was sent in.
+    Reply {
+        generation: Generation,
+        reply: ApiReply,
+    },
 }
 
 // The password must never reach a log line.
@@ -53,7 +57,11 @@ impl std::fmt::Debug for BokkieIntent {
         match self {
             Self::EditUsername(username) => f.debug_tuple("EditUsername").field(username).finish(),
             Self::EditPassword(_) => f.write_str("EditPassword(<redacted>)"),
-            Self::Reply(reply) => f.debug_tuple("Reply").field(reply).finish(),
+            Self::Reply { generation, reply } => f
+                .debug_struct("Reply")
+                .field("generation", generation)
+                .field("reply", reply)
+                .finish(),
         }
     }
 }
@@ -100,6 +108,9 @@ enum BotsState {
 /// The application state. The UI only reads it.
 pub struct App {
     session: Session,
+    /// Moves on at every sign-in and sign-out; replies from before are
+    /// dropped.
+    generation: Generation,
     store: Store,
     make_api: Option<ApiFactory>,
     api: Option<Box<dyn Api>>,
@@ -119,6 +130,7 @@ impl App {
     pub fn new(make_api: ApiFactory) -> Self {
         Self {
             session: Session::Checking,
+            generation: Generation::default(),
             store: Store::new(),
             make_api: Some(make_api),
             api: None,
@@ -172,10 +184,19 @@ impl App {
         &self.store
     }
 
+    /// The generation the next command is sent in.
+    pub fn generation(&self) -> Generation {
+        self.generation
+    }
+
     fn send(&self, request: ApiRequest) {
         if let Some(api) = &self.api {
-            api.send(request);
+            api.send(self.generation, request);
         }
+    }
+
+    fn next_generation(&mut self) {
+        self.generation = Generation(self.generation.0 + 1);
     }
 
     fn signed_out(&mut self, message: Option<String>) {
@@ -184,6 +205,7 @@ impl App {
             Session::SignedIn(signed_in) => signed_in.user.username.clone(),
             Session::Checking => String::new(),
         };
+        self.next_generation();
         self.store = Store::new();
         self.session = Session::SignedOut(SignInForm {
             username,
@@ -193,6 +215,7 @@ impl App {
     }
 
     fn signed_in(&mut self, user: User) {
+        self.next_generation();
         self.store = Store::new();
         self.session = Session::SignedIn(SignedIn {
             user,
@@ -347,7 +370,9 @@ impl Application for App {
                 }
                 _ => false,
             },
-            BokkieIntent::Reply(reply) => self.reply(reply),
+            BokkieIntent::Reply { generation, reply } => {
+                generation == self.generation && self.reply(reply)
+            }
         })
     }
 

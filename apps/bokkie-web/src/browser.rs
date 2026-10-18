@@ -8,7 +8,7 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestCredentials, RequestInit, Response};
 
 use crate::BokkieIntent;
-use crate::api::{Api, ApiRequest};
+use crate::api::{Api, ApiRequest, Generation};
 
 /// Sends each command with `fetch` and reports its reply as an intent.
 pub struct BrowserApi {
@@ -28,7 +28,7 @@ impl BrowserApi {
 }
 
 impl Api for BrowserApi {
-    fn send(&self, request: ApiRequest) {
+    fn send(&self, generation: Generation, request: ApiRequest) {
         let intents = self.intents.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let reply = match fetch(&request).await {
@@ -36,7 +36,7 @@ impl Api for BrowserApi {
                 Err(_) => request.unreachable(),
             };
             // A stopped host has nobody left to tell.
-            let _ = intents.send(BokkieIntent::Reply(reply));
+            let _ = intents.send(BokkieIntent::Reply { generation, reply });
         });
     }
 }

@@ -112,10 +112,17 @@ impl ApiRequest {
     }
 }
 
+/// Which sign-in a command belongs to. It changes whenever the user signs in
+/// or out, so a reply that arrives after that, possibly with another user's
+/// data, is recognised and dropped.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Generation(pub u64);
+
 /// Something that carries commands to the gateway and reports each reply
-/// back to the application as an intent.
+/// back to the application as an intent, tagged with the command's
+/// generation.
 pub trait Api {
-    fn send(&self, request: ApiRequest);
+    fn send(&self, generation: Generation, request: ApiRequest);
 }
 
 /// An [`Api`] that only records what it was asked to send, for tests and for
@@ -133,7 +140,7 @@ impl Recorder {
 }
 
 impl Api for Recorder {
-    fn send(&self, request: ApiRequest) {
+    fn send(&self, _generation: Generation, request: ApiRequest) {
         self.sent.borrow_mut().push(request);
     }
 }
