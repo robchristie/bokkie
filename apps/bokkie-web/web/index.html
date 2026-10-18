@@ -1,16 +1,16 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-AU">
   <head>
     <meta charset="utf-8" />
     <!-- egui scales itself, so page zoom is off. viewport-fit=cover gives the
          page the whole screen; #app-shell keeps clear of the safe areas. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-    <title>Bokkie Web</title>
+    <title>Bokkie</title>
     <!-- The installable application. `stobie build-web` writes
          manifest.webmanifest and sw.js from these tags: the title names the
          application, apple-mobile-web-app-title gives its short name,
          theme-color its colour and the icon links its icons. -->
-    <meta name="apple-mobile-web-app-title" content="Bokkie Web" />
+    <meta name="apple-mobile-web-app-title" content="Bokkie" />
     <meta name="theme-color" content="#0b0f12" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
@@ -46,9 +46,9 @@
   </head>
   <body>
     <div id="app-shell">
-      <canvas id="app-canvas" aria-label="Bokkie Web"></canvas>
+      <canvas id="app-canvas" aria-label="Bokkie"></canvas>
     </div>
-    <div id="loading" role="status">Starting Bokkie Web…</div>
+    <div id="loading" role="status">Starting Bokkie…</div>
     <script type="module" src="bootstrap.js"></script>
   </body>
 </html>
