@@ -151,7 +151,7 @@ Its tools are pinned:
   including under `BOKKIE_BROWSER_RUNNER`.
 - Playwright, exactly, in `tests/browser-smoke/package-lock.json`.
 - The Chromium build that this Playwright version names, which the script
-  installs with `playwright install chromium`.
+  installs with `playwright install --no-shell chromium`.
 
 Chromium runs headful, because egui's text fields take no typing in headless
 Chromium. The script uses `DISPLAY` when it is set, or else `xvfb-run`; CI

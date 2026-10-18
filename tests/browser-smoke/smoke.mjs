@@ -343,7 +343,10 @@ try {
   await app.action('bokkie.open-bot', bot.id);
   await app.until('the conversation', facts => facts.conversation === 'loaded' && facts.bot === bot.id);
   const deltas = () => frames.filter(frame => frame.payload.includes('"message_delta"')).length;
+  // Each message goes to an idle Bot, so it starts a turn of its own rather
+  // than steering the last one.
   const send = async text => {
+    await app.until('the Bot idle', facts => facts.bot_status === 'idle' && facts.reply_state !== 'streaming', 60000);
     await app.setText('bokkie.draft', text);
     await app.until('the draft entered', facts => facts.draft === text, 5000);
     await app.action('bokkie.send');
@@ -412,8 +415,13 @@ try {
     secondary: { used_percent: 7, window_minutes: 10080, resets_at: resetsAt + 86400 },
   });
   await controlRequest('reply', { pieces: ['Short ', 'reply.'], piece_delay_ms: 50 });
+  const countBefore = (await app.facts()).message_count;
   await send('How much is used?');
-  const meter = await app.until('the meter at 42%', facts => facts.subscription_used === 42 && facts.reply_state === 'complete', 60000);
+  // Codex reports the windows as the response starts, before its reply
+  // exists, so wait for this turn's own reply.
+  const meter = await app.until('the meter at 42% after the reply', facts => facts.subscription_used === 42
+    && facts.message_count === countBefore + 2 && facts.reply === 'Short reply.' && facts.reply_state === 'complete'
+    && facts.bot_status === 'idle', 60000);
   assert.equal(meter.limit, '', 'no banner below the limit');
   await controlRequest('rate-limits', {
     primary: { used_percent: 100, window_minutes: 300, resets_at: resetsAt },
