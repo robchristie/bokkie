@@ -12,7 +12,8 @@ itself runs entirely on the owner's own hardware.
 - **Client:** a web application and iOS home-screen PWA built with
   [Stobie](https://github.com/robchristie/stobie). Bokkie is Stobie's first
   real consumer application. Framework friction found while building Bokkie
-  is fixed in Stobie rather than worked around here.
+  is fixed in Stobie; until a fix lands, Bokkie records it and works around
+  it.
 - **Access:** LAN and tailnet only. An administrator creates the accounts, for
   example for family members.
 
@@ -27,4 +28,5 @@ the Codex app server and its sandbox in a container on the LAN host.
 multi-user model and the container and sandbox posture. Build, test and
 verification rules are in [CONTRIBUTING.md](CONTRIBUTING.md). Phase 2's
 gateway has landed; [docs/gateway.md](docs/gateway.md) is its operator
-reference. The owner keeps the phase plan privately.
+reference. The web client (`apps/bokkie-web`) signs in and lists the user's
+Bots; conversations come next. The owner keeps the phase plan privately.
