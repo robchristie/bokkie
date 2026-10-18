@@ -1,11 +1,11 @@
 # Phase 0 qualification probe
 
 This directory qualifies `codex app-server` and the Codex Linux sandbox
-inside a container on nostromo, as Phase 0 of the
-[foundation plan](../../docs/plans/foundation-plan.md#phase-0-codex-runtime-qualification)
-requires. It is not a deployment. The container publishes no ports and has
-no Traefik route. Its Compose projects are named `bokkie-qualify-<profile>`.
-Never use the project name `bokkie`.
+inside a container on nostromo for Phase 0, against the
+[sandbox invariants](../../docs/architecture.md#sandbox-invariants). It is
+not a deployment. The container publishes no ports and has no Traefik route.
+Its Compose projects are named `bokkie-qualify-<profile>`. Never use the
+project name `bokkie`.
 
 ## Pieces
 

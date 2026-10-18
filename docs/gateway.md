@@ -1,8 +1,8 @@
 # The gateway
 
 `crates/bokkie-gateway` is Bokkie's backend: an axum service that owns
-accounts, sessions, Bots and routing. The
-[foundation plan](plans/foundation-plan.md) owns its design; this page is the
+accounts, sessions, Bots and routing.
+[docs/architecture.md](architecture.md) owns its design; this page is the
 operator's reference and grows with each Phase 2 increment.
 
 ## Configuration
