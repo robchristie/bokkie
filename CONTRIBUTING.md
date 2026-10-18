@@ -24,7 +24,7 @@ download and those checks during quick local iteration; a change is not
 verified until the full script passes.
 
 CI pins every GitHub Action by its full commit SHA, with the release in a
-trailing comment (`uses: actions/checkout@<sha> # v4.4.0`), and
+trailing comment (`uses: actions/checkout@<sha> # v7.0.1`), and
 `scripts/verify` refuses a workflow that does not. To move an action, resolve
 the release tag to its commit with `gh api repos/<owner>/<repo>/commits/<tag>
 -q .sha` and update both.
