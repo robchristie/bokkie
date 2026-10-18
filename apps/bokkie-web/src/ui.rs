@@ -277,7 +277,7 @@ fn chatgpt_ui(
     p.content(
         ui,
         "about",
-        "Your Bots reply through your own ChatGPT account. Sign in once, with a code, and Bokkie's server keeps the sign-in for your Bots.",
+        "Your Bots reply only once Bokkie's server is signed in to ChatGPT for you. Sign in once, with a code; the server keeps the sign-in for your Bots.",
         line(TextRole::Secondary, 4),
     );
     match login {
@@ -305,8 +305,9 @@ fn chatgpt_ui(
                 "1. Open this page, on any device:",
                 line(TextRole::Body, 1),
             );
+            // In a new tab: this page holds the code and must stay open.
             p.raw(ui, "link", "the device-code page as a link", |ui| {
-                ui.hyperlink(&code.0.verification_url)
+                ui.add(egui::Hyperlink::new(&code.0.verification_url).open_in_new_tab(true))
             });
             p.content(ui, "step-2", "2. Enter this code:", line(TextRole::Body, 1));
             p.heading(ui, "code", &code.0.user_code);
@@ -314,6 +315,13 @@ fn chatgpt_ui(
             if let Some(error) = error {
                 p.status(ui, "poll-error", error, true);
             }
+            p.content(
+                ui,
+                "keep-open",
+                "Keep this page open: the code is shown only here. If it has expired, start again.",
+                line(TextRole::Secondary, 3),
+            );
+            frame.action(ui, p, BokkieAction::StartChatGpt, ActionEmphasis::Normal);
         }
         Login::Done => {
             let text = match &signed_in.account {

@@ -294,3 +294,82 @@ fn the_stand_ins_actions_have_readable_ids() {
         "bokkie.start-chatgpt"
     );
 }
+
+impl Fixture {
+    /// Show a device code, as after Start.
+    fn waiting_for_code(&mut self) {
+        self.reply(ApiReply::Account(Ok(account(false))));
+        self.click("Sign in to ChatGPT");
+        self.reply(ApiReply::Account(Ok(account(false))));
+        self.click("Start");
+        self.reply(ApiReply::Login(Ok(code())));
+        let _ = self.sent();
+        assert_eq!(self.fact("chatgpt_login"), "waiting".into());
+    }
+}
+
+#[test]
+fn the_verification_link_opens_in_a_new_tab_so_the_code_stays_on_screen() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.waiting_for_code();
+    assert!(fixture.shows(
+        "Keep this page open: the code is shown only here. If it has expired, start again."
+    ));
+    fixture.harness.get_by_label(URL).click();
+    fixture.harness.step();
+    let opened: Vec<_> = fixture
+        .harness
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|command| match command {
+            egui::OutputCommand::OpenUrl(open) => Some((open.url.clone(), open.new_tab)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(opened, [(URL.to_owned(), true)]);
+    fixture.harness.run();
+    assert!(fixture.shows(CODE), "the code is still on screen");
+}
+
+#[test]
+fn an_expired_code_can_be_replaced() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.waiting_for_code();
+    assert!(fixture.enabled(BokkieAction::StartChatGpt));
+    fixture.click("Start");
+    assert_eq!(fixture.sent(), [ApiRequest::CodexLogin]);
+    assert!(!fixture.shows(CODE), "the old code goes at once");
+    fixture.reply(ApiReply::Login(Ok(DeviceCode(DeviceCodeLogin {
+        verification_url: URL.into(),
+        user_code: "ABCD-5678".into(),
+    }))));
+    assert!(fixture.shows("ABCD-5678"));
+    assert!(!fixture.shows(CODE));
+}
+
+#[test]
+fn reopening_the_sign_in_after_a_failure_checks_the_account_before_start() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.reply(ApiReply::Account(Ok(account(false))));
+    fixture.click("Sign in to ChatGPT");
+    fixture.reply(ApiReply::Account(Ok(account(false))));
+    fixture.click("Start");
+    fixture.reply(ApiReply::Login(Err(error(
+        503,
+        ErrorCode::Unavailable,
+        "The Bots' runtime is unavailable",
+    ))));
+    assert!(fixture.enabled(BokkieAction::StartChatGpt));
+    // Leaving and coming back checks the account again.
+    fixture.click("Back");
+    fixture.click("Sign in to ChatGPT");
+    assert!(
+        !fixture.enabled(BokkieAction::StartChatGpt),
+        "still checking"
+    );
+}

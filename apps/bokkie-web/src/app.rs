@@ -87,7 +87,7 @@ pub enum BokkieAction {
     ChatGptSignIn,
     #[action(
         label = "Start",
-        description = "Start a ChatGPT sign-in with a device code",
+        description = "Start a ChatGPT sign-in with a device code, or get a new code",
         id = "bokkie.start-chatgpt"
     )]
     StartChatGpt,
@@ -939,12 +939,13 @@ impl Application for App {
                 signed_in.and_then(|signed_in| match (&signed_in.login, &signed_in.account) {
                     (None, _) => Some("Open the ChatGPT sign-in first"),
                     (_, Account::SignedIn { .. }) => Some("Already signed in to ChatGPT"),
-                    (Some(Login::Ready), Account::Checking) => {
+                    (Some(Login::Ready | Login::Failed(_)), Account::Checking) => {
                         Some("Checking your ChatGPT sign-in")
                     }
-                    (Some(Login::Ready | Login::Failed(_)), _) => None,
+                    // While a code is shown, starting again replaces it, as
+                    // when it has expired.
+                    (Some(Login::Ready | Login::Failed(_) | Login::Waiting { .. }), _) => None,
                     (Some(Login::Starting), _) => Some("Starting"),
-                    (Some(Login::Waiting { .. }), _) => Some("Waiting for the code to be entered"),
                     (Some(Login::Done), _) => Some("Already signed in to ChatGPT"),
                 })
             }
