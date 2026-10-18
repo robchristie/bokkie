@@ -10,13 +10,14 @@
 use std::collections::BTreeSet;
 
 use bokkie_protocol::api::{
-    Author, BotStatus, Delivery, LoginRequest, Message, MessageState, SendMessageRequest, User,
+    Author, BotStatus, CreateBotRequest, Delivery, LoginRequest, Message, MessageState,
+    SendMessageRequest, User,
 };
 use bokkie_protocol::{BotId, Timestamp};
 use serde::Serialize;
 use stobie_ui_egui::{
     Action, ActionArgument, ActionKey, ActionTarget, Application, ApplicationIdentity,
-    Availability, Frame, IntentSender, Observation, application_identity,
+    Availability, Frame, IntentSender, Observation, PassContext, application_identity,
 };
 
 use crate::api::{Api, ApiReply, ApiRequest, Generation};
@@ -33,6 +34,8 @@ pub const USERNAME_ID: &str = "bokkie.username";
 pub const PASSWORD_ID: &str = "bokkie.password";
 /// The message field's stable ID.
 pub const DRAFT_ID: &str = "bokkie.draft";
+/// The New Bot name field's stable ID.
+pub const BOT_NAME_ID: &str = "bokkie.bot-name";
 
 /// The largest Bot ID the Open action accepts: the largest integer a JSON
 /// number carries exactly.
@@ -71,6 +74,23 @@ pub enum BokkieAction {
         description = "Send the message to the Bot; while it replies, the message steers the reply"
     )]
     Send,
+    #[action(
+        label = "Create Bot",
+        description = "Create a Bot with the name entered"
+    )]
+    CreateBot,
+    #[action(
+        label = "Sign in to ChatGPT",
+        description = "Open the ChatGPT sign-in for your own Bots",
+        id = "bokkie.chatgpt-sign-in"
+    )]
+    ChatGptSignIn,
+    #[action(
+        label = "Start",
+        description = "Start a ChatGPT sign-in with a device code, or get a new code",
+        id = "bokkie.start-chatgpt"
+    )]
+    StartChatGpt,
     #[action(label = "Stop", description = "Stop the Bot's reply in progress")]
     Stop,
     #[action(
@@ -85,6 +105,7 @@ pub enum BokkieIntent {
     EditUsername(String),
     EditPassword(String),
     EditDraft(String),
+    EditBotName(String),
     /// A command's reply, with the generation it was sent in.
     Reply {
         generation: Generation,
@@ -104,6 +125,7 @@ impl std::fmt::Debug for BokkieIntent {
             Self::EditUsername(username) => f.debug_tuple("EditUsername").field(username).finish(),
             Self::EditPassword(_) => f.write_str("EditPassword(<redacted>)"),
             Self::EditDraft(draft) => f.debug_tuple("EditDraft").field(draft).finish(),
+            Self::EditBotName(name) => f.debug_tuple("EditBotName").field(name).finish(),
             Self::Reply { generation, reply } => f
                 .debug_struct("Reply")
                 .field("generation", generation)
@@ -127,7 +149,7 @@ pub(crate) enum Session {
     /// Asking the gateway whether the browser's cookie is still a session.
     Checking,
     SignedOut(SignInForm),
-    SignedIn(SignedIn),
+    SignedIn(Box<SignedIn>),
 }
 
 #[derive(Debug, Default)]
@@ -153,7 +175,54 @@ pub(crate) struct SignedIn {
     pub(crate) link: Link,
     /// The conversation shown, if any; otherwise the Bot list is.
     pub(crate) open: Option<Open>,
+    pub(crate) new_bot: NewBot,
+    /// Whether the user's own app server is signed in to ChatGPT.
+    pub(crate) account: Account,
+    /// The ChatGPT sign-in screen, when shown.
+    pub(crate) login: Option<Login>,
 }
+
+/// The New Bot form: a name only.
+#[derive(Debug, Default)]
+pub(crate) struct NewBot {
+    pub(crate) name: String,
+    /// A create is under way.
+    pub(crate) busy: bool,
+    /// Why the last create failed.
+    pub(crate) error: Option<String>,
+}
+
+/// The user's ChatGPT account, as `GET /codex/account` last said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Account {
+    Checking,
+    SignedIn { plan: Option<String> },
+    SignedOut,
+    Failed(String),
+}
+
+/// The ChatGPT device-code sign-in screen.
+#[derive(Debug)]
+pub(crate) enum Login {
+    /// Explained, not started.
+    Ready,
+    /// `POST /codex/login` is under way.
+    Starting,
+    /// The code is on screen and the account is polled until signed in.
+    /// The code lives here only, and goes when the screen does.
+    Waiting {
+        code: crate::api::DeviceCode,
+        next_poll: Timestamp,
+        polling: bool,
+        /// Why the last poll failed, while polling goes on.
+        error: Option<String>,
+    },
+    Done,
+    Failed(String),
+}
+
+/// How often the account is checked while a device code is on screen.
+pub const LOGIN_POLL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// One Bot's conversation, open on screen.
 #[derive(Debug)]
@@ -242,6 +311,7 @@ impl App {
             Session::SignedOut(form) if form.busy => "signing_in",
             Session::SignedOut(_) => "signed_out",
             Session::SignedIn(signed_in) if signed_in.signing_out => "signing_out",
+            Session::SignedIn(signed_in) if signed_in.login.is_some() => "chatgpt",
             Session::SignedIn(signed_in) if signed_in.open.is_some() => "conversation",
             Session::SignedIn(_) => "signed_in",
         }
@@ -316,6 +386,13 @@ impl App {
         self.generation
     }
 
+    pub(crate) fn login(&self) -> Option<&Login> {
+        match &self.session {
+            Session::SignedIn(signed_in) => signed_in.login.as_ref(),
+            _ => None,
+        }
+    }
+
     pub(crate) fn open(&self) -> Option<&Open> {
         match &self.session {
             Session::SignedIn(signed_in) => signed_in.open.as_ref(),
@@ -376,18 +453,22 @@ impl App {
 
     fn signed_in(&mut self, user: User) {
         self.next_generation();
-        self.session = Session::SignedIn(SignedIn {
+        self.session = Session::SignedIn(Box::new(SignedIn {
             user,
             bots_error: None,
             signing_out: false,
             message: None,
             link: Link::Stopped,
             open: None,
-        });
+            new_bot: NewBot::default(),
+            account: Account::Checking,
+            login: None,
+        }));
         // The list shows at once. Once the socket is live it is loaded again,
         // so that no event can fall between the list and the socket.
         self.load(Snapshot::Bots);
         self.load_usage();
+        self.send(ApiRequest::CodexAccount);
         if let Some(api) = &self.api {
             api.connect_events(self.generation);
         }
@@ -580,6 +661,77 @@ impl App {
                     Err(error) => open.stop_note = Some(error.message),
                 }
             }
+            (ApiReply::Created(result), Session::SignedIn(signed_in)) if signed_in.new_bot.busy => {
+                let form = &mut signed_in.new_bot;
+                form.busy = false;
+                match result {
+                    // The Bot itself arrives as `bot_created`.
+                    Ok(_) => form.name.clear(),
+                    Err(error) if error.is_unauthenticated() => self.session_ended(),
+                    // The name stays, to correct.
+                    Err(error) => form.error = Some(error.message),
+                }
+            }
+            (ApiReply::Account(result), Session::SignedIn(_)) => {
+                let now = self.now();
+                let Session::SignedIn(signed_in) = &mut self.session else {
+                    return false;
+                };
+                let account = match result {
+                    Ok(account) if account.signed_in => Account::SignedIn { plan: account.plan },
+                    Ok(_) => Account::SignedOut,
+                    Err(error) if error.is_unauthenticated() => {
+                        self.session_ended();
+                        return true;
+                    }
+                    Err(error) => Account::Failed(error.message),
+                };
+                if let Some(Login::Waiting {
+                    next_poll,
+                    polling,
+                    error,
+                    ..
+                }) = &mut signed_in.login
+                {
+                    *polling = false;
+                    *next_poll = Timestamp(now.0 + LOGIN_POLL.as_millis() as i64);
+                    *error = match &account {
+                        Account::Failed(message) => Some(message.clone()),
+                        _ => None,
+                    };
+                }
+                if matches!(account, Account::SignedIn { .. }) && signed_in.login.is_some() {
+                    // The code has served its purpose: it goes.
+                    signed_in.login = Some(Login::Done);
+                }
+                // A failed poll does not unsay what the screen knows.
+                if !(matches!(account, Account::Failed(_))
+                    && matches!(signed_in.login, Some(Login::Waiting { .. })))
+                {
+                    signed_in.account = account;
+                }
+            }
+            (ApiReply::Login(result), Session::SignedIn(signed_in))
+                if matches!(signed_in.login, Some(Login::Starting)) =>
+            {
+                let now = self.now();
+                let Session::SignedIn(signed_in) = &mut self.session else {
+                    return false;
+                };
+                signed_in.login = Some(match result {
+                    Ok(code) => Login::Waiting {
+                        code,
+                        next_poll: Timestamp(now.0 + LOGIN_POLL.as_millis() as i64),
+                        polling: false,
+                        error: None,
+                    },
+                    Err(error) if error.is_unauthenticated() => {
+                        self.session_ended();
+                        return true;
+                    }
+                    Err(error) => Login::Failed(error.message),
+                });
+            }
             (ApiReply::Usage(result), Session::SignedIn(_)) if self.usage_in_flight => {
                 self.usage_in_flight = false;
                 let changed = match result {
@@ -756,10 +908,47 @@ impl Application for App {
                 Some("Loading the Bots")
             }
             (BokkieAction::Refresh, _) => None,
+            (BokkieAction::OpenBot, _) if self.login().is_some() => {
+                Some("Leave the ChatGPT sign-in first")
+            }
             (BokkieAction::OpenBot, _) if !self.store.bots_loaded() => Some("Loading the Bots"),
             (BokkieAction::OpenBot, _) => None,
-            (BokkieAction::Back, _) if self.open().is_none() => Some("No conversation is open"),
+            (BokkieAction::Back, _) if self.open().is_none() && self.login().is_none() => {
+                Some("Already on the list of Bots")
+            }
             (BokkieAction::Back, _) => None,
+            (BokkieAction::CreateBot, _) => signed_in.and_then(|signed_in| {
+                if signed_in.new_bot.busy {
+                    Some("Creating the Bot")
+                } else if signed_in.new_bot.name.trim().is_empty() {
+                    Some("Enter a name")
+                } else {
+                    None
+                }
+            }),
+            (BokkieAction::ChatGptSignIn, _) => signed_in.and_then(|signed_in| {
+                if signed_in.open.is_some() || signed_in.login.is_some() {
+                    Some("Return to the list of Bots first")
+                } else if matches!(signed_in.account, Account::SignedIn { .. }) {
+                    Some("Already signed in to ChatGPT")
+                } else {
+                    None
+                }
+            }),
+            (BokkieAction::StartChatGpt, _) => {
+                signed_in.and_then(|signed_in| match (&signed_in.login, &signed_in.account) {
+                    (None, _) => Some("Open the ChatGPT sign-in first"),
+                    (_, Account::SignedIn { .. }) => Some("Already signed in to ChatGPT"),
+                    (Some(Login::Ready | Login::Failed(_)), Account::Checking) => {
+                        Some("Checking your ChatGPT sign-in")
+                    }
+                    // While a code is shown, starting again replaces it, as
+                    // when it has expired.
+                    (Some(Login::Ready | Login::Failed(_) | Login::Waiting { .. }), _) => None,
+                    (Some(Login::Starting), _) => Some("Starting"),
+                    (Some(Login::Done), _) => Some("Already signed in to ChatGPT"),
+                })
+            }
             (BokkieAction::Send, _) => self.can_send().err(),
             (BokkieAction::Stop, _) => self.can_stop().err(),
         };
@@ -773,6 +962,33 @@ impl Application for App {
             self.api = Some(make_api(intents));
         }
         self.send(ApiRequest::CheckSession);
+    }
+
+    /// Poll the ChatGPT account while a device code is on screen.
+    fn prepare(&mut self, pass: &mut PassContext<'_>, _: &mut ()) {
+        let now = self.now();
+        let Session::SignedIn(signed_in) = &mut self.session else {
+            return;
+        };
+        let Some(Login::Waiting {
+            next_poll, polling, ..
+        }) = &mut signed_in.login
+        else {
+            return;
+        };
+        if *polling {
+            return;
+        }
+        if now >= *next_poll {
+            *polling = true;
+            self.send(ApiRequest::CodexAccount);
+        } else {
+            let wait = u64::try_from(next_poll.0 - now.0).unwrap_or(0);
+            pass.request_repaint_after(
+                "ChatGPT sign-in poll",
+                std::time::Duration::from_millis(wait),
+            );
+        }
     }
 
     fn ui(&self, ui: &mut egui::Ui, _: &mut (), frame: &mut Frame<'_, BokkieAction, BokkieIntent>) {
@@ -798,6 +1014,13 @@ impl Application for App {
             BokkieIntent::EditDraft(draft) => match self.open_mut() {
                 Some(open) if !open.sending => {
                     open.draft = draft;
+                    true
+                }
+                _ => false,
+            },
+            BokkieIntent::EditBotName(name) => match &mut self.session {
+                Session::SignedIn(signed_in) if !signed_in.new_bot.busy => {
+                    signed_in.new_bot.name = name;
                     true
                 }
                 _ => false,
@@ -837,10 +1060,36 @@ impl Application for App {
                 None => self.load(Snapshot::Bots),
             },
             (BokkieAction::Back, Session::SignedIn(signed_in)) => {
+                // Leaving the ChatGPT sign-in drops its code with it.
+                if signed_in.login.take().is_some() {
+                    return Ok(true);
+                }
                 let Some(open) = signed_in.open.take() else {
                     return Ok(false);
                 };
                 self.store.close_conversation(open.bot);
+            }
+            (BokkieAction::CreateBot, Session::SignedIn(signed_in)) => {
+                let form = &mut signed_in.new_bot;
+                form.busy = true;
+                form.error = None;
+                let request = CreateBotRequest {
+                    name: form.name.trim().to_owned(),
+                    label: String::new(),
+                    description: String::new(),
+                    avatar: None,
+                };
+                self.send(ApiRequest::CreateBot(request));
+            }
+            (BokkieAction::ChatGptSignIn, Session::SignedIn(signed_in)) => {
+                signed_in.login = Some(Login::Ready);
+                // Ask again: it may have changed since sign-in.
+                signed_in.account = Account::Checking;
+                self.send(ApiRequest::CodexAccount);
+            }
+            (BokkieAction::StartChatGpt, Session::SignedIn(signed_in)) => {
+                signed_in.login = Some(Login::Starting);
+                self.send(ApiRequest::CodexLogin);
             }
             (BokkieAction::Send, Session::SignedIn(signed_in)) => {
                 let Some(open) = &mut signed_in.open else {
@@ -971,6 +1220,45 @@ impl Application for App {
                 open.and_then(|open| open.stop_note.as_deref())
                     .unwrap_or(""),
             ),
+        );
+        let signed_in = match &self.session {
+            Session::SignedIn(signed_in) => Some(signed_in),
+            _ => None,
+        };
+        observation.fact(
+            "new_bot_name",
+            bounded(signed_in.map_or("", |s| s.new_bot.name.as_str())),
+        );
+        observation.fact("creating", signed_in.is_some_and(|s| s.new_bot.busy));
+        observation.fact(
+            "create_error",
+            bounded(
+                signed_in
+                    .and_then(|s| s.new_bot.error.as_deref())
+                    .unwrap_or(""),
+            ),
+        );
+        observation.fact(
+            "chatgpt",
+            match signed_in.map(|s| &s.account) {
+                None => "",
+                Some(Account::Checking) => "checking",
+                Some(Account::SignedIn { .. }) => "signed_in",
+                Some(Account::SignedOut) => "signed_out",
+                Some(Account::Failed(_)) => "failed",
+            },
+        );
+        // Never the code itself.
+        observation.fact(
+            "chatgpt_login",
+            match signed_in.and_then(|s| s.login.as_ref()) {
+                None => "",
+                Some(Login::Ready) => "ready",
+                Some(Login::Starting) => "starting",
+                Some(Login::Waiting { .. }) => "waiting",
+                Some(Login::Done) => "done",
+                Some(Login::Failed(_)) => "failed",
+            },
         );
         let usage = self.store.usage();
         observation.fact("usage", if usage.is_some() { "loaded" } else { "" });
