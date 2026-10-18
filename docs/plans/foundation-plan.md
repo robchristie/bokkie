@@ -378,7 +378,7 @@ operator reference is [docs/gateway.md](../gateway.md).
 | Usage follow-ups: `usage_updated` on limit changes and window rollover; usage pruned | Done (#16, `06a79d1`) |
 | Usage follow-ups: token overshoot bounded to one model response per running turn; sends serialised per Bot, not per user | Done (#17, `d4536d4`) |
 | Small gaps: API-shaped `Path` and query rejections; sign-in limits survive a restart | Done (#18, `5af2d10`) |
-| The gateway tests the PR reviews asked for: a lagged socket, a prune during replay, an admin revoking sessions, profile context on a live steer | Done (#19) |
+| The gateway tests the PR reviews asked for: a lagged socket, a prune during replay, an admin revoking sessions, profile context on a live steer | Done (#19, `54d0dbe`) |
 | The conversation list, usage meter and limit-reached banner in the client | Waits for Phase 1 |
 | PWA install, and deployment behind Traefik under a temporary hostname | Not started; deployment needs the owner's go-ahead |
 
