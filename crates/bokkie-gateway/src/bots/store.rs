@@ -2,10 +2,13 @@
 //!
 //! Every function takes the owning user's id and puts it in the query's
 //! `WHERE` clause, so a Bot or message id from another user reads as absent.
+//! Each is one statement, so it runs on the pool or inside an event
+//! [`Batch`](crate::events::Batch) alike.
 
 use bokkie_protocol::api::{Author, Bot, BotStatus, Message, MessagePreview, MessageState};
 use bokkie_protocol::{BotId, MessageId, Timestamp, UserId};
-use sqlx::{Row, SqlitePool};
+use sqlx::Row;
+use sqlx::sqlite::SqliteExecutor;
 
 use crate::error::{Failure, Result};
 
@@ -193,7 +196,7 @@ async fn unique_name<T>(result: std::result::Result<T, sqlx::Error>) -> Result<T
 }
 
 pub async fn create_bot(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     now: Timestamp,
     user: UserId,
     name: &str,
@@ -205,11 +208,11 @@ pub async fn create_bot(
     let label = check_label(label)?;
     let description = check_description(description)?;
     let avatar = avatar.map(check_avatar).transpose()?;
-    let done = unique_name(
-        sqlx::query(
+    let row = unique_name(
+        sqlx::query(&format!(
             "INSERT INTO bots (user_id, name, label, description, avatar, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
+             VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING {BOT_COLUMNS}"
+        ))
         .bind(user.0)
         .bind(&name)
         .bind(&label)
@@ -217,16 +220,14 @@ pub async fn create_bot(
         .bind(&avatar)
         .bind(now.0)
         .bind(now.0)
-        .execute(db)
+        .fetch_one(db)
         .await,
     )
     .await?;
-    bot(db, user, BotId(done.last_insert_rowid()))
-        .await?
-        .ok_or_else(Failure::not_found)
+    Ok(bot_from(&row))
 }
 
-pub async fn bot(db: &SqlitePool, user: UserId, bot: BotId) -> Result<Option<BotRow>> {
+pub async fn bot(db: impl SqliteExecutor<'_>, user: UserId, bot: BotId) -> Result<Option<BotRow>> {
     let row = sqlx::query(&format!(
         "SELECT {BOT_COLUMNS} FROM bots WHERE id = ? AND user_id = ?"
     ))
@@ -239,7 +240,7 @@ pub async fn bot(db: &SqlitePool, user: UserId, bot: BotId) -> Result<Option<Bot
 
 /// The user's Bot on a Codex thread, if any.
 pub async fn bot_by_thread(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     user: UserId,
     thread_id: &str,
 ) -> Result<Option<BotRow>> {
@@ -254,7 +255,7 @@ pub async fn bot_by_thread(
 }
 
 /// The user's Bots, pinned first, then by most recent activity.
-pub async fn list_bots(db: &SqlitePool, user: UserId) -> Result<Vec<BotRow>> {
+pub async fn list_bots(db: impl SqliteExecutor<'_>, user: UserId) -> Result<Vec<BotRow>> {
     let rows = sqlx::query(&format!(
         "SELECT {BOT_COLUMNS} FROM bots b WHERE user_id = ?
          ORDER BY pinned DESC,
@@ -279,7 +280,7 @@ pub struct BotChanges {
 }
 
 pub async fn update_bot(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     now: Timestamp,
     user: UserId,
     id: BotId,
@@ -299,8 +300,8 @@ pub async fn update_bot(
     // One statement, so concurrent edits cannot lose each other's fields.
     // SQLite evaluates every expression against the row as it was, so the
     // revision compares the old profile with the new one.
-    let done = unique_name(
-        sqlx::query(
+    let row = unique_name(
+        sqlx::query(&format!(
             "UPDATE bots SET
                  profile_revision = profile_revision + (CASE
                      WHEN (?1 IS NOT NULL AND ?1 != name)
@@ -313,8 +314,8 @@ pub async fn update_bot(
                  pinned = coalesce(?6, pinned),
                  hidden = coalesce(?7, hidden),
                  updated_at = ?8
-             WHERE id = ?9 AND user_id = ?10",
-        )
+             WHERE id = ?9 AND user_id = ?10 RETURNING {BOT_COLUMNS}"
+        ))
         .bind(name)
         .bind(label)
         .bind(description)
@@ -325,18 +326,15 @@ pub async fn update_bot(
         .bind(now.0)
         .bind(id.0)
         .bind(user.0)
-        .execute(db)
+        .fetch_optional(db)
         .await,
     )
     .await?;
-    if done.rows_affected() == 0 {
-        return Err(Failure::not_found());
-    }
-    bot(db, user, id).await?.ok_or_else(Failure::not_found)
+    row.as_ref().map(bot_from).ok_or_else(Failure::not_found)
 }
 
 pub async fn set_thread(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     user: UserId,
     bot: BotId,
     thread_id: &str,
@@ -356,7 +354,7 @@ pub async fn set_thread(
 }
 
 pub async fn set_profile_sent(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     user: UserId,
     bot: BotId,
     revision: i64,
@@ -374,7 +372,7 @@ pub async fn set_profile_sent(
 }
 
 pub async fn set_refused(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     now: Timestamp,
     user: UserId,
     bot: BotId,
@@ -405,7 +403,7 @@ pub struct NewMessage<'a> {
 }
 
 pub async fn insert_message(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     now: Timestamp,
     user: UserId,
     new: NewMessage<'_>,
@@ -417,11 +415,12 @@ pub async fn insert_message(
         state,
         turn,
     } = new;
-    let done = sqlx::query(
+    let row = sqlx::query(&format!(
         "INSERT INTO messages (bot_id, user_id, author, text, state, turn_id, item_id,
                                created_at, updated_at)
-         SELECT id, user_id, ?, ?, ?, ?, ?, ?, ? FROM bots WHERE id = ? AND user_id = ?",
-    )
+         SELECT id, user_id, ?, ?, ?, ?, ?, ?, ? FROM bots WHERE id = ? AND user_id = ?
+         RETURNING {MESSAGE_COLUMNS}"
+    ))
     .bind(author_name(author))
     .bind(text)
     .bind(state_name(state))
@@ -431,17 +430,18 @@ pub async fn insert_message(
     .bind(now.0)
     .bind(bot.0)
     .bind(user.0)
-    .execute(db)
+    .fetch_optional(db)
     .await?;
-    if done.rows_affected() != 1 {
-        return Err(Failure::not_found());
-    }
-    message(db, user, MessageId(done.last_insert_rowid()))
-        .await?
+    row.as_ref()
+        .map(message_from)
         .ok_or_else(Failure::not_found)
 }
 
-pub async fn message(db: &SqlitePool, user: UserId, id: MessageId) -> Result<Option<Message>> {
+pub async fn message(
+    db: impl SqliteExecutor<'_>,
+    user: UserId,
+    id: MessageId,
+) -> Result<Option<Message>> {
     let row = sqlx::query(&format!(
         "SELECT {MESSAGE_COLUMNS} FROM messages WHERE id = ? AND user_id = ?"
     ))
@@ -454,7 +454,7 @@ pub async fn message(db: &SqlitePool, user: UserId, id: MessageId) -> Result<Opt
 
 /// Appends streamed text to a Bot reply that is still streaming.
 pub async fn append_text(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     now: Timestamp,
     user: UserId,
     id: MessageId,
@@ -473,32 +473,33 @@ pub async fn append_text(
     Ok(())
 }
 
-/// Sets a message's final text (when given) and state.
+/// Sets a streaming message's final text (when given) and state. Returns
+/// the message if it was still streaming.
 pub async fn finish_message(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     now: Timestamp,
     user: UserId,
     id: MessageId,
     text: Option<&str>,
     state: MessageState,
 ) -> Result<Option<Message>> {
-    sqlx::query(
+    let row = sqlx::query(&format!(
         "UPDATE messages SET text = coalesce(?, text), state = ?, updated_at = ?
-         WHERE id = ? AND user_id = ? AND state = 'streaming'",
-    )
+         WHERE id = ? AND user_id = ? AND state = 'streaming' RETURNING {MESSAGE_COLUMNS}"
+    ))
     .bind(text)
     .bind(state_name(state))
     .bind(now.0)
     .bind(id.0)
     .bind(user.0)
-    .execute(db)
+    .fetch_optional(db)
     .await?;
-    message(db, user, id).await
+    Ok(row.as_ref().map(message_from))
 }
 
 /// The user's replies still streaming, for one Bot or for every Bot.
 pub async fn streaming_messages(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     user: UserId,
     bot: Option<BotId>,
 ) -> Result<Vec<MessageId>> {
@@ -516,7 +517,7 @@ pub async fn streaming_messages(
 
 /// A page of a Bot's conversation, oldest first, ending before `before`.
 pub async fn messages(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     user: UserId,
     bot: BotId,
     before: Option<MessageId>,
@@ -548,7 +549,7 @@ pub async fn messages(
 
 /// The start of each of the user's Bots' latest message.
 pub async fn previews(
-    db: &SqlitePool,
+    db: impl SqliteExecutor<'_>,
     user: UserId,
 ) -> Result<std::collections::HashMap<BotId, MessagePreview>> {
     let rows = sqlx::query(

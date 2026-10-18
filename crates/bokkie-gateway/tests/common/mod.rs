@@ -201,6 +201,11 @@ impl Gateway {
         send(self.app.clone(), call).await
     }
 
+    /// Sends a call in its own task.
+    pub fn spawn(&self, call: Call) -> tokio::task::JoinHandle<Reply> {
+        tokio::spawn(send(self.app.clone(), call))
+    }
+
     /// Sends every call at once and returns the replies in call order.
     pub async fn send_all(&self, calls: Vec<Call>) -> Vec<Reply> {
         let tasks: Vec<_> = calls

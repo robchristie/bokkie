@@ -261,16 +261,16 @@ async fn concurrent_usage_writes_are_not_lost() {
         create_bot(&gateway, &rob, "Two").await,
     ];
     let user = UserId(1);
-    let db = gateway.state.db.clone();
     let clock = gateway.state.clock.clone();
     let mut tasks = Vec::new();
     for bot in bots {
-        let (db, clock) = (db.clone(), clock.clone());
+        let (events, clock) = (gateway.state.events.clone(), clock.clone());
         // Each thread's total grows by 10 per report.
         tasks.push(tokio::spawn(async move {
             for total in (10..=500).step_by(10) {
+                let mut batch = events.begin(user).await.unwrap();
                 bokkie_gateway::usage::record_tokens(
-                    &db,
+                    &mut batch,
                     clock.now(),
                     user,
                     bokkie_protocol::BotId(bot),
@@ -278,6 +278,7 @@ async fn concurrent_usage_writes_are_not_lost() {
                 )
                 .await
                 .unwrap();
+                batch.commit().await.unwrap();
             }
         }));
     }
@@ -344,4 +345,81 @@ async fn concurrent_sends_to_several_bots_cannot_overrun_the_turn_limit() {
             .all(|r| r.code() == "limit_reached")
     );
     assert_eq!(gateway.fake.received("turn/start").len(), 1);
+}
+
+/// Makes every insert into `table` fail, as a full disk would.
+async fn break_inserts(gateway: &Gateway, table: &str) {
+    sqlx::query(&format!(
+        "CREATE TRIGGER broken_{table} BEFORE INSERT ON {table}
+         BEGIN SELECT RAISE(ABORT, 'disk full'); END"
+    ))
+    .execute(&gateway.state.db)
+    .await
+    .unwrap();
+}
+
+async fn mend_inserts(gateway: &Gateway, table: &str) {
+    sqlx::query(&format!("DROP TRIGGER broken_{table}"))
+        .execute(&gateway.state.db)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_turn_is_counted_before_codex_is_asked_to_start_it() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    // Counting the turn fails, so Codex is never asked to start it.
+    break_inserts(&gateway, "turns").await;
+    let failed = say(&gateway, &rob, chef).await;
+    assert_eq!(failed.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(gateway.fake.received("turn/start").is_empty());
+    mend_inserts(&gateway, "turns").await;
+    turn(&gateway, &rob, chef).await;
+    assert_eq!(usage(&gateway, &rob).await["allowance"]["turns_today"], 1);
+}
+
+#[tokio::test]
+async fn a_turn_codex_started_stays_counted_when_its_answer_is_lost() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    // The app server starts the turn and exits before answering.
+    gateway.fake.with(|b| b.hang_up_on_turn = true);
+    let lost = say(&gateway, &rob, chef).await;
+    assert_eq!(
+        lost.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{:?}",
+        lost.body
+    );
+    assert_eq!(gateway.fake.received("turn/start").len(), 1);
+    assert_eq!(usage(&gateway, &rob).await["allowance"]["turns_today"], 1);
+}
+
+#[tokio::test]
+async fn a_turn_codex_refuses_to_start_is_not_counted() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    gateway.fake.with(|b| b.reject_turns = true);
+    let refused = say(&gateway, &rob, chef).await;
+    assert_eq!(refused.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(gateway.fake.received("turn/start").len(), 1);
+    let allowance = &usage(&gateway, &rob).await["allowance"];
+    assert_eq!(allowance["turns_today"], 0, "{allowance}");
+    // The meter's last event agrees.
+    let log = gateway
+        .state
+        .events
+        .since(UserId(1), bokkie_protocol::events::Seq(0), 1_000)
+        .await
+        .unwrap();
+    let last_usage = log
+        .iter()
+        .rev()
+        .find_map(|e| match &e.event {
+            bokkie_protocol::events::Event::UsageUpdated { usage } => Some(usage.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(last_usage.allowance.turns_today, 0);
 }

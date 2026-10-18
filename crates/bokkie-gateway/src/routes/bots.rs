@@ -16,9 +16,10 @@ use crate::AppState;
 use crate::auth::SignedIn;
 use crate::bots::store::{self, BotChanges, BotRow};
 use crate::error::{Body, Failure, Result};
+use sqlx::sqlite::SqliteExecutor;
 
-async fn to_api(state: &AppState, bot: &BotRow) -> Result<Bot> {
-    let previews = store::previews(&state.db, bot.user).await?;
+async fn to_api(state: &AppState, db: impl SqliteExecutor<'_>, bot: &BotRow) -> Result<Bot> {
+    let previews = store::previews(db, bot.user).await?;
     Ok(bot.to_api(
         state.conversations.is_working(bot.id),
         previews.get(&bot.id).cloned(),
@@ -48,8 +49,10 @@ pub async fn create(
     signed_in: SignedIn,
     Body(request): Body<CreateBotRequest>,
 ) -> Result<(StatusCode, Json<Bot>)> {
+    // The Bot and its event commit together, or neither does.
+    let mut batch = state.events.begin(signed_in.id()).await?;
     let bot = store::create_bot(
-        &state.db,
+        &mut *batch,
         state.clock.now(),
         signed_in.id(),
         &request.name,
@@ -58,11 +61,9 @@ pub async fn create(
         request.avatar.as_deref(),
     )
     .await?;
-    let bot = to_api(&state, &bot).await?;
-    state
-        .events
-        .append(signed_in.id(), Event::BotCreated { bot: bot.clone() })
-        .await?;
+    let bot = to_api(&state, &mut *batch, &bot).await?;
+    batch.emit(Event::BotCreated { bot: bot.clone() }).await?;
+    batch.commit().await?;
     Ok((StatusCode::CREATED, Json(bot)))
 }
 
@@ -75,7 +76,7 @@ pub async fn get(
     let bot = store::bot(&state.db, signed_in.id(), BotId(id))
         .await?
         .ok_or_else(Failure::not_found)?;
-    Ok(Json(to_api(&state, &bot).await?))
+    Ok(Json(to_api(&state, &state.db, &bot).await?))
 }
 
 /// `PATCH /api/v1/bots/{id}`.
@@ -85,8 +86,11 @@ pub async fn update(
     Path(id): Path<i64>,
     Body(request): Body<UpdateBotRequest>,
 ) -> Result<Json<Bot>> {
+    // The edit and its event commit together under the user's log lock, so
+    // concurrent edits announce the Bot in the order they took effect.
+    let mut batch = state.events.begin(signed_in.id()).await?;
     let bot = store::update_bot(
-        &state.db,
+        &mut *batch,
         state.clock.now(),
         signed_in.id(),
         BotId(id),
@@ -100,11 +104,9 @@ pub async fn update(
         },
     )
     .await?;
-    let bot = to_api(&state, &bot).await?;
-    state
-        .events
-        .append(signed_in.id(), Event::BotUpdated { bot: bot.clone() })
-        .await?;
+    let bot = to_api(&state, &mut *batch, &bot).await?;
+    batch.emit(Event::BotUpdated { bot: bot.clone() }).await?;
+    batch.commit().await?;
     Ok(Json(bot))
 }
 
@@ -147,12 +149,15 @@ pub async fn send(
     Path(id): Path<i64>,
     Body(request): Body<SendMessageRequest>,
 ) -> Result<Json<SendMessageResponse>> {
-    Ok(Json(
-        state
-            .conversations
+    // A send runs to completion in its own task, so a client that goes away
+    // midway cannot leave it half done.
+    let conversations = state.conversations.clone();
+    let send = tokio::spawn(async move {
+        conversations
             .send(&signed_in.account, BotId(id), &request.text)
-            .await?,
-    ))
+            .await
+    });
+    Ok(Json(send.await.map_err(Failure::internal)??))
 }
 
 /// `POST /api/v1/bots/{id}/stop`.

@@ -56,6 +56,11 @@ pub struct Behaviour {
     pub finish_before_answer: bool,
     /// Whether `turn/steer` fails, as it does once the turn has ended.
     pub steer_fails: bool,
+    /// Whether `turn/start` answers with an error, starting nothing.
+    pub reject_turns: bool,
+    /// Whether the app server starts a turn and then exits before
+    /// answering `turn/start`.
+    pub hang_up_on_turn: bool,
     pub signed_in: bool,
     /// The `account/rateLimits/read` result.
     pub rate_limits: Value,
@@ -75,6 +80,8 @@ impl Default for Behaviour {
             finish_turns: true,
             finish_before_answer: false,
             steer_fails: false,
+            reject_turns: false,
+            hang_up_on_turn: false,
             signed_in: true,
             rate_limits: json!({
                 "rateLimits": {"limitId": "codex", "limitName": null, "planType": "pro",
@@ -184,6 +191,10 @@ impl FakeCodex {
                 }
                 let message: Value = serde_json::from_str(&line).unwrap();
                 fake.handle(&context, &out_tx, message);
+                // The handler hung up.
+                if !outlets.lock().unwrap().contains_key(&user) {
+                    break;
+                }
             }
         });
         Client::new(client_read, client_write)
@@ -235,6 +246,24 @@ impl FakeCodex {
             "thread/resume" => {
                 let id = params["threadId"].as_str().unwrap().to_owned();
                 self.session(&id, &params)
+            }
+            "turn/start" if self.with(|b| b.reject_turns) => {
+                let _ = out.send(json!({"id": id, "error": {
+                    "code": -32600, "message": "turn refused"}}));
+                return;
+            }
+            "turn/start" if self.with(|b| b.hang_up_on_turn) => {
+                let turn = self.with(|b| {
+                    b.next_id += 1;
+                    format!("turn-{}", b.next_id)
+                });
+                let thread = params["threadId"].as_str().unwrap();
+                let _ = out.send(
+                    json!({"method": "turn/started", "params": {"threadId": thread,
+                    "turn": {"id": turn, "items": [], "status": "inProgress", "error": null}}}),
+                );
+                self.crash(context.user);
+                return;
             }
             "turn/start" => {
                 let turn = self.with(|b| {

@@ -373,7 +373,8 @@ operator reference is [docs/gateway.md](../gateway.md).
 | The WebSocket with a durable, resumable per-user event log and coalesced deltas | Done (#10, `7a1370f`) |
 | Usage: the subscription's windows and per-user allowances, enforced for a member account | Done (#11, `5d9a908`) |
 | A scripted end-to-end check on the qualified image ([`deploy/e2e/`](../../deploy/e2e/README.md)) | Done (#12, `d8b6229`) |
-| CI pins GitHub Actions by commit SHA, checked by `scripts/verify` | Done (#14) |
+| CI pins GitHub Actions by commit SHA, checked by `scripts/verify` | Done (#14, `ae7c967`) |
+| Robustness follow-ups: a change and its events commit together, in the order changes took effect; a turn is counted before Codex starts it | Done (#15) |
 | The conversation list, usage meter and limit-reached banner in the client | Waits for Phase 1 |
 | PWA install, and deployment behind Traefik under a temporary hostname | Not started; deployment needs the owner's go-ahead |
 
@@ -406,11 +407,15 @@ What the gateway work found, now recorded in docs/gateway.md:
 Gateway follow-ups, accepted when the PRs landed. They belong to Phase 2's
 remaining work unless a later phase is named:
 
-- **Robustness:**
-  - A request dropped between its database change and its event append
-    keeps the change without an event, until clients reload.
-  - Concurrent edits to one Bot can emit their events out of order.
-  - A turn goes uncounted if recording it fails after Codex started it.
+- **Robustness,** all done in #15:
+  - ~~A request dropped between its database change and its event append
+    keeps the change without an event, until clients reload.~~ They now
+    commit in one transaction.
+  - ~~Concurrent edits to one Bot can emit their events out of order.~~ The
+    transaction holds the user's log, so events follow commit order.
+  - ~~A turn goes uncounted if recording it fails after Codex started
+    it.~~ The turn is counted first, and taken back only when Codex
+    answers with an error.
 - **Usage:**
   - No `usage_updated` event is sent when an admin changes limits or a
     window rolls over.

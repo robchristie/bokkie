@@ -18,8 +18,7 @@ use bokkie_codex::protocol::{
     AdditionalContextEntry, AdditionalContextKind, ServerNotification, ThreadItem, TurnStatus,
 };
 use bokkie_protocol::api::{
-    Allowance, Author, BotStatus, Delivery, ErrorCode, Message, MessageState, SendMessageResponse,
-    Usage,
+    Allowance, Author, Delivery, ErrorCode, Message, MessageState, SendMessageResponse, Usage,
 };
 use bokkie_protocol::events::Event;
 use bokkie_protocol::{BotId, MessageId, UserId};
@@ -31,7 +30,7 @@ use crate::accounts::Account;
 use crate::clock::Clock;
 use crate::codex::{CodexError, RuntimeEvent, RuntimeEventKind, Supervisor};
 use crate::error::{Failure, Result};
-use crate::events::EventLog;
+use crate::events::{Batch, EventLog};
 use crate::usage::{self, SubscriptionCache};
 
 /// How often streamed text is written out. Deltas arriving in between are
@@ -161,7 +160,9 @@ fn unavailable(error: CodexError) -> Failure {
         CodexError::Refused(_) | CodexError::ThreadRefused(_) => Failure::unavailable(
             "This Bot is unavailable because a safety check failed. An admin has been told",
         ),
-        CodexError::AppServer(_) => Failure::unavailable("The Bots' runtime is unavailable"),
+        CodexError::AppServer(_) | CodexError::Rejected(_) => {
+            Failure::unavailable("The Bots' runtime is unavailable")
+        }
     }
 }
 
@@ -189,13 +190,22 @@ impl Conversations {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Appends an event to the user's log. A failure, which means the
-    /// database failed, is logged: the change itself has happened, the event
-    /// is lost, and sequence numbers stay contiguous. Clients see the change
-    /// the next time they load it over HTTP.
+    /// Appends an event that announces no database change. A failure, which
+    /// means the database failed, is logged: the event is lost, and
+    /// sequence numbers stay contiguous.
     async fn emit(&self, user: UserId, event: Event) {
         if let Err(failure) = self.events.append(user, event).await {
             tracing::error!(user = %user, message = %failure.message, "appending an event failed");
+        }
+    }
+
+    /// Commits a batch from the event router, where nobody waits on the
+    /// result: a failure is logged, and the change and its events are both
+    /// rolled back.
+    async fn commit(&self, batch: Batch) {
+        let user = batch.user();
+        if let Err(failure) = batch.commit().await {
+            tracing::error!(user = %user, message = %failure.message, "committing a change failed");
         }
     }
 
@@ -220,8 +230,9 @@ impl Conversations {
                 .await?;
         for (id, user) in &left {
             let user = UserId(*user);
+            let mut batch = self.events.begin(user).await?;
             if let Some(message) = store::finish_message(
-                &self.db,
+                &mut *batch,
                 self.clock.now(),
                 user,
                 MessageId(*id),
@@ -230,8 +241,9 @@ impl Conversations {
             )
             .await?
             {
-                self.emit(user, Event::MessageCompleted { message }).await;
+                batch.emit(Event::MessageCompleted { message }).await?;
             }
+            batch.commit().await?;
         }
         if !left.is_empty() {
             tracing::warn!(count = left.len(), "marked interrupted replies as failed");
@@ -307,8 +319,9 @@ impl Conversations {
         let profile = (bot.profile_sent_revision < bot.profile_revision)
             .then(|| context(profile_update(&bot)));
 
+        let mut batch = self.events.begin(user).await?;
         let message = store::insert_message(
-            &self.db,
+            &mut *batch,
             self.clock.now(),
             user,
             NewMessage {
@@ -320,13 +333,12 @@ impl Conversations {
             },
         )
         .await?;
-        self.emit(
-            user,
-            Event::MessageCreated {
+        batch
+            .emit(Event::MessageCreated {
                 message: message.clone(),
-            },
-        )
-        .await;
+            })
+            .await?;
+        batch.commit().await?;
 
         // Steer the running turn, if there is one.
         let active = self.live().turns.get(&bot.id).cloned();
@@ -343,7 +355,7 @@ impl Conversations {
                     });
                 }
                 // The turn ended in the meantime: start a new one instead.
-                Err(CodexError::AppServer(error)) => {
+                Err(CodexError::AppServer(error) | CodexError::Rejected(error)) => {
                     tracing::info!(bot = %bot.id, %error, "steer missed the turn; starting one");
                 }
                 Err(refused @ (CodexError::Refused(_) | CodexError::ThreadRefused(_))) => {
@@ -354,14 +366,25 @@ impl Conversations {
                 }
             }
         }
-        if allowance.exhausted {
-            // The steer missed, and there is no allowance for a new turn.
+        // Count the turn before Codex starts it, so that a started turn is
+        // always counted. If there is no allowance for it, the steer missed
+        // and the message stays without a reply.
+        let Some(reserved) = self.reserve_turn(user, bot.id).await? else {
             return Err(limit_reached());
-        }
-        let turn = runtime.start_turn(&thread_id, &text, profile).await;
-        let turn = self.refusing(user, &bot, turn).await?;
-        usage::record_turn(&self.db, self.clock.now(), user, bot.id).await?;
-        self.usage_changed(user).await;
+        };
+        let turn = match runtime.start_turn(&thread_id, &text, profile).await {
+            Ok(turn) => turn,
+            Err(error) => {
+                // Only a turn Codex certainly did not start is taken back.
+                if error.had_no_effect() {
+                    self.release_turn(user, reserved).await;
+                }
+                return Err(self
+                    .refusing::<()>(user, &bot, Err(error))
+                    .await
+                    .unwrap_err());
+            }
+        };
         store::set_profile_sent(&self.db, user, bot.id, bot.profile_revision).await?;
         // Whichever of this and the router's `turn/started` records the turn
         // first announces that the Bot is working.
@@ -380,7 +403,7 @@ impl Conversations {
                     .is_none()
         };
         if started {
-            self.status(user, bot.id, BotStatus::Working).await;
+            self.status(user, bot.id).await;
         }
         Ok(SendMessageResponse {
             message,
@@ -402,15 +425,10 @@ impl Conversations {
             // the Bot's, and must not outlive it.
             Err(CodexError::ThreadRefused(refusal)) => {
                 tracing::error!(user = %user, bot = %bot.id, %refusal, "refusing a Bot");
-                store::set_refused(&self.db, self.clock.now(), user, bot.id, &refusal.0).await?;
-                self.emit(
-                    user,
-                    Event::BotStatusChanged {
-                        bot_id: bot.id,
-                        status: BotStatus::Refused,
-                    },
-                )
-                .await;
+                let mut batch = self.events.begin(user).await?;
+                store::set_refused(&mut *batch, self.clock.now(), user, bot.id, &refusal.0).await?;
+                self.emit_status(&mut batch, bot.id).await?;
+                batch.commit().await?;
                 Err(unavailable(CodexError::ThreadRefused(refusal)))
             }
             Err(error) => {
@@ -480,17 +498,17 @@ impl Conversations {
             })
             .collect();
         for (user, bot_id, message_id, offset, delta) in pending {
-            store::append_text(&self.db, self.clock.now(), user, message_id, &delta).await?;
-            self.emit(
-                user,
-                Event::MessageDelta {
+            let mut batch = self.events.begin(user).await?;
+            store::append_text(&mut *batch, self.clock.now(), user, message_id, &delta).await?;
+            batch
+                .emit(Event::MessageDelta {
                     bot_id,
                     message_id,
                     offset,
                     delta,
-                },
-            )
-            .await;
+                })
+                .await?;
+            batch.commit().await?;
         }
         Ok(())
     }
@@ -517,7 +535,7 @@ impl Conversations {
                             )
                             .is_none();
                         if was_idle {
-                            self.status(user, bot.id, BotStatus::Working).await;
+                            self.status(user, bot.id).await;
                         }
                     }
                 }
@@ -553,8 +571,9 @@ impl Conversations {
                                 .remove(&(user, item.thread_id.clone(), id.clone()));
                         if let Some(reply) = reply {
                             // The final text replaces whatever streamed.
+                            let mut batch = self.events.begin(user).await?;
                             let message = store::finish_message(
-                                &self.db,
+                                &mut *batch,
                                 self.clock.now(),
                                 user,
                                 reply.message,
@@ -563,8 +582,9 @@ impl Conversations {
                             )
                             .await?;
                             if let Some(message) = message {
-                                self.emit(user, Event::MessageCompleted { message }).await;
+                                batch.emit(Event::MessageCompleted { message }).await?;
                             }
+                            self.commit(batch).await;
                         }
                     }
                 }
@@ -591,8 +611,8 @@ impl Conversations {
                             TurnStatus::Failed => MessageState::Failed,
                         };
                         self.finish_streaming(user, Some(bot.id), state).await?;
-                        if ended && bot.refused_reason.is_none() {
-                            self.status(user, bot.id, BotStatus::Idle).await;
+                        if ended {
+                            self.status(user, bot.id).await;
                         }
                     }
                 }
@@ -602,9 +622,11 @@ impl Conversations {
                     {
                         let total =
                             u64::try_from(update.token_usage.total.total_tokens).unwrap_or(0);
-                        usage::record_tokens(&self.db, self.clock.now(), user, bot.id, total)
+                        let mut batch = self.events.begin(user).await?;
+                        usage::record_tokens(&mut batch, self.clock.now(), user, bot.id, total)
                             .await?;
-                        self.usage_changed(user).await;
+                        self.emit_usage(&mut batch).await?;
+                        self.commit(batch).await;
                     }
                 }
                 ServerNotification::AccountRateLimitsUpdated(update) => {
@@ -631,11 +653,14 @@ impl Conversations {
             },
             RuntimeEventKind::Refused { thread_id, reason } => {
                 if let Some(bot) = store::bot_by_thread(&self.db, user, &thread_id).await? {
-                    store::set_refused(&self.db, self.clock.now(), user, bot.id, &reason).await?;
                     self.live().turns.remove(&bot.id);
                     self.finish_streaming(user, Some(bot.id), MessageState::Failed)
                         .await?;
-                    self.status(user, bot.id, BotStatus::Refused).await;
+                    let mut batch = self.events.begin(user).await?;
+                    store::set_refused(&mut *batch, self.clock.now(), user, bot.id, &reason)
+                        .await?;
+                    self.emit_status(&mut batch, bot.id).await?;
+                    self.commit(batch).await;
                 }
             }
             RuntimeEventKind::Exited => {
@@ -654,7 +679,7 @@ impl Conversations {
                 self.finish_streaming(user, None, MessageState::Failed)
                     .await?;
                 for bot in stopped {
-                    self.status(user, bot, BotStatus::Idle).await;
+                    self.status(user, bot).await;
                 }
             }
         }
@@ -680,8 +705,9 @@ impl Conversations {
         {
             return Ok(None);
         }
+        let mut batch = self.events.begin(user).await?;
         let message = store::insert_message(
-            &self.db,
+            &mut *batch,
             self.clock.now(),
             user,
             NewMessage {
@@ -693,13 +719,12 @@ impl Conversations {
             },
         )
         .await?;
-        self.emit(
-            user,
-            Event::MessageCreated {
+        batch
+            .emit(Event::MessageCreated {
                 message: message.clone(),
-            },
-        )
-        .await;
+            })
+            .await?;
+        batch.commit().await?;
         let mut live = self.live();
         if !live.finished.iter().any(|t| t == turn_id) {
             live.turns.entry(bot.id).or_insert_with(|| ActiveTurn {
@@ -731,24 +756,22 @@ impl Conversations {
         self.live()
             .replies
             .retain(|(owner, _, _), reply| *owner != user || bot.is_some_and(|b| b != reply.bot));
-        for message in store::streaming_messages(&self.db, user, bot).await? {
+        let mut batch = self.events.begin(user).await?;
+        for message in store::streaming_messages(&mut *batch, user, bot).await? {
             if let Some(message) =
-                store::finish_message(&self.db, self.clock.now(), user, message, None, state)
+                store::finish_message(&mut *batch, self.clock.now(), user, message, None, state)
                     .await?
             {
-                self.emit(user, Event::MessageCompleted { message }).await;
+                batch.emit(Event::MessageCompleted { message }).await?;
             }
         }
+        batch.commit().await?;
         Ok(())
     }
 
     /// The user's allowance now, with their current limits.
     pub async fn allowance(&self, user: UserId) -> Result<Allowance> {
-        let limits = crate::accounts::account(&self.db, user)
-            .await?
-            .map(|a| a.limits)
-            .unwrap_or_default();
-        usage::allowance(&self.db, self.clock.now(), user, limits).await
+        allowance(&mut *self.db.acquire().await?, self.clock.now(), user).await
     }
 
     /// The user's usage meter. Reads the subscription's windows from the
@@ -778,26 +801,96 @@ impl Conversations {
         Ok(usage::usage(subscription, self.allowance(user).await?))
     }
 
-    async fn usage_changed(&self, user: UserId) {
-        let allowance = match self.allowance(user).await {
-            Ok(allowance) => allowance,
-            Err(failure) => {
-                tracing::error!(user = %user, message = %failure.message, "reading usage failed");
-                return;
-            }
-        };
+    /// Adds the user's usage meter to a batch, as the batch sees it.
+    async fn emit_usage(&self, batch: &mut Batch) -> Result<()> {
+        let user = batch.user();
+        let allowance = allowance(batch, self.clock.now(), user).await?;
         let subscription = self.subscription.get(user).unwrap_or_default();
-        self.emit(
-            user,
-            Event::UsageUpdated {
+        batch
+            .emit(Event::UsageUpdated {
                 usage: usage::usage(subscription, allowance),
-            },
-        )
-        .await;
+            })
+            .await
     }
 
-    async fn status(&self, user: UserId, bot_id: BotId, status: BotStatus) {
-        self.emit(user, Event::BotStatusChanged { bot_id, status })
-            .await;
+    async fn usage_changed(&self, user: UserId) {
+        match self.events.begin(user).await {
+            Ok(mut batch) => match self.emit_usage(&mut batch).await {
+                Ok(()) => self.commit(batch).await,
+                Err(failure) => {
+                    tracing::error!(user = %user, message = %failure.message, "reading usage failed");
+                }
+            },
+            Err(failure) => {
+                tracing::error!(user = %user, message = %failure.message, "reading usage failed");
+            }
+        }
     }
+
+    /// Counts a turn for the user if their allowance has one left, and
+    /// announces the new count.
+    async fn reserve_turn(&self, user: UserId, bot: BotId) -> Result<Option<i64>> {
+        let mut batch = self.events.begin(user).await?;
+        let Some(turn) = usage::reserve_turn(&mut batch, self.clock.now(), user, bot).await? else {
+            return Ok(None);
+        };
+        self.emit_usage(&mut batch).await?;
+        batch.commit().await?;
+        Ok(Some(turn))
+    }
+
+    /// Takes back a counted turn that Codex refused. A failure leaves the
+    /// turn counted, which costs the user one turn rather than letting a
+    /// turn go uncounted.
+    async fn release_turn(&self, user: UserId, turn: i64) {
+        let released = async {
+            let mut batch = self.events.begin(user).await?;
+            usage::release_turn(&mut *batch, user, turn).await?;
+            self.emit_usage(&mut batch).await?;
+            batch.commit().await
+        };
+        if let Err(failure) = released.await {
+            tracing::error!(user = %user, message = %failure.message, "releasing a turn failed");
+        }
+    }
+
+    /// Adds the Bot's status to a batch. The status is read while the batch
+    /// holds the user's log lock, and every change to it is followed by a
+    /// status event, so the user's latest status event is always current.
+    async fn emit_status(&self, batch: &mut Batch, bot_id: BotId) -> Result<()> {
+        let user = batch.user();
+        let Some(bot) = store::bot(&mut **batch, user, bot_id).await? else {
+            return Ok(());
+        };
+        let status = bot.to_api(self.is_working(bot_id), None).status;
+        batch.emit(Event::BotStatusChanged { bot_id, status }).await
+    }
+
+    /// Announces the Bot's current status.
+    async fn status(&self, user: UserId, bot_id: BotId) {
+        match self.events.begin(user).await {
+            Ok(mut batch) => match self.emit_status(&mut batch, bot_id).await {
+                Ok(()) => self.commit(batch).await,
+                Err(failure) => {
+                    tracing::error!(user = %user, message = %failure.message, "reading a Bot failed");
+                }
+            },
+            Err(failure) => {
+                tracing::error!(user = %user, message = %failure.message, "reading a Bot failed");
+            }
+        }
+    }
+}
+
+/// The user's allowance at `now`, with their current limits.
+async fn allowance(
+    conn: &mut sqlx::SqliteConnection,
+    now: bokkie_protocol::Timestamp,
+    user: UserId,
+) -> Result<Allowance> {
+    let limits = crate::accounts::account(&mut *conn, user)
+        .await?
+        .map(|a| a.limits)
+        .unwrap_or_default();
+    usage::allowance(&mut *conn, now, user, limits).await
 }
