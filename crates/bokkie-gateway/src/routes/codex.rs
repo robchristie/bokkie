@@ -2,7 +2,7 @@
 //!
 //! Each user's app server holds its own ChatGPT credential in its own
 //! `CODEX_HOME`. Whether household members sign in with their own ChatGPT
-//! accounts is still an open decision in the plan; these routes only let a
+//! accounts is still an open decision; these routes only let a
 //! user see and start the sign-in of their own app server.
 
 use axum::Json;

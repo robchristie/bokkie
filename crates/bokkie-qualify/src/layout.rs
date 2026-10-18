@@ -1,8 +1,9 @@
 //! The qualification data layout, Codex configuration and probe plans.
 //!
-//! It mirrors the plan's layout: `/data/users/<id>/codex` is the user's
-//! `CODEX_HOME`, `/data/users/<id>/workspace` the Bots' computer, and
-//! `/data/bokkie.db` stands in for Bokkie's database.
+//! It mirrors the layout that `docs/architecture.md#sandbox-invariants`
+//! protects: `/data/users/<id>/codex` is the user's `CODEX_HOME`,
+//! `/data/users/<id>/workspace` the Bots' computer, and `/data/bokkie.db`
+//! stands in for Bokkie's database.
 
 use std::path::{Path, PathBuf};
 

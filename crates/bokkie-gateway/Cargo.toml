@@ -14,12 +14,14 @@ base64 = "0.22"
 bokkie-codex = { path = "../bokkie-codex" }
 bokkie-protocol = { path = "../bokkie-protocol" }
 getrandom = "0.3"
+percent-encoding = "2"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "signal"] }
+tower-http = { version = "0.7.1", default-features = false, features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

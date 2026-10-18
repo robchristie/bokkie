@@ -1,7 +1,7 @@
 //! Admin user management and invitations. Every route needs an admin.
 //!
 //! Admins see accounts, limits and invitations. They do not see members'
-//! conversations: whether they should is an open decision in the plan.
+//! conversations: whether they should is still an open decision.
 
 use axum::Json;
 use axum::extract::State;
