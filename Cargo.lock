@@ -673,6 +673,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 

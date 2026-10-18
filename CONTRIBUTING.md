@@ -66,6 +66,27 @@ stobie serve apps/bokkie-web/web
 `stobie build-web` writes `web/pkg/`, `web/browser-startup.js`,
 `web/manifest.webmanifest` and `web/sw.js`; they are generated and ignored.
 
+`stobie serve` has no API behind it, so the client only signs in when the
+gateway serves it from the same origin. Build a production package and
+point a local gateway at it, with a synthetic admin in a temporary data
+directory. The session cookie is `Secure`, which browsers accept over HTTPS
+or from `localhost`, so use `localhost` as the origin:
+
+```sh
+stobie build-web --manifest-path apps/bokkie-web/Cargo.toml --package bokkie-web \
+  --production --output /tmp/bokkie-web
+export BOKKIE_DATA="$(mktemp -d)" BOKKIE_ORIGIN=http://localhost:8787 \
+  BOKKIE_LISTEN=127.0.0.1:8787 BOKKIE_WEB_ROOT=/tmp/bokkie-web/bokkie-web \
+  BOKKIE_CODEX_BIN="$(scripts/fetch-codex)"
+cargo run -p bokkie-gateway -- bootstrap-admin synthetic "Synthetic Admin"  # password on standard input
+cargo run -p bokkie-gateway -- serve
+```
+
+Then open <http://localhost:8787/>, adding `?automation=1` for
+`stobie attach`. The client's facts (`screen`, `user`, `bots`, `bot_count`
+and `message`) say where it is. Stobie offers no `set-text` on the password
+field, so type into it with the keyboard.
+
 ### Stobie pin
 
 Stobie is not on crates.io and has no releases. Every Stobie dependency in
