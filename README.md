@@ -31,5 +31,8 @@ gateway has landed; [docs/gateway.md](docs/gateway.md) is its operator
 reference. The web client (`apps/bokkie-web`) signs in, lists the user's
 Bots and holds one Bot's conversation, with replies streaming over the event
 socket, a Stop action, the usage meter, the limit-reached banner, a New Bot
-form and the ChatGPT device-code sign-in for the user's own app server. The
-owner keeps the phase plan privately.
+form and the ChatGPT device-code sign-in for the user's own app server. It
+builds as an installable web application named Bokkie, which the gateway
+serves with a Content-Security-Policy, and verification drives it in
+Chromium against the real gateway and a mock model. The owner keeps the
+phase plan privately.

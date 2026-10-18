@@ -2,3 +2,5 @@
 # Downloaded tools (the pinned Codex release), runtime captures, qualification
 # logs and local probe state. Never commit them.
 /.tools/
+# The browser smoke's pinned Node packages, installed by scripts/browser-smoke.
+/tests/browser-smoke/node_modules/

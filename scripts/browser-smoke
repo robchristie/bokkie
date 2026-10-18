@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# The browser smoke: drives pinned Chromium, headful, against a production
+# web package served by the real gateway, with the pinned Codex app server
+# and the gateway tests' mock model. See CONTRIBUTING.md, "Browser smoke".
+#
+# Usage: scripts/browser-smoke WEB_ROOT [EVIDENCE_DIR]
+#   WEB_ROOT      a production package's application directory, such as
+#                 <output>/bokkie-web from `stobie build-web --production`
+#   EVIDENCE_DIR  where the logs and smoke.json go (default
+#                 .tools/runtime/browser-smoke)
+#
+# Needs the pinned Node (tests/browser-smoke/.node-version), BOKKIE_CODEX_BIN
+# or a downloadable Codex, and a display: DISPLAY, or Xvfb through
+# `xvfb-run`. On a host without Chromium's libraries or Xvfb, set
+# BOKKIE_BROWSER_RUNNER to a command that runs its arguments somewhere that
+# has them, such as a container.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+web_root="$(cd "${1:?usage: scripts/browser-smoke WEB_ROOT [EVIDENCE_DIR]}" && pwd)"
+evidence="${2:-$root/.tools/runtime/browser-smoke}"
+smoke=tests/browser-smoke
+
+node_version="$(cat "$smoke/.node-version")"
+if [[ "$(node --version 2>/dev/null)" != "v$node_version" ]]; then
+  echo "browser-smoke: needs Node $node_version, found $(node --version 2>/dev/null || echo none)" >&2
+  exit 1
+fi
+# The pinned Playwright, and the Chromium build it names.
+npm ci --prefix "$smoke" --ignore-scripts --no-audit --no-fund --loglevel=error >&2
+"$smoke/node_modules/.bin/playwright" install chromium >&2
+
+codex="${BOKKIE_CODEX_BIN:-$(scripts/fetch-codex)}"
+cargo build --locked --quiet -p bokkie-gateway -p bokkie-mock-model
+target="$(cargo metadata --format-version 1 --no-deps --locked |
+  python3 -I -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+
+run=(node "$smoke/smoke.mjs" "$target/debug/bokkie-gateway" "$target/debug/bokkie-mock-model"
+  "$codex" "$web_root" "$evidence")
+mkdir -p "$evidence"
+started=$SECONDS
+if [[ -n "${BOKKIE_BROWSER_RUNNER:-}" ]]; then
+  # A command that runs the smoke where Chromium can run headful, such as a
+  # container with its libraries and Xvfb. It must see this checkout, the
+  # build directory and the evidence directory at the same paths.
+  read -r -a runner <<<"$BOKKIE_BROWSER_RUNNER"
+  "${runner[@]}" "${run[@]}"
+elif [[ -n "${DISPLAY:-}" ]]; then
+  "${run[@]}"
+elif command -v xvfb-run >/dev/null; then
+  xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24 -nolisten tcp" "${run[@]}"
+else
+  echo "browser-smoke: needs a display for headful Chromium: set DISPLAY or install xvfb-run" >&2
+  exit 1
+fi
+echo "browser-smoke: passed in $((SECONDS - started)) s" >&2

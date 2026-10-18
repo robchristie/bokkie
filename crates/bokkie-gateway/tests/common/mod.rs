@@ -4,7 +4,6 @@
 #![allow(dead_code)]
 
 pub mod fake_codex;
-pub mod mock_model;
 
 use axum::Router;
 use axum::body::Body;

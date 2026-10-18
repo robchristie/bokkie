@@ -6,9 +6,9 @@ mod common;
 
 use std::time::Duration;
 
+use bokkie_mock_model::{MockModel, RateLimitWindow, RateLimits};
 use bokkie_protocol::api::{Author, BotStatus, MessageState};
 use bokkie_protocol::events::{ClientFrame, Event, ServerFrame};
-use common::mock_model::MockModel;
 use common::{Call, Gateway, HOST, ORIGIN};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
@@ -94,4 +94,93 @@ async fn a_bot_reply_streams_over_the_websocket_from_a_real_app_server() {
     // The model saw the Bot's profile.
     let request = mock.requests.lock().unwrap()[0].to_string();
     assert!(request.contains("Suggest one dinner."));
+}
+
+/// The mock reports the subscription's windows in the headers the real API
+/// uses, and the real app server passes them to the gateway's usage meter.
+/// The browser smoke relies on this to show the meter and the banner.
+#[tokio::test]
+async fn the_mock_models_rate_limit_windows_reach_the_usage_meter() {
+    let Some(program) = std::env::var_os("BOKKIE_CODEX_BIN") else {
+        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+        return;
+    };
+    let (mock, base_url) = MockModel::start(&["Fine."]).await;
+    let resets_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+    let window = |used_percent, window_minutes| RateLimitWindow {
+        used_percent,
+        window_minutes,
+        resets_at,
+    };
+    *mock.rate_limits.lock().unwrap() = Some(RateLimits {
+        primary: Some(window(42, 300)),
+        secondary: Some(window(7, 10080)),
+    });
+    let gateway = Gateway::live(program.into(), MockModel::overrides(&base_url)).await;
+    gateway.route().await;
+    let rob = gateway.admin("rob").await;
+    let bot = gateway
+        .send(Call::post("/api/v1/bots").cookie(&rob).json(&json!({
+            "name": "Chef", "label": "", "description": ""})))
+        .await;
+    let bot_id = bot.body["id"].as_i64().unwrap();
+    let sent = gateway
+        .send(
+            Call::post(&format!("/api/v1/bots/{bot_id}/messages"))
+                .cookie(&rob)
+                .json(&json!({"text": "Hello"})),
+        )
+        .await;
+    assert_eq!(sent.status, 200, "{:?}", sent.body);
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let usage = loop {
+        let usage = gateway.send(Call::get("/api/v1/usage").cookie(&rob)).await;
+        let primary = &usage.body["subscription"][0]["primary"];
+        if primary["used_percent"] == 42 {
+            break usage.body;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no windows: {:?}",
+            usage.body
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let bucket = &usage["subscription"][0];
+    assert_eq!(bucket["primary"]["window_minutes"], 300, "{usage}");
+    assert_eq!(bucket["primary"]["resets_at"], resets_at * 1000, "{usage}");
+    assert_eq!(bucket["secondary"]["used_percent"], 7, "{usage}");
+    assert_eq!(bucket["reached"], false, "{usage}");
+
+    // A full window is reported as reached.
+    *mock.rate_limits.lock().unwrap() = Some(RateLimits {
+        primary: Some(window(100, 300)),
+        secondary: None,
+    });
+    let sent = gateway
+        .send(
+            Call::post(&format!("/api/v1/bots/{bot_id}/messages"))
+                .cookie(&rob)
+                .json(&json!({"text": "Again"})),
+        )
+        .await;
+    assert_eq!(sent.status, 200, "{:?}", sent.body);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let usage = gateway.send(Call::get("/api/v1/usage").cookie(&rob)).await;
+        if usage.body["subscription"][0]["reached"] == true {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "never reached: {:?}",
+            usage.body
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
