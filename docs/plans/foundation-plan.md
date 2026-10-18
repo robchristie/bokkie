@@ -423,10 +423,13 @@ remaining work unless a later phase is named:
     window rolls over.~~ Done in #16: the limit change commits with its
     event, and a pass every minute announces rolled-over windows.
   - ~~A token allowance can be overshot by one turn.~~ Decided in #17:
-    when a token report uses up the allowance, the user's running turns
-    are interrupted, so the overshoot is at most what each used before its
-    last report. A hard stop suits allowances set for children; the cost
-    is a cut-off reply.
+    Codex reports tokens as each model response completes, so the
+    overshoot is bounded by one response per running turn and is counted.
+    When a report uses up the allowance, the user's running turns are
+    interrupted, which cuts short turns that would ask the model again
+    (steered, compacted and, from Phase 4, tool turns). A chat-only reply
+    has usually finished by then and is left whole. A hard stop suits
+    allowances set for children; its cost is a cut-off multi-step turn.
   - ~~One user's sends are serialised, so a hung Codex call delays that
     user's other sends for up to 120 seconds.~~ Done in #17: sends are
     serialised per Bot, and the allowance is checked and counted in one

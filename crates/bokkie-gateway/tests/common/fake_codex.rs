@@ -74,6 +74,8 @@ pub struct Behaviour {
     pub received: Vec<Received>,
     /// Each thread's token total, which grows by 120 per turn.
     pub tokens: HashMap<String, i64>,
+    /// Turns that have finished; Codex refuses to interrupt them.
+    pub finished: std::collections::HashSet<String>,
     next_id: u64,
 }
 
@@ -101,6 +103,7 @@ impl Default for Behaviour {
             }),
             received: Vec::new(),
             tokens: HashMap::new(),
+            finished: Default::default(),
             next_id: 0,
         }
     }
@@ -306,7 +309,16 @@ impl FakeCodex {
                 return;
             }
             "turn/steer" => json!({"turnId": params["expectedTurnId"]}),
+            "turn/interrupt"
+                if self.with(|b| b.finished.contains(params["turnId"].as_str().unwrap_or(""))) =>
+            {
+                let _ = out.send(json!({"id": id, "error": {
+                    "code": -32600, "message": "no active turn to interrupt"}}));
+                return;
+            }
             "turn/interrupt" => {
+                let turn = params["turnId"].as_str().unwrap_or("").to_owned();
+                self.with(|b| b.finished.insert(turn));
                 let _ = out.send(json!({"method": "turn/completed", "params": {
                     "threadId": params["threadId"],
                     "turn": {"id": params["turnId"], "items": [], "status": "interrupted", "error": null},
@@ -417,6 +429,7 @@ impl FakeCodex {
             *total += 120;
             (b.reply.clone(), b.finish_turns, *total, b.usage_mid_turn)
         });
+        let fake = self.clone();
         tokio::spawn(async move {
             let item = format!("{turn}-msg");
             let send = |value: Value| {
@@ -449,6 +462,9 @@ impl FakeCodex {
             if !finish {
                 return;
             }
+            // As Codex does, the turn reports its tokens once the model's
+            // response is complete, just before the turn ends.
+            fake.with(|b| b.finished.insert(turn.clone()));
             let text: String = reply.concat();
             send(
                 json!({"method": "item/completed", "params": {"threadId": thread, "turnId": turn,

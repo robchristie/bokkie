@@ -585,8 +585,24 @@ async fn a_subscription_window_that_resets_is_read_again_and_announced() {
     );
 }
 
+/// Every `bot_error` message in the user's log.
+async fn bot_errors(gateway: &Gateway, user: i64) -> Vec<String> {
+    gateway
+        .state
+        .events
+        .since(UserId(user), bokkie_protocol::events::Seq(0), 10_000)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.event {
+            bokkie_protocol::events::Event::BotError { message, .. } => Some(message),
+            _ => None,
+        })
+        .collect()
+}
+
 #[tokio::test]
-async fn a_turn_that_uses_up_the_token_allowance_is_stopped() {
+async fn a_reply_that_uses_up_the_token_allowance_overshoots_by_one_response() {
     let (gateway, rob) = setup().await;
     let (amy, amy_id) = gateway.member(&rob, "amy").await;
     set_limits(
@@ -596,14 +612,56 @@ async fn a_turn_that_uses_up_the_token_allowance_is_stopped() {
         json!({"daily_turns": null, "weekly_tokens": 100}),
     )
     .await;
-    // The turn reports 120 tokens while it is still running.
-    gateway.fake.with(|b| {
-        b.finish_turns = false;
-        b.usage_mid_turn = true;
-    });
+    // As with the pinned Codex, a chat-only turn reports its 120 tokens
+    // once the model's response is complete.
+    let chef = create_bot(&gateway, &amy, "Chef").await;
+    turn(&gateway, &amy, chef).await;
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}/messages")).cookie(&amy))
+        .await;
+    let reply = page.body["messages"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    assert_eq!(reply["state"], "complete", "the reply was not cut short");
+    assert_eq!(reply["text"], "Hello there");
+    // The overshoot is that one response, and it is counted.
+    let meter = usage(&gateway, &amy).await;
+    assert_eq!(meter["allowance"]["tokens_this_week"], 120);
+    assert_eq!(meter["allowance"]["exhausted"], true);
+    // Nothing claims a stop that did not happen, and nothing more runs.
+    assert!(bot_errors(&gateway, amy_id).await.is_empty());
+    assert_eq!(say(&gateway, &amy, chef).await.code(), "limit_reached");
+}
+
+#[tokio::test]
+async fn a_turn_still_running_when_the_token_allowance_is_used_up_is_stopped() {
+    let (gateway, rob) = setup().await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    set_limits(
+        &gateway,
+        &rob,
+        amy_id,
+        json!({"daily_turns": null, "weekly_tokens": 100}),
+    )
+    .await;
+    // Rob's turn runs on, unreported.
+    gateway.fake.with(|b| b.finish_turns = false);
+    let robs = create_bot(&gateway, &rob, "Butler").await;
+    assert_eq!(say(&gateway, &rob, robs).await.status, StatusCode::OK);
+    gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{robs}"), |b| {
+            b["status"] == "working"
+        })
+        .await;
+    // Amy's turn reports 120 tokens and would go on, as a turn that asks
+    // the model again does.
+    gateway.fake.with(|b| b.usage_mid_turn = true);
     let chef = create_bot(&gateway, &amy, "Chef").await;
     assert_eq!(say(&gateway, &amy, chef).await.status, StatusCode::OK);
-    let page = gateway
+    gateway
         .wait_for(&amy, &format!("/api/v1/bots/{chef}/messages"), |b| {
             b["messages"]
                 .as_array()
@@ -612,22 +670,18 @@ async fn a_turn_that_uses_up_the_token_allowance_is_stopped() {
                 .any(|m| m["author"] == "bot" && m["state"] == "interrupted")
         })
         .await;
-    assert_eq!(gateway.fake.received("turn/interrupt").len(), 1, "{page}");
-    // The overshoot is what Codex reported before the turn was stopped.
-    let meter = usage(&gateway, &amy).await;
-    assert_eq!(meter["allowance"]["tokens_this_week"], 120);
-    assert_eq!(meter["allowance"]["exhausted"], true);
-    // Amy is told why, and nothing more runs.
-    let log = gateway
-        .state
-        .events
-        .since(UserId(amy_id), bokkie_protocol::events::Seq(0), 1_000)
-        .await
-        .unwrap();
-    assert!(log.iter().any(|e| matches!(
-        &e.event,
-        bokkie_protocol::events::Event::BotError { message, .. } if message.contains("allowance")
-    )));
+    // Only Amy's turn is stopped, once, and she is told why.
+    let interrupts = gateway.fake.received("turn/interrupt");
+    assert_eq!(interrupts.len(), 1);
+    assert_eq!(interrupts[0].user, UserId(amy_id));
+    let errors = bot_errors(&gateway, amy_id).await;
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("allowance"));
+    assert!(bot_errors(&gateway, 1).await.is_empty());
+    let butler = gateway
+        .send(Call::get(&format!("/api/v1/bots/{robs}")).cookie(&rob))
+        .await;
+    assert_eq!(butler.body["status"], "working");
     assert_eq!(say(&gateway, &amy, chef).await.code(), "limit_reached");
 }
 

@@ -130,6 +130,9 @@ struct Live {
     /// Recently finished turns. A turn can finish before `turn/start`
     /// answers, and must not then be recorded as running.
     finished: std::collections::VecDeque<String>,
+    /// Turns interrupted because the user's token allowance ran out, by the
+    /// user and Codex turn id, until they end.
+    token_stops: std::collections::HashSet<(UserId, String)>,
 }
 
 impl Live {
@@ -681,9 +684,11 @@ impl Conversations {
                 ServerNotification::TurnCompleted(done) => {
                     if let Some(bot) = store::bot_by_thread(&self.db, user, &done.thread_id).await?
                     {
-                        let ended = {
+                        let (ended, stopped_for_tokens) = {
                             let mut live = self.live();
                             live.finished(&done.turn.id);
+                            let stopped_for_tokens =
+                                live.token_stops.remove(&(user, done.turn.id.clone()));
                             let current = live
                                 .turns
                                 .get(&bot.id)
@@ -691,7 +696,7 @@ impl Conversations {
                             if current {
                                 live.turns.remove(&bot.id);
                             }
-                            current
+                            (current, stopped_for_tokens)
                         };
                         let state = match done.turn.status {
                             TurnStatus::Completed | TurnStatus::InProgress => {
@@ -701,6 +706,21 @@ impl Conversations {
                             TurnStatus::Failed => MessageState::Failed,
                         };
                         self.finish_streaming(user, Some(bot.id), state).await?;
+                        // Only a turn the token stop actually cut short is
+                        // announced as stopped. A chat-only turn usually
+                        // reports its tokens after its reply is complete.
+                        if stopped_for_tokens && done.turn.status == TurnStatus::Interrupted {
+                            self.emit(
+                                user,
+                                Event::BotError {
+                                    bot_id: bot.id,
+                                    message: "Your token allowance is used up, so this turn was \
+                                              stopped"
+                                        .into(),
+                                },
+                            )
+                            .await;
+                        }
                         if ended {
                             self.status(user, bot.id).await;
                         }
@@ -769,6 +789,7 @@ impl Conversations {
                     .collect();
                 let stopped: Vec<BotId> = {
                     let mut live = self.live();
+                    live.token_stops.retain(|(owner, _)| *owner != user);
                     bots.iter()
                         .filter(|bot| live.turns.remove(bot).is_some())
                         .copied()
@@ -915,37 +936,41 @@ impl Conversations {
     }
 
     /// Interrupts the user's running turns once their token allowance is
-    /// used up. A turn admitted under the allowance therefore overshoots it
-    /// by at most the tokens Codex used before it reported them. The
-    /// interrupts run in their own tasks, so routing never waits on Codex.
+    /// used up, each turn once. Codex reports a turn's tokens as each model
+    /// response completes, so the allowance is overshot by at most one
+    /// response per running turn: a chat-only turn has usually finished its
+    /// reply by then, and a turn that would ask the model again is cut
+    /// short. The interrupts run in their own task, which also finds the
+    /// user's app server, so routing never waits on the supervisor.
     async fn stop_for_tokens(&self, user: UserId) {
-        let Some(runtime) = self.supervisor.running(user).await else {
-            return;
+        let running: Vec<(BotId, ActiveTurn)> = {
+            let mut live = self.live();
+            let running: Vec<(BotId, ActiveTurn)> = live
+                .turns
+                .iter()
+                .filter(|(_, turn)| turn.user == user)
+                .map(|(bot, turn)| (*bot, turn.clone()))
+                .collect();
+            running
+                .into_iter()
+                .filter(|(_, turn)| live.token_stops.insert((user, turn.turn_id.clone())))
+                .collect()
         };
-        let running: Vec<(BotId, ActiveTurn)> = self
-            .live()
-            .turns
-            .iter()
-            .filter(|(_, turn)| turn.user == user)
-            .map(|(bot, turn)| (*bot, turn.clone()))
-            .collect();
-        for (bot_id, turn) in running {
-            tracing::info!(user = %user, bot = %bot_id, "token allowance used up; stopping the turn");
-            self.emit(
-                user,
-                Event::BotError {
-                    bot_id,
-                    message: "The token allowance is used up, so this reply was stopped".into(),
-                },
-            )
-            .await;
-            let runtime = runtime.clone();
-            tokio::spawn(async move {
-                if let Err(error) = runtime.interrupt_turn(&turn.thread_id, &turn.turn_id).await {
-                    tracing::warn!(user = %user, bot = %bot_id, %error, "stopping a turn failed");
-                }
-            });
+        if running.is_empty() {
+            return;
         }
+        let supervisor = self.supervisor.clone();
+        tokio::spawn(async move {
+            let Some(runtime) = supervisor.running(user).await else {
+                return;
+            };
+            for (bot_id, turn) in running {
+                tracing::info!(user = %user, bot = %bot_id, "token allowance used up; stopping the turn");
+                if let Err(error) = runtime.interrupt_turn(&turn.thread_id, &turn.turn_id).await {
+                    tracing::info!(user = %user, bot = %bot_id, %error, "the turn was not stopped");
+                }
+            }
+        });
     }
 
     async fn usage_changed(&self, user: UserId) {
