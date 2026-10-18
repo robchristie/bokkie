@@ -4,3 +4,5 @@
 /.tools/
 # The browser smoke's pinned Node packages, installed by scripts/browser-smoke.
 /tests/browser-smoke/node_modules/
+# A bokkie-next .env holds host facts and stays on the host.
+/deploy/next/.env

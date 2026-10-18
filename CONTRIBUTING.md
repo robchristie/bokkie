@@ -45,6 +45,18 @@ qualification sign-in in place; see [its README](deploy/e2e/README.md). Run
 it from a clean checkout of the exact commit under test, after changes to
 the gateway's Codex path.
 
+The temporary deployment, `deploy/next/`, builds one image holding the
+gateway, the web client's production package and the pinned Codex, from the
+`git archive` of a commit on `main` (`deploy/next/build.sh`), and runs it as
+Compose project `bokkie-next` behind the LAN host's Traefik. Its
+[README](deploy/next/README.md) is the operator procedure, and
+`deploy/next/check.sh` checks a running deployment's confinement and
+responses. `scripts/verify` runs `deploy/next/check-compose.sh`, which fails
+when the Compose file's confinement or allowlist weakens; it needs
+`docker compose` but no daemon. After changing the files it uses, build the image from the
+commit under test (`BOKKIE_NEXT_ALLOW_UNMERGED=1` until it merges) and start
+it locally to see the gateway healthy and the page served.
+
 ## Web client
 
 `apps/bokkie-web` is the web client, a
