@@ -38,8 +38,17 @@ jobs:
             .tools/stobie
             .tools/wasm-bindgen
           key: web-tools-${{ runner.os }}-stobie-${{ steps.web-tools.outputs.stobie }}-wasm-bindgen-${{ steps.web-tools.outputs.wasm-bindgen }}
-      # The browser smoke: the pinned Node, Playwright's Chromium (cached by
-      # the Playwright version the lock names), its system libraries and Xvfb.
+      # The browser smoke: the pinned Node (cached in the runner's tool cache,
+      # where setup-node looks before downloading), Playwright's Chromium
+      # (cached by the Playwright version the lock names), its system
+      # libraries and Xvfb.
+      - name: Read the pinned Node version
+        id: node
+        run: echo "version=$(cat tests/browser-smoke/.node-version)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.tool_cache }}/node/${{ steps.node.outputs.version }}
+          key: node-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/browser-smoke/.node-version') }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: tests/browser-smoke/.node-version
@@ -49,6 +58,10 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('tests/browser-smoke/package-lock.json') }}
+      # Not cached: the packages come from Ubuntu's archive at whatever
+      # version it holds, so a cache of them would pin nothing, and no
+      # first-party action caches apt installs. See CONTRIBUTING.md, "Browser
+      # smoke".
       - name: Install Chromium's system libraries and Xvfb
         run: |
           npm ci --prefix tests/browser-smoke --ignore-scripts --no-audit --no-fund
