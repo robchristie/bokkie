@@ -1,14 +1,14 @@
 //! The usage meter.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use bokkie_protocol::UserId;
 use bokkie_protocol::api::{Allowance, Usage};
 
 use crate::AppState;
 use crate::accounts;
 use crate::auth::{SignedIn, SignedInAdmin};
-use crate::error::{Failure, Result};
+use crate::error::{Failure, Path, Result};
 
 /// `GET /api/v1/usage`: the shared subscription's windows and the signed-in
 /// user's own allowance.

@@ -309,6 +309,15 @@ pub async fn change_own_password(
     Ok(())
 }
 
+/// Whether a username, as typed at sign-in, names an account.
+pub async fn username_exists(db: &SqlitePool, username: &str) -> Result<bool> {
+    let found: Option<i64> = sqlx::query_scalar("SELECT 1 FROM users WHERE username = ?")
+        .bind(username.trim().to_ascii_lowercase())
+        .fetch_optional(db)
+        .await?;
+    Ok(found.is_some())
+}
+
 /// Checks a username and password. Returns the account only when the
 /// password matches and the account is enabled.
 pub async fn check_credentials(

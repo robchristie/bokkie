@@ -13,6 +13,8 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use bokkie_protocol::SESSION_COOKIE;
 use bokkie_protocol::api::{ErrorCode, Role};
+use sqlx::SqlitePool;
+use tokio::sync::mpsc;
 
 use crate::AppState;
 use crate::accounts::{self, Account, SESSION_IDLE_MS};
@@ -169,16 +171,84 @@ pub fn client_address(parts: &Parts, trust_forwarded_for: bool) -> String {
 /// counts the attempt as a failure up front, and [`LoginLimiter::succeeded`]
 /// takes it back. Concurrent attempts therefore cannot all slip past a limit
 /// before any of them fails.
+///
+/// The counts live in memory. A [persistent](LoginLimiter::persistent)
+/// limiter also writes every change, in order, to the database and starts
+/// from what is stored there, so a restart does not reset the limits.
 #[derive(Debug, Default)]
 pub struct LoginLimiter {
     failures: Mutex<HashMap<String, VecDeque<i64>>>,
+    journal: Option<mpsc::UnboundedSender<Change>>,
+}
+
+/// One limited thing.
+struct Key {
+    name: String,
+    limit: usize,
+    /// Whether success clears the key entirely.
+    clear: bool,
+    /// Whether the key's count is stored in the database.
+    stored: bool,
+}
+
+/// One change to the counts, as written to the database.
+#[derive(Debug)]
+enum Change {
+    Counted { keys: Vec<String>, at: i64 },
+    Cleared { key: String },
+    TakenBack { key: String, at: i64 },
+}
+
+async fn record(db: &SqlitePool, change: Change) -> Result<(), sqlx::Error> {
+    match change {
+        Change::Counted { keys, .. } if keys.is_empty() => {}
+        Change::Counted { keys, at } => {
+            let mut tx = crate::db::write(db).await?;
+            for key in keys {
+                sqlx::query("INSERT INTO login_failures (key, at) VALUES (?, ?)")
+                    .bind(key)
+                    .bind(at)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            sqlx::query("DELETE FROM login_failures WHERE at <= ?")
+                .bind(at - LoginLimiter::WINDOW_MS)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+        }
+        Change::Cleared { key } => {
+            sqlx::query("DELETE FROM login_failures WHERE key = ?")
+                .bind(key)
+                .execute(db)
+                .await?;
+        }
+        Change::TakenBack { key, at } => {
+            sqlx::query(
+                "DELETE FROM login_failures WHERE id =
+                     (SELECT min(id) FROM login_failures WHERE key = ? AND at = ?)",
+            )
+            .bind(key)
+            .bind(at)
+            .execute(db)
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 /// What an attempt is limited by.
 #[derive(Debug, Clone, Copy)]
 pub enum Attempting<'a> {
-    /// A sign-in: limited per username and per client address.
-    SignIn { username: &'a str, address: &'a str },
+    /// A sign-in: limited per username and per client address. A
+    /// username's count is stored only when it names an account, so that
+    /// nothing typed into the field by mistake, such as a password, is
+    /// written to disk.
+    SignIn {
+        username: &'a str,
+        address: &'a str,
+        account_exists: bool,
+    },
     /// An invitation code: limited per client address, sharing the sign-in
     /// address limit.
     Invitation { address: &'a str },
@@ -191,9 +261,10 @@ pub enum Attempting<'a> {
 #[derive(Debug)]
 #[must_use]
 pub struct Attempt {
-    /// Each key, and whether success clears the key entirely (an account's
-    /// own key) or only takes back this attempt (a shared address key).
-    keys: Vec<(String, bool)>,
+    /// Each key, whether success clears the key entirely (an account's
+    /// own key) or only takes back this attempt (a shared address key), and
+    /// whether the key is stored.
+    keys: Vec<(String, bool, bool)>,
     at: i64,
 }
 
@@ -205,25 +276,71 @@ impl LoginLimiter {
     /// dropped, and if none are expired the oldest key goes.
     const MAX_KEYS: usize = 10_000;
 
-    /// Each key with its limit, and whether success clears it.
-    fn keys(attempting: Attempting<'_>) -> Vec<(String, usize, bool)> {
-        let address = |a: &str| (format!("a:{a}"), Self::PER_ADDRESS, false);
+    /// Each key with its limit, whether success clears it, and whether it
+    /// is stored.
+    fn keys(attempting: Attempting<'_>) -> Vec<Key> {
+        let address = |a: &str| Key {
+            name: format!("a:{a}"),
+            limit: Self::PER_ADDRESS,
+            clear: false,
+            stored: true,
+        };
         match attempting {
             Attempting::SignIn {
                 username,
                 address: a,
+                account_exists,
             } => vec![
-                (
-                    format!("u:{}", username.trim().to_ascii_lowercase()),
-                    Self::PER_ACCOUNT,
-                    true,
-                ),
+                Key {
+                    name: format!("u:{}", username.trim().to_ascii_lowercase()),
+                    limit: Self::PER_ACCOUNT,
+                    clear: true,
+                    stored: account_exists,
+                },
                 address(a),
             ],
             Attempting::Invitation { address: a } => vec![address(a)],
-            Attempting::PasswordChange { user } => {
-                vec![(format!("p:{user}"), Self::PER_ACCOUNT, true)]
+            Attempting::PasswordChange { user } => vec![Key {
+                name: format!("p:{user}"),
+                limit: Self::PER_ACCOUNT,
+                clear: true,
+                stored: true,
+            }],
+        }
+    }
+
+    /// A limiter that starts from the attempts stored in the database
+    /// within the window, and stores every change it makes.
+    pub async fn persistent(db: SqlitePool, now: i64) -> Result<Self, sqlx::Error> {
+        sqlx::query("DELETE FROM login_failures WHERE at <= ?")
+            .bind(now - Self::WINDOW_MS)
+            .execute(&db)
+            .await?;
+        let rows: Vec<(String, i64)> =
+            sqlx::query_as("SELECT key, at FROM login_failures ORDER BY at, id")
+                .fetch_all(&db)
+                .await?;
+        let mut failures: HashMap<String, VecDeque<i64>> = HashMap::new();
+        for (key, at) in rows {
+            failures.entry(key).or_default().push_back(at);
+        }
+        let (journal, mut changes) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(change) = changes.recv().await {
+                if let Err(error) = record(&db, change).await {
+                    tracing::warn!(%error, "storing a sign-in attempt failed");
+                }
             }
+        });
+        Ok(Self {
+            failures: Mutex::new(failures),
+            journal: Some(journal),
+        })
+    }
+
+    fn journal(&self, change: Change) {
+        if let Some(journal) = &self.journal {
+            let _ = journal.send(change);
         }
     }
 
@@ -237,7 +354,10 @@ impl LoginLimiter {
     pub fn begin(&self, attempting: Attempting<'_>, now: i64) -> Option<Attempt> {
         let keys = Self::keys(attempting);
         let mut failures = self.lock();
-        for (key, limit, _) in &keys {
+        for Key {
+            name: key, limit, ..
+        } in &keys
+        {
             if let Some(times) = failures.get_mut(key) {
                 while times.front().is_some_and(|t| now - t >= Self::WINDOW_MS) {
                     times.pop_front();
@@ -248,6 +368,7 @@ impl LoginLimiter {
             }
         }
         if failures.len() + keys.len() > Self::MAX_KEYS {
+            // Expired keys go from memory; the journal prunes them by age.
             failures.retain(|_, times| times.back().is_some_and(|t| now - t < Self::WINDOW_MS));
             while failures.len() + keys.len() > Self::MAX_KEYS {
                 let Some(oldest) = failures
@@ -258,15 +379,25 @@ impl LoginLimiter {
                     break;
                 };
                 failures.remove(&oldest);
+                self.journal(Change::Cleared { key: oldest });
             }
         }
-        for (key, _, _) in &keys {
-            failures.entry(key.clone()).or_default().push_back(now);
+        for key in &keys {
+            failures.entry(key.name.clone()).or_default().push_back(now);
         }
+        // Journalled under the lock, so the stored order is this order.
+        self.journal(Change::Counted {
+            keys: keys
+                .iter()
+                .filter(|key| key.stored)
+                .map(|key| key.name.clone())
+                .collect(),
+            at: now,
+        });
         Some(Attempt {
             keys: keys
                 .into_iter()
-                .map(|(key, _, clear)| (key, clear))
+                .map(|key| (key.name, key.clear, key.stored))
                 .collect(),
             at: now,
         })
@@ -277,13 +408,22 @@ impl LoginLimiter {
     /// good sign-in cannot reset guessing against other accounts.
     pub fn succeeded(&self, attempt: Attempt) {
         let mut failures = self.lock();
-        for (key, clear) in attempt.keys {
+        for (key, clear, stored) in attempt.keys {
             if clear {
                 failures.remove(&key);
+                if stored {
+                    self.journal(Change::Cleared { key });
+                }
             } else if let Some(times) = failures.get_mut(&key)
                 && let Some(index) = times.iter().position(|t| *t == attempt.at)
             {
                 times.remove(index);
+                if stored {
+                    self.journal(Change::TakenBack {
+                        key,
+                        at: attempt.at,
+                    });
+                }
             }
         }
     }
@@ -302,7 +442,11 @@ mod tests {
     use super::*;
 
     fn sign_in<'a>(username: &'a str, address: &'a str) -> Attempting<'a> {
-        Attempting::SignIn { username, address }
+        Attempting::SignIn {
+            username,
+            address,
+            account_exists: true,
+        }
     }
 
     #[test]

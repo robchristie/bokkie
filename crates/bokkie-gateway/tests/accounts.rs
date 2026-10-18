@@ -147,6 +147,26 @@ async fn malformed_bodies_get_the_api_error_shape() {
 }
 
 #[tokio::test]
+async fn malformed_paths_and_queries_get_the_api_error_shape() {
+    let gateway = Gateway::new().await;
+    let cookie = gateway.admin("rob").await;
+    for path in [
+        "/api/v1/bots/chef",
+        "/api/v1/bots/1.5/messages",
+        "/api/v1/admin/users/rob/usage",
+        "/api/v1/bots/1/messages?limit=lots",
+    ] {
+        let reply = gateway.send(Call::get(path).cookie(&cookie)).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{path}");
+        assert_eq!(reply.code(), "invalid_request", "{path}: {:?}", reply.body);
+    }
+    let reply = gateway
+        .send(Call::new(Method::DELETE, "/api/v1/sessions/latest").cookie(&cookie))
+        .await;
+    assert_eq!(reply.code(), "invalid_request", "{:?}", reply.body);
+}
+
+#[tokio::test]
 async fn signing_out_revokes_the_session() {
     let gateway = Gateway::new().await;
     let cookie = gateway.admin("rob").await;
@@ -591,4 +611,82 @@ async fn refused_invitation_codes_do_not_block_other_addresses() {
         .unwrap()
         .to_owned();
     assert_eq!(accept(&code).await.status, StatusCode::OK);
+}
+
+/// How many sign-in failures are stored under `key`.
+async fn stored_failures(gateway: &Gateway, key: &str) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM login_failures WHERE key = ?")
+        .bind(key)
+        .fetch_one(&gateway.state.db)
+        .await
+        .unwrap()
+}
+
+/// Waits until `key` has `count` stored failures. The limiter writes them
+/// in order, so later keys are written after earlier ones.
+async fn until_stored(gateway: &Gateway, key: &str, count: i64) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while stored_failures(gateway, key).await != count {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{key} never reached {count} stored failures"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn sign_in_limits_survive_a_restart() {
+    let gateway = Gateway::new().await;
+    gateway.admin("rob").await;
+    // A name that is no account, such as a password typed in the wrong
+    // field, is limited in memory but never stored.
+    assert_eq!(
+        gateway.login("hunter2-secret", "guess").await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    for _ in 0..LoginLimiter::PER_ACCOUNT {
+        assert_eq!(
+            gateway.login("rob", "guess").await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    until_stored(&gateway, "u:rob", LoginLimiter::PER_ACCOUNT as i64).await;
+    assert_eq!(stored_failures(&gateway, "u:hunter2-secret").await, 0);
+
+    // A restarted gateway still refuses Rob, until the window passes.
+    let db = gateway.state.db.clone();
+    let now = gateway.state.clock.now_ms();
+    let restarted = LoginLimiter::persistent(db.clone(), now).await.unwrap();
+    let attempt = |limiter: &LoginLimiter, at: i64| {
+        limiter.begin(
+            bokkie_gateway::auth::Attempting::SignIn {
+                username: "Rob",
+                address: "10.0.0.7",
+                account_exists: true,
+            },
+            at,
+        )
+    };
+    assert!(attempt(&restarted, now).is_none());
+    let later = now + LoginLimiter::WINDOW_MS;
+    let restarted = LoginLimiter::persistent(db.clone(), later).await.unwrap();
+    assert_eq!(
+        stored_failures(&gateway, "u:rob").await,
+        0,
+        "expired rows go"
+    );
+    drop(attempt(&restarted, later).expect("the window has passed"));
+    drop(attempt(&restarted, later).unwrap());
+    until_stored(&gateway, "u:rob", 2).await;
+
+    // A success clears the account's stored failures, so a restart after
+    // it does not count them again.
+    restarted.succeeded(attempt(&restarted, later).unwrap());
+    until_stored(&gateway, "u:rob", 0).await;
+    let again = LoginLimiter::persistent(db, later).await.unwrap();
+    for _ in 0..LoginLimiter::PER_ACCOUNT - 1 {
+        drop(attempt(&again, later).unwrap());
+    }
+    assert!(attempt(&again, later).is_some());
 }

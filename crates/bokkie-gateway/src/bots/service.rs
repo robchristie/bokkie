@@ -771,7 +771,12 @@ impl Conversations {
             },
             RuntimeEventKind::Refused { thread_id, reason } => {
                 if let Some(bot) = store::bot_by_thread(&self.db, user, &thread_id).await? {
-                    self.live().turns.remove(&bot.id);
+                    {
+                        let mut live = self.live();
+                        if let Some(turn) = live.turns.remove(&bot.id) {
+                            live.token_stops.remove(&(user, turn.turn_id));
+                        }
+                    }
                     self.finish_streaming(user, Some(bot.id), MessageState::Failed)
                         .await?;
                     let mut batch = self.events.begin(user).await?;

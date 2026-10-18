@@ -1,7 +1,7 @@
 //! Sign-in, sessions, password changes and invitation acceptance.
 
 use axum::Json;
-use axum::extract::{FromRequestParts, Path, State};
+use axum::extract::{FromRequestParts, State};
 use axum::http::header::{SET_COOKIE, USER_AGENT};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
@@ -13,7 +13,7 @@ use bokkie_protocol::api::{
 use crate::AppState;
 use crate::accounts;
 use crate::auth::{self, Attempting, SignedIn};
-use crate::error::{Body, Failure, Result};
+use crate::error::{Body, Failure, Path, Result};
 
 /// The client's address, for rate limiting.
 #[derive(Debug)]
@@ -53,12 +53,14 @@ pub async fn login(
     Body(request): Body<LoginRequest>,
 ) -> Result<Response> {
     let now = state.clock.now();
+    let account_exists = accounts::username_exists(&state.db, &request.username).await?;
     let attempt = state
         .limiter
         .begin(
             Attempting::SignIn {
                 username: &request.username,
                 address: &address,
+                account_exists,
             },
             now.0,
         )
