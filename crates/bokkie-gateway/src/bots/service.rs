@@ -21,7 +21,7 @@ use bokkie_protocol::api::{
     Allowance, Author, Delivery, ErrorCode, Message, MessageState, SendMessageResponse, Usage,
 };
 use bokkie_protocol::events::Event;
-use bokkie_protocol::{BotId, MessageId, UserId};
+use bokkie_protocol::{BotId, MessageId, Timestamp, UserId};
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 
@@ -36,6 +36,13 @@ use crate::usage::{self, SubscriptionCache};
 /// How often streamed text is written out. Deltas arriving in between are
 /// coalesced into one write.
 pub const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+
+/// How often the gateway looks for allowance and subscription windows that
+/// rolled over.
+pub const ROLLOVER_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How long reading a user's subscription windows after a reset may take.
+const RATE_LIMITS_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The key of the profile context fragment.
 pub const PROFILE_CONTEXT: &str = "bokkie-profile";
@@ -457,6 +464,54 @@ impl Conversations {
         Ok(true)
     }
 
+    // -- Rollover -----------------------------------------------------------
+
+    /// Announces rolled-over windows every [`ROLLOVER_INTERVAL`], until the
+    /// gateway stops.
+    pub async fn run_rollovers(self: Arc<Self>) {
+        let mut since = self.clock.now();
+        let mut tick = tokio::time::interval(ROLLOVER_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            let now = self.clock.now();
+            if let Err(failure) = self.roll_over(since, now).await {
+                tracing::error!(message = %failure.message, "rolling usage windows over failed");
+            }
+            since = now;
+        }
+    }
+
+    /// Announces the usage meter of every user with usage that left an
+    /// allowance window, or with a subscription window that reset, in
+    /// `(since, now]`. A reset subscription is read again from the user's
+    /// app server if it is running. Then deletes usage that no window
+    /// counts any more. Returns the users announced.
+    pub async fn roll_over(&self, since: Timestamp, now: Timestamp) -> Result<Vec<UserId>> {
+        let mut users = usage::rolled_over(&self.db, since, now).await?;
+        for user in self.subscription.resetting(since, now) {
+            if let Some(runtime) = self.supervisor.running(user).await {
+                match tokio::time::timeout(RATE_LIMITS_TIMEOUT, runtime.rate_limits()).await {
+                    Ok(Ok(response)) => self.subscription.set(user, usage::buckets(&response)),
+                    Ok(Err(error)) => {
+                        tracing::warn!(user = %user, %error, "reading rate limits failed");
+                    }
+                    Err(_) => tracing::warn!(user = %user, "reading rate limits timed out"),
+                }
+            }
+            users.push(user);
+        }
+        users.sort();
+        users.dedup();
+        for user in &users {
+            self.usage_changed(*user).await;
+        }
+        let mut tx = crate::db::write(&self.db).await?;
+        usage::prune(&mut tx, now).await?;
+        tx.commit().await?;
+        Ok(users)
+    }
+
     // -- Routing ------------------------------------------------------------
 
     /// Routes app-server events until the stream ends, writing streamed
@@ -802,7 +857,7 @@ impl Conversations {
     }
 
     /// Adds the user's usage meter to a batch, as the batch sees it.
-    async fn emit_usage(&self, batch: &mut Batch) -> Result<()> {
+    pub async fn emit_usage(&self, batch: &mut Batch) -> Result<()> {
         let user = batch.user();
         let allowance = allowance(batch, self.clock.now(), user).await?;
         let subscription = self.subscription.get(user).unwrap_or_default();
@@ -885,7 +940,7 @@ impl Conversations {
 /// The user's allowance at `now`, with their current limits.
 async fn allowance(
     conn: &mut sqlx::SqliteConnection,
-    now: bokkie_protocol::Timestamp,
+    now: Timestamp,
     user: UserId,
 ) -> Result<Allowance> {
     let limits = crate::accounts::account(&mut *conn, user)

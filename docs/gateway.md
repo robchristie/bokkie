@@ -199,7 +199,9 @@ user's event log. The upgrade needs the session cookie and the gateway's
 
 `GET /api/v1/usage` is the usage meter: the shared subscription's
 rate-limit windows and the signed-in user's own allowance. Usage changes
-also arrive on the event socket as `usage_updated`.
+also arrive on the event socket as `usage_updated`: when a turn is counted,
+when Codex reports tokens or rate limits, when an admin changes the user's
+limits, and when a window rolls over.
 
 - **Subscription.** Each user's app server reports the ChatGPT
   subscription's windows (`account/rateLimits/read` when the meter is first
@@ -227,5 +229,10 @@ also arrive on the event socket as `usage_updated`.
   A thread total that falls is taken as a new baseline. Totals include
   cached input, so a long conversation uses a token allowance faster than
   its visible length suggests.
+- Once a minute the gateway looks for usage that has left an allowance
+  window, and for subscription windows whose reset time has passed, and
+  announces each affected user's meter. A reset subscription is read again
+  from the user's app server if it is running. Usage that no window counts
+  any more is then deleted.
 - `GET /api/v1/admin/users/{id}/usage` shows an admin another account's
   counts, never its conversations.

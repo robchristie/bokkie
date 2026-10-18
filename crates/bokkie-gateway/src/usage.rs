@@ -5,6 +5,7 @@
 //! each user an allowance: turns per rolling 24 hours and tokens per rolling
 //! seven days. Turns are counted when the gateway starts one; tokens come
 //! from `thread/tokenUsage/updated`, as the growth of each thread's total.
+//! Usage is deleted once its window no longer counts it.
 
 use std::collections::HashMap;
 
@@ -127,6 +128,39 @@ pub async fn allowance(
     })
 }
 
+/// The users with usage that left an allowance window in `(since, now]`.
+pub async fn rolled_over(
+    db: impl SqliteExecutor<'_>,
+    since: Timestamp,
+    now: Timestamp,
+) -> Result<Vec<UserId>> {
+    let users: Vec<i64> = sqlx::query_scalar(
+        "SELECT user_id FROM turns WHERE at > ?1 AND at <= ?2
+         UNION
+         SELECT user_id FROM token_usage WHERE at > ?3 AND at <= ?4",
+    )
+    .bind(since.0 - TURN_WINDOW_MS)
+    .bind(now.0 - TURN_WINDOW_MS)
+    .bind(since.0 - TOKEN_WINDOW_MS)
+    .bind(now.0 - TOKEN_WINDOW_MS)
+    .fetch_all(db)
+    .await?;
+    Ok(users.into_iter().map(UserId).collect())
+}
+
+/// Deletes usage that no allowance window still counts.
+pub async fn prune(conn: &mut SqliteConnection, now: Timestamp) -> Result<()> {
+    sqlx::query("DELETE FROM turns WHERE at <= ?")
+        .bind(now.0 - TURN_WINDOW_MS)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM token_usage WHERE at <= ?")
+        .bind(now.0 - TOKEN_WINDOW_MS)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// Codex reports `resetsAt` in Unix seconds; the wire uses milliseconds.
 fn seconds_to_timestamp(seconds: i64) -> Timestamp {
     Timestamp(seconds.saturating_mul(1000))
@@ -213,6 +247,21 @@ impl SubscriptionCache {
 
     pub fn set(&self, user: UserId, buckets: Vec<RateLimitBucket>) {
         self.lock().insert(user, buckets);
+    }
+
+    /// The users with a known window that resets in `(since, now]`.
+    pub fn resetting(&self, since: Timestamp, now: Timestamp) -> Vec<UserId> {
+        self.lock()
+            .iter()
+            .filter(|(_, buckets)| {
+                buckets
+                    .iter()
+                    .flat_map(|b| [&b.primary, &b.secondary])
+                    .flatten()
+                    .any(|w| w.resets_at.is_some_and(|at| since < at && at <= now))
+            })
+            .map(|(user, _)| *user)
+            .collect()
     }
 
     pub fn update(&self, user: UserId, snapshot: &RateLimitSnapshot) -> Vec<RateLimitBucket> {

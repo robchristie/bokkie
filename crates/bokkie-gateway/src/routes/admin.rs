@@ -34,8 +34,10 @@ pub async fn update_user(
     Path(id): Path<i64>,
     Body(request): Body<UpdateUserRequest>,
 ) -> Result<Json<AdminUser>> {
+    // The change and the account's new usage meter commit together.
+    let mut batch = state.events.begin(UserId(id)).await?;
     let updated = accounts::admin_update_user(
-        &state.db,
+        &mut batch,
         state.clock.now(),
         admin.id(),
         UserId(id),
@@ -44,6 +46,10 @@ pub async fn update_user(
         request.limits,
     )
     .await?;
+    if request.limits.is_some() {
+        state.conversations.emit_usage(&mut batch).await?;
+    }
+    batch.commit().await?;
     if request.disabled == Some(true) {
         // A disabled account's Bots stop at once.
         state.supervisor.stop(UserId(id)).await;

@@ -186,9 +186,11 @@ pub async fn admin_list_users(db: &SqlitePool) -> Result<Vec<AdminUser>> {
 }
 
 /// Changes another account's display name, disabled flag or limits, for an
-/// admin. Disabling revokes every session of that account.
+/// admin. Disabling revokes every session of that account. Runs inside the
+/// caller's write transaction, so that the change can commit with its
+/// events.
 pub async fn admin_update_user(
-    db: &SqlitePool,
+    tx: &mut sqlx::SqliteConnection,
     now: Timestamp,
     admin: UserId,
     target: UserId,
@@ -200,7 +202,6 @@ pub async fn admin_update_user(
         return Err(Failure::invalid("You cannot disable your own account"));
     }
     let display_name = display_name.map(normalise_display_name).transpose()?;
-    let mut tx = crate::db::write(db).await?;
     let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM users WHERE id = ?")
         .bind(target.0)
         .fetch_optional(&mut *tx)
@@ -224,7 +225,7 @@ pub async fn admin_update_user(
             .execute(&mut *tx)
             .await?;
         if disabled {
-            revoke_all_sessions(&mut tx, now, target, None).await?;
+            revoke_all_sessions(&mut *tx, now, target, None).await?;
         }
     }
     if let Some(limits) = limits {
@@ -238,8 +239,9 @@ pub async fn admin_update_user(
         .execute(&mut *tx)
         .await?;
     }
-    tx.commit().await?;
-    let account = account(db, target).await?.ok_or_else(Failure::not_found)?;
+    let account = account(&mut *tx, target)
+        .await?
+        .ok_or_else(Failure::not_found)?;
     Ok(AdminUser {
         user: account.user,
         limits: account.limits,
