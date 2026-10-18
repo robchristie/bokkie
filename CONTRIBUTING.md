@@ -27,9 +27,10 @@ driver fed frames by hand. It also
 lints the client's browser-only code for that target and builds its web root
 and a production package (see [Web client](#web-client)), and it
 downloads the pinned Codex release (about 160 MB, cached under ignored
-`.tools/codex/`) for the live checks. Set `BOKKIE_SKIP_LIVE=1` to skip the
-download and those checks during quick local iteration; a change is not
-verified until the full script passes.
+`.tools/codex/`) for the live checks, the last of which is the
+[browser smoke](#browser-smoke) of that package. Set `BOKKIE_SKIP_LIVE=1` to
+skip the download and those checks during quick local iteration; a change is
+not verified until the full script passes.
 
 CI pins every GitHub Action by its full commit SHA, with the release in a
 trailing comment (`uses: actions/checkout@<sha> # v7.0.1`), and
@@ -107,9 +108,58 @@ code. Name a new Bot with `stobie set-text bokkie.bot-name`. Open a Bot with
 `stobie invoke bokkie.open-bot --value ID` and fill the message field with
 `stobie set-text bokkie.draft`. Stobie offers no `set-text` on the password
 field, so type into it with the keyboard. To watch a reply stream without a
-ChatGPT sign-in, point the app server at a mock model, as the gateway's
-live tests do (`MockModel::overrides` in
-`crates/bokkie-gateway/tests/common/mock_model.rs`).
+ChatGPT sign-in, point the app server at the mock model, as the browser
+smoke does.
+
+### Browser smoke
+
+`scripts/browser-smoke WEB_ROOT`, which `scripts/verify` runs on its
+production package unless `BOKKIE_SKIP_LIVE=1`, drives Chromium against the
+real gateway. `tests/browser-smoke/smoke.mjs` says step by step what it
+checks:
+
+- the page starts under the gateway's Content-Security-Policy;
+- it signs in by clicking the fields and typing;
+- a reply streams in several deltas and completes;
+- a second reply is stopped;
+- a connection dropped mid-reply, and refused while several pieces arrive,
+  catches up with exactly the stored text;
+- the subscription meter and the limit-reached banner show;
+- the manifest has no errors and the page is installable, the service
+  worker controls the page, and nothing from `/api/` is in Cache Storage;
+- the font notices are served as text;
+- no CSP violation, page error or unexpected console error occurs.
+
+Its logs and `smoke.json` go to ignored `.tools/runtime/browser-smoke/`,
+which CI keeps as an artifact.
+
+It never calls a real model or uses a ChatGPT credential:
+
+- The gateway is the ordinary `bokkie-gateway` binary, with a synthetic admin
+  in a temporary data directory.
+- `BOKKIE_CODEX_BIN` names a wrapper script that runs the pinned Codex with
+  the `-c` overrides from `MockModel::overrides`, which point it at the mock
+  model. The gateway itself has no test seam.
+- The mock model is the gateway tests' own, `crates/bokkie-mock-model`. Its
+  binary streams a reply piece by piece and reports subscription windows
+  in the `x-codex-*` headers that Codex reads. No production crate depends on
+  it; the gateway takes it only as a development dependency.
+
+Its tools are pinned:
+
+- Node, in `tests/browser-smoke/.node-version`; the smoke refuses another,
+  including under `BOKKIE_BROWSER_RUNNER`.
+- Playwright, exactly, in `tests/browser-smoke/package-lock.json`.
+- The Chromium build that this Playwright version names, which the script
+  installs with `playwright install --no-shell chromium`.
+
+Chromium runs headful, because egui's text fields take no typing in headless
+Chromium. The script uses `DISPLAY` when it is set, or else `xvfb-run`; CI
+installs Xvfb and Chromium's libraries (`playwright install-deps
+chromium`). On a host that has neither, set `BOKKIE_BROWSER_RUNNER` to a
+command that runs its arguments where they exist, such as a container
+running `xvfb-run` with this checkout, the Cargo build directory and the
+Node and Playwright caches mounted at the same paths.
 
 ### Stobie pin
 

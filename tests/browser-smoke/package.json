@@ -1,0 +1,12 @@
+{
+  "name": "bokkie-browser-smoke",
+  "private": true,
+  "type": "module",
+  "description": "The browser smoke of Bokkie's web client; scripts/browser-smoke runs it",
+  "engines": {
+    "node": "25.8.2"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

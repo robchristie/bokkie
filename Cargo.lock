@@ -618,6 +618,7 @@ dependencies = [
  "axum",
  "base64",
  "bokkie-codex",
+ "bokkie-mock-model",
  "bokkie-protocol",
  "futures-util",
  "getrandom 0.3.4",
@@ -635,6 +636,17 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "bokkie-mock-model"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

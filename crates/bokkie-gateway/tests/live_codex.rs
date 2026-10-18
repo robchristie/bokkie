@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use bokkie_codex::protocol::{DynamicToolSpec, ServerNotification, TurnStatus};
 use bokkie_gateway::codex::{CodexError, Launcher, RuntimeEventKind, Supervisor, catalog};
+use bokkie_mock_model::MockModel;
 use bokkie_protocol::UserId;
-use common::mock_model::MockModel;
 use serde_json::json;
 
 fn codex() -> Option<PathBuf> {

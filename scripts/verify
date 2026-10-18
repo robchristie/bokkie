@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The canonical verification. CI runs exactly this.
 #
-# Set BOKKIE_SKIP_LIVE=1 to skip downloading Codex and the live checks.
+# Set BOKKIE_SKIP_LIVE=1 to skip downloading Codex and the live checks,
+# including the browser smoke.
 # The web client's tools (the pinned `stobie` CLI and `wasm-bindgen`) are
 # always installed, into ignored `.tools/`.
 set -euo pipefail
@@ -32,6 +33,11 @@ PATH="$web_tools:$PATH" stobie build-web --manifest-path apps/bokkie-web/Cargo.t
 scripts/check-web-notices apps/bokkie-web/web "$web_package"/bokkie-web/assets/*/
 # The committed icons are the mark's rendering.
 scripts/render-icons --check
+# That package, served by the real gateway with the pinned Codex and the
+# mock model, in headful Chromium.
+if [[ "${BOKKIE_SKIP_LIVE:-}" != 1 ]]; then
+  scripts/browser-smoke "$web_package/bokkie-web"
+fi
 if command -v shellcheck >/dev/null; then
   # Shell scripts: every *.sh, and the scripts/ files with a shell shebang.
   mapfile -t shell_scripts < <(
