@@ -22,6 +22,7 @@ use crate::socket::{Driver, Io, Step};
 use crate::wire::CommandError;
 
 mod conversation;
+mod limits;
 
 struct Fixture {
     harness: Harness<'static, AppHost<App>>,
@@ -133,7 +134,7 @@ impl Fixture {
             })]
         );
         self.reply(ApiReply::SignedIn(Ok(SessionResponse { user: user() })));
-        assert_eq!(self.sent(), [ApiRequest::ListBots]);
+        assert_eq!(self.sent(), [ApiRequest::ListBots, ApiRequest::LoadUsage]);
     }
 }
 
@@ -205,7 +206,10 @@ fn a_valid_session_skips_the_form() {
     assert_eq!(fixture.fact("screen"), "signed_in".into());
     assert_eq!(fixture.fact("user"), "ada".into());
     assert_eq!(fixture.fact("bots"), "loading".into());
-    assert_eq!(fixture.sent(), [ApiRequest::ListBots]);
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::ListBots, ApiRequest::LoadUsage]
+    );
     assert!(fixture.shows("Loading Bots…"));
 }
 

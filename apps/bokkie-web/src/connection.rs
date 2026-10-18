@@ -16,9 +16,10 @@
 //!   again connects at once. Reaching live resets the delay.
 //! - **Signed out.** A request answered 401, or the gateway closed the socket
 //!   because the session ended. Nothing reconnects.
-//! - **Outdated.** Frames this client cannot read kept arriving
+//! - **Outdated.** Frames this client cannot read kept arriving, or the
+//!   gateway kept closing the socket because it could not read the client's
 //!   ([`UNREADABLE_LIMIT`] in a row without an event in between), so the
-//!   gateway speaks a newer protocol. Nothing reconnects; the page must be
+//!   two speak different protocols. Nothing reconnects; the page must be
 //!   reloaded to fetch the client that matches it.
 //!
 //! A page that becomes visible again pings a live socket, which may have died
@@ -42,6 +43,9 @@ pub const LAST_RETRY: Duration = Duration::from_secs(8);
 
 /// The close code the gateway sends when the socket's session ends.
 pub const CLOSE_SIGNED_OUT: u16 = 4002;
+
+/// The close code the gateway sends when it cannot read the client's frames.
+pub const CLOSE_PROTOCOL: u16 = 4000;
 
 /// How long a ping waits for any frame before the socket counts as dead.
 pub const PONG_DEADLINE: Duration = Duration::from_secs(5);
@@ -270,6 +274,13 @@ impl Connection {
         if code == Some(CLOSE_SIGNED_OUT) {
             self.state = State::SignedOut;
             return vec![Command::SignedOut];
+        }
+        if code == Some(CLOSE_PROTOCOL) {
+            self.unreadable = self.unreadable.saturating_add(1);
+            if self.unreadable >= UNREADABLE_LIMIT {
+                self.state = State::Outdated;
+                return vec![Command::Outdated];
+            }
         }
         self.failures = self.failures.saturating_add(1);
         let delay = Self::delay(self.failures);

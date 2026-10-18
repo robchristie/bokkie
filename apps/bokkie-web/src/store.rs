@@ -123,6 +123,9 @@ pub struct Store {
     /// The latest error each Bot reported.
     errors: BTreeMap<BotId, String>,
     usage: Option<Usage>,
+    /// A `usage_updated` event arrived since the usage meter was last
+    /// requested over HTTP, so a reply to that request may be older.
+    usage_event_seen: bool,
     /// Snapshots requested and not yet loaded.
     loading: BTreeSet<Snapshot>,
     /// Events received while anything was loading.
@@ -179,9 +182,25 @@ impl Store {
         self.errors.remove(&bot).is_some()
     }
 
-    /// The usage meter, once an event has reported it.
+    /// The usage meter, once loaded or reported by an event.
     pub fn usage(&self) -> Option<&Usage> {
         self.usage.as_ref()
+    }
+
+    /// The usage meter is about to be requested over HTTP.
+    pub fn request_usage(&mut self) {
+        self.usage_event_seen = false;
+    }
+
+    /// The usage meter from HTTP. It has no sequence number, so it applies
+    /// only if no `usage_updated` event arrived since it was requested,
+    /// which would be at least as new. Returns whether it changed.
+    pub fn load_usage(&mut self, usage: Usage) -> bool {
+        if self.usage_event_seen || self.usage.as_ref() == Some(&usage) {
+            return false;
+        }
+        self.usage = Some(usage);
+        true
     }
 
     pub fn is_loading(&self, snapshot: Snapshot) -> bool {
@@ -294,6 +313,7 @@ impl Store {
         if let Event::UsageUpdated { usage } = &envelope.event {
             applied.changed |= self.usage.as_ref() != Some(usage);
             self.usage = Some(usage.clone());
+            self.usage_event_seen = true;
         }
         self.finish(applied)
     }

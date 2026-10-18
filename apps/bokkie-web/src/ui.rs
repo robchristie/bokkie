@@ -19,7 +19,10 @@ type BokkieFrame<'a, 'b> = Frame<'a, BokkieAction, BokkieIntent>;
 
 /// Room kept below a conversation's messages for the message field, its
 /// buttons and a status line.
-const COMPOSER_HEIGHT: f32 = 190.0;
+const COMPOSER_HEIGHT: f32 = 230.0;
+
+/// How often a meter with reset times is shown again, so they stay true.
+const METER_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
 
 pub(crate) fn present(app: &App, ui: &mut egui::Ui, frame: &mut BokkieFrame<'_, '_>) {
     egui::CentralPanel::default().show(ui, |ui| {
@@ -155,6 +158,8 @@ fn bots_ui(
     if signed_in.link == Link::Outdated {
         frame.action(ui, p, BokkieAction::ReloadPage, ActionEmphasis::Primary);
     }
+    limit_ui(ui, p, app);
+    meter_ui(ui, p, frame, app);
     ui.separator();
     p.heading(ui, "bots-title", "Bots");
     frame.action(ui, p, BokkieAction::Refresh, ActionEmphasis::Normal);
@@ -243,13 +248,54 @@ fn conversation_ui(
     if signed_in.link == Link::Outdated {
         frame.action(ui, p, BokkieAction::ReloadPage, ActionEmphasis::Primary);
     }
+    limit_ui(ui, p, app);
+    // A conversation that failed to load can be loaded again here.
+    if open.error.is_some() && store.conversation(open.bot).is_none() {
+        frame.action(ui, p, BokkieAction::Refresh, ActionEmphasis::Normal);
+    }
     if let Some(error) = store.error(open.bot) {
         p.status(ui, "bot-error", error, true);
     }
     ui.separator();
     messages_ui(ui, frame, store, open, name);
     ui.separator();
-    composer_ui(ui, p, frame, open);
+    composer_ui(ui, p, frame, app, open);
+}
+
+/// The limit-reached banner: a plain error line.
+fn limit_ui(ui: &mut egui::Ui, p: &mut PresentationContext, app: &App) {
+    if let Some(banner) = app.limit_banner() {
+        p.status(ui, "limit", &banner, true);
+    }
+}
+
+/// The usage meter: the subscription's windows and the user's allowance.
+fn meter_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
+) {
+    let Some(usage) = app.store().usage() else {
+        return;
+    };
+    ui.separator();
+    p.heading(ui, "usage-title", "Usage");
+    for (index, text) in crate::usage::meter_lines(usage, app.now())
+        .iter()
+        .enumerate()
+    {
+        p.content(ui, ("usage", index), text, line(TextRole::Secondary, 2));
+    }
+    let resets = usage
+        .subscription
+        .iter()
+        .flat_map(|bucket| [&bucket.primary, &bucket.secondary])
+        .flatten()
+        .any(|window| window.resets_at.is_some());
+    if resets {
+        frame.request_repaint_after("usage meter reset times", METER_REFRESH);
+    }
 }
 
 fn messages_ui(
@@ -335,8 +381,18 @@ fn composer_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
     frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
     open: &Open,
 ) {
+    // Only while a reply runs, on a row of its own.
+    if app.shows_stop() {
+        frame.action(ui, p, BokkieAction::Stop, ActionEmphasis::Normal);
+    }
+    if open.stopping {
+        p.status(ui, "stop-status", "Stopping…", false);
+    } else if let Some(note) = &open.stop_note {
+        p.status(ui, "stop-status", note, false);
+    }
     ui.add_enabled_ui(!open.sending, |ui| {
         let (draft, field) = text_field(ui, p, DRAFT_ID, "Message", &open.draft, false);
         if draft != open.draft {

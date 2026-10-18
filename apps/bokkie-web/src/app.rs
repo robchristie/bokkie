@@ -9,10 +9,10 @@
 
 use std::collections::BTreeSet;
 
-use bokkie_protocol::BotId;
 use bokkie_protocol::api::{
     Author, BotStatus, Delivery, LoginRequest, Message, MessageState, SendMessageRequest, User,
 };
+use bokkie_protocol::{BotId, Timestamp};
 use serde::Serialize;
 use stobie_ui_egui::{
     Action, ActionArgument, ActionKey, ActionTarget, Application, ApplicationIdentity,
@@ -50,7 +50,10 @@ pub enum BokkieAction {
     SignIn,
     #[action(label = "Sign out", description = "Sign this browser out of Bokkie")]
     SignOut,
-    #[action(label = "Refresh", description = "Load the list of Bots again")]
+    #[action(
+        label = "Refresh",
+        description = "Load the list of Bots, or the open conversation, again"
+    )]
     Refresh,
     #[action(
         label = "Open",
@@ -68,6 +71,8 @@ pub enum BokkieAction {
         description = "Send the message to the Bot; while it replies, the message steers the reply"
     )]
     Send,
+    #[action(label = "Stop", description = "Stop the Bot's reply in progress")]
+    Stop,
     #[action(
         label = "Reload page",
         description = "Reload the page to fetch the client that matches Bokkie's server"
@@ -163,6 +168,10 @@ pub(crate) struct Open {
     pub(crate) delivery: Option<Delivery>,
     /// Why the last send failed.
     pub(crate) send_error: Option<String>,
+    /// A stop is under way.
+    pub(crate) stopping: bool,
+    /// What the last stop found, when it is worth saying.
+    pub(crate) stop_note: Option<String>,
 }
 
 impl Open {
@@ -174,6 +183,8 @@ impl Open {
             sending: false,
             delivery: None,
             send_error: None,
+            stopping: false,
+            stop_note: None,
         }
     }
 }
@@ -368,9 +379,15 @@ impl App {
         // The list shows at once. Once the socket is live it is loaded again,
         // so that no event can fall between the list and the socket.
         self.load(Snapshot::Bots);
+        self.load_usage();
         if let Some(api) = &self.api {
             api.connect_events(self.generation);
         }
+    }
+
+    fn load_usage(&mut self) {
+        self.store.request_usage();
+        self.send(ApiRequest::LoadUsage);
     }
 
     /// Load a snapshot over HTTP. The store holds any event that arrives
@@ -402,6 +419,8 @@ impl App {
             all.insert(Snapshot::Messages(bot));
         }
         self.load_all(all);
+        // The meter may have missed events too.
+        self.load_usage();
     }
 
     /// A load answered. Returns whether to load it again at once.
@@ -521,12 +540,38 @@ impl App {
                     Ok(sent) => {
                         open.draft.clear();
                         open.delivery = Some(sent.delivery);
+                        // A delivered message moves on from the Bot's last
+                        // error.
+                        let _ = self.store.clear_error(bot);
                     }
                     Err(error) if error.is_unauthenticated() => self.session_ended(),
                     // The draft stays, to send again.
                     Err(error) => open.send_error = Some(error.message),
                 }
             }
+            (ApiReply::Stopped(bot, result), Session::SignedIn(_)) => {
+                let Some(open) = self
+                    .open_mut()
+                    .filter(|open| open.bot == bot && open.stopping)
+                else {
+                    return false;
+                };
+                open.stopping = false;
+                match result {
+                    // The interrupted reply arrives on the socket.
+                    Ok(stop) if stop.stopped => {}
+                    Ok(_) => open.stop_note = Some("The reply had already finished".into()),
+                    Err(error) if error.is_unauthenticated() => self.session_ended(),
+                    Err(error) => open.stop_note = Some(error.message),
+                }
+            }
+            (ApiReply::Usage(result), Session::SignedIn(_)) => match result {
+                Ok(usage) => return self.store.load_usage(usage),
+                Err(error) if error.is_unauthenticated() => self.session_ended(),
+                // The meter stays as it was; events or the next reload
+                // bring it up to date.
+                Err(_) => return false,
+            },
             // A reply to a command whose screen has gone, such as a Bot list
             // that arrives after signing out.
             _ => return false,
@@ -591,6 +636,36 @@ impl App {
         Ok(true)
     }
 
+    fn can_stop(&self) -> Result<(), &'static str> {
+        let Some(open) = self.open() else {
+            return Err("No conversation is open");
+        };
+        if open.stopping {
+            return Err("Stopping");
+        }
+        match self.store.bot(open.bot).map(|bot| bot.status) {
+            Some(BotStatus::Working) => Ok(()),
+            _ => Err("No reply is running"),
+        }
+    }
+
+    /// Whether the Stop control is shown: while a reply runs or a stop is
+    /// under way.
+    pub(crate) fn shows_stop(&self) -> bool {
+        self.open().is_some_and(|open| open.stopping) || self.can_stop().is_ok()
+    }
+
+    /// The limit-reached banner, when the subscription or the user's
+    /// allowance is used up.
+    pub fn limit_banner(&self) -> Option<String> {
+        crate::usage::limit_banner(self.store.usage()?, self.now())
+    }
+
+    /// The time now, from the transport.
+    pub(crate) fn now(&self) -> Timestamp {
+        self.api.as_ref().map_or(Timestamp(0), |api| api.now())
+    }
+
     fn can_send(&self) -> Result<(), &'static str> {
         let Some(open) = self.open() else {
             return Err("No conversation is open");
@@ -643,7 +718,16 @@ impl Application for App {
                 Some("Signing out")
             }
             (BokkieAction::SignOut, _) => None,
-            (BokkieAction::Refresh, _) if self.in_flight.contains(&Snapshot::Bots) => {
+            (BokkieAction::Refresh, _)
+                if self
+                    .open_bot()
+                    .is_some_and(|bot| self.in_flight.contains(&Snapshot::Messages(bot))) =>
+            {
+                Some("Loading the conversation")
+            }
+            (BokkieAction::Refresh, _)
+                if self.open().is_none() && self.in_flight.contains(&Snapshot::Bots) =>
+            {
                 Some("Loading the Bots")
             }
             (BokkieAction::Refresh, _) => None,
@@ -652,6 +736,7 @@ impl Application for App {
             (BokkieAction::Back, _) if self.open().is_none() => Some("No conversation is open"),
             (BokkieAction::Back, _) => None,
             (BokkieAction::Send, _) => self.can_send().err(),
+            (BokkieAction::Stop, _) => self.can_stop().err(),
         };
         reason.map_or(Availability::Enabled, |reason| Availability::Disabled {
             reason: reason.into(),
@@ -718,7 +803,14 @@ impl Application for App {
                 signed_in.message = None;
                 self.send(ApiRequest::SignOut);
             }
-            (BokkieAction::Refresh, Session::SignedIn(_)) => self.load(Snapshot::Bots),
+            // On the list, the list; in a conversation, that conversation.
+            (BokkieAction::Refresh, Session::SignedIn(signed_in)) => match &signed_in.open {
+                Some(open) => {
+                    let bot = open.bot;
+                    self.load(Snapshot::Messages(bot));
+                }
+                None => self.load(Snapshot::Bots),
+            },
             (BokkieAction::Back, Session::SignedIn(signed_in)) => {
                 let Some(open) = signed_in.open.take() else {
                     return Ok(false);
@@ -734,9 +826,16 @@ impl Application for App {
                 open.send_error = None;
                 let bot = open.bot;
                 let text = open.draft.trim().to_owned();
-                // A new message moves on from the Bot's last error.
-                let _ = self.store.clear_error(bot);
                 self.send(ApiRequest::SendMessage(bot, SendMessageRequest { text }));
+            }
+            (BokkieAction::Stop, Session::SignedIn(signed_in)) => {
+                let Some(open) = &mut signed_in.open else {
+                    return Ok(false);
+                };
+                open.stopping = true;
+                open.stop_note = None;
+                let bot = open.bot;
+                self.send(ApiRequest::StopBot(bot));
             }
             (BokkieAction::ReloadPage, _) => {
                 if let Some(api) = &self.api {
@@ -839,6 +938,32 @@ impl Application for App {
                 None => "",
             },
         );
+        observation.fact("stopping", open.is_some_and(|open| open.stopping));
+        observation.fact(
+            "stop_note",
+            bounded(
+                open.and_then(|open| open.stop_note.as_deref())
+                    .unwrap_or(""),
+            ),
+        );
+        let usage = self.store.usage();
+        observation.fact("usage", if usage.is_some() { "loaded" } else { "" });
+        observation.fact(
+            "subscription_used",
+            usage
+                .into_iter()
+                .flat_map(|usage| &usage.subscription)
+                .flat_map(|bucket| [&bucket.primary, &bucket.secondary])
+                .flatten()
+                .map(|window| i64::from(window.used_percent))
+                .max()
+                .unwrap_or(0),
+        );
+        observation.fact(
+            "turns_today",
+            usage.map_or(0, |usage| usage.allowance.turns_today),
+        );
+        observation.fact("limit", bounded(&self.limit_banner().unwrap_or_default()));
         observation.fact(
             "send_error",
             bounded(

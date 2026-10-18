@@ -440,3 +440,29 @@ fn errors_and_usage_are_kept() {
     );
     assert_eq!(store.usage(), Some(&usage));
 }
+
+#[test]
+fn a_usage_reply_older_than_an_event_is_ignored() {
+    let mut store = Store::new();
+    let usage = |turns_today| Usage {
+        subscription: Vec::new(),
+        allowance: Allowance {
+            limits: Limits::default(),
+            turns_today,
+            tokens_this_week: 0,
+            exhausted: false,
+        },
+    };
+    store.request_usage();
+    assert!(store.load_usage(usage(1)));
+    assert!(!store.load_usage(usage(1)), "unchanged");
+    store.request_usage();
+    // An event reports a newer meter before the reply arrives.
+    let _ = store.apply(&at(1, Event::UsageUpdated { usage: usage(3) }));
+    assert!(!store.load_usage(usage(2)));
+    assert_eq!(store.usage(), Some(&usage(3)));
+    // A later request applies again.
+    store.request_usage();
+    assert!(store.load_usage(usage(4)));
+    assert_eq!(store.usage(), Some(&usage(4)));
+}

@@ -20,7 +20,8 @@
 //!   last event processed, back off from 250 ms to 8 s, retry at once when
 //!   the page is visible again, reload on `reset`, and stop when signed out;
 //! - [`socket`] drives that policy for a transport, which only performs its
-//!   I/O, and filters what reaches the application.
+//!   I/O, and filters what reaches the application;
+//! - [`usage`] words the usage meter and the limit-reached banner.
 
 pub mod api;
 pub mod app;
@@ -30,6 +31,7 @@ pub mod connection;
 pub mod socket;
 pub mod store;
 mod ui;
+pub mod usage;
 pub mod wire;
 
 pub use app::{APPLICATION_NAME, App, BokkieAction, BokkieIntent};

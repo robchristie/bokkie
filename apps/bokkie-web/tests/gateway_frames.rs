@@ -556,6 +556,16 @@ async fn the_gateways_error_responses_decode_with_their_messages() {
             ErrorCode::Unavailable,
             503,
         ),
+        // The refusal of a send beyond the allowance, worded as the
+        // conversation service words it.
+        (
+            Failure::new(
+                ErrorCode::LimitReached,
+                "You have used your allowance for now. It refills over the next day or week",
+            ),
+            ErrorCode::LimitReached,
+            429,
+        ),
     ];
     for (failure, code, status) in cases {
         let message = failure.message.clone();
