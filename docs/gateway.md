@@ -219,11 +219,23 @@ limits, and when a window rolls over.
   of each thread's total from `thread/tokenUsage/updated`, because the
   subscription's own limits are shared by everyone. A message that would
   start a turn beyond the allowance, or any message once the tokens are used
-  up, is refused with `limit_reached` and is not stored. One user's sends
-  are handled one at a time, so sends to several Bots at once cannot all pass
-  the check. The exception: a message meant to steer a turn that ends just
-  before it arrives needs a new turn; if none is left, it stays stored
-  without a reply.
+  up, is refused with `limit_reached` and is not stored. The turn is
+  checked and counted in one transaction before the message is stored, so
+  sends to several Bots at once cannot all pass the check. The exception: a
+  message meant to steer a turn that ends just before it arrives needs a
+  new turn; if none is left, it stays stored without a reply.
+- **Token overshoot.** Codex reports tokens as a turn goes, so a turn
+  admitted under the allowance can pass it. When a report uses up the
+  weekly tokens, the gateway interrupts every turn the user has running and
+  tells each Bot's conversation why (`bot_error`); the replies end
+  `interrupted`. The allowance is therefore overshot by at most the tokens
+  each running turn used before its last report, and those tokens are
+  counted. Turns are not cut short for the daily turn limit, which is
+  checked only when a turn starts.
+- Sends to one Bot are handled one at a time, so that its thread starts
+  once and each message either steers its running turn or starts one.
+  Sends to the user's other Bots do not wait: a Codex call that hangs holds
+  up only its own Bot, for at most the 120-second request timeout.
 - Codex sends sparse rate-limit updates; the gateway merges the values each
   one carries, and reads the windows afresh once a known reset time passes.
   A thread total that falls is taken as a new baseline. Totals include

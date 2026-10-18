@@ -61,6 +61,13 @@ pub struct Behaviour {
     /// Whether the app server starts a turn and then exits before
     /// answering `turn/start`.
     pub hang_up_on_turn: bool,
+    /// Whether `turn/start` is never answered.
+    pub hang_turns: bool,
+    /// Whether `turn/start` starts the turn but answers with a line the
+    /// client cannot decode.
+    pub garble_turn_answers: bool,
+    /// Whether a turn reports its tokens while it is still streaming.
+    pub usage_mid_turn: bool,
     pub signed_in: bool,
     /// The `account/rateLimits/read` result.
     pub rate_limits: Value,
@@ -82,6 +89,9 @@ impl Default for Behaviour {
             steer_fails: false,
             reject_turns: false,
             hang_up_on_turn: false,
+            hang_turns: false,
+            garble_turn_answers: false,
+            usage_mid_turn: false,
             signed_in: true,
             rate_limits: json!({
                 "rateLimits": {"limitId": "codex", "limitName": null, "planType": "pro",
@@ -252,6 +262,16 @@ impl FakeCodex {
                     "code": -32600, "message": "turn refused"}}));
                 return;
             }
+            "turn/start" if self.with(|b| b.hang_turns) => return,
+            "turn/start" if self.with(|b| b.garble_turn_answers) => {
+                let thread = params["threadId"].as_str().unwrap();
+                let _ = out.send(json!({"method": "turn/started", "params": {"threadId": thread,
+                    "turn": {"id": "turn-garbled", "items": [], "status": "inProgress", "error": null}}}));
+                let _ = out.send(
+                    json!({"id": id, "result": {"turn": {"id": "turn-garbled"}}, "error": 5}),
+                );
+                return;
+            }
             "turn/start" if self.with(|b| b.hang_up_on_turn) => {
                 let turn = self.with(|b| {
                     b.next_id += 1;
@@ -392,10 +412,10 @@ impl FakeCodex {
 
     /// Streams the scripted reply as a real turn would.
     fn stream_turn(&self, out: mpsc::UnboundedSender<Value>, thread: String, turn: String) {
-        let (reply, finish, total) = self.with(|b| {
+        let (reply, finish, total, usage_mid_turn) = self.with(|b| {
             let total = b.tokens.entry(thread.clone()).or_default();
             *total += 120;
-            (b.reply.clone(), b.finish_turns, *total)
+            (b.reply.clone(), b.finish_turns, *total, b.usage_mid_turn)
         });
         tokio::spawn(async move {
             let item = format!("{turn}-msg");
@@ -410,10 +430,21 @@ impl FakeCodex {
                 json!({"method": "item/started", "params": {"threadId": thread, "turnId": turn,
                 "item": {"type": "agentMessage", "id": item, "text": ""}}}),
             );
+            let usage = json!({"method": "thread/tokenUsage/updated", "params": {
+                "threadId": thread, "turnId": turn, "tokenUsage": {
+                    "total": {"totalTokens": total, "inputTokens": total - 20,
+                              "cachedInputTokens": 0, "outputTokens": 20,
+                              "reasoningOutputTokens": 0},
+                    "last": {"totalTokens": 120, "inputTokens": 100, "cachedInputTokens": 0,
+                             "outputTokens": 20, "reasoningOutputTokens": 0},
+                    "modelContextWindow": 272000}}});
             for piece in &reply {
                 tokio::task::yield_now().await;
                 send(json!({"method": "item/agentMessage/delta", "params": {
                     "threadId": thread, "turnId": turn, "itemId": item, "delta": piece}}));
+            }
+            if usage_mid_turn {
+                send(usage.clone());
             }
             if !finish {
                 return;
@@ -423,14 +454,7 @@ impl FakeCodex {
                 json!({"method": "item/completed", "params": {"threadId": thread, "turnId": turn,
                 "item": {"type": "agentMessage", "id": item, "text": text}}}),
             );
-            send(json!({"method": "thread/tokenUsage/updated", "params": {
-                "threadId": thread, "turnId": turn, "tokenUsage": {
-                    "total": {"totalTokens": total, "inputTokens": total - 20,
-                              "cachedInputTokens": 0, "outputTokens": 20,
-                              "reasoningOutputTokens": 0},
-                    "last": {"totalTokens": 120, "inputTokens": 100, "cachedInputTokens": 0,
-                             "outputTokens": 20, "reasoningOutputTokens": 0},
-                    "modelContextWindow": 272000}}}));
+            send(usage);
             send(
                 json!({"method": "turn/completed", "params": {"threadId": thread,
                 "turn": {"id": turn, "items": [], "status": "completed", "error": null}}}),

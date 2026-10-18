@@ -345,6 +345,20 @@ async fn concurrent_sends_to_several_bots_cannot_overrun_the_turn_limit() {
             .all(|r| r.code() == "limit_reached")
     );
     assert_eq!(gateway.fake.received("turn/start").len(), 1);
+    // Only the accepted message was stored.
+    let mut stored = 0;
+    for bot in &bots {
+        let page = gateway
+            .send(Call::get(&format!("/api/v1/bots/{bot}/messages")).cookie(&amy))
+            .await;
+        stored += page.body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["author"] == "user")
+            .count();
+    }
+    assert_eq!(stored, 1);
 }
 
 /// Makes every insert into `table` fail, as a full disk would.
@@ -569,4 +583,165 @@ async fn a_subscription_window_that_resets_is_read_again_and_announced() {
         primary.resets_at,
         Some(bokkie_protocol::Timestamp(1_801_200_000_000))
     );
+}
+
+#[tokio::test]
+async fn a_turn_that_uses_up_the_token_allowance_is_stopped() {
+    let (gateway, rob) = setup().await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    set_limits(
+        &gateway,
+        &rob,
+        amy_id,
+        json!({"daily_turns": null, "weekly_tokens": 100}),
+    )
+    .await;
+    // The turn reports 120 tokens while it is still running.
+    gateway.fake.with(|b| {
+        b.finish_turns = false;
+        b.usage_mid_turn = true;
+    });
+    let chef = create_bot(&gateway, &amy, "Chef").await;
+    assert_eq!(say(&gateway, &amy, chef).await.status, StatusCode::OK);
+    let page = gateway
+        .wait_for(&amy, &format!("/api/v1/bots/{chef}/messages"), |b| {
+            b["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["author"] == "bot" && m["state"] == "interrupted")
+        })
+        .await;
+    assert_eq!(gateway.fake.received("turn/interrupt").len(), 1, "{page}");
+    // The overshoot is what Codex reported before the turn was stopped.
+    let meter = usage(&gateway, &amy).await;
+    assert_eq!(meter["allowance"]["tokens_this_week"], 120);
+    assert_eq!(meter["allowance"]["exhausted"], true);
+    // Amy is told why, and nothing more runs.
+    let log = gateway
+        .state
+        .events
+        .since(UserId(amy_id), bokkie_protocol::events::Seq(0), 1_000)
+        .await
+        .unwrap();
+    assert!(log.iter().any(|e| matches!(
+        &e.event,
+        bokkie_protocol::events::Event::BotError { message, .. } if message.contains("allowance")
+    )));
+    assert_eq!(say(&gateway, &amy, chef).await.code(), "limit_reached");
+}
+
+#[tokio::test]
+async fn a_turn_under_the_token_allowance_is_not_stopped() {
+    let (gateway, rob) = setup().await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    set_limits(
+        &gateway,
+        &rob,
+        amy_id,
+        json!({"daily_turns": null, "weekly_tokens": 1_000}),
+    )
+    .await;
+    gateway.fake.with(|b| b.usage_mid_turn = true);
+    let chef = create_bot(&gateway, &amy, "Chef").await;
+    turn(&gateway, &amy, chef).await;
+    assert!(gateway.fake.received("turn/interrupt").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hung_codex_call_does_not_hold_up_sends_to_other_bots() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let tutor = create_bot(&gateway, &rob, "Tutor").await;
+    // Chef's turn/start is never answered.
+    gateway.fake.with(|b| b.hang_turns = true);
+    let hung = gateway.spawn(
+        Call::post(&format!("/api/v1/bots/{chef}/messages"))
+            .cookie(&rob)
+            .json(&json!({"text": "hi"})),
+    );
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while gateway.fake.received("turn/start").is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Chef's turn was never started"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    gateway.fake.with(|b| b.hang_turns = false);
+    let other = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        say(&gateway, &rob, tutor),
+    )
+    .await
+    .expect("a send to another Bot does not wait for the hung call");
+    assert_eq!(other.status, StatusCode::OK, "{:?}", other.body);
+    assert!(!hung.is_finished());
+    hung.abort();
+}
+
+#[tokio::test]
+async fn a_turn_whose_answer_cannot_be_read_stays_counted() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    // Codex starts the turn, but its answer is unreadable: the turn may run.
+    gateway.fake.with(|b| b.garble_turn_answers = true);
+    let unread = say(&gateway, &rob, chef).await;
+    assert_eq!(
+        unread.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{:?}",
+        unread.body
+    );
+    assert_eq!(usage(&gateway, &rob).await["allowance"]["turns_today"], 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_rollover_pass_is_retried_from_where_it_started() {
+    let (gateway, rob) = setup().await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    set_limits(
+        &gateway,
+        &rob,
+        amy_id,
+        json!({"daily_turns": 1, "weekly_tokens": null}),
+    )
+    .await;
+    let chef = create_bot(&gateway, &amy, "Chef").await;
+    turn(&gateway, &amy, chef).await;
+    let db = gateway.state.db.clone();
+    let rename = |from: &'static str, to: &'static str| {
+        let db = db.clone();
+        async move {
+            sqlx::query(&format!("ALTER TABLE {from} RENAME TO {to}"))
+                .execute(&db)
+                .await
+        }
+    };
+    tokio::spawn(
+        gateway
+            .state
+            .conversations
+            .clone()
+            .run_rollovers(std::time::Duration::from_millis(20)),
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // The passes fail while the turn leaves its window.
+    rename("token_usage", "token_usage_away").await.unwrap();
+    gateway.state.clock.advance(DAY_MS);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    rename("token_usage_away", "token_usage").await.unwrap();
+    // A later pass still covers the moment it left.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let usage = last_usage_event(&gateway, amy_id).await.unwrap();
+        if usage.allowance.turns_today == 0 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the rollover is announced"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 }
