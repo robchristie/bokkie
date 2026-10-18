@@ -295,3 +295,90 @@ fn one_meter_request_is_in_flight_at_a_time_and_a_later_one_follows_it() {
     assert_eq!(fixture.fact("turns_today"), 7_u64.into());
     assert!(fixture.sent().is_empty());
 }
+
+impl Fixture {
+    /// Whether the latest pass scheduled the once-a-minute pass that keeps
+    /// reset times true.
+    fn refreshes_reset_times(&self) -> bool {
+        self.host().repaint_reasons().iter().any(|reason| {
+            matches!(
+                reason,
+                stobie_ui_egui::HostRepaint::Scheduled {
+                    reason: "usage reset times",
+                    delay,
+                } if delay.as_secs() == 60
+            )
+        })
+    }
+
+    /// How many presented nodes carry exactly this text.
+    fn count(&self, text: &str) -> usize {
+        self.harness.query_all_by_label(text).count()
+    }
+}
+
+#[test]
+fn reset_times_are_kept_true_on_both_screens() {
+    let mut fixture = Fixture::new();
+    fixture.sent.set_now(Timestamp(NOW));
+    fixture.signed_in_and_live(10);
+    fixture.reply(ApiReply::Usage(Ok(usage(false, false))));
+    assert!(fixture.refreshes_reset_times(), "the meter's reset times");
+    fixture.open_tutor(hello(), 10);
+    assert!(!fixture.refreshes_reset_times(), "no reset time shown");
+    fixture.event(
+        11,
+        Event::UsageUpdated {
+            usage: usage(true, false),
+        },
+    );
+    assert!(fixture.shows(REACHED));
+    assert!(fixture.refreshes_reset_times(), "the banner's reset time");
+    // A minute on, the banner says so.
+    fixture.sent.set_now(Timestamp(NOW + 60_000));
+    fixture.harness.ctx.request_repaint();
+    fixture.harness.run();
+    assert!(fixture.shows(
+        "The shared ChatGPT subscription has reached its limit. Bots can reply again in 1 h 59 min"
+    ));
+}
+
+#[test]
+fn a_stop_note_goes_with_the_next_send() {
+    let mut fixture = Fixture::new();
+    fixture.replying();
+    fixture.click("Stop");
+    let _ = fixture.sent();
+    fixture.reply(ApiReply::Stopped(
+        TUTOR,
+        Ok(StopResponse { stopped: false }),
+    ));
+    assert!(fixture.shows("The reply had already finished"));
+    fixture.write("Next question");
+    fixture.click("Send");
+    assert_eq!(fixture.fact("stop_note"), "".into());
+    assert!(!fixture.shows("The reply had already finished"));
+}
+
+#[test]
+fn a_refusal_the_banner_already_says_is_said_once() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor(hello(), 10);
+    fixture.write("One more question");
+    fixture.click("Send");
+    let _ = fixture.sent();
+    fixture.reply(ApiReply::Sent(
+        TUTOR,
+        Err(error(429, ErrorCode::LimitReached, EXHAUSTED)),
+    ));
+    assert_eq!(fixture.count(EXHAUSTED), 1, "the send error alone");
+    fixture.event(
+        11,
+        Event::UsageUpdated {
+            usage: usage(false, true),
+        },
+    );
+    assert_eq!(fixture.count(EXHAUSTED), 1, "the banner, not both");
+    assert_eq!(fixture.fact("send_error"), EXHAUSTED.into());
+}

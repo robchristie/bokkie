@@ -450,3 +450,39 @@ fn refusals_separated_by_a_live_socket_do_not_add_up() {
         assert_eq!(connection.state(), State::Live);
     }
 }
+
+#[test]
+fn unreadable_frames_after_live_still_add_up() {
+    let mut connection = live(10);
+    for _ in 1..UNREADABLE_LIMIT {
+        let _ = connection.handle(Input::Unreadable);
+        let _ = connection.handle(Input::RetryDue);
+        let _ = connection.handle(Input::Opened);
+        let _ = frame(&mut connection, ServerFrame::Live { latest: Seq(10) });
+        assert_eq!(connection.state(), State::Live);
+    }
+    assert_eq!(
+        connection.handle(Input::Unreadable),
+        [Command::Close, Command::Outdated]
+    );
+}
+
+#[test]
+fn refusals_and_unreadable_frames_are_counted_apart() {
+    let mut connection = live(10);
+    for _ in 1..UNREADABLE_LIMIT {
+        let _ = connection.handle(Input::Closed {
+            code: Some(CLOSE_PROTOCOL),
+        });
+        let _ = connection.handle(Input::RetryDue);
+        let _ = connection.handle(Input::Opened);
+    }
+    // One short of either limit: an unreadable frame does not tip it over.
+    assert_eq!(
+        connection.handle(Input::Unreadable),
+        [
+            Command::Close,
+            Command::RetryAfter(Connection::delay(UNREADABLE_LIMIT))
+        ]
+    );
+}

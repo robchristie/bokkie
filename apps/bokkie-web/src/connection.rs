@@ -16,10 +16,11 @@
 //!   again connects at once. Reaching live resets the delay.
 //! - **Signed out.** A request answered 401, or the gateway closed the socket
 //!   because the session ended. Nothing reconnects.
-//! - **Outdated.** Frames this client cannot read kept arriving, or the
+//! - **Outdated.** Frames this client cannot read kept arriving
+//!   ([`UNREADABLE_LIMIT`] with no event passed on between them), or the
 //!   gateway kept closing the socket because it could not read the client's
-//!   ([`UNREADABLE_LIMIT`] in a row, with no event passed on and no live
-//!   socket in between), so the two speak different protocols. Nothing
+//!   (as many in a row with no live socket between them), so the two speak
+//!   different protocols. Nothing
 //!   reconnects; the page must be reloaded to fetch the client that matches
 //!   it.
 //!
@@ -148,6 +149,9 @@ pub struct Connection {
     awaiting: Option<u32>,
     /// Unreadable frames since the last event passed on.
     unreadable: u32,
+    /// The gateway's refusals of this client's frames (close 4000) since the
+    /// socket was last live.
+    refusals: u32,
 }
 
 impl Default for Connection {
@@ -167,6 +171,7 @@ impl Connection {
             pings: 0,
             awaiting: None,
             unreadable: 0,
+            refusals: 0,
         }
     }
 
@@ -277,8 +282,8 @@ impl Connection {
             return vec![Command::SignedOut];
         }
         if code == Some(CLOSE_PROTOCOL) {
-            self.unreadable = self.unreadable.saturating_add(1);
-            if self.unreadable >= UNREADABLE_LIMIT {
+            self.refusals = self.refusals.saturating_add(1);
+            if self.refusals >= UNREADABLE_LIMIT {
                 self.state = State::Outdated;
                 return vec![Command::Outdated];
             }
@@ -333,8 +338,10 @@ impl Connection {
                 self.state = State::Live;
                 self.failures = 0;
                 // Only refusals in a row, with no live socket between them,
-                // show an outdated client.
-                self.unreadable = 0;
+                // show an outdated client. (The gateway also refuses a
+                // socket that sends no resume in time, as a suspended page
+                // may not.)
+                self.refusals = 0;
                 if !self.synced || replaced {
                     self.synced = true;
                     vec![Command::Reload]

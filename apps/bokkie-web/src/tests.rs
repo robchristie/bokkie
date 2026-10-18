@@ -23,6 +23,7 @@ use crate::wire::CommandError;
 
 mod conversation;
 mod limits;
+mod stand_ins;
 
 struct Fixture {
     harness: Harness<'static, AppHost<App>>,
@@ -134,7 +135,14 @@ impl Fixture {
             })]
         );
         self.reply(ApiReply::SignedIn(Ok(SessionResponse { user: user() })));
-        assert_eq!(self.sent(), [ApiRequest::ListBots, ApiRequest::LoadUsage]);
+        assert_eq!(
+            self.sent(),
+            [
+                ApiRequest::ListBots,
+                ApiRequest::LoadUsage,
+                ApiRequest::CodexAccount
+            ]
+        );
     }
 }
 
@@ -208,7 +216,11 @@ fn a_valid_session_skips_the_form() {
     assert_eq!(fixture.fact("bots"), "loading".into());
     assert_eq!(
         fixture.sent(),
-        [ApiRequest::ListBots, ApiRequest::LoadUsage]
+        [
+            ApiRequest::ListBots,
+            ApiRequest::LoadUsage,
+            ApiRequest::CodexAccount
+        ]
     );
     assert!(fixture.shows("Loading Bots…"));
 }

@@ -6,8 +6,8 @@
 //! tests record them and reply by hand.
 
 use bokkie_protocol::api::{
-    BotList, LoginRequest, MessagePage, SendMessageRequest, SendMessageResponse, SessionResponse,
-    StopResponse, Usage,
+    Bot, BotList, CodexAccount, CreateBotRequest, DeviceCodeLogin, LoginRequest, MessagePage,
+    SendMessageRequest, SendMessageResponse, SessionResponse, StopResponse, Usage,
 };
 use bokkie_protocol::{API_PREFIX, BotId, Timestamp};
 
@@ -33,6 +33,13 @@ pub enum ApiRequest {
     StopBot(BotId),
     /// `GET /api/v1/usage`: the usage meter.
     LoadUsage,
+    /// `POST /api/v1/bots`: create a Bot.
+    CreateBot(CreateBotRequest),
+    /// `GET /api/v1/codex/account`: whether the user's own app server is
+    /// signed in to ChatGPT.
+    CodexAccount,
+    /// `POST /api/v1/codex/login`: start a device-code sign-in.
+    CodexLogin,
 }
 
 // The password must never reach a log line.
@@ -51,6 +58,9 @@ impl std::fmt::Debug for ApiRequest {
                 .finish(),
             Self::StopBot(bot) => f.debug_tuple("StopBot").field(bot).finish(),
             Self::LoadUsage => f.write_str("LoadUsage"),
+            Self::CreateBot(bot) => f.debug_tuple("CreateBot").field(bot).finish(),
+            Self::CodexAccount => f.write_str("CodexAccount"),
+            Self::CodexLogin => f.write_str("CodexLogin"),
         }
     }
 }
@@ -84,15 +94,39 @@ pub enum ApiReply {
     Sent(BotId, Result<SendMessageResponse, CommandError>),
     Stopped(BotId, Result<StopResponse, CommandError>),
     Usage(Result<Usage, CommandError>),
+    Created(Result<Bot, CommandError>),
+    Account(Result<CodexAccount, CommandError>),
+    Login(Result<DeviceCode, CommandError>),
+}
+
+/// A device-code sign-in as the gateway started it. The code is shown on
+/// screen and nowhere else, so its `Debug` leaves it out.
+#[derive(Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(transparent)]
+pub struct DeviceCode(pub DeviceCodeLogin);
+
+impl std::fmt::Debug for DeviceCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceCode")
+            .field("verification_url", &self.0.verification_url)
+            .field("user_code", &"<redacted>")
+            .finish()
+    }
 }
 
 impl ApiRequest {
     pub fn method(&self) -> Method {
         match self {
-            Self::CheckSession | Self::ListBots | Self::LoadMessages(_) | Self::LoadUsage => {
-                Method::Get
-            }
-            Self::SignIn(_) | Self::SendMessage(..) | Self::StopBot(_) => Method::Post,
+            Self::CheckSession
+            | Self::ListBots
+            | Self::LoadMessages(_)
+            | Self::LoadUsage
+            | Self::CodexAccount => Method::Get,
+            Self::SignIn(_)
+            | Self::SendMessage(..)
+            | Self::StopBot(_)
+            | Self::CreateBot(_)
+            | Self::CodexLogin => Method::Post,
             Self::SignOut => Method::Delete,
         }
     }
@@ -101,7 +135,9 @@ impl ApiRequest {
     pub fn path(&self) -> String {
         let route = match self {
             Self::CheckSession | Self::SignIn(_) | Self::SignOut => "/session".into(),
-            Self::ListBots => "/bots".into(),
+            Self::ListBots | Self::CreateBot(_) => "/bots".into(),
+            Self::CodexAccount => "/codex/account".into(),
+            Self::CodexLogin => "/codex/login".into(),
             Self::LoadMessages(bot) | Self::SendMessage(bot, _) => format!("/bots/{bot}/messages"),
             Self::StopBot(bot) => format!("/bots/{bot}/stop"),
             Self::LoadUsage => "/usage".into(),
@@ -114,6 +150,7 @@ impl ApiRequest {
         match self {
             Self::SignIn(login) => Some(json(login)),
             Self::SendMessage(_, message) => Some(json(message)),
+            Self::CreateBot(bot) => Some(json(bot)),
             _ => None,
         }
     }
@@ -131,6 +168,9 @@ impl ApiRequest {
             Self::SendMessage(bot, _) => ApiReply::Sent(*bot, wire::decode_response(status, body)),
             Self::StopBot(bot) => ApiReply::Stopped(*bot, wire::decode_response(status, body)),
             Self::LoadUsage => ApiReply::Usage(wire::decode_response(status, body)),
+            Self::CreateBot(_) => ApiReply::Created(wire::decode_response(status, body)),
+            Self::CodexAccount => ApiReply::Account(wire::decode_response(status, body)),
+            Self::CodexLogin => ApiReply::Login(wire::decode_response(status, body)),
         }
     }
 
@@ -146,6 +186,9 @@ impl ApiRequest {
             Self::SendMessage(bot, _) => ApiReply::Sent(*bot, Err(error)),
             Self::StopBot(bot) => ApiReply::Stopped(*bot, Err(error)),
             Self::LoadUsage => ApiReply::Usage(Err(error)),
+            Self::CreateBot(_) => ApiReply::Created(Err(error)),
+            Self::CodexAccount => ApiReply::Account(Err(error)),
+            Self::CodexLogin => ApiReply::Login(Err(error)),
         }
     }
 }
@@ -267,6 +310,14 @@ mod tests {
             ),
             ApiRequest::StopBot(BotId(3)),
             ApiRequest::LoadUsage,
+            ApiRequest::CreateBot(CreateBotRequest {
+                name: "Gardener".into(),
+                label: String::new(),
+                description: String::new(),
+                avatar: None,
+            }),
+            ApiRequest::CodexAccount,
+            ApiRequest::CodexLogin,
         ]
         .iter()
         .map(|request| (request.method().as_str(), request.path()))
@@ -282,6 +333,9 @@ mod tests {
                 ("POST", "/api/v1/bots/3/messages".to_owned()),
                 ("POST", "/api/v1/bots/3/stop".to_owned()),
                 ("GET", "/api/v1/usage".to_owned()),
+                ("POST", "/api/v1/bots".to_owned()),
+                ("GET", "/api/v1/codex/account".to_owned()),
+                ("POST", "/api/v1/codex/login".to_owned()),
             ]
         );
         assert_eq!(
@@ -301,6 +355,31 @@ mod tests {
         );
         assert_eq!(ApiRequest::ListBots.body(), None);
         assert!(!format!("{login:?}").contains("a long password"));
+    }
+
+    #[test]
+    fn a_new_bot_is_named_only_and_a_device_code_never_reaches_a_log() {
+        let create = ApiRequest::CreateBot(CreateBotRequest {
+            name: "Gardener".into(),
+            label: String::new(),
+            description: String::new(),
+            avatar: None,
+        });
+        assert_eq!(
+            create.body().as_deref(),
+            Some(r#"{"name":"Gardener","label":"","description":""}"#)
+        );
+        let reply = ApiRequest::CodexLogin.decode(
+            200,
+            r#"{"verification_url":"https://auth.example/device","user_code":"WXYZ-1234"}"#,
+        );
+        let ApiReply::Login(Ok(login)) = &reply else {
+            panic!("a device code");
+        };
+        assert_eq!(login.0.user_code, "WXYZ-1234");
+        let logged = format!("{reply:?}");
+        assert!(!logged.contains("WXYZ-1234"), "{logged}");
+        assert!(logged.contains("https://auth.example/device"));
     }
 
     #[test]

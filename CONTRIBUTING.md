@@ -90,8 +90,11 @@ Then open <http://localhost:8787/>, adding `?automation=1` for
 the open conversation `bot`, `conversation`, `bot_status`, `bot_error`,
 `message_count`, `reply`, `reply_chars` and `reply_state` (the latest Bot
 reply), `draft`, `sending`, `delivery`, `send_error`, `stopping` and
-`stop_note`, and for the usage meter `usage`, `subscription_used`,
-`turns_today` and `limit` (the limit-reached banner). Open a Bot with
+`stop_note`; for the usage meter `usage`, `subscription_used`,
+`turns_today` and `limit` (the limit-reached banner); for the New Bot form
+`new_bot_name`, `creating` and `create_error`; and `chatgpt` and
+`chatgpt_login` for the ChatGPT sign-in, which never publishes its device
+code. Name a new Bot with `stobie set-text bokkie.bot-name`. Open a Bot with
 `stobie invoke bokkie.open-bot --value ID` and fill the message field with
 `stobie set-text bokkie.draft`. Stobie offers no `set-text` on the password
 field, so type into it with the keyboard. To watch a reply stream without a

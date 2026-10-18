@@ -30,6 +30,6 @@ verification rules are in [CONTRIBUTING.md](CONTRIBUTING.md). Phase 2's
 gateway has landed; [docs/gateway.md](docs/gateway.md) is its operator
 reference. The web client (`apps/bokkie-web`) signs in, lists the user's
 Bots and holds one Bot's conversation, with replies streaming over the event
-socket, a Stop action, the usage meter and the limit-reached banner; a New
-Bot form and the ChatGPT sign-in screen come next. The owner keeps the phase
-plan privately.
+socket, a Stop action, the usage meter, the limit-reached banner, a New Bot
+form and the ChatGPT device-code sign-in for the user's own app server. The
+owner keeps the phase plan privately.
