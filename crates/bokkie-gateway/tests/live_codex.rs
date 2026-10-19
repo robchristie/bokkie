@@ -116,7 +116,12 @@ async fn the_real_app_server_offers_exactly_the_granted_tools() {
     let user = UserId(1);
     let runtime = supervisor.runtime(user).await.expect("the checks pass");
     // Every grant with tools today, alone and together, and none.
-    let combinations: Vec<GrantSet> = vec![GrantSet::new(), [Grant::Notes].into()];
+    let combinations: Vec<GrantSet> = vec![
+        GrantSet::new(),
+        [Grant::Notes].into(),
+        [Grant::Seen].into(),
+        [Grant::Notes, Grant::Seen].into(),
+    ];
     for grants in &combinations {
         let (offered, text) = capture(&runtime, &mut events, mock, grants).await;
         eprintln!("grants {grants:?}: offered {offered:?}");
@@ -126,12 +131,7 @@ async fn the_real_app_server_offers_exactly_the_granted_tools() {
         assert_eq!(offered, expected_tools(grants), "grants {grants:?}");
     }
     // The grants whose tools do not exist yet offer nothing.
-    for grant in [
-        Grant::Seen,
-        Grant::Notify,
-        Grant::WebSearch,
-        Grant::WebFetch,
-    ] {
+    for grant in [Grant::Notify, Grant::WebSearch, Grant::WebFetch] {
         assert_eq!(bokkie_gateway::tools::granted(&[grant].into()).count(), 0);
     }
 
@@ -278,12 +278,12 @@ async fn run_turn(
     .expect("the turn completes")
 }
 
-/// Chat-only threads need no working sandbox, so a container without one
-/// (Docker's default confinement, or a CI runner that forbids user
-/// namespaces) still serves them. Here every Bubblewrap fails: a failing
+/// Threads that run no command need no working sandbox, so a container
+/// without one (Docker's default confinement, or a CI runner that forbids
+/// user namespaces) still serves them. Here every Bubblewrap fails: a failing
 /// `bwrap` comes first on `PATH`, and the bundled copy is replaced by it.
 #[tokio::test]
-async fn chat_only_threads_run_without_a_working_sandbox() {
+async fn threads_that_run_no_command_run_without_a_working_sandbox() {
     use std::os::unix::fs::PermissionsExt;
     let Some(live) = Live::start(&["still here"]).await else {
         return;

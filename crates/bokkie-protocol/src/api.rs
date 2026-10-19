@@ -612,7 +612,8 @@ pub enum ToolCallOutcome {
     Ok,
     /// The tool ran and failed, for example on invalid arguments.
     Failed,
-    /// The gateway refused the call: the Bot no longer holds the grant.
+    /// The gateway refused the call: the Bot no longer holds the grant, or
+    /// it named no tool the gateway has.
     Refused,
     /// The tool did not finish within its deadline.
     TimedOut,

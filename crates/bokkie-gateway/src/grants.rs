@@ -8,7 +8,7 @@
 //! Setting grants follows three rules, checked by [`check_change`]:
 //!
 //! - **Availability.** A grant whose tools do not exist yet cannot be
-//!   granted. Today that is every grant but `notes`.
+//!   granted. Today that is `notify`, `web.search` and `web.fetch`.
 //! - **Who grants what.** An admin may grant anything available; a member
 //!   may add only `notes`, `seen` and `notify` ([`member_may_grant`]), and
 //!   may remove any grant.
@@ -50,8 +50,8 @@ pub fn class(grant: Grant) -> Class {
 /// Whether the gateway can grant this yet: its tools exist.
 pub fn available(grant: Grant) -> bool {
     match grant {
-        Grant::Notes => true,
-        Grant::Seen | Grant::Notify | Grant::WebSearch | Grant::WebFetch => false,
+        Grant::Notes | Grant::Seen => true,
+        Grant::Notify | Grant::WebSearch | Grant::WebFetch => false,
     }
 }
 
@@ -204,13 +204,13 @@ mod tests {
     #[test]
     fn only_grants_with_tools_can_be_granted() {
         assert!(available(Grant::Notes));
+        assert!(available(Grant::Seen));
         let none = GrantSet::new();
-        for grant in [
-            Grant::Seen,
-            Grant::Notify,
-            Grant::WebSearch,
-            Grant::WebFetch,
-        ] {
+        assert_eq!(
+            check_change(Role::Member, &none, &[Grant::Seen, Grant::Notes]).unwrap(),
+            [Grant::Notes, Grant::Seen].into()
+        );
+        for grant in [Grant::Notify, Grant::WebSearch, Grant::WebFetch] {
             assert!(!available(grant));
             let refused = check_change(Role::Admin, &none, &[grant]).unwrap_err();
             assert_eq!(refused.code, ErrorCode::InvalidRequest, "{grant}");

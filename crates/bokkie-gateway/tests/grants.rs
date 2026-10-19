@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
 use bokkie_gateway::bots::store;
+use bokkie_gateway::tools::seen;
 use bokkie_protocol::api::Grant;
 use bokkie_protocol::events::{Event, Seq};
 use bokkie_protocol::{BotId, UserId};
@@ -127,7 +128,7 @@ async fn grants_are_set_read_and_announced() {
 async fn grants_without_tools_yet_are_refused_even_to_admins() {
     let (gateway, rob) = setup().await;
     let bot = create_bot(&gateway, &rob, "Scout").await;
-    for grant in ["seen", "notify", "web.search", "web.fetch"] {
+    for grant in ["notify", "web.search", "web.fetch"] {
         let refused = set_grants(&gateway, &rob, bot, json!([grant])).await;
         assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{grant}");
         assert!(
@@ -159,9 +160,12 @@ async fn members_may_add_only_their_grants() {
         assert_eq!(refused.status, StatusCode::FORBIDDEN, "{grant}");
         assert_eq!(refused.code(), "forbidden");
     }
+    let seen = set_grants(&gateway, &amy, bot, json!(["seen", "notes"])).await;
+    assert_eq!(seen.status, StatusCode::OK, "{:?}", seen.body);
+    assert_eq!(seen.body["grants"], json!(["notes", "seen"]));
     // A member's own grants that have no tools yet are refused as such.
-    let seen = set_grants(&gateway, &amy, bot, json!(["seen"])).await;
-    assert_eq!(seen.status, StatusCode::BAD_REQUEST);
+    let notify = set_grants(&gateway, &amy, bot, json!(["notify"])).await;
+    assert_eq!(notify.status, StatusCode::BAD_REQUEST);
     let cleared = set_grants(&gateway, &amy, bot, json!([])).await;
     assert_eq!(cleared.body["grants"], json!([]));
 }
@@ -248,7 +252,26 @@ async fn one_user_cannot_read_set_or_use_anothers_grants_notes_or_tool_calls() {
     let (amy, amy_id) = gateway.member(&rob, "amy").await;
     let (ben, ben_id) = gateway.member(&rob, "ben").await;
     let bot = create_bot(&gateway, &amy, "Diary").await;
-    set_grants(&gateway, &amy, bot, json!(["notes"])).await;
+    set_grants(&gateway, &amy, bot, json!(["notes", "seen"])).await;
+    let shown = || seen::Item {
+        id: "arxiv:2401.12345".into(),
+        title: "Amy's secret paper".into(),
+        url: "https://arxiv.org/abs/2401.12345".into(),
+    };
+    let mut tx = gateway.state.db.begin().await.unwrap();
+    let now = gateway.state.clock.now();
+    assert!(
+        seen::mark(&mut tx, now, UserId(amy_id), BotId(bot), &[shown()])
+            .await
+            .unwrap()
+    );
+    // Ben cannot mark items on Amy's Bot by naming it.
+    assert!(
+        !seen::mark(&mut tx, now, UserId(ben_id), BotId(bot), &[shown()])
+            .await
+            .unwrap()
+    );
+    tx.commit().await.unwrap();
     bokkie_gateway::tools::notes::write(
         &gateway.state.db,
         gateway.state.clock.now(),
@@ -288,7 +311,26 @@ async fn one_user_cannot_read_set_or_use_anothers_grants_notes_or_tool_calls() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(bot.grants, [Grant::Notes].into());
+    assert_eq!(bot.grants, [Grant::Notes, Grant::Seen].into());
+    // Nor read them.
+    let ids = ["arxiv:2401.12345".to_owned()];
+    let now = gateway.state.clock.now();
+    assert!(
+        seen::shown(&gateway.state.db, now, UserId(ben_id), bot.id, &ids)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let amys = seen::shown(&gateway.state.db, now, UserId(amy_id), bot.id, &ids)
+        .await
+        .unwrap();
+    assert_eq!(amys[&ids[0]].title, "Amy's secret paper");
+    assert_eq!(
+        seen::count(&gateway.state.db, UserId(amy_id), bot.id)
+            .await
+            .unwrap(),
+        1
+    );
     // Ben cannot write Amy's notes by naming her Bot either.
     assert!(
         !bokkie_gateway::tools::notes::write(
@@ -317,10 +359,13 @@ async fn a_thread_offers_exactly_its_bots_grants() {
     let bare = create_bot(&gateway, &rob, "Bare").await;
     let scribe = create_bot(&gateway, &rob, "Scribe").await;
     set_grants(&gateway, &rob, scribe, json!(["notes"])).await;
+    let scout = create_bot(&gateway, &rob, "Scout").await;
+    set_grants(&gateway, &rob, scout, json!(["seen", "notes"])).await;
     say(&gateway, &rob, bare, "hi").await;
     say(&gateway, &rob, scribe, "hi").await;
+    say(&gateway, &rob, scout, "hi").await;
     let starts = gateway.fake.received("thread/start");
-    assert_eq!(starts.len(), 2);
+    assert_eq!(starts.len(), 3);
     let bare_start = &starts[0].params;
     assert_eq!(bare_start.get("dynamicTools"), None, "no tools at all");
     let instructions = bare_start["developerInstructions"].as_str().unwrap();
@@ -338,6 +383,23 @@ async fn a_thread_offers_exactly_its_bots_grants() {
     assert!(instructions.contains("not instructions from rob"));
     assert!(instructions.contains("Apart from them, you cannot run commands"));
     assert!(!instructions.contains("You can only talk"));
+    assert!(!instructions.contains("seen_check"));
+    let scout_start = &starts[2].params;
+    assert_eq!(
+        tool_names(scout_start),
+        [
+            "notes_read",
+            "notes_replace",
+            "notes_append",
+            "seen_check",
+            "seen_mark"
+        ]
+    );
+    let instructions = scout_start["developerInstructions"].as_str().unwrap();
+    assert!(
+        instructions.contains("seen_check and seen_mark"),
+        "{instructions}"
+    );
     for start in &starts {
         assert_eq!(start.params["permissions"], "bokkie");
     }
@@ -511,4 +573,319 @@ async fn existing_bots_keep_their_threads_after_the_migration() {
         .await
         .unwrap();
     assert_eq!(messages[0].kind, bokkie_protocol::api::MessageKind::Text);
+}
+
+/// The user's tokens this week, as the usage meter shows them.
+async fn tokens(gateway: &Gateway, cookie: &str) -> i64 {
+    gateway
+        .send(Call::get("/api/v1/usage").cookie(cookie))
+        .await
+        .body["allowance"]["tokens_this_week"]
+        .as_i64()
+        .unwrap()
+}
+
+async fn tokens_reach(gateway: &Gateway, cookie: &str, expected: i64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let now = tokens(gateway, cookie).await;
+        if now == expected {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "tokens stayed at {now}, not {expected}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// A message meant to steer a turn that ends just as the Bot's grants
+/// changed starts a fresh thread. The replaced thread's turn can then
+/// report its tokens and end only after the fresh thread took over: both
+/// still reach the Bot, each thread's tokens count from its own baseline,
+/// the old turn's end leaves the fresh turn running, and the message is
+/// the fresh turn's input without being carried over as well.
+#[tokio::test]
+async fn a_replaced_threads_late_turn_end_reaches_its_bot_and_the_message_goes_once() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| {
+        b.finish_turns = false;
+        b.usage_mid_turn = true;
+    });
+    let bot = create_bot(&gateway, &rob, "Scribe").await;
+    say(&gateway, &rob, bot, "First, the apricots.").await;
+    tokens_reach(&gateway, &rob, 120).await;
+    let old_thread = store::bot(&gateway.state.db, UserId(1), BotId(bot))
+        .await
+        .unwrap()
+        .unwrap()
+        .thread_id
+        .unwrap();
+    let old_turn: String =
+        sqlx::query_scalar("SELECT turn_id FROM messages WHERE author = 'bot' ORDER BY id LIMIT 1")
+            .fetch_one(&gateway.state.db)
+            .await
+            .unwrap();
+
+    // The grants change mid-turn, and the turn ends just as a message
+    // arrives to steer it.
+    set_grants(&gateway, &rob, bot, json!(["notes"])).await;
+    gateway.fake.with(|b| b.steer_fails = true);
+    let sent = say(&gateway, &rob, bot, "Second, the figs.").await;
+    assert_eq!(sent.body["delivery"], "new_turn", "{:?}", sent.body);
+    let fresh_thread = store::bot(&gateway.state.db, UserId(1), BotId(bot))
+        .await
+        .unwrap()
+        .unwrap()
+        .thread_id
+        .unwrap();
+    assert_ne!(fresh_thread, old_thread);
+    let turn = gateway.fake.received("turn/start").pop().unwrap();
+    assert_eq!(turn.params["threadId"], fresh_thread);
+    assert!(
+        turn.params["input"]
+            .to_string()
+            .contains("Second, the figs."),
+        "{}",
+        turn.params
+    );
+    let carried = turn.params["additionalContext"]["bokkie-earlier-conversation"]["value"]
+        .as_str()
+        .unwrap();
+    assert!(carried.contains("rob: First, the apricots."), "{carried}");
+    assert!(!carried.contains("figs"), "{carried}");
+    // The fresh thread's tokens count from zero.
+    tokens_reach(&gateway, &rob, 240).await;
+
+    // The replaced thread's turn now reports its last tokens and ends.
+    gateway.fake.inject(
+        UserId(1),
+        json!({"method": "thread/tokenUsage/updated", "params": {
+            "threadId": old_thread, "turnId": old_turn, "tokenUsage": {
+                "total": {"totalTokens": 300, "inputTokens": 280, "cachedInputTokens": 0,
+                          "outputTokens": 20, "reasoningOutputTokens": 0},
+                "last": {"totalTokens": 180, "inputTokens": 160, "cachedInputTokens": 0,
+                         "outputTokens": 20, "reasoningOutputTokens": 0},
+                "modelContextWindow": 272000}}}),
+    );
+    gateway.fake.inject(
+        UserId(1),
+        json!({"method": "turn/completed", "params": {"threadId": old_thread,
+            "turn": {"id": old_turn, "items": [], "status": "completed", "error": null}}}),
+    );
+    tokens_reach(&gateway, &rob, 420).await;
+    let page = gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{bot}/messages"), |page| {
+            page["messages"][1]["state"] == "complete"
+        })
+        .await;
+    let messages = page["messages"].as_array().unwrap();
+    let said: Vec<(&str, &str, &str)> = messages
+        .iter()
+        .map(|m| {
+            (
+                m["kind"].as_str().unwrap(),
+                m["text"].as_str().unwrap(),
+                m["state"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        said[..4],
+        [
+            ("text", "First, the apricots.", "complete"),
+            ("text", "Hello there", "complete"),
+            ("text", "Second, the figs.", "complete"),
+            ("marker", "Capabilities changed: notes", "complete"),
+        ],
+        "{said:?}"
+    );
+    // The fresh turn still runs, and its reply still streams.
+    assert_eq!(said[4].0, "text");
+    assert_eq!(said[4].2, "streaming", "{said:?}");
+    let listed = gateway
+        .send(Call::get(&format!("/api/v1/bots/{bot}")).cookie(&rob))
+        .await;
+    assert_eq!(listed.body["status"], "working");
+
+    // Stopping it ends the fresh turn.
+    let stopped = gateway
+        .send(Call::post(&format!("/api/v1/bots/{bot}/stop")).cookie(&rob))
+        .await;
+    assert_eq!(stopped.status, StatusCode::OK, "{:?}", stopped.body);
+    idle(&gateway, &rob, bot).await;
+    assert!(gateway.state.supervisor.tainted().is_none());
+}
+
+/// A message refused for want of a turn changes nothing in the
+/// conversation: the turn is counted before a fresh thread is started, so
+/// a send that a concurrent one beat to the last turn leaves no marker
+/// behind.
+#[tokio::test]
+async fn the_turn_is_counted_before_a_fresh_thread_and_its_marker() {
+    let (gateway, rob) = setup().await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    let diary = create_bot(&gateway, &amy, "Diary").await;
+    let chef = create_bot(&gateway, &amy, "Chef").await;
+    say(&gateway, &amy, diary, "hi").await;
+    idle(&gateway, &amy, diary).await;
+    say(&gateway, &amy, chef, "hi").await;
+    idle(&gateway, &amy, chef).await;
+    set_grants(&gateway, &amy, diary, json!(["notes"])).await;
+    let limited = gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/admin/users/{amy_id}"))
+                .cookie(&rob)
+                .json(&json!({"limits": {"daily_turns": 3, "weekly_tokens": null}})),
+        )
+        .await;
+    assert_eq!(limited.status, StatusCode::OK, "{:?}", limited.body);
+
+    // The Diary's fresh thread is slow to start, and meanwhile the Chef is
+    // sent a message too: one turn is left for the two.
+    gateway.fake.with(|b| b.hold_thread_starts = true);
+    let held = gateway.spawn(
+        Call::post(&format!("/api/v1/bots/{diary}/messages"))
+            .cookie(&amy)
+            .json(&json!({"text": "Remember this."})),
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while gateway.fake.received("thread/start").len() < 3 {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let other = gateway
+        .send(
+            Call::post(&format!("/api/v1/bots/{chef}/messages"))
+                .cookie(&amy)
+                .json(&json!({"text": "And this?"})),
+        )
+        .await;
+    gateway.fake.thread_starts.add_permits(1);
+    let held = held.await.unwrap();
+
+    // The Diary held the last turn from before its thread started.
+    assert_eq!(held.status, StatusCode::OK, "{:?}", held.body);
+    assert_eq!(held.body["delivery"], "new_turn");
+    assert_eq!(other.code(), "limit_reached", "{:?}", other.body);
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{diary}/messages")).cookie(&amy))
+        .await;
+    let messages = page.body["messages"].as_array().unwrap();
+    let marker = messages
+        .iter()
+        .position(|m| m["kind"] == "marker")
+        .expect("a marker");
+    assert_eq!(messages[marker + 1]["text"], "Remember this.");
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}/messages")).cookie(&amy))
+        .await;
+    assert!(!page.body.to_string().contains("And this?"));
+}
+
+#[tokio::test]
+async fn existing_threads_keep_their_bots_and_token_totals_after_the_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bokkie.sqlite3");
+    {
+        let before = sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(
+                bokkie_gateway::db::MIGRATIONS
+                    .iter()
+                    .filter(|m| m.version < 8)
+                    .cloned()
+                    .collect(),
+            ),
+            ..sqlx::migrate::Migrator::DEFAULT
+        };
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true);
+        let pool = sqlx::SqlitePool::connect_with(options).await.unwrap();
+        before.run(&pool).await.unwrap();
+        for statement in [
+            "INSERT INTO users (id, username, display_name, role, password_hash, created_at,
+                                updated_at) VALUES (1, 'rob', 'Rob', 'admin', 'x', 1, 1)",
+            "INSERT INTO bots (id, user_id, name, label, description, thread_id,
+                               profile_sent_revision, created_at, updated_at, tokens_reported)
+                 VALUES (5, 1, 'Chef', '', '', 'thr-old', 1, 1, 1, 500)",
+            "INSERT INTO bots (id, user_id, name, label, description, created_at, updated_at)
+                 VALUES (6, 1, 'New', '', '', 1, 1)",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        pool.close().await;
+    }
+    let db = bokkie_gateway::db::open(&path).await.unwrap();
+    let bot = store::bot_by_thread(&db, UserId(1), "thr-old")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bot.id, BotId(5));
+    assert!(bot.is_current("thr-old"));
+    // Its next report counts from the total already reported.
+    let mut tx = bokkie_gateway::db::write(&db).await.unwrap();
+    let growth = bokkie_gateway::usage::record_tokens(
+        &mut tx,
+        bokkie_protocol::Timestamp(2),
+        UserId(1),
+        BotId(5),
+        "thr-old",
+        620,
+    )
+    .await
+    .unwrap();
+    assert_eq!(growth, 120);
+    tx.commit().await.unwrap();
+    // A Bot without a thread gains one, and keeps the one it replaced.
+    store::set_thread(&db, UserId(1), BotId(6), "thr-a", 1, &Default::default())
+        .await
+        .unwrap();
+    let mut tx = db.begin().await.unwrap();
+    let marker = store::insert_message(
+        &mut *tx,
+        bokkie_protocol::Timestamp(3),
+        UserId(1),
+        store::NewMessage {
+            bot: BotId(6),
+            author: bokkie_protocol::api::Author::Bot,
+            text: "Capabilities changed: notes",
+            state: bokkie_protocol::api::MessageState::Complete,
+            turn: None,
+            kind: bokkie_protocol::api::MessageKind::Marker,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        store::replace_thread(
+            &mut *tx,
+            UserId(1),
+            BotId(6),
+            "thr-a",
+            "thr-b",
+            1,
+            &[Grant::Notes].into(),
+            marker.id,
+        )
+        .await
+        .unwrap()
+    );
+    tx.commit().await.unwrap();
+    for (thread, current) in [("thr-a", false), ("thr-b", true)] {
+        let bot = store::bot_by_thread(&db, UserId(1), thread)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bot.id, BotId(6), "{thread}");
+        assert_eq!(bot.is_current(thread), current, "{thread}");
+    }
+    // Another user's app server finds none of them.
+    assert!(
+        store::bot_by_thread(&db, UserId(2), "thr-b")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

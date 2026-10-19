@@ -14,6 +14,7 @@
 
 pub mod audit;
 pub mod notes;
+pub mod seen;
 
 use std::time::{Duration, Instant};
 
@@ -83,6 +84,58 @@ pub const TOOLS: &[Tool] = &[
         deadline: LOCAL_DEADLINE,
         schema: || text_argument("The Markdown text to add."),
     },
+    Tool {
+        name: "seen_check",
+        grant: Grant::Seen,
+        description: "Check which items you have already shown your owner, by arXiv id, DOI or \
+                      link, at most 50 at a time. Each comes back with its canonical id and \
+                      whether it was seen, with the title it was shown under and how many \
+                      days ago. Items are remembered for a year after you last showed them.",
+        deadline: LOCAL_DEADLINE,
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {"items": {
+                    "type": "array",
+                    "description": "arXiv ids, DOIs or links, at most 50.",
+                    "items": {"type": "string"},
+                }},
+                "required": ["items"],
+                "additionalProperties": false,
+            })
+        },
+    },
+    Tool {
+        name: "seen_mark",
+        grant: Grant::Seen,
+        description: "Record items as shown to your owner now, by arXiv id, DOI or link, with \
+                      their titles, at most 50 at a time. Mark what you showed, so that you \
+                      do not show it again.",
+        deadline: LOCAL_DEADLINE,
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {"items": {
+                    "type": "array",
+                    "description": "The items you showed, at most 50.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string",
+                                   "description": "The item's arXiv id, DOI or link."},
+                            "title": {"type": "string", "description": "Its title."},
+                            "url": {"type": "string",
+                                    "description": "The link you gave, if not the id."},
+                        },
+                        "required": ["id", "title"],
+                        "additionalProperties": false,
+                    },
+                }},
+                "required": ["items"],
+                "additionalProperties": false,
+            })
+        },
+    },
 ];
 
 /// The tools of these grants, in catalogue order.
@@ -111,6 +164,16 @@ pub fn find(name: &str, namespace: Option<&str>) -> Option<&'static Tool> {
     TOOLS.iter().find(|tool| tool.name == name)
 }
 
+/// A called tool's name for logs, with its namespace, bounded: the model
+/// chose it.
+pub fn display_name(tool: &str, namespace: Option<&str>) -> String {
+    let name = match namespace {
+        Some(namespace) => format!("{namespace}/{tool}"),
+        None => tool.to_owned(),
+    };
+    name.chars().take(64).collect()
+}
+
 /// Whether a thread started with these grants offers this tool.
 pub fn allows(grants: &GrantSet, name: &str, namespace: Option<&str>) -> bool {
     find(name, namespace).is_some_and(|tool| grants.contains(&tool.grant))
@@ -135,6 +198,8 @@ async fn run(tool: &Tool, caller: &Caller, arguments: &Value) -> Output {
         "notes_read" => notes::read_tool(caller).await,
         "notes_replace" => notes::replace_tool(caller, arguments).await,
         "notes_append" => notes::append_tool(caller, arguments).await,
+        "seen_check" => seen::check_tool(caller, arguments).await,
+        "seen_mark" => seen::mark_tool(caller, arguments).await,
         _ => Err(NOT_AVAILABLE.into()),
     }
 }
@@ -146,6 +211,7 @@ fn summary(tool: &Tool, arguments: &Value) -> String {
             Some(text) => format!("{} bytes", text.len()),
             None => "invalid arguments".into(),
         },
+        "seen_check" | "seen_mark" => seen::summary(tool.name, arguments),
         _ => String::new(),
     }
 }
@@ -179,12 +245,14 @@ impl Broker {
 
     async fn serve(&self, user: UserId, call: &DynamicToolCallParams) -> DynamicToolCallResponse {
         let started = Instant::now();
+        let name = display_name(&call.tool, call.namespace.as_deref());
         // The thread names the Bot; the user is the app server's own. The
-        // arguments name neither.
+        // arguments name neither. A call from a thread with no Bot has no
+        // owner to read its log entry, so only the gateway's log has it.
         let bot = match store::bot_by_thread(&self.db, user, &call.thread_id).await {
             Ok(Some(bot)) => bot,
             Ok(None) => {
-                tracing::warn!(user = %user, tool = %call.tool, "a tool call from a thread with no Bot");
+                tracing::warn!(user = %user, tool = %name, "a tool call from a thread with no Bot");
                 return DynamicToolCallResponse::text(false, NOT_AVAILABLE);
             }
             Err(failure) => {
@@ -193,7 +261,19 @@ impl Broker {
             }
         };
         let Some(tool) = find(&call.tool, call.namespace.as_deref()) else {
-            tracing::warn!(user = %user, bot = %bot.id, tool = %call.tool, "a call for an unknown tool");
+            // The read loop lets through only the thread's own tools, so
+            // this is a defence in depth; the Bot's owner sees it.
+            tracing::warn!(user = %user, bot = %bot.id, tool = %name, "a call for an unknown tool");
+            self.record(
+                user,
+                bot.id,
+                call,
+                &name,
+                ToolCallOutcome::Refused,
+                "unknown tool".into(),
+                started,
+            )
+            .await;
             return DynamicToolCallResponse::text(false, NOT_AVAILABLE);
         };
         let caller = Caller {
@@ -223,24 +303,48 @@ impl Broker {
                 ),
             }
         };
-        let entry = audit::Entry {
+        self.record(
             user,
-            bot: bot.id,
-            thread_id: &call.thread_id,
-            turn_id: &call.turn_id,
-            call_id: &call.call_id,
-            tool: tool.name,
-            summary: summary(tool, &call.arguments),
+            bot.id,
+            call,
+            tool.name,
             outcome,
-            duration_ms: started.elapsed().as_millis() as u64,
-        };
-        if let Err(failure) = audit::record(&self.db, self.clock.now(), entry).await {
-            tracing::error!(user = %user, bot = %bot.id, message = %failure.message, "recording a tool call failed");
-        }
+            summary(tool, &call.arguments),
+            started,
+        )
+        .await;
         tracing::info!(user = %user, bot = %bot.id, tool = tool.name, ?outcome, "served a tool call");
         match output {
             Ok(text) => DynamicToolCallResponse::text(true, text),
             Err(error) => DynamicToolCallResponse::text(false, error),
+        }
+    }
+
+    /// Records a call in its Bot's tool-call log.
+    #[allow(clippy::too_many_arguments)]
+    async fn record(
+        &self,
+        user: UserId,
+        bot: BotId,
+        call: &DynamicToolCallParams,
+        tool: &str,
+        outcome: ToolCallOutcome,
+        summary: String,
+        started: Instant,
+    ) {
+        let entry = audit::Entry {
+            user,
+            bot,
+            thread_id: &call.thread_id,
+            turn_id: &call.turn_id,
+            call_id: &call.call_id,
+            tool,
+            summary,
+            outcome,
+            duration_ms: started.elapsed().as_millis() as u64,
+        };
+        if let Err(failure) = audit::record(&self.db, self.clock.now(), entry).await {
+            tracing::error!(user = %user, bot = %bot, message = %failure.message, "recording a tool call failed");
         }
     }
 }
@@ -257,13 +361,13 @@ mod tests {
         assert_eq!(names, ["notes_read", "notes_replace", "notes_append"]);
         let specs = specs(&notes).unwrap();
         assert_eq!(specs.len(), 3);
+        let seen: GrantSet = [Grant::Seen].into();
+        let names: Vec<&str> = granted(&seen).map(|t| t.name).collect();
+        assert_eq!(names, ["seen_check", "seen_mark"]);
+        let both: GrantSet = [Grant::Seen, Grant::Notes].into();
+        assert_eq!(granted(&both).count(), 5);
         // Grants without tools yet bring none.
-        for grant in [
-            Grant::Seen,
-            Grant::Notify,
-            Grant::WebSearch,
-            Grant::WebFetch,
-        ] {
+        for grant in [Grant::Notify, Grant::WebSearch, Grant::WebFetch] {
             assert_eq!(granted(&[grant].into()).count(), 0, "{grant}");
         }
     }
@@ -301,6 +405,13 @@ mod tests {
         let long = summary(tool, &json!({"text": "secret plans ".repeat(1000)}));
         assert_eq!(long, "13000 bytes");
         assert_eq!(summary(tool, &json!({})), "invalid arguments");
+    }
+
+    #[test]
+    fn called_names_in_logs_are_bounded() {
+        assert_eq!(display_name("notes_read", None), "notes_read");
+        assert_eq!(display_name("x", Some("web")), "web/x");
+        assert_eq!(display_name(&"y".repeat(10_000), None).len(), 64);
     }
 
     #[tokio::test]

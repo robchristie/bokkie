@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::http::{Method, StatusCode};
 use bokkie_gateway::bots::store;
 use bokkie_gateway::clock::DAY_MS;
-use bokkie_gateway::tools::{audit, notes};
+use bokkie_gateway::tools::{audit, notes, seen};
 use bokkie_protocol::api::{Grant, ToolCallOutcome};
 use bokkie_protocol::{BotId, UserId};
 use common::{Call, Gateway};
@@ -527,4 +527,296 @@ async fn tool_calls_are_kept_ninety_days() {
     clock.advance(DAY_MS);
     conversations.roll_over(start, clock.now()).await.unwrap();
     assert!(calls(&gateway, 1, bot).await.is_empty());
+}
+
+/// The items of a `seen_check` answer.
+fn checked(answer: &Value) -> Vec<Value> {
+    let (ok, text) = reply(answer);
+    assert!(ok, "{text}");
+    let parsed: Value = serde_json::from_str(&text).unwrap();
+    parsed["items"].as_array().unwrap().clone()
+}
+
+#[tokio::test]
+async fn seen_tools_check_and_mark_the_calling_bots_items() {
+    let (gateway, rob) = setup().await;
+    let bot = create_bot(&gateway, &rob, "Scout", json!(["seen"])).await;
+    let thread = thread(&gateway, &rob, 1, bot).await;
+
+    let candidates = json!({"items": [
+        "https://arxiv.org/abs/2401.12345v2",
+        "10.1145/3600006.3613165",
+        "https://www.example.com/post/?utm_source=feed",
+        "not a link",
+    ]});
+    call(&gateway, 1, 901, &thread, "seen_check", candidates.clone());
+    let items = checked(&answer(&gateway, 901).await);
+    assert_eq!(items.len(), 4);
+    assert_eq!(items[0]["id"], "arxiv:2401.12345");
+    assert_eq!(items[1]["id"], "doi:10.1145/3600006.3613165");
+    assert_eq!(items[2]["id"], "https://example.com/post");
+    assert!(items[..3].iter().all(|i| i["seen"] == false), "{items:?}");
+    assert_eq!(items[3]["item"], "not a link");
+    assert!(
+        items[3]["error"]
+            .as_str()
+            .unwrap()
+            .contains("not an arXiv id")
+    );
+
+    // Marking the paper and the post, in other forms of their ids.
+    call(
+        &gateway,
+        1,
+        902,
+        &thread,
+        "seen_mark",
+        json!({"items": [
+            {"id": "arXiv:2401.12345", "title": "A paper"},
+            {"id": "http://example.com/post", "title": "  A post  ",
+             "url": "https://example.com/post?ref=digest"},
+        ]}),
+    );
+    let (ok, text) = reply(&answer(&gateway, 902).await);
+    assert!(ok, "{text}");
+    assert_eq!(
+        text,
+        "Marked 2 items as shown: arxiv:2401.12345, https://example.com/post."
+    );
+    gateway.state.clock.advance(3 * DAY_MS);
+    call(&gateway, 1, 903, &thread, "seen_check", candidates);
+    let items = checked(&answer(&gateway, 903).await);
+    assert_eq!(items[0]["seen"], true);
+    assert_eq!(items[0]["title"], "A paper");
+    assert_eq!(items[0]["url"], "https://arxiv.org/abs/2401.12345");
+    assert_eq!(items[0]["shown_days_ago"], 3);
+    assert_eq!(items[1]["seen"], false);
+    assert_eq!(items[2]["seen"], true);
+    assert_eq!(items[2]["title"], "A post");
+    assert_eq!(items[2]["url"], "https://example.com/post?ref=digest");
+
+    // Invalid calls mark nothing.
+    for (id, arguments, expected) in [
+        (
+            904,
+            json!({"items": [{"id": "2401.99999", "title": "Fine"},
+                             {"id": "nonsense", "title": "Bad"}]}),
+            "not an arXiv id",
+        ),
+        (
+            905,
+            json!({"items": [{"id": "2401.99999", "title": " "}]}),
+            "needs a title",
+        ),
+        (
+            906,
+            json!({"items": [{"id": "2401.99999", "title": "T", "url": "javascript:x"}]}),
+            "not an http(s) link",
+        ),
+        (907, json!({"items": []}), "at least one item"),
+        (908, json!({"ids": ["2401.99999"]}), "needs"),
+        (
+            909,
+            json!({"items": vec!["2401.99999"; seen::MAX_PER_CALL + 1]}),
+            "at most 50",
+        ),
+    ] {
+        let tool = if id == 909 { "seen_check" } else { "seen_mark" };
+        call(&gateway, 1, id, &thread, tool, arguments);
+        let (ok, text) = reply(&answer(&gateway, id).await);
+        assert!(!ok && text.contains(expected), "{id}: {text}");
+    }
+    assert_eq!(
+        seen::count(&gateway.state.db, UserId(1), BotId(bot))
+            .await
+            .unwrap(),
+        2
+    );
+
+    // The log has counts and, for marks, the canonical ids.
+    let entries = calls(&gateway, 1, bot).await;
+    let mark = entries
+        .iter()
+        .find(|c| c.tool == "seen_mark" && c.outcome == ToolCallOutcome::Ok)
+        .unwrap();
+    assert_eq!(
+        mark.summary,
+        "2 items: arxiv:2401.12345, https://example.com/post"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|c| c.tool == "seen_check" && c.summary == "4 items")
+    );
+    assert!(gateway.state.supervisor.tainted().is_none());
+}
+
+#[tokio::test]
+async fn seen_items_are_kept_a_year_from_when_last_shown() {
+    let (gateway, rob) = setup().await;
+    let bot = create_bot(&gateway, &rob, "Scout", json!(["seen"])).await;
+    let thread = thread(&gateway, &rob, 1, bot).await;
+    let clock = &gateway.state.clock;
+    let start = clock.now();
+    let mark = |id: i64, item: &str| {
+        call(
+            &gateway,
+            1,
+            id,
+            &thread,
+            "seen_mark",
+            json!({"items": [{"id": item, "title": item}]}),
+        )
+    };
+    mark(910, "2401.00001");
+    assert!(reply(&answer(&gateway, 910).await).0);
+    mark(911, "2401.00002");
+    assert!(reply(&answer(&gateway, 911).await).0);
+    clock.advance(200 * DAY_MS);
+    // Shown again: kept a year from now.
+    mark(912, "2401.00002");
+    assert!(reply(&answer(&gateway, 912).await).0);
+    clock.advance(165 * DAY_MS);
+    // A year on, the first has lapsed even before the minute pass.
+    call(
+        &gateway,
+        1,
+        913,
+        &thread,
+        "seen_check",
+        json!({"items": ["2401.00001", "2401.00002"]}),
+    );
+    let items = checked(&answer(&gateway, 913).await);
+    assert_eq!(items[0]["seen"], false);
+    assert_eq!(items[1]["seen"], true);
+    assert_eq!(items[1]["shown_days_ago"], 165);
+    let conversations = &gateway.state.conversations;
+    conversations.roll_over(start, clock.now()).await.unwrap();
+    assert_eq!(
+        seen::count(&gateway.state.db, UserId(1), BotId(bot))
+            .await
+            .unwrap(),
+        1
+    );
+    clock.advance(200 * DAY_MS);
+    conversations.roll_over(start, clock.now()).await.unwrap();
+    assert_eq!(
+        seen::count(&gateway.state.db, UserId(1), BotId(bot))
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_bot_keeps_at_most_its_newest_seen_items() {
+    let (gateway, rob) = setup().await;
+    let bot = create_bot(&gateway, &rob, "Scout", json!(["seen"])).await;
+    let clock = &gateway.state.clock;
+    let item = |n: i64| seen::Item {
+        id: format!("https://example.com/{n}"),
+        title: "T".into(),
+        url: format!("https://example.com/{n}"),
+    };
+    let total = seen::MAX_PER_BOT + 2;
+    let mut tx = gateway.state.db.begin().await.unwrap();
+    // The first two are the oldest.
+    seen::mark(
+        &mut tx,
+        clock.now(),
+        UserId(1),
+        BotId(bot),
+        &[item(0), item(1)],
+    )
+    .await
+    .unwrap();
+    clock.advance(1);
+    let rest: Vec<seen::Item> = (2..total).map(item).collect();
+    seen::mark(&mut tx, clock.now(), UserId(1), BotId(bot), &rest)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        seen::count(&gateway.state.db, UserId(1), BotId(bot))
+            .await
+            .unwrap(),
+        seen::MAX_PER_BOT
+    );
+    let ids: Vec<String> = [0, 1, 2, total - 1]
+        .into_iter()
+        .map(|n| item(n).id)
+        .collect();
+    let shown = seen::shown(&gateway.state.db, clock.now(), UserId(1), BotId(bot), &ids)
+        .await
+        .unwrap();
+    assert!(!shown.contains_key(&ids[0]) && !shown.contains_key(&ids[1]));
+    assert!(shown.contains_key(&ids[2]) && shown.contains_key(&ids[3]));
+}
+
+#[tokio::test]
+async fn a_forged_seen_call_from_another_users_app_server_reaches_nothing_of_theirs() {
+    let (gateway, rob) = setup().await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    let (ben, ben_id) = gateway.member(&rob, "ben").await;
+    let amys = create_bot(&gateway, &amy, "Scout", json!(["seen"])).await;
+    let amys_thread = thread(&gateway, &amy, amy_id, amys).await;
+    let bens = create_bot(&gateway, &ben, "Scout", json!(["seen"])).await;
+    let bens_thread = thread(&gateway, &ben, ben_id, bens).await;
+    call(
+        &gateway,
+        amy_id,
+        920,
+        &amys_thread,
+        "seen_mark",
+        json!({"items": [{"id": "2401.12345", "title": "Amy's secret paper"}]}),
+    );
+    assert!(reply(&answer(&gateway, 920).await).0);
+
+    // Ben's app server names Amy's thread, to read and to mark.
+    call(
+        &gateway,
+        ben_id,
+        921,
+        &amys_thread,
+        "seen_check",
+        json!({"items": ["2401.12345"]}),
+    );
+    let (ok, text) = reply(&answer(&gateway, 921).await);
+    assert!(!ok && !text.contains("secret"), "{text}");
+    call(
+        &gateway,
+        ben_id,
+        922,
+        &amys_thread,
+        "seen_mark",
+        json!({"items": [{"id": "2401.54321", "title": "Ben was here"}]}),
+    );
+    assert!(!reply(&answer(&gateway, 922).await).0);
+    // On his own thread, arguments that name Amy's Bot are only arguments.
+    call(
+        &gateway,
+        ben_id,
+        923,
+        &bens_thread,
+        "seen_check",
+        json!({"items": ["2401.12345"], "bot": amys, "user": amy_id}),
+    );
+    let items = checked(&answer(&gateway, 923).await);
+    assert_eq!(items[0]["seen"], false);
+    assert!(!items[0].to_string().contains("secret"));
+
+    assert_eq!(
+        seen::count(&gateway.state.db, UserId(amy_id), BotId(amys))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        seen::count(&gateway.state.db, UserId(ben_id), BotId(bens))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(calls(&gateway, amy_id, amys).await.len(), 1);
+    assert!(gateway.state.supervisor.tainted().is_none());
 }

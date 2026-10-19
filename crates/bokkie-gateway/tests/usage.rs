@@ -265,6 +265,17 @@ async fn concurrent_usage_writes_are_not_lost() {
     let mut tasks = Vec::new();
     for bot in bots {
         let (events, clock) = (gateway.state.events.clone(), clock.clone());
+        let thread = format!("thr-{bot}");
+        bokkie_gateway::bots::store::set_thread(
+            &gateway.state.db,
+            user,
+            bokkie_protocol::BotId(bot),
+            &thread,
+            1,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         // Each thread's total grows by 10 per report.
         tasks.push(tokio::spawn(async move {
             for total in (10..=500).step_by(10) {
@@ -274,6 +285,7 @@ async fn concurrent_usage_writes_are_not_lost() {
                     clock.now(),
                     user,
                     bokkie_protocol::BotId(bot),
+                    &thread,
                     total,
                 )
                 .await
@@ -612,7 +624,7 @@ async fn a_reply_that_uses_up_the_token_allowance_overshoots_by_one_response() {
         json!({"daily_turns": null, "weekly_tokens": 100}),
     )
     .await;
-    // As with the pinned Codex, a chat-only turn reports its 120 tokens
+    // As with the pinned Codex, a turn without tool calls reports its 120 tokens
     // once the model's response is complete.
     let chef = create_bot(&gateway, &amy, "Chef").await;
     turn(&gateway, &amy, chef).await;

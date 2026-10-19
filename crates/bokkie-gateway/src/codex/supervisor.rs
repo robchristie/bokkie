@@ -1459,11 +1459,7 @@ async fn watch(runtime: Arc<Runtime>, mut incoming: mpsc::UnboundedReceiver<Inco
 
 /// A tool call's name for logs, bounded: the model chose it.
 fn tool_name(call: &DynamicToolCallParams) -> String {
-    let name = match &call.namespace {
-        Some(namespace) => format!("{namespace}/{}", call.tool),
-        None => call.tool.clone(),
-    };
-    name.chars().take(64).collect()
+    tools::display_name(&call.tool, call.namespace.as_deref())
 }
 
 /// Handles a broken safety rule: refuses the thread, taints Codex for the
