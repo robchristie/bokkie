@@ -77,6 +77,19 @@ async fn a_signed_out_app_server_answers_the_startup_queries() {
     let workspace = scratch("workspace");
     let mut command = AppServerCommand::new(codex, &home);
     command.current_dir = Some(workspace.clone());
+    // Signed out, with Codex's defaults, it asks other hosts (its plugins
+    // feature asks github.com and chatgpt.com). A local proxy refuses them,
+    // so no request leaves the machine.
+    let (proxy, refused) = deny_proxy().await;
+    for name in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
+        command.env.push((name.into(), proxy.clone().into()));
+        command
+            .env
+            .push((name.to_lowercase().into(), proxy.clone().into()));
+    }
+    command
+        .env
+        .push(("NO_PROXY".into(), "127.0.0.1,localhost".into()));
     let (server, _incoming) = AppServer::spawn(&command).unwrap();
     let client = server.client.clone();
     let checks = async {
@@ -132,6 +145,32 @@ async fn a_signed_out_app_server_answers_the_startup_queries() {
         .await
         .expect("app server answered in time");
     drop(server);
+    eprintln!("the deny proxy refused {:?}", refused.lock().unwrap());
     let _ = std::fs::remove_dir_all(home);
     let _ = std::fs::remove_dir_all(workspace);
+}
+
+/// A local proxy that refuses every request and records its first line.
+async fn deny_proxy() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let refused = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = refused.clone();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut buffer = vec![0; 4096];
+            let n = stream.read(&mut buffer).await.unwrap_or(0);
+            let line = String::from_utf8_lossy(&buffer[..n])
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            record.lock().unwrap().push(line);
+            let _ = stream
+                .write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n")
+                .await;
+        }
+    });
+    (url, refused)
 }

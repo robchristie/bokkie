@@ -154,14 +154,94 @@ everything under `<data>/users/<id>/` (mode 700):
 
 | Path | Holds |
 | --- | --- |
-| `codex/` | The user's `CODEX_HOME`: their ChatGPT credential, Codex's state and the gateway's `config.toml` |
+| `codex/` | The user's `CODEX_HOME`: Codex's state, the user's threads, the gateway's `config.toml`, and `auth.json`, a symbolic link to the household's sign-in |
 | `home/` | The app server's `HOME` |
 | `workspace/` | The working directory of every thread: the Bots' computer from Phase 4 |
 | `app-server.log` | The app server's standard error, mode 600 |
 
-A user signs their own app server in to ChatGPT with a device code
-(`POST /api/v1/codex/login`) and checks it with `GET /api/v1/codex/account`.
-Nobody else sees either. Disabling an account stops its app server.
+Disabling an account stops its app server.
+
+### The household's ChatGPT sign-in
+
+Every app server uses one household ChatGPT sign-in. It lives in
+`<data>/household/codex/auth.json` (mode 600), the `CODEX_HOME` of one more
+app server, the household's, laid out like a user's under
+`<data>/household/` (mode 700). The household app server holds the only
+real `auth.json`, runs no threads, and is the only app server the gateway
+asks to sign in, refresh or sign out.
+
+- **Links.** Each user's `codex/auth.json` is the relative symbolic link
+  `../../../household/codex/auth.json`. The gateway makes it before it
+  starts the user's app server and checks it each time it hands the app
+  server out; an app server whose `auth.json` is anything else (a link
+  elsewhere, a directory) is refused. A user's own earlier sign-in, a
+  regular `auth.json` from before the household sign-in, is signed out
+  through that user's app server, which revokes it, before the link
+  replaces it. The gateway does this for every user when it starts, whether
+  or not the household is signed in, and again if one appears later. It is
+  the only time the gateway asks a user's app server to sign out; it never
+  asks one to sign in. Codex 0.163.0's sign-out asks the authority to revoke
+  the sign-in and deletes the file even if that request fails, so the
+  gateway can confirm the file is gone but not that the revoke succeeded.
+- **Configuration.** Every `config.toml` sets
+  `cli_auth_credentials_store = "file"`, so Codex keeps the sign-in in
+  `auth.json` and never in a keyring, and turns off `use_agent_identity`,
+  which would make each app server write its own agent identity into the
+  shared file. The startup and per-thread `config/read` checks require both.
+- **One refresher.** Codex refreshes an access token itself within five
+  minutes of its expiry. Refresh tokens are single-use and Codex has no lock
+  across processes, so the gateway refreshes the household's token itself
+  15 minutes before expiry, by asking the household app server for
+  `account/read` with `refreshToken`. A user's app server whose cached token
+  goes stale then finds a fresh one in the shared file and reloads it
+  without refreshing. To schedule this the gateway reads one claim of the
+  household's access token, its expiry, and nothing else. A refresher looks
+  every 30 seconds; a failed refresh is retried after a minute.
+- **Cold starts.** The household app server starts first, when the gateway
+  starts; Codex refreshes an expired token as it starts. Before the gateway
+  starts a user's app server, and before it hands one out for a message, the
+  household app server must be running and its token must lie outside the
+  15-minute window, refreshed first if not. While the household is signed
+  out, its token cannot be refreshed, or its app server is down, no user's
+  app server starts and no message is sent: `POST
+  /api/v1/bots/{id}/messages` answers `unavailable` (503), saying that
+  ChatGPT is signed out for the household, and stores nothing. The usage
+  meter then shows no subscription windows.
+- **Recovery.** A user's turn that fails on its credential (Codex reports
+  `unauthorized`, or a 401 from the model) restarts that user's app server
+  once, if the household's sign-in is good, so that it reads the file
+  again. It is not restarted again until one of its turns completes. Codex
+  0.163.0 refreshes the shared token itself after a repeated 401 (reload
+  first, then refresh, on each retry); each such refresh rotates the token
+  in the shared file, which the other app servers then reload. Two app
+  servers that refresh at once with the same refresh token leave one
+  refused as a reuse; it reads the winner's token from the file on its next
+  401, as `tests/live_household.rs` shows.
+- **Status.** `GET /api/v1/codex/account` says whether the household is
+  signed in, meaning usable: the household app server runs and its token
+  lies outside the refresh window, refreshed if needed. A member sees only
+  `{"signed_in": true}` or `false`; an admin also sees the account's
+  `email` and `plan`. A household refresh that fails, for whatever reason,
+  shows the household signed out until a refresh succeeds.
+- **Signing in.** Only an admin signs the household in, by device code on
+  the household app server: `POST /api/v1/codex/login` starts one,
+  cancelling any pending one, and returns the URL, the code, its `state`
+  and `expires_at`, 15 minutes later, which is how long Codex 0.163.0 waits
+  for a code. `GET /api/v1/codex/login` reports the latest one since the
+  gateway started: `pending`, `completed`, `expired` (the code's time
+  passed), `failed` (with `error`, also when the household app server
+  stops) or `cancelled`. `DELETE /api/v1/codex/login` cancels a pending one
+  in Codex too.
+- **Signing out.** Only an admin signs the household out:
+  `POST /api/v1/codex/logout` asks the household app server to sign out,
+  which revokes the sign-in and deletes the file. That signs out every app
+  server at once, so the gateway also stops every user's app server. A
+  client should warn before it does this.
+- Members get `forbidden` (403) from every sign-in and sign-out route.
+
+`tests/live_household.rs` proves this with the pinned app server and a
+synthetic sign-in from a mock token endpoint (see
+[CONTRIBUTING](../CONTRIBUTING.md#browser-smoke)).
 
 ### Chat-only until Phase 4
 
@@ -171,8 +251,10 @@ conversation. With the pinned Codex this takes two things together:
 
 - The gateway writes each `config.toml` itself on every start: the `bokkie`
   permission profile as the default, approvals `never`, web search disabled,
-  `project_doc_max_bytes = 0`, and every tool-bearing feature off (the list
-  is `DISABLED_FEATURES` in `crates/bokkie-gateway/src/codex/config.rs`).
+  `project_doc_max_bytes = 0`, every tool-bearing feature off (the list
+  is `DISABLED_FEATURES` in `crates/bokkie-gateway/src/codex/config.rs`,
+  which also turns off `use_agent_identity`), and the sign-in kept in
+  `auth.json`.
   Codex reads `AGENTS.md` files through its sandbox helper, so turning
   project docs off means chat-only threads need no working Bubblewrap; it
   also stops a file in the workspace from adding instructions.
@@ -186,8 +268,9 @@ conversation. With the pinned Codex this takes two things together:
 The gateway refuses to serve an app server or thread unless these all hold:
 
 - at startup, `config/read` reports the profile, the approvals, the web
-  search setting, project docs off, Bokkie's catalog, every listed feature
-  off, no MCP servers, no config profiles, and a `bokkie` permission profile
+  search setting, project docs off, Bokkie's catalog, the `file`
+  credentials store, every listed feature off, no MCP servers, no config
+  profiles, and a `bokkie` permission profile
   that grants exactly `:minimal` read, workspace write, no access to the data
   directory and no network;
 - `model/list` lists only models from Bokkie's catalog, and the catalog on
@@ -208,7 +291,8 @@ The gateway refuses to serve an app server or thread unless these all hold:
   database.
 
 `tests/live_codex.rs` proves the result against the real pinned app server
-with a mock model: the only tools it offers are Bokkie's own and
+with a mock model and a synthetic household sign-in: the only tools it
+offers are Bokkie's own and
 `request_user_input`, which the gateway answers with an error. Its control
 test shows that the same capture sees `apply_patch`, `exec_command` and
 `spawn_agent` without the gateway's configuration. Other live tests show

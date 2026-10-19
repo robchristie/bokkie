@@ -6,7 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
-use bokkie_gateway::codex::{CodexError, RuntimeEventKind};
+use bokkie_gateway::codex::{CodexError, Owner, RuntimeEventKind};
 use bokkie_protocol::UserId;
 use common::{Call, Gateway};
 use serde_json::{Value, json};
@@ -58,8 +58,20 @@ async fn a_checked_app_server_serves_bokkie_threads() {
     assert_eq!(start.params["approvalPolicy"], "never");
     assert_eq!(start.params["developerInstructions"], "You are Chef.");
     assert_eq!(start.params["cwd"].as_str().unwrap(), runtime.workspace());
-    // config/read ran at startup and again for the thread.
-    assert_eq!(gateway.fake.received("config/read").len(), 2);
+    // config/read ran at startup and again for the thread, on the user's
+    // app server; the household's ran its own at startup.
+    let reads = gateway.fake.received("config/read");
+    assert_eq!(
+        reads
+            .iter()
+            .filter(|r| r.owner == Owner::User(user))
+            .count(),
+        2
+    );
+    assert_eq!(
+        reads.iter().filter(|r| r.owner == Owner::Household).count(),
+        1
+    );
 
     // The user's directories are private, and so is the configuration.
     let paths = gateway.state.supervisor.paths(user);
@@ -118,7 +130,7 @@ async fn one_users_app_server_will_not_act_on_anothers_thread() {
             .fake
             .received("turn/start")
             .iter()
-            .all(|r| r.user != UserId(2))
+            .all(|r| r.owner != Owner::User(UserId(2)))
     );
 }
 
@@ -396,31 +408,6 @@ async fn questions_to_the_user_are_answered_with_an_error() {
 }
 
 #[tokio::test]
-async fn users_see_and_start_only_their_own_codex_sign_in() {
-    let gateway = Gateway::new().await;
-    let admin = gateway.admin("rob").await;
-    let (amy, amy_id) = gateway.member(&admin, "amy").await;
-    gateway.fake.with(|b| b.signed_in = false);
-    let account = gateway
-        .send(Call::get("/api/v1/codex/account").cookie(&amy))
-        .await;
-    assert_eq!(account.status, StatusCode::OK);
-    assert_eq!(account.body, json!({"signed_in": false, "plan": null}));
-    let login = gateway
-        .send(Call::post("/api/v1/codex/login").cookie(&amy))
-        .await;
-    assert_eq!(login.status, StatusCode::OK);
-    assert_eq!(login.body["user_code"], "ABCD-EFGH");
-    // The sign-in went to Amy's own app server only.
-    let starts = gateway.fake.received("account/login/start");
-    assert_eq!(starts.len(), 1);
-    assert_eq!(starts[0].user, UserId(amy_id));
-    // Without a session there is nothing to see.
-    let anonymous = gateway.send(Call::get("/api/v1/codex/account")).await;
-    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
 async fn refused_runtimes_answer_unavailable() {
     let gateway = Gateway::new().await;
     let admin = gateway.admin("rob").await;
@@ -428,7 +415,7 @@ async fn refused_runtimes_answer_unavailable() {
         b.config_override = Some((vec!["features".into(), "shell_tool".into()], json!(true)))
     });
     let reply = gateway
-        .send(Call::get("/api/v1/codex/account").cookie(&admin))
+        .send(Call::post("/api/v1/codex/login").cookie(&admin))
         .await;
     assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(reply.code(), "unavailable");
@@ -439,10 +426,13 @@ async fn refused_runtimes_answer_unavailable() {
 async fn disabling_a_user_stops_their_app_server() {
     let gateway = Gateway::new().await;
     let admin = gateway.admin("rob").await;
-    let (amy, amy_id) = gateway.member(&admin, "amy").await;
+    let (_amy, amy_id) = gateway.member(&admin, "amy").await;
     gateway
-        .send(Call::get("/api/v1/codex/account").cookie(&amy))
-        .await;
+        .state
+        .supervisor
+        .runtime(UserId(amy_id))
+        .await
+        .unwrap();
     let runtime = gateway
         .state
         .supervisor

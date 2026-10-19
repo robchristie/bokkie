@@ -1,5 +1,6 @@
 //! The Bokkie gateway: an axum service that owns accounts, sessions, Bots
-//! and routing, and supervises one Codex app server per user.
+//! and routing, and supervises one Codex app server per user, all on the
+//! household's one ChatGPT sign-in.
 //!
 //! Every route sits behind [`auth::guard`], which checks `Host` on every
 //! request and `Origin` on every state-changing request. Routes that act
@@ -117,7 +118,13 @@ pub fn router(state: AppState) -> Router {
         .route("/usage", get(usage::usage))
         .route("/admin/users/{id}/usage", get(usage::admin_usage))
         .route("/codex/account", get(codex::account))
-        .route("/codex/login", post(codex::login))
+        .route(
+            "/codex/login",
+            post(codex::login)
+                .get(codex::current_login)
+                .delete(codex::cancel_login),
+        )
+        .route("/codex/logout", post(codex::logout))
         .route("/admin/users", get(admin::list_users))
         .route("/admin/users/{id}", patch(admin::update_user))
         .route("/admin/users/{id}/password", put(admin::reset_password))

@@ -1,31 +1,44 @@
-//! One Codex app server per user.
+//! One Codex app server per user, and the household's.
 //!
 //! Each user's app server runs with its own `CODEX_HOME`, home directory and
 //! workspace under `<data>/users/<id>/`. The supervisor starts it on first
 //! use, checks it before handing it out, and starts a new one if it exits.
+//!
+//! Every app server uses one ChatGPT sign-in, the household's (see
+//! [`super::household`]). The household app server, under
+//! `<data>/household/`, holds the only real `auth.json` and runs no threads;
+//! it alone signs in, refreshes and signs out. Each user's `auth.json` is a
+//! symbolic link to it. Before a user's app server starts, and before each
+//! use of one, the household app server must be running and its access
+//! token must lie outside the refresh window, refreshed first if it does
+//! not. So no member app server starts, and no turn runs, while the
+//! household is signed out.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use bokkie_codex::protocol::{
-    ApprovalDecision, ApprovalResponse, AskForApproval, ClientInfo, ConfigReadParams,
-    DynamicToolCallResponse, DynamicToolSpec, GetAccountParams, GetAccountRateLimitsResponse,
-    GetAccountResponse, InitializeCapabilities, InitializeParams, LoginAccountParams,
-    LoginAccountResponse, ModelListParams, ServerNotification, ServerRequestKind,
-    ThreadResumeParams, ThreadSessionResponse, ThreadStartParams, Turn, TurnInterruptParams,
-    TurnStartParams, TurnSteerParams, UserInput,
+    AccountLoginCompletedNotification, ApprovalDecision, ApprovalResponse, AskForApproval,
+    CancelLoginAccountParams, ClientInfo, ConfigReadParams, DynamicToolCallResponse,
+    DynamicToolSpec, GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse,
+    InitializeCapabilities, InitializeParams, LoginAccountParams, LoginAccountResponse,
+    ModelListParams, ServerNotification, ServerRequestKind, ThreadResumeParams,
+    ThreadSessionResponse, ThreadStartParams, Turn, TurnInterruptParams, TurnStartParams,
+    TurnStatus, TurnSteerParams, UserInput,
 };
 use bokkie_codex::{AppServer, AppServerCommand, Client, Incoming, RpcError};
-use bokkie_protocol::UserId;
+use bokkie_protocol::api::LoginState;
+use bokkie_protocol::{Timestamp, UserId};
 use tokio::sync::mpsc;
 
 use super::catalog::Catalog;
 use super::config::{self, PROFILE};
 use super::guard::{self, Expected, Refusal};
+use super::household::{self, AuthFile, HouseholdSettings, Login};
 
 /// How long one app-server request may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -41,6 +54,10 @@ pub enum CodexError {
     /// the thread alone, so its Bot may record it.
     #[error("thread refused: {0}")]
     ThreadRefused(Refusal),
+    /// The household's ChatGPT sign-in is signed out, or could not be
+    /// refreshed, so no member app server starts and no turn runs.
+    #[error("the household is signed out: {0}")]
+    SignedOut(String),
     /// The app server failed or did not answer, so the request may or may
     /// not have taken effect.
     #[error("app server: {0}")]
@@ -53,7 +70,8 @@ pub enum CodexError {
 impl CodexError {
     /// Whether the request certainly had no effect on Codex.
     pub fn had_no_effect(&self) -> bool {
-        // A refusal is decided before the request is sent.
+        // A refusal or a signed-out household is decided before the request
+        // is sent.
         !matches!(self, Self::AppServer(_))
     }
 }
@@ -82,7 +100,25 @@ async fn timed<T>(
         .map_err(Into::into)
 }
 
-/// The directories of one user.
+/// Whose app server: the household's, or a user's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Owner {
+    /// The household app server, which holds the shared sign-in and runs no
+    /// threads.
+    Household,
+    User(UserId),
+}
+
+impl std::fmt::Display for Owner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Household => f.write_str("household"),
+            Self::User(user) => write!(f, "user {user}"),
+        }
+    }
+}
+
+/// The directories of one app server.
 #[derive(Debug, Clone)]
 pub struct UserPaths {
     pub root: PathBuf,
@@ -94,7 +130,22 @@ pub struct UserPaths {
 
 impl UserPaths {
     pub fn new(data_dir: &Path, user: UserId) -> Self {
-        let root = data_dir.join("users").join(user.to_string());
+        Self::under(data_dir.join("users").join(user.to_string()))
+    }
+
+    /// The household app server's directories, `<data>/household/`.
+    pub fn household(data_dir: &Path) -> Self {
+        Self::under(data_dir.join("household"))
+    }
+
+    pub fn of(data_dir: &Path, owner: Owner) -> Self {
+        match owner {
+            Owner::Household => Self::household(data_dir),
+            Owner::User(user) => Self::new(data_dir, user),
+        }
+    }
+
+    fn under(root: PathBuf) -> Self {
         Self {
             codex_home: root.join("codex"),
             home: root.join("home"),
@@ -102,6 +153,12 @@ impl UserPaths {
             log: root.join("app-server.log"),
             root,
         }
+    }
+
+    /// This app server's `auth.json`: the household's file, or a user's
+    /// link to it.
+    pub fn auth_json(&self) -> PathBuf {
+        self.codex_home.join("auth.json")
     }
 
     /// Creates the directories, private to the gateway's user.
@@ -133,15 +190,15 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     std::fs::rename(temporary, path)
 }
 
-/// Connects to an in-process app server for a user.
+/// Connects to an in-process app server, for tests.
 pub type Connect =
-    Arc<dyn Fn(UserId, &UserPaths) -> (Client, mpsc::UnboundedReceiver<Incoming>) + Send + Sync>;
+    Arc<dyn Fn(Owner, &UserPaths) -> (Client, mpsc::UnboundedReceiver<Incoming>) + Send + Sync>;
 
 /// Context fragments for a turn, by key.
 pub type Context =
     std::collections::BTreeMap<String, bokkie_codex::protocol::AdditionalContextEntry>;
 
-/// One user's runtime, behind a lock held while it starts.
+/// One app server, behind a lock held while it starts.
 type Slot = Arc<tokio::sync::Mutex<Option<Arc<Runtime>>>>;
 
 /// How app servers are started.
@@ -153,7 +210,9 @@ pub enum Launcher {
         /// `-c key=value` overrides placed before `app-server`. Tests use
         /// them to point Codex at a mock model provider.
         overrides: Vec<String>,
-        /// Extra environment for the child, such as a test's `PATH`.
+        /// Extra environment for the child, such as a test's `PATH`. The
+        /// gateway's own environment never reaches the child, so only a
+        /// test can set these.
         env: Vec<(OsString, OsString)>,
     },
     /// Connect to something in-process, for tests.
@@ -249,49 +308,88 @@ impl Latch {
     }
 }
 
-/// Starts, checks and stops each user's app server.
+/// The household's ChatGPT sign-in, as an admin sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HouseholdStatus {
+    pub signed_in: bool,
+    pub email: Option<String>,
+    pub plan: Option<String>,
+}
+
+/// Starts, checks and stops each user's app server and the household's.
 #[derive(Debug)]
 pub struct Supervisor {
+    /// This supervisor, for the tasks it starts.
+    me: Weak<Supervisor>,
     data_dir: PathBuf,
     catalog: Catalog,
     launcher: Launcher,
+    settings: HouseholdSettings,
     events: mpsc::UnboundedSender<RuntimeEvent>,
     slots: std::sync::Mutex<HashMap<UserId, Slot>>,
+    household: Slot,
+    /// Held while the household's sign-in is refreshed or signed out, so
+    /// that only one refresh runs at a time.
+    refreshing: tokio::sync::Mutex<()>,
+    /// When a refresh last failed, by the system clock (Unix seconds).
+    refresh_failed_at: std::sync::Mutex<Option<i64>>,
+    /// The latest device-code sign-in of the household.
+    login: std::sync::Mutex<Option<Login>>,
+    /// Users whose app server was restarted after a credential failure, and
+    /// not since seen to complete a turn. Each is restarted once.
+    recovering: std::sync::Mutex<HashSet<UserId>>,
+    recoveries: AtomicU64,
     latch: Arc<Latch>,
 }
 
 impl Supervisor {
-    /// A supervisor and the stream of everything its app servers report.
+    /// A supervisor and the stream of everything users' app servers report.
     pub fn new(
         data_dir: impl Into<PathBuf>,
         catalog: Catalog,
         launcher: Launcher,
-    ) -> (Self, mpsc::UnboundedReceiver<RuntimeEvent>) {
+    ) -> (Arc<Self>, mpsc::UnboundedReceiver<RuntimeEvent>) {
+        Self::with_settings(data_dir, catalog, launcher, HouseholdSettings::default())
+    }
+
+    /// The same, with the household's refresh timing.
+    pub fn with_settings(
+        data_dir: impl Into<PathBuf>,
+        catalog: Catalog,
+        launcher: Launcher,
+        settings: HouseholdSettings,
+    ) -> (Arc<Self>, mpsc::UnboundedReceiver<RuntimeEvent>) {
         let (events, receiver) = mpsc::unbounded_channel();
-        (
-            Self {
-                data_dir: data_dir.into(),
-                catalog,
-                launcher,
-                events,
-                slots: Default::default(),
-                latch: Arc::default(),
-            },
-            receiver,
-        )
+        let data_dir = data_dir.into();
+        let supervisor = Arc::new_cyclic(|me| Self {
+            me: me.clone(),
+            data_dir,
+            catalog,
+            launcher,
+            settings,
+            events,
+            slots: Default::default(),
+            household: Default::default(),
+            refreshing: Default::default(),
+            refresh_failed_at: Default::default(),
+            login: Default::default(),
+            recovering: Default::default(),
+            recoveries: AtomicU64::new(0),
+            latch: Arc::default(),
+        });
+        (supervisor, receiver)
     }
 
     pub fn paths(&self, user: UserId) -> UserPaths {
         UserPaths::new(&self.data_dir, user)
     }
 
+    pub fn household_paths(&self) -> UserPaths {
+        UserPaths::household(&self.data_dir)
+    }
+
     fn slot(&self, user: UserId) -> Slot {
-        self.slots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entry(user)
-            .or_default()
-            .clone()
+        lock(&self.slots).entry(user).or_default().clone()
     }
 
     /// Why Codex is refused for the whole gateway, if it is.
@@ -299,23 +397,42 @@ impl Supervisor {
         self.latch.tainted()
     }
 
-    /// The user's running app server, started and checked if needed.
-    pub async fn runtime(&self, user: UserId) -> Result<Arc<Runtime>, CodexError> {
-        if let Some(reason) = self.latch.tainted() {
-            return Err(Refusal::new(format!(
+    fn ensure_untainted(&self) -> Result<(), CodexError> {
+        match self.latch.tainted() {
+            Some(reason) => Err(Refusal::new(format!(
                 "Codex is refused until the gateway restarts: {reason}"
             ))
-            .into());
+            .into()),
+            None => Ok(()),
         }
+    }
+
+    // -- Users' app servers --------------------------------------------------
+
+    /// The user's running app server, started and checked if needed. The
+    /// household must be signed in, with its token outside the refresh
+    /// window, every time.
+    pub async fn runtime(&self, user: UserId) -> Result<Arc<Runtime>, CodexError> {
+        self.ensure_untainted()?;
+        self.ensure_household().await?;
+        let auth = self.paths(user).auth_json();
         let slot = self.slot(user);
         let mut slot = slot.lock().await;
         if let Some(runtime) = slot.as_ref().filter(|r| r.is_alive()) {
-            return Ok(runtime.clone());
+            // The link must still be the household's.
+            if household::inspect(&auth).ok() == Some(AuthFile::Link) {
+                return Ok(runtime.clone());
+            }
+            tracing::error!(user = %user, "the user's auth.json is no longer the household's link");
+            runtime.stop();
+            *slot = None;
+            return Err(Refusal::new("the user's auth.json is not the household's sign-in").into());
         }
         if let Some(old) = slot.take() {
             old.stop();
         }
-        let runtime = self.start(user).await?;
+        self.link(user).await?;
+        let runtime = self.start(Owner::User(user)).await?;
         *slot = Some(runtime.clone());
         Ok(runtime)
     }
@@ -335,11 +452,449 @@ impl Supervisor {
         }
     }
 
-    async fn start(&self, user: UserId) -> Result<Arc<Runtime>, CodexError> {
+    /// Stops every user's app server.
+    async fn stop_users(&self) {
+        let slots: Vec<Slot> = lock(&self.slots).values().cloned().collect();
+        for slot in slots {
+            if let Some(runtime) = slot.lock().await.take() {
+                runtime.stop();
+            }
+        }
+    }
+
+    /// Makes the user's `auth.json` the link to the household's. A user's
+    /// own earlier sign-in is signed out first, through the user's app
+    /// server, which revokes it. Anything else there is refused.
+    async fn link(&self, user: UserId) -> Result<(), CodexError> {
         let paths = self.paths(user);
         paths
             .create()
             .map_err(|e| CodexError::AppServer(format!("creating the user's directories: {e}")))?;
+        let auth = paths.auth_json();
+        let found = household::inspect(&auth)
+            .map_err(|e| CodexError::AppServer(format!("reading the user's auth.json: {e}")))?;
+        match found {
+            AuthFile::Link => return Ok(()),
+            AuthFile::Missing => {}
+            AuthFile::File => self.sign_out_own(user).await?,
+            AuthFile::Other(what) => {
+                tracing::error!(user = %user, what, "refusing the user's app server: auth.json is not the household's link");
+                return Err(Refusal::new(format!(
+                    "the user's auth.json is {what}, not the household's sign-in"
+                ))
+                .into());
+            }
+        }
+        household::make_link(&auth)
+            .map_err(|e| CodexError::AppServer(format!("linking the user's auth.json: {e}")))?;
+        match household::inspect(&auth) {
+            Ok(AuthFile::Link) => {
+                tracing::info!(user = %user, "linked the user's auth.json to the household's");
+                Ok(())
+            }
+            _ => Err(Refusal::new("the user's auth.json is not the household's sign-in").into()),
+        }
+    }
+
+    /// Signs out a user's own earlier sign-in through the user's app server,
+    /// which asks the authority to revoke it and deletes the file (even if
+    /// the revoke request fails). The only time the gateway asks
+    /// a user's app server to sign out.
+    async fn sign_out_own(&self, user: UserId) -> Result<(), CodexError> {
+        tracing::info!(user = %user, "signing out the user's own earlier ChatGPT sign-in");
+        let runtime = self.start(Owner::User(user)).await?;
+        let result = timed(runtime.client.account_logout()).await;
+        runtime.stop();
+        result?;
+        match household::inspect(&self.paths(user).auth_json()) {
+            Ok(AuthFile::Missing) => {
+                tracing::info!(user = %user, "signed out the user's own earlier sign-in");
+                Ok(())
+            }
+            _ => Err(Refusal::new("the user's own earlier sign-in was not signed out").into()),
+        }
+    }
+
+    /// Signs out every user's own earlier sign-in and links them all to the
+    /// household's, as the gateway starts, whether or not the household is
+    /// signed in. A user whose sign-out fails is left as it is, and refused
+    /// until it succeeds.
+    pub async fn sign_out_own_sign_ins(&self) {
+        let Ok(entries) = std::fs::read_dir(self.data_dir.join("users")) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let Some(user) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse().ok())
+                .map(UserId)
+            else {
+                continue;
+            };
+            let auth = self.paths(user).auth_json();
+            if household::inspect(&auth).ok() != Some(AuthFile::File) {
+                continue;
+            }
+            let slot = self.slot(user);
+            let _slot = slot.lock().await;
+            if let Err(error) = self.link(user).await {
+                tracing::error!(user = %user, %error, "could not sign out the user's own sign-in");
+            }
+        }
+    }
+
+    // -- The household -------------------------------------------------------
+
+    /// The household app server, started and checked if needed.
+    pub async fn household(&self) -> Result<Arc<Runtime>, CodexError> {
+        self.ensure_untainted()?;
+        let mut slot = self.household.lock().await;
+        if let Some(runtime) = slot.as_ref().filter(|r| r.is_alive()) {
+            return Ok(runtime.clone());
+        }
+        if let Some(old) = slot.take() {
+            old.stop();
+        }
+        let paths = self.household_paths();
+        paths.create().map_err(|e| {
+            CodexError::AppServer(format!("creating the household's directories: {e}"))
+        })?;
+        match household::inspect(&paths.auth_json()) {
+            Ok(AuthFile::Missing | AuthFile::File) => {}
+            Ok(AuthFile::Link | AuthFile::Other(_)) => {
+                return Err(Refusal::new("the household's auth.json is not a file").into());
+            }
+            Err(e) => {
+                return Err(CodexError::AppServer(format!(
+                    "reading the household's auth.json: {e}"
+                )));
+            }
+        }
+        let runtime = self.start(Owner::Household).await?;
+        *slot = Some(runtime.clone());
+        Ok(runtime)
+    }
+
+    /// The expiry of the household's access token, in Unix seconds.
+    async fn expiry(&self) -> Option<i64> {
+        household::access_token_expiry(&self.household_paths().auth_json()).await
+    }
+
+    fn outside_window(&self, expiry: i64) -> bool {
+        expiry - household::unix_now() > self.settings.refresh_ahead.as_secs() as i64
+    }
+
+    /// Makes sure the household app server runs and its access token lies
+    /// outside the refresh window, refreshing it first if not. Fails while
+    /// the household is signed out, or its token cannot be refreshed.
+    pub async fn ensure_household(&self) -> Result<(), CodexError> {
+        let household = self.household().await?;
+        match self.expiry().await {
+            None => return Err(CodexError::SignedOut("no ChatGPT sign-in".into())),
+            Some(expiry) if self.outside_window(expiry) => return Ok(()),
+            Some(_) => {}
+        }
+        let _refreshing = self.refreshing.lock().await;
+        // Another request may have refreshed it meanwhile.
+        match self.expiry().await {
+            None => return Err(CodexError::SignedOut("no ChatGPT sign-in".into())),
+            Some(expiry) if self.outside_window(expiry) => return Ok(()),
+            Some(_) => {}
+        }
+        let failed_at = *lock(&self.refresh_failed_at);
+        if failed_at.is_some_and(|at| {
+            household::unix_now() - at < self.settings.retry_after.as_secs() as i64
+        }) {
+            return Err(CodexError::SignedOut(
+                "the sign-in could not be refreshed".into(),
+            ));
+        }
+        self.refresh_with(&household).await
+    }
+
+    /// Refreshes the household's sign-in now, whatever its expiry. The
+    /// refresher uses [`Supervisor::ensure_household`] instead; this is for
+    /// tests and operators.
+    pub async fn refresh_household(&self) -> Result<(), CodexError> {
+        let household = self.household().await?;
+        let _refreshing = self.refreshing.lock().await;
+        self.refresh_with(&household).await
+    }
+
+    /// Asks the household app server to refresh, then checks the file. Call
+    /// with `refreshing` held.
+    async fn refresh_with(&self, household: &Runtime) -> Result<(), CodexError> {
+        tracing::info!("refreshing the household's ChatGPT sign-in");
+        // `account/read` with `refreshToken` refreshes before it answers.
+        // Whatever it answers, the file says whether the refresh happened.
+        if let Err(error) = timed(household.client.account_read(&GetAccountParams {
+            refresh_token: true,
+        }))
+        .await
+        {
+            tracing::warn!(%error, "the household's account read failed while refreshing");
+        }
+        match self.expiry().await {
+            Some(expiry) if self.outside_window(expiry) => {
+                *lock(&self.refresh_failed_at) = None;
+                tracing::info!(
+                    expires_in_s = expiry - household::unix_now(),
+                    "refreshed the household's ChatGPT sign-in"
+                );
+                Ok(())
+            }
+            Some(_) => {
+                *lock(&self.refresh_failed_at) = Some(household::unix_now());
+                tracing::error!("the household's ChatGPT sign-in could not be refreshed");
+                Err(CodexError::SignedOut(
+                    "the sign-in could not be refreshed".into(),
+                ))
+            }
+            None => Err(CodexError::SignedOut("no ChatGPT sign-in".into())),
+        }
+    }
+
+    /// Starts the household app server and then keeps its sign-in fresh,
+    /// looking every [`HouseholdSettings::check_every`], until the gateway
+    /// stops.
+    pub async fn run_refresher(self: Arc<Self>) {
+        if let Err(error) = self.household().await {
+            tracing::error!(%error, "the household's app server did not start");
+        }
+        let mut tick = tokio::time::interval(self.settings.check_every);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            if self.tainted().is_some() {
+                continue;
+            }
+            // Nothing to refresh while signed out.
+            if self.expiry().await.is_none() {
+                continue;
+            }
+            if let Err(error) = self.ensure_household().await {
+                tracing::warn!(%error, "the household's sign-in is not usable");
+            }
+        }
+    }
+
+    /// The household's sign-in. Signed in means usable: the household app
+    /// server runs and its token lies outside the refresh window. With
+    /// `detail`, for admins, also asks the app server for the account's
+    /// email and plan.
+    pub async fn household_status(&self, detail: bool) -> HouseholdStatus {
+        let signed_out = HouseholdStatus {
+            signed_in: false,
+            email: None,
+            plan: None,
+        };
+        if self.ensure_household().await.is_err() {
+            return signed_out;
+        }
+        if !detail {
+            return HouseholdStatus {
+                signed_in: true,
+                ..signed_out
+            };
+        }
+        let Ok(household) = self.household().await else {
+            return signed_out;
+        };
+        match timed(household.client.account_read(&GetAccountParams::default())).await {
+            Ok(GetAccountResponse {
+                account:
+                    Some(bokkie_codex::protocol::Account::Chatgpt {
+                        email, plan_type, ..
+                    }),
+                ..
+            }) => HouseholdStatus {
+                signed_in: true,
+                email,
+                plan: Some(plan_type),
+            },
+            Ok(GetAccountResponse { account: None, .. }) => signed_out,
+            Ok(_) => HouseholdStatus {
+                signed_in: true,
+                ..signed_out
+            },
+            Err(error) => {
+                tracing::warn!(%error, "reading the household's account failed");
+                signed_out
+            }
+        }
+    }
+
+    /// Starts a device-code sign-in of the household app server, cancelling
+    /// any pending one.
+    pub async fn start_login(&self, now: Timestamp) -> Result<Login, CodexError> {
+        let household = self.household().await?;
+        self.cancel_login(now).await?;
+        match timed(
+            household
+                .client
+                .account_login_start(&LoginAccountParams::ChatgptDeviceCode),
+        )
+        .await?
+        {
+            LoginAccountResponse::ChatgptDeviceCode {
+                login_id,
+                user_code,
+                verification_url,
+            } => {
+                let login = Login {
+                    login_id,
+                    verification_url,
+                    user_code,
+                    state: LoginState::Pending,
+                    expires_at: Timestamp(now.0 + household::DEVICE_CODE_LIFETIME_MS),
+                    error: None,
+                };
+                *lock(&self.login) = Some(login.clone());
+                tracing::info!("started a device-code sign-in of the household");
+                Ok(login)
+            }
+            LoginAccountResponse::Unknown => Err(CodexError::Rejected(
+                "Codex did not offer a device-code sign-in".into(),
+            )),
+        }
+    }
+
+    /// The latest device-code sign-in, if any since the gateway started.
+    pub fn login(&self, now: Timestamp) -> Option<Login> {
+        let mut login = lock(&self.login);
+        if let Some(login) = login.as_mut() {
+            login.expire(now);
+        }
+        login.clone()
+    }
+
+    /// Cancels a pending device-code sign-in. Returns the latest sign-in.
+    pub async fn cancel_login(&self, now: Timestamp) -> Result<Option<Login>, CodexError> {
+        let pending = self
+            .login(now)
+            .filter(|login| login.state == LoginState::Pending);
+        if let Some(pending) = pending {
+            if let Some(login) = lock(&self.login)
+                .as_mut()
+                .filter(|l| l.login_id == pending.login_id)
+            {
+                login.state = LoginState::Cancelled;
+            }
+            if let Ok(household) = self.household().await {
+                let cancelled = timed(household.client.account_login_cancel(
+                    &CancelLoginAccountParams {
+                        login_id: pending.login_id,
+                    },
+                ))
+                .await;
+                if let Err(error) = cancelled {
+                    tracing::warn!(%error, "cancelling the household's sign-in failed");
+                }
+            }
+            tracing::info!("cancelled a device-code sign-in of the household");
+        }
+        Ok(self.login(now))
+    }
+
+    fn login_completed(&self, completed: &AccountLoginCompletedNotification) {
+        let mut login = lock(&self.login);
+        let Some(login) = login
+            .as_mut()
+            .filter(|l| completed.login_id.as_deref() == Some(l.login_id.as_str()))
+        else {
+            return;
+        };
+        login.completed(completed.success, completed.error.clone());
+        tracing::info!(state = ?login.state, "the household's device-code sign-in ended");
+        if completed.success {
+            *lock(&self.refresh_failed_at) = None;
+        }
+    }
+
+    fn household_exited(&self) {
+        if let Some(login) = lock(&self.login)
+            .as_mut()
+            .filter(|l| l.state == LoginState::Pending)
+        {
+            login.state = LoginState::Failed;
+            login.error = Some("The household's app server stopped".into());
+        }
+    }
+
+    /// Signs the household out of ChatGPT, which revokes the sign-in for
+    /// every app server, and stops every user's app server, since each
+    /// holds the revoked tokens in memory.
+    pub async fn sign_out_household(&self, now: Timestamp) -> Result<(), CodexError> {
+        let household = self.household().await?;
+        self.cancel_login(now).await?;
+        let _refreshing = self.refreshing.lock().await;
+        timed(household.client.account_logout()).await?;
+        self.stop_users().await;
+        tracing::info!("signed the household out of ChatGPT");
+        Ok(())
+    }
+
+    // -- Recovery ------------------------------------------------------------
+
+    /// How many times a user's app server was restarted after a credential
+    /// failure.
+    pub fn recoveries(&self) -> u64 {
+        self.recoveries.load(Ordering::SeqCst)
+    }
+
+    fn turn_ended(&self, user: UserId, turn: &Turn, runtime: &Arc<Runtime>) {
+        match turn.status {
+            TurnStatus::Completed => {
+                lock(&self.recovering).remove(&user);
+            }
+            TurnStatus::Failed if turn.error.as_ref().is_some_and(|e| e.is_unauthorized()) => {
+                if let Some(me) = self.me.upgrade() {
+                    tokio::spawn(me.recover(user, Arc::downgrade(runtime)));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Restarts a user's app server whose turn failed on its credential,
+    /// once, if the household's sign-in is good, so that it reads the file
+    /// again. Not again until one of its turns completes.
+    async fn recover(self: Arc<Self>, user: UserId, failed: Weak<Runtime>) {
+        if !lock(&self.recovering).insert(user) {
+            tracing::error!(user = %user, "the user's app server failed on its credential again after a restart; not restarting it again");
+            return;
+        }
+        if let Err(error) = self.ensure_household().await {
+            lock(&self.recovering).remove(&user);
+            tracing::warn!(user = %user, %error, "not restarting the user's app server: the household's sign-in is not good");
+            return;
+        }
+        {
+            let slot = self.slot(user);
+            let mut slot = slot.lock().await;
+            let current = slot
+                .as_ref()
+                .zip(failed.upgrade())
+                .is_some_and(|(current, failed)| Arc::ptr_eq(current, &failed));
+            if current && let Some(runtime) = slot.take() {
+                runtime.stop();
+            }
+        }
+        tracing::warn!(user = %user, "restarting the user's app server after a credential failure");
+        self.recoveries.fetch_add(1, Ordering::SeqCst);
+        if let Err(error) = self.runtime(user).await {
+            tracing::error!(user = %user, %error, "restarting the user's app server failed");
+        }
+    }
+
+    // -- Starting ------------------------------------------------------------
+
+    async fn start(&self, owner: Owner) -> Result<Arc<Runtime>, CodexError> {
+        let paths = UserPaths::of(&self.data_dir, owner);
+        paths
+            .create()
+            .map_err(|e| CodexError::AppServer(format!("creating {owner}'s directories: {e}")))?;
         // The catalog must still be Bokkie's before any app server reads it.
         let catalog = super::catalog::load(&self.catalog.path)?;
         write_private(
@@ -368,12 +923,16 @@ impl Supervisor {
                 (server.client.clone(), incoming, Some(server))
             }
             Launcher::InProcess(connect) => {
-                let (client, incoming) = connect(user, &paths);
+                let (client, incoming) = connect(owner, &paths);
                 (client, incoming, None)
             }
         };
+        let sink = match owner {
+            Owner::Household => Sink::Household(self.me.clone()),
+            Owner::User(user) => Sink::User(user, self.events.clone(), self.me.clone()),
+        };
         let runtime = Arc::new(Runtime {
-            user,
+            owner,
             client,
             server: std::sync::Mutex::new(server),
             expected,
@@ -381,21 +940,40 @@ impl Supervisor {
             served: Default::default(),
             latch: self.latch.clone(),
         });
-        tokio::spawn(watch(runtime.clone(), incoming, self.events.clone()));
+        tokio::spawn(watch(runtime.clone(), incoming, sink));
         if let Err(error) = runtime.startup_checks().await {
-            tracing::error!(user = %user, %error, "refusing the user's app server");
+            tracing::error!(%owner, %error, "refusing the app server");
             runtime.stop();
             return Err(error);
         }
-        tracing::info!(user = %user, "app server ready");
+        tracing::info!(%owner, "app server ready");
         Ok(runtime)
     }
 }
 
-/// A running, checked app server for one user.
+/// Where an app server's messages go.
+#[derive(Debug, Clone)]
+enum Sink {
+    User(
+        UserId,
+        mpsc::UnboundedSender<RuntimeEvent>,
+        Weak<Supervisor>,
+    ),
+    Household(Weak<Supervisor>),
+}
+
+impl Sink {
+    fn send(&self, kind: RuntimeEventKind) {
+        if let Self::User(user, events, _) = self {
+            let _ = events.send(RuntimeEvent { user: *user, kind });
+        }
+    }
+}
+
+/// A running, checked app server.
 #[derive(Debug)]
 pub struct Runtime {
-    pub user: UserId,
+    pub owner: Owner,
     client: Client,
     /// The child process, killed when the runtime stops or drops.
     server: std::sync::Mutex<Option<AppServer>>,
@@ -425,6 +1003,16 @@ impl Runtime {
 
     pub fn workspace(&self) -> &str {
         &self.expected.workspace
+    }
+
+    /// The user whose app server this is; the household's runs no threads.
+    fn user(&self) -> Result<UserId, CodexError> {
+        match self.owner {
+            Owner::User(user) => Ok(user),
+            Owner::Household => {
+                Err(Refusal::new("the household's app server runs no threads").into())
+            }
+        }
     }
 
     async fn startup_checks(&self) -> Result<(), CodexError> {
@@ -457,9 +1045,10 @@ impl Runtime {
     }
 
     fn served(&self, response: ThreadSessionResponse) -> Result<ThreadSessionResponse, CodexError> {
+        let user = self.user()?;
         if let Err(refusal) = guard::check_thread(&response, &self.expected) {
-            tracing::error!(user = %self.user, thread = %response.thread.id, %refusal, "refusing a thread");
-            self.refuse(&response.thread.id, &refusal.0);
+            tracing::error!(user = %user, thread = %response.thread.id, %refusal, "refusing a thread");
+            self.refuse(user, &response.thread.id, &refusal.0);
             return Err(CodexError::ThreadRefused(refusal));
         }
         lock(&self.served).insert(response.thread.id.clone());
@@ -473,6 +1062,7 @@ impl Runtime {
         developer_instructions: String,
         dynamic_tools: Option<Vec<DynamicToolSpec>>,
     ) -> Result<ThreadSessionResponse, CodexError> {
+        self.user()?;
         if let Some(reason) = self.latch.tainted() {
             return Err(Refusal::new(reason).into());
         }
@@ -516,16 +1106,20 @@ impl Runtime {
 
     /// Whether the thread passed its checks on this app server.
     pub fn is_served(&self, thread_id: &str) -> bool {
+        let Ok(user) = self.user() else {
+            return false;
+        };
         self.is_alive()
             && lock(&self.served).contains(thread_id)
-            && self.latch.thread_refusal(self.user, thread_id).is_none()
+            && self.latch.thread_refusal(user, thread_id).is_none()
     }
 
     fn ensure_not_refused(&self, thread_id: &str) -> Result<(), CodexError> {
+        let user = self.user()?;
         if let Some(reason) = self.latch.tainted() {
             return Err(Refusal::new(reason).into());
         }
-        match self.latch.thread_refusal(self.user, thread_id) {
+        match self.latch.thread_refusal(user, thread_id) {
             Some(reason) => Err(CodexError::ThreadRefused(Refusal::new(reason))),
             None => Ok(()),
         }
@@ -541,9 +1135,9 @@ impl Runtime {
         Ok(())
     }
 
-    fn refuse(&self, thread_id: &str, reason: &str) {
+    fn refuse(&self, user: UserId, thread_id: &str, reason: &str) {
         lock(&self.served).remove(thread_id);
-        self.latch.refuse_thread(self.user, thread_id, reason);
+        self.latch.refuse_thread(user, thread_id, reason);
     }
 
     /// Starts a turn on a served thread, with optional context fragments.
@@ -583,6 +1177,7 @@ impl Runtime {
 
     /// Interrupts a turn. Works on refused threads too.
     pub async fn interrupt_turn(&self, thread_id: &str, turn_id: &str) -> Result<(), CodexError> {
+        self.user()?;
         timed(self.client.turn_interrupt(&TurnInterruptParams {
             thread_id: thread_id.into(),
             turn_id: turn_id.into(),
@@ -594,19 +1189,6 @@ impl Runtime {
     pub async fn rate_limits(&self) -> Result<GetAccountRateLimitsResponse, CodexError> {
         timed(self.client.account_rate_limits_read()).await
     }
-
-    pub async fn account(&self) -> Result<GetAccountResponse, CodexError> {
-        timed(self.client.account_read(&GetAccountParams::default())).await
-    }
-
-    /// Starts a ChatGPT device-code sign-in for this user's app server.
-    pub async fn login_start(&self) -> Result<LoginAccountResponse, CodexError> {
-        timed(
-            self.client
-                .account_login_start(&LoginAccountParams::ChatgptDeviceCode),
-        )
-        .await
-    }
 }
 
 impl Drop for Runtime {
@@ -616,16 +1198,9 @@ impl Drop for Runtime {
 }
 
 /// Reads one app server's messages until it closes: checks every item,
-/// answers every server request, and forwards notifications.
-async fn watch(
-    runtime: Arc<Runtime>,
-    mut incoming: mpsc::UnboundedReceiver<Incoming>,
-    events: mpsc::UnboundedSender<RuntimeEvent>,
-) {
-    let user = runtime.user;
-    let send = |kind| {
-        let _ = events.send(RuntimeEvent { user, kind });
-    };
+/// answers every server request, and forwards a user's notifications.
+async fn watch(runtime: Arc<Runtime>, mut incoming: mpsc::UnboundedReceiver<Incoming>, sink: Sink) {
+    let owner = runtime.owner;
     // Hold only a weak reference while waiting, so a stopped runtime drops.
     let weak = Arc::downgrade(&runtime);
     let client = runtime.client.clone();
@@ -655,15 +1230,31 @@ async fn watch(
                 | ServerNotification::ItemCompleted(item) = &notification
                     && let Err(refusal) = guard::check_item(&item.item)
                 {
-                    violation(&runtime, Some(&item.thread_id), &refusal, &send).await;
+                    violation(&runtime, Some(&item.thread_id), &refusal, &sink).await;
                 }
-                send(RuntimeEventKind::Notification(notification));
+                match (&sink, &notification) {
+                    (Sink::User(user, _, supervisor), ServerNotification::TurnCompleted(done)) => {
+                        if let Some(supervisor) = supervisor.upgrade() {
+                            supervisor.turn_ended(*user, &done.turn, &runtime);
+                        }
+                    }
+                    (
+                        Sink::Household(supervisor),
+                        ServerNotification::AccountLoginCompleted(completed),
+                    ) => {
+                        if let Some(supervisor) = supervisor.upgrade() {
+                            supervisor.login_completed(completed);
+                        }
+                    }
+                    _ => {}
+                }
+                sink.send(RuntimeEventKind::Notification(notification));
             }
             Incoming::Request(request) => {
                 let answer = match request.kind {
                     ServerRequestKind::DynamicToolCall(call) => {
                         // Phase 2 Bots have no tools; Phase 3 adds them.
-                        tracing::warn!(user = %user, tool = %call.tool, "unexpected tool call");
+                        tracing::warn!(%owner, tool = %call.tool, "unexpected tool call");
                         client
                             .respond(
                                 request.id,
@@ -676,7 +1267,7 @@ async fn watch(
                     }
                     ServerRequestKind::CommandExecutionApproval(params) => {
                         let refusal = Refusal::new("the app server asked to approve a command");
-                        violation(&runtime, Some(&params.thread_id), &refusal, &send).await;
+                        violation(&runtime, Some(&params.thread_id), &refusal, &sink).await;
                         client
                             .respond(
                                 request.id,
@@ -688,7 +1279,7 @@ async fn watch(
                     }
                     ServerRequestKind::FileChangeApproval(params) => {
                         let refusal = Refusal::new("the app server asked to approve a file change");
-                        violation(&runtime, Some(&params.thread_id), &refusal, &send).await;
+                        violation(&runtime, Some(&params.thread_id), &refusal, &sink).await;
                         client
                             .respond(
                                 request.id,
@@ -707,7 +1298,7 @@ async fn watch(
                                 .and_then(|t| t.as_str())
                             {
                                 let refusal = Refusal::new(format!("the app server sent {method}"));
-                                violation(&runtime, Some(thread_id), &refusal, &send).await;
+                                violation(&runtime, Some(thread_id), &refusal, &sink).await;
                             }
                         }
                         client
@@ -716,11 +1307,11 @@ async fn watch(
                     }
                 };
                 if let Err(error) = answer {
-                    tracing::warn!(user = %user, %error, "could not answer a server request");
+                    tracing::warn!(%owner, %error, "could not answer a server request");
                 }
             }
             Incoming::MalformedRequest { id, method, error } => {
-                tracing::warn!(user = %user, %method, %error, "undecodable server request");
+                tracing::warn!(%owner, %method, %error, "undecodable server request");
                 let _ = client
                     .respond_error(id, RpcError::method_not_found(&method))
                     .await;
@@ -728,11 +1319,11 @@ async fn watch(
                 if method.contains("pproval") {
                     let refusal =
                         Refusal::new(format!("the app server sent an unreadable {method}"));
-                    violation(&runtime, None, &refusal, &send).await;
+                    violation(&runtime, None, &refusal, &sink).await;
                 }
             }
             Incoming::Malformed { line, error } => {
-                tracing::warn!(user = %user, %error, "undecodable app-server message");
+                tracing::warn!(%owner, %error, "undecodable app-server message");
                 // Fail closed: an item that cannot be checked is refused.
                 let value: Option<serde_json::Value> = serde_json::from_str(&line).ok();
                 let method = value.as_ref().and_then(|v| v["method"].as_str());
@@ -743,7 +1334,7 @@ async fn watch(
                         .map(str::to_owned);
                     let refusal =
                         Refusal::new("the app server sent an item that could not be checked");
-                    violation(&runtime, thread.as_deref(), &refusal, &send).await;
+                    violation(&runtime, thread.as_deref(), &refusal, &sink).await;
                 }
             }
         }
@@ -754,27 +1345,27 @@ async fn watch(
     if let Some(runtime) = weak.upgrade() {
         runtime.stop();
     }
-    tracing::info!(user = %user, "app server closed");
-    send(RuntimeEventKind::Exited);
+    tracing::info!(%owner, "app server closed");
+    if let Sink::Household(supervisor) = &sink
+        && let Some(supervisor) = supervisor.upgrade()
+    {
+        supervisor.household_exited();
+    }
+    sink.send(RuntimeEventKind::Exited);
 }
 
 /// Handles a broken safety rule: refuses the thread, taints Codex for the
 /// whole gateway, which stops every app server, and reports it.
-async fn violation(
-    runtime: &Runtime,
-    thread_id: Option<&str>,
-    refusal: &Refusal,
-    send: &impl Fn(RuntimeEventKind),
-) {
+async fn violation(runtime: &Runtime, thread_id: Option<&str>, refusal: &Refusal, sink: &Sink) {
     tracing::error!(
-        user = %runtime.user,
+        owner = %runtime.owner,
         thread = thread_id.unwrap_or("-"),
         %refusal,
         "safety rule broken; stopping Codex for the whole gateway until it restarts"
     );
-    if let Some(thread_id) = thread_id {
-        runtime.refuse(thread_id, &refusal.0);
-        send(RuntimeEventKind::Refused {
+    if let (Some(thread_id), Owner::User(user)) = (thread_id, runtime.owner) {
+        runtime.refuse(user, thread_id, &refusal.0);
+        sink.send(RuntimeEventKind::Refused {
             thread_id: thread_id.into(),
             reason: refusal.0.clone(),
         });

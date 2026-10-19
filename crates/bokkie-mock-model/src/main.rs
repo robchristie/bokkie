@@ -1,18 +1,34 @@
-//! Serves the mock model for the browser smoke: `bokkie-mock-model [ADDRESS]`
-//! (default `127.0.0.1:0`). Prints one JSON line with the Responses API's
-//! base URL, the `-c` overrides that point an app server at it, and its
-//! control URL, then serves until stopped.
+//! Serves the mocks for the browser smoke:
+//! `bokkie-mock-model [ADDRESS [DIR]]` (default `127.0.0.1:0` and a new
+//! directory under the system's temporary directory). The model listens on
+//! ADDRESS; the ChatGPT authority and backend, and the deny proxy, on free
+//! local ports, with the authority's certificate in DIR. Prints one JSON
+//! line, then serves until stopped:
+//!
+//! - `base_url`: the Responses API's base URL;
+//! - `overrides`: the `-c` overrides that point an app server at the model
+//!   and the backend;
+//! - `env`: the environment that points its token and revoke endpoints at
+//!   the authority, trusts the authority's certificate, and sends any other
+//!   host to the deny proxy;
+//! - `household_auth`: an `auth.json` holding a synthetic sign-in that lasts
+//!   a day, for `<data>/household/codex/auth.json`;
+//! - `control`: the control URL.
 //!
 //! Control, as JSON:
 //! - `PUT /control/reply` `{"pieces": [...], "piece_delay_ms": N}`;
 //! - `PUT /control/rate-limits` with [`RateLimits`] or `null`;
-//! - `GET /control/requests` `{"count": N}`, the requests answered so far.
+//! - `GET /control/requests` `{"count": N, "refreshes": N, "refused": [...]}`:
+//!   the requests the model answered, the refreshes the authority answered,
+//!   and the hosts the deny proxy refused.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use axum::Json;
 use axum::extract::State;
 use axum::routing::{get, put};
+use bokkie_mock_model::chatgpt::MockChatgpt;
 use bokkie_mock_model::{MockModel, RateLimits};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -23,44 +39,87 @@ struct Reply {
     piece_delay_ms: u64,
 }
 
-async fn set_reply(State(mock): State<MockModel>, Json(reply): Json<Reply>) -> Json<Value> {
-    mock.set_reply(reply.pieces);
-    *mock.piece_delay.lock().unwrap() = Duration::from_millis(reply.piece_delay_ms);
+#[derive(Clone)]
+struct Mocks {
+    model: MockModel,
+    chatgpt: MockChatgpt,
+}
+
+async fn set_reply(State(mocks): State<Mocks>, Json(reply): Json<Reply>) -> Json<Value> {
+    mocks.model.set_reply(reply.pieces);
+    *mocks.model.piece_delay.lock().unwrap() = Duration::from_millis(reply.piece_delay_ms);
     Json(json!({}))
 }
 
 async fn set_rate_limits(
-    State(mock): State<MockModel>,
+    State(mocks): State<Mocks>,
     Json(limits): Json<Option<RateLimits>>,
 ) -> Json<Value> {
-    *mock.rate_limits.lock().unwrap() = limits;
+    *mocks.model.rate_limits.lock().unwrap() = limits;
     Json(json!({}))
 }
 
-async fn requests(State(mock): State<MockModel>) -> Json<Value> {
-    Json(json!({"count": mock.requests.lock().unwrap().len()}))
+async fn requests(State(mocks): State<Mocks>) -> Json<Value> {
+    Json(json!({
+        "count": mocks.model.requests.lock().unwrap().len(),
+        "refreshes": mocks.chatgpt.refreshes().len(),
+        "refused": mocks.chatgpt.proxy().hosts(),
+    }))
 }
 
 #[tokio::main]
 async fn main() {
-    let listen = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:0".into());
-    let mock = MockModel::new(&["Hello", " from", " a mock"]);
+    let mut args = std::env::args().skip(1);
+    let listen = args.next().unwrap_or_else(|| "127.0.0.1:0".into());
+    let dir = match args.next() {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let dir = std::env::temp_dir().join(format!("bokkie-mock-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+    };
+    let model = MockModel::new(&["Hello", " from", " a mock"]);
+    let chatgpt = MockChatgpt::start(&dir).await;
+    let mocks = Mocks {
+        model: model.clone(),
+        chatgpt: chatgpt.clone(),
+    };
     let control = axum::Router::new()
         .route("/control/reply", put(set_reply))
         .route("/control/rate-limits", put(set_rate_limits))
         .route("/control/requests", get(requests))
-        .with_state(mock.clone());
-    let base_url = bokkie_mock_model::serve(mock.router().merge(control), &listen).await;
+        .with_state(mocks);
+    let base_url = bokkie_mock_model::serve(model.router().merge(control), &listen).await;
     let origin = base_url.trim_end_matches("/v1");
-    println!(
-        "{}",
+    let mut overrides = MockModel::signed_in_overrides(&base_url);
+    overrides.extend(chatgpt.overrides());
+    let env: serde_json::Map<String, Value> = chatgpt
+        .env()
+        .into_iter()
+        .map(|(name, value)| {
+            (
+                name.to_string_lossy().into_owned(),
+                Value::String(value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    // One write, so a reader gets the line whole.
+    let line = format!(
+        "{}\n",
         json!({
             "base_url": base_url,
-            "overrides": MockModel::overrides(&base_url),
+            "overrides": overrides,
+            "env": env,
+            "household_auth": chatgpt.auth_json(86_400),
             "control": format!("{origin}/control"),
         })
     );
+    {
+        use std::io::Write;
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(line.as_bytes()).unwrap();
+        stdout.flush().unwrap();
+    }
     let _ = tokio::signal::ctrl_c().await;
 }

@@ -166,6 +166,11 @@ pub struct CancelLoginAccountResponse {
     pub status: String,
 }
 
+/// `account/logout`: signs out and revokes the sign-in. It deletes the
+/// `CODEX_HOME`'s `auth.json`, which for a symbolic link is the link alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LogoutAccountResponse {}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetAccountRateLimitsResponse {
@@ -436,6 +441,30 @@ pub enum TurnStatus {
 pub struct TurnError {
     pub message: String,
     pub additional_details: Option<String>,
+    /// Codex's classification, such as `"unauthorized"` or
+    /// `{"responseStreamDisconnected": {"httpStatusCode": 401}}`. Kept raw:
+    /// the union is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_error_info: Option<Value>,
+}
+
+impl TurnError {
+    /// Whether Codex attributes the failure to the credential: a refresh
+    /// that failed, or the model answering 401.
+    pub fn is_unauthorized(&self) -> bool {
+        fn status_401(value: &Value) -> bool {
+            value
+                .as_object()
+                .into_iter()
+                .flat_map(|object| object.values())
+                .any(|detail| detail["httpStatusCode"] == 401)
+        }
+        match &self.codex_error_info {
+            Some(Value::String(kind)) => kind == "unauthorized",
+            Some(value) => status_401(value),
+            None => false,
+        }
+    }
 }
 
 /// The thread items Bokkie reads. Other item types decode to `Unknown`.

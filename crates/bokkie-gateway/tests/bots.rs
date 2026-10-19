@@ -272,7 +272,7 @@ async fn threads_resume_on_a_new_app_server() {
     gateway.fake.crash(user);
     let runtime = gateway.state.supervisor.running(user).await.unwrap();
     // Wake the watcher so it sees the closed stream.
-    let _ = runtime.account().await;
+    let _ = runtime.rate_limits().await;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     while runtime.is_alive() {
         assert!(tokio::time::Instant::now() < deadline);
@@ -284,7 +284,7 @@ async fn threads_resume_on_a_new_app_server() {
     assert_eq!(resumes.len(), 1);
     let thread = gateway.fake.received("thread/start")[0].params.clone();
     assert_eq!(resumes[0].params["permissions"], "bokkie");
-    assert_eq!(resumes[0].user, user);
+    assert_eq!(resumes[0].user(), user);
     assert_eq!(gateway.fake.starts(user), 2);
     assert!(thread.is_object());
 }
@@ -422,7 +422,7 @@ async fn one_user_cannot_read_change_message_or_stop_anothers_bot() {
             .fake
             .received("turn/start")
             .iter()
-            .all(|r| r.user == UserId(amy_id))
+            .all(|r| r.user() == UserId(amy_id))
     );
     let bot = gateway
         .send(Call::get(&format!("/api/v1/bots/{chef}")).cookie(&amy))
@@ -542,7 +542,7 @@ async fn an_app_server_exit_mid_reply_fails_the_reply() {
         .await;
     gateway.fake.crash(UserId(1));
     let runtime = gateway.state.supervisor.running(UserId(1)).await.unwrap();
-    let _ = runtime.account().await;
+    let _ = runtime.rate_limits().await;
     let page = gateway
         .wait_for(&rob, &path, |b| {
             last_bot_reply(b).is_some_and(|m| m["state"] == "failed")

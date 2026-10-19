@@ -43,6 +43,11 @@ async fn serve() -> Result<(), String> {
         .await
         .map_err(|e| format!("database: {e}"))?;
     let (supervisor, events) = supervisor(&config).await?;
+    // Any user's own earlier ChatGPT sign-in is signed out and linked to
+    // the household's before anything else uses Codex.
+    supervisor.sign_out_own_sign_ins().await;
+    // The household's app server starts first and keeps its sign-in fresh.
+    tokio::spawn(supervisor.clone().run_refresher());
     let clock = Clock::system();
     let mut state = AppState::new(config, pool, clock.clone(), supervisor);
     state.limiter = Arc::new(
@@ -91,7 +96,9 @@ async fn supervisor(
     .map_err(|e| format!("exporting the model catalog: {e}"))?;
     let catalog = catalog::write(&config.catalog_path(), bundled)
         .map_err(|e| format!("writing the model catalog: {e}"))?;
-    let (supervisor, events) = Supervisor::new(
+    // No overrides and no environment: an app server's endpoints are always
+    // Codex's own.
+    Ok(Supervisor::new(
         &config.data_dir,
         catalog,
         Launcher::Process {
@@ -99,8 +106,7 @@ async fn supervisor(
             overrides: Vec::new(),
             env: Vec::new(),
         },
-    );
-    Ok((Arc::new(supervisor), events))
+    ))
 }
 
 async fn bootstrap(username: &str, display_name: &str) -> Result<(), String> {

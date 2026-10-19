@@ -582,6 +582,7 @@ fn method_results_decode() {
     check_incoming::<GetAccountResponse>("v2/GetAccountResponse");
     check_incoming::<LoginAccountResponse>("v2/LoginAccountResponse");
     check_incoming::<CancelLoginAccountResponse>("v2/CancelLoginAccountResponse");
+    check_incoming::<LogoutAccountResponse>("v2/LogoutAccountResponse");
     check_incoming::<GetAccountRateLimitsResponse>("v2/GetAccountRateLimitsResponse");
     check_incoming::<ConfigReadResponse>("v2/ConfigReadResponse");
     check_incoming::<PermissionProfileListResponse>("v2/PermissionProfileListResponse");

@@ -28,11 +28,14 @@ services:
       - type: volume
         source: data
         target: /data
-      # The account's CODEX_HOME is the Phase 0 qualification sign-in,
-      # used in place. Nothing is copied out of its volume.
+      # The household's CODEX_HOME is the Phase 0 qualification sign-in,
+      # used in place: the household app server holds it, and the account's
+      # auth.json is the gateway's link to it. Nothing is copied out of its
+      # volume. Mounted as a user's own CODEX_HOME instead, the gateway
+      # would sign it out, which revokes it.
       - type: volume
         source: credential
-        target: /data/users/1/codex
+        target: /data/household/codex
         volume:
           subpath: users/alice/codex
       - type: bind

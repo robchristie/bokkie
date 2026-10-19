@@ -50,6 +50,7 @@ pub const CLIENT_METHODS: &[MethodSchema] = &[
         Some("v2/CancelLoginAccountParams"),
         "v2/CancelLoginAccountResponse",
     ),
+    MethodSchema::new("account/logout", None, "v2/LogoutAccountResponse"),
     MethodSchema::new(
         "account/rateLimits/read",
         None,

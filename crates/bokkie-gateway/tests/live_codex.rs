@@ -1,24 +1,25 @@
 //! The supervisor against the real pinned `codex app-server`, with a mock
-//! model. Runs only when `BOKKIE_CODEX_BIN` names the binary, as
-//! `scripts/verify` arranges. It never signs in or calls a real model.
+//! model and a synthetic household sign-in from a mock authority. Runs only
+//! when `BOKKIE_CODEX_BIN` names the binary, as `scripts/verify` arranges.
+//! It never uses a real ChatGPT credential or calls a real model, and each
+//! test shows that nothing tried to leave the machine.
 //!
 //! This is the proof that the gateway's configuration makes threads
 //! chat-only: it captures the tools the app server actually offers a model.
 
 mod common;
 
-use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bokkie_codex::protocol::{DynamicToolSpec, ServerNotification, TurnStatus};
-use bokkie_gateway::codex::{CodexError, Launcher, RuntimeEventKind, Supervisor, catalog};
+use bokkie_gateway::codex::{
+    CodexError, HouseholdSettings, Launcher, RuntimeEventKind, Supervisor, catalog,
+};
 use bokkie_mock_model::MockModel;
 use bokkie_protocol::UserId;
+use common::live::Live;
 use serde_json::json;
-
-fn codex() -> Option<PathBuf> {
-    std::env::var_os("BOKKIE_CODEX_BIN").map(PathBuf::from)
-}
 
 /// Tools that may be offered while threads are chat-only: Bokkie's own
 /// dynamic tools, and Codex's question to the user, which the gateway
@@ -35,52 +36,35 @@ fn message_bot() -> DynamicToolSpec {
     }
 }
 
-async fn supervisor(
-    program: PathBuf,
-    data: &std::path::Path,
-    overrides: Vec<String>,
-) -> (
-    Supervisor,
-    tokio::sync::mpsc::UnboundedReceiver<bokkie_gateway::codex::RuntimeEvent>,
-) {
-    supervisor_with_env(program, data, overrides, Vec::new()).await
+type Events = tokio::sync::mpsc::UnboundedReceiver<bokkie_gateway::codex::RuntimeEvent>;
+
+/// A supervisor on `live`'s mocks, with the household signed in for a day.
+async fn supervisor(live: &Live, data: &std::path::Path) -> (Arc<Supervisor>, Events) {
+    supervisor_with(live, data, live.launcher()).await
 }
 
-async fn supervisor_with_env(
-    program: PathBuf,
+async fn supervisor_with(
+    live: &Live,
     data: &std::path::Path,
-    overrides: Vec<String>,
-    env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
-) -> (
-    Supervisor,
-    tokio::sync::mpsc::UnboundedReceiver<bokkie_gateway::codex::RuntimeEvent>,
-) {
-    let bundled = catalog::export_bundled(&program, &data.join("codex/catalog-home"))
+    launcher: Launcher,
+) -> (Arc<Supervisor>, Events) {
+    let bundled = catalog::export_bundled(&live.program, &data.join("codex/catalog-home"))
         .await
         .unwrap();
     let catalog = catalog::write(&data.join("codex/models.json"), bundled).unwrap();
     assert!(catalog.slugs.contains("gpt-6.1-sol"), "{:?}", catalog.slugs);
-    Supervisor::new(
-        data,
-        catalog,
-        Launcher::Process {
-            program,
-            overrides,
-            env,
-        },
-    )
+    live.sign_in_household(data, 86_400);
+    Supervisor::with_settings(data, catalog, launcher, HouseholdSettings::default())
 }
 
 #[tokio::test]
 async fn the_real_app_server_passes_the_checks_and_offers_no_unsafe_tools() {
-    let Some(program) = codex() else {
-        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+    let Some(live) = Live::start(&["Hello", " from", " a mock"]).await else {
         return;
     };
+    let mock = &live.model;
     let data = tempfile::tempdir().unwrap();
-    let (mock, base_url) = MockModel::start(&["Hello", " from", " a mock"]).await;
-    let (supervisor, mut events) =
-        supervisor(program, data.path(), MockModel::overrides(&base_url)).await;
+    let (supervisor, mut events) = supervisor(&live, data.path()).await;
     let user = UserId(1);
     let runtime = supervisor.runtime(user).await.expect("the checks pass");
     let thread = runtime
@@ -139,44 +123,41 @@ async fn the_real_app_server_passes_the_checks_and_offers_no_unsafe_tools() {
     let paths = supervisor.paths(user);
     assert!(paths.codex_home.join("config.toml").exists());
     assert!(thread.cwd.ends_with("users/1/workspace"), "{}", thread.cwd);
+    live.assert_nothing_left_the_machine();
 }
 
 #[tokio::test]
 async fn the_real_app_server_is_refused_when_a_tool_is_enabled() {
-    let Some(program) = codex() else {
-        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+    let Some(live) = Live::start(&["x"]).await else {
         return;
     };
     let data = tempfile::tempdir().unwrap();
-    let (_mock, base_url) = MockModel::start(&["x"]).await;
-    let mut overrides = MockModel::overrides(&base_url);
-    overrides.push("features.shell_tool=true".into());
-    let (supervisor, _events) = supervisor(program, data.path(), overrides).await;
+    let launcher = live.launcher_with(vec!["features.shell_tool=true".into()]);
+    let (supervisor, _events) = supervisor_with(&live, data.path(), launcher).await;
     match supervisor.runtime(UserId(1)).await {
         Err(CodexError::Refused(refusal)) => {
             assert!(refusal.0.contains("shell_tool"), "{refusal}")
         }
         other => panic!("expected a refusal, got {other:?}"),
     }
+    live.assert_nothing_left_the_machine();
 }
 
 #[tokio::test]
 async fn the_real_app_server_is_refused_with_another_profile() {
-    let Some(program) = codex() else {
-        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+    let Some(live) = Live::start(&["x"]).await else {
         return;
     };
     let data = tempfile::tempdir().unwrap();
-    let (_mock, base_url) = MockModel::start(&["x"]).await;
-    let mut overrides = MockModel::overrides(&base_url);
-    overrides.push("default_permissions=\":workspace\"".into());
-    let (supervisor, _events) = supervisor(program, data.path(), overrides).await;
+    let launcher = live.launcher_with(vec!["default_permissions=\":workspace\"".into()]);
+    let (supervisor, _events) = supervisor_with(&live, data.path(), launcher).await;
     match supervisor.runtime(UserId(1)).await {
         Err(CodexError::Refused(refusal)) => {
             assert!(refusal.0.contains("default_permissions"), "{refusal}")
         }
         other => panic!("expected a refusal, got {other:?}"),
     }
+    live.assert_nothing_left_the_machine();
 }
 
 /// The control: the same capture, on an app server without the gateway's
@@ -188,18 +169,22 @@ async fn without_the_gateways_configuration_the_capture_sees_unsafe_tools() {
         ClientInfo, InitializeCapabilities, InitializeParams, ThreadStartParams, TurnStartParams,
     };
     use bokkie_codex::{AppServer, AppServerCommand, Incoming};
-    let Some(program) = codex() else {
-        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+    let Some(live) = Live::start(&["ok"]).await else {
         return;
     };
+    let mock = &live.model;
     let home = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
-    let (mock, base_url) = MockModel::start(&["ok"]).await;
-    let mut command = AppServerCommand::new(&program, home.path());
-    command.args = MockModel::overrides(&base_url)
+    // Signed out, so the model needs no sign-in. Without the gateway's
+    // configuration, Codex asks other hosts too (its plugins feature asks
+    // github.com and chatgpt.com); the deny proxy refuses them all.
+    let mut command = AppServerCommand::new(&live.program, home.path());
+    command.args = MockModel::overrides(&live.base_url)
         .into_iter()
+        .chain(live.chatgpt.overrides())
         .flat_map(|o| ["-c".into(), o.into()])
         .collect();
+    command.env = live.env();
     command.current_dir = Some(workspace.path().to_owned());
     command.stderr = Some(home.path().join("stderr"));
     let (server, mut incoming) = AppServer::spawn(&command).unwrap();
@@ -248,6 +233,10 @@ async fn without_the_gateways_configuration_the_capture_sees_unsafe_tools() {
             "{unsafe_tool} in {offered:?}"
         );
     }
+    eprintln!(
+        "control: the deny proxy refused {:?}",
+        live.chatgpt.proxy().hosts()
+    );
 }
 
 async fn run_turn(
@@ -280,10 +269,10 @@ async fn run_turn(
 #[tokio::test]
 async fn chat_only_threads_run_without_a_working_sandbox() {
     use std::os::unix::fs::PermissionsExt;
-    let Some(program) = codex() else {
-        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+    let Some(live) = Live::start(&["still here"]).await else {
         return;
     };
+    let program = std::path::PathBuf::from(std::env::var_os("BOKKIE_CODEX_BIN").unwrap());
     // Lay out a package beside the real one, so the binary can be linked
     // rather than copied, with a broken bundled bwrap.
     let package = program.parent().unwrap().parent().unwrap();
@@ -315,14 +304,14 @@ async fn chat_only_threads_run_without_a_working_sandbox() {
     );
 
     let data = tempfile::tempdir().unwrap();
-    let (_mock, base_url) = MockModel::start(&["still here"]).await;
-    let (supervisor, mut events) = supervisor_with_env(
-        linked,
-        data.path(),
-        MockModel::overrides(&base_url),
-        vec![("PATH".into(), path.into())],
-    )
-    .await;
+    let mut env = live.env();
+    env.push(("PATH".into(), path.into()));
+    let launcher = Launcher::Process {
+        program: linked,
+        overrides: live.overrides(),
+        env,
+    };
+    let (supervisor, mut events) = supervisor_with(&live, data.path(), launcher).await;
     let runtime = supervisor
         .runtime(UserId(1))
         .await
@@ -335,20 +324,18 @@ async fn chat_only_threads_run_without_a_working_sandbox() {
         run_turn(&runtime, &mut events, &thread.thread.id).await,
         TurnStatus::Completed
     );
+    live.assert_nothing_left_the_machine();
 }
 
 /// One user's app server cannot load another user's thread: each has its
 /// own `CODEX_HOME`, which holds the threads.
 #[tokio::test]
 async fn one_users_app_server_cannot_resume_anothers_thread() {
-    let Some(program) = codex() else {
-        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+    let Some(live) = Live::start(&["private"]).await else {
         return;
     };
     let data = tempfile::tempdir().unwrap();
-    let (_mock, base_url) = MockModel::start(&["private"]).await;
-    let (supervisor, mut events) =
-        supervisor(program, data.path(), MockModel::overrides(&base_url)).await;
+    let (supervisor, mut events) = supervisor(&live, data.path()).await;
     let amy = supervisor.runtime(UserId(1)).await.unwrap();
     let thread = amy.start_thread("Amy's Bot".into(), None).await.unwrap();
     run_turn(&amy, &mut events, &thread.thread.id).await;
@@ -362,9 +349,11 @@ async fn one_users_app_server_cannot_resume_anothers_thread() {
         other => panic!("Ben's app server loaded Amy's thread: {other:?}"),
     }
     assert!(!ben.is_served(&thread.thread.id));
+    live.assert_nothing_left_the_machine();
 }
 
 fn requests_text(mock: &MockModel) -> Vec<String> {
+    // Only requests the model answered: every one carried the sign-in.
     mock.requests
         .lock()
         .unwrap()
@@ -378,14 +367,12 @@ fn requests_text(mock: &MockModel) -> Vec<String> {
 /// cold. A changed Bot profile therefore travels as turn context instead.
 #[tokio::test]
 async fn developer_instructions_are_fixed_at_thread_start() {
-    let Some(program) = codex() else {
-        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+    let Some(live) = Live::start(&["ok"]).await else {
         return;
     };
+    let mock = &live.model;
     let data = tempfile::tempdir().unwrap();
-    let (mock, base_url) = MockModel::start(&["ok"]).await;
-    let (supervisor, mut events) =
-        supervisor(program, data.path(), MockModel::overrides(&base_url)).await;
+    let (supervisor, mut events) = supervisor(&live, data.path()).await;
     let user = UserId(1);
     let runtime = supervisor.runtime(user).await.unwrap();
     let thread = runtime
@@ -409,13 +396,14 @@ async fn developer_instructions_are_fixed_at_thread_start() {
         .await
         .unwrap();
     run_turn(&runtime, &mut events, &thread).await;
-    let requests = requests_text(&mock);
+    let requests = requests_text(mock);
     assert_eq!(requests.len(), 3);
     for request in &requests {
         assert!(request.contains("INSTRUCTIONS-ALPHA"));
         assert!(!request.contains("INSTRUCTIONS-BETA"));
         assert!(!request.contains("INSTRUCTIONS-GAMMA"));
     }
+    live.assert_nothing_left_the_machine();
 }
 
 /// And this: an application context fragment reaches the model as a
@@ -423,14 +411,12 @@ async fn developer_instructions_are_fixed_at_thread_start() {
 #[tokio::test]
 async fn profile_context_reaches_the_model_and_stays_in_history() {
     use bokkie_codex::protocol::{AdditionalContextEntry, AdditionalContextKind};
-    let Some(program) = codex() else {
-        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+    let Some(live) = Live::start(&["ok"]).await else {
         return;
     };
+    let mock = &live.model;
     let data = tempfile::tempdir().unwrap();
-    let (mock, base_url) = MockModel::start(&["ok"]).await;
-    let (supervisor, mut events) =
-        supervisor(program, data.path(), MockModel::overrides(&base_url)).await;
+    let (supervisor, mut events) = supervisor(&live, data.path()).await;
     let user = UserId(1);
     let runtime = supervisor.runtime(user).await.unwrap();
     let thread = runtime
@@ -464,7 +450,7 @@ async fn profile_context_reaches_the_model_and_stays_in_history() {
     .await
     .unwrap();
     run_turn(&runtime, &mut events, &thread).await;
-    let requests = requests_text(&mock);
+    let requests = requests_text(mock);
     for request in &requests {
         assert!(
             request.contains("<bokkie-profile>PROFILE-DELTA</bokkie-profile>"),
@@ -472,6 +458,7 @@ async fn profile_context_reaches_the_model_and_stays_in_history() {
         );
     }
     assert_eq!(requests.len(), 2);
+    live.assert_nothing_left_the_machine();
 }
 
 /// And this: a context fragment sent with `turn/steer` reaches the model
@@ -480,14 +467,12 @@ async fn profile_context_reaches_the_model_and_stays_in_history() {
 #[tokio::test]
 async fn profile_context_on_a_steer_reaches_the_model() {
     use bokkie_codex::protocol::{AdditionalContextEntry, AdditionalContextKind};
-    let Some(program) = codex() else {
-        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+    let Some(live) = Live::start(&["ok"]).await else {
         return;
     };
+    let mock = &live.model;
     let data = tempfile::tempdir().unwrap();
-    let (mock, base_url) = MockModel::start(&["ok"]).await;
-    let (supervisor, mut events) =
-        supervisor(program, data.path(), MockModel::overrides(&base_url)).await;
+    let (supervisor, mut events) = supervisor(&live, data.path()).await;
     let runtime = supervisor.runtime(UserId(1)).await.unwrap();
     let thread = runtime
         .start_thread("You are a test Bot.".into(), None)
@@ -531,7 +516,7 @@ async fn profile_context_on_a_steer_reaches_the_model() {
     })
     .await
     .expect("the turn completes");
-    let requests = requests_text(&mock);
+    let requests = requests_text(mock);
     assert!(!requests[0].contains("PROFILE-STEERED"), "{}", requests[0]);
     let later = &requests[1..];
     assert!(
@@ -539,4 +524,5 @@ async fn profile_context_on_a_steer_reaches_the_model() {
             && r.contains("<bokkie-profile>PROFILE-STEERED</bokkie-profile>")),
         "{later:?}"
     );
+    live.assert_nothing_left_the_machine();
 }

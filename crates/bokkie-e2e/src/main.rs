@@ -1,6 +1,6 @@
 //! The scripted end-to-end check for `deploy/e2e/`.
 //!
-//! Against a running gateway it signs in, checks that the account's Codex
+//! Against a running gateway it signs in, checks that the household's Codex
 //! app server is signed in to ChatGPT and passes the gateway's checks,
 //! creates a Bot, opens the event WebSocket, sends a message asking for a
 //! token, and waits for the Bot's reply to stream in over the socket. It
@@ -187,8 +187,9 @@ async fn run(result: &mut serde_json::Map<String, Value>) -> Result<(), Failure>
     gateway.cookie = login.set_cookie;
     expect(gateway.cookie.is_some(), || "sign-in set no cookie".into())?;
 
-    // This starts the user's app server, which must pass the gateway's
-    // startup checks, and must be signed in to ChatGPT.
+    // The household's app server must pass the gateway's startup checks,
+    // and the household must be signed in to ChatGPT. The account's own app
+    // server starts with the first message.
     let account = gateway.call("GET", "/api/v1/codex/account", None).await?;
     result.insert("codex_account".into(), account.body.clone());
     expect(account.status == 200, || {
@@ -198,7 +199,7 @@ async fn run(result: &mut serde_json::Map<String, Value>) -> Result<(), Failure>
         )
     })?;
     expect(account.body["signed_in"] == true, || {
-        "the account's app server is not signed in to ChatGPT".into()
+        "the household is not signed in to ChatGPT".into()
     })?;
 
     let usage = gateway.call("GET", "/api/v1/usage", None).await?;

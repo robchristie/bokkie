@@ -388,23 +388,53 @@ pub struct StopResponse {
 }
 
 // ---------------------------------------------------------------------------
-// The user's Codex account
+// The household's ChatGPT sign-in
 
-/// `GET /api/v1/codex/account`: whether the user's own app server is signed
-/// in to ChatGPT. Only that user sees it.
+/// `GET /api/v1/codex/account`: whether the household's ChatGPT sign-in,
+/// which every user's app server shares, is signed in and usable. A member
+/// sees only that; an admin also sees the account's email and plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexAccount {
     pub signed_in: bool,
-    /// The ChatGPT plan, such as `pro`, when signed in.
+    /// The ChatGPT plan, such as `pro`, when signed in. Admins only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// The account's email, when signed in. Admins only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
 }
 
-/// `POST /api/v1/codex/login`: a device-code sign-in. Open the URL, enter
-/// the code, then poll [`CodexAccount`].
+/// Where a device-code sign-in of the household stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginState {
+    /// Waiting for someone to enter the code.
+    Pending,
+    /// Signed in.
+    Completed,
+    /// The code expired unused. Start a new sign-in for a new code.
+    Expired,
+    /// The sign-in failed; `error` says why.
+    Failed,
+    /// An admin cancelled it, or started another.
+    Cancelled,
+}
+
+/// A device-code sign-in of the household's app server, for admins only:
+/// `POST /api/v1/codex/login` starts one, `GET /api/v1/codex/login` reports
+/// the latest, and `DELETE /api/v1/codex/login` cancels it while pending.
+/// Open the URL, enter the code, then poll until the state is no longer
+/// `pending`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceCodeLogin {
     pub verification_url: String,
     pub user_code: String,
+    pub state: LoginState,
+    /// When the code stops working.
+    pub expires_at: Timestamp,
+    /// Why the sign-in failed, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

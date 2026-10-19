@@ -1,14 +1,16 @@
-//! The whole gateway against the real pinned `codex app-server` and a mock
-//! model: sign in, create a Bot, and watch its reply stream over the event
-//! WebSocket. Runs only when `BOKKIE_CODEX_BIN` names the binary.
+//! The whole gateway against the real pinned `codex app-server`, a mock
+//! model and a synthetic household sign-in: sign in, create a Bot, and
+//! watch its reply stream over the event WebSocket. Runs only when
+//! `BOKKIE_CODEX_BIN` names the binary.
 
 mod common;
 
 use std::time::Duration;
 
-use bokkie_mock_model::{MockModel, RateLimitWindow, RateLimits};
+use bokkie_mock_model::{RateLimitWindow, RateLimits};
 use bokkie_protocol::api::{Author, BotStatus, MessageState};
 use bokkie_protocol::events::{ClientFrame, Event, ServerFrame};
+use common::live::Live;
 use common::{Call, Gateway, HOST, ORIGIN};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
@@ -17,12 +19,11 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 #[tokio::test]
 async fn a_bot_reply_streams_over_the_websocket_from_a_real_app_server() {
-    let Some(program) = std::env::var_os("BOKKIE_CODEX_BIN") else {
-        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+    let Some(live) = Live::start(&["Pasta", " with", " pesto."]).await else {
         return;
     };
-    let (mock, base_url) = MockModel::start(&["Pasta", " with", " pesto."]).await;
-    let gateway = Gateway::live(program.into(), MockModel::overrides(&base_url)).await;
+    let mock = &live.model;
+    let gateway = Gateway::live(&live).await;
     gateway.route().await;
     let address = gateway.serve().await;
     let rob = gateway.admin("rob").await;
@@ -94,6 +95,10 @@ async fn a_bot_reply_streams_over_the_websocket_from_a_real_app_server() {
     // The model saw the Bot's profile.
     let request = mock.requests.lock().unwrap()[0].to_string();
     assert!(request.contains("Suggest one dinner."));
+    // On the household's sign-in, which nobody refreshed.
+    assert_eq!(live.model_generations(), [Some(1)]);
+    assert!(live.refreshers().is_empty());
+    live.assert_nothing_left_the_machine();
 }
 
 /// The mock reports the subscription's windows in the headers the real API
@@ -101,11 +106,10 @@ async fn a_bot_reply_streams_over_the_websocket_from_a_real_app_server() {
 /// The browser smoke relies on this to show the meter and the banner.
 #[tokio::test]
 async fn the_mock_models_rate_limit_windows_reach_the_usage_meter() {
-    let Some(program) = std::env::var_os("BOKKIE_CODEX_BIN") else {
-        eprintln!("BOKKIE_CODEX_BIN is not set; skipping");
+    let Some(live) = Live::start(&["Fine."]).await else {
         return;
     };
-    let (mock, base_url) = MockModel::start(&["Fine."]).await;
+    let mock = &live.model;
     let resets_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -120,7 +124,7 @@ async fn the_mock_models_rate_limit_windows_reach_the_usage_meter() {
         primary: Some(window(42, 300)),
         secondary: Some(window(7, 10080)),
     });
-    let gateway = Gateway::live(program.into(), MockModel::overrides(&base_url)).await;
+    let gateway = Gateway::live(&live).await;
     gateway.route().await;
     let rob = gateway.admin("rob").await;
     let bot = gateway
@@ -183,4 +187,5 @@ async fn the_mock_models_rate_limit_windows_reach_the_usage_meter() {
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    live.assert_nothing_left_the_machine();
 }

@@ -11,9 +11,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use base64::Engine;
 use bokkie_codex::{Client, Incoming};
-use bokkie_gateway::codex::Launcher;
 use bokkie_gateway::codex::config::DISABLED_FEATURES;
+use bokkie_gateway::codex::{Launcher, Owner};
 use bokkie_protocol::UserId;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -34,9 +35,60 @@ pub fn bundled_catalog() -> Value {
 /// One request the fake received.
 #[derive(Debug, Clone)]
 pub struct Received {
-    pub user: UserId,
+    pub owner: Owner,
     pub method: String,
     pub params: Value,
+}
+
+impl Received {
+    /// The user whose app server received it; panics for the household's.
+    pub fn user(&self) -> UserId {
+        match self.owner {
+            Owner::User(user) => user,
+            Owner::Household => panic!("the household's app server received {}", self.method),
+        }
+    }
+}
+
+/// An `auth.json` whose access token expires `expires_in` seconds from now,
+/// by the system clock. Synthetic: nothing reads it but the gateway's
+/// expiry check.
+pub fn household_auth(expires_in: i64) -> String {
+    let exp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        + expires_in;
+    let encode = |v: Value| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string());
+    let access = format!(
+        "{}.{}.synthetic",
+        encode(json!({"alg": "none"})),
+        encode(json!({"exp": exp}))
+    );
+    json!({"auth_mode": "chatgpt", "OPENAI_API_KEY": null,
+           "tokens": {"id_token": access, "access_token": access,
+                      "refresh_token": "synthetic", "account_id": "acct"}})
+    .to_string()
+}
+
+/// Writes the household's sign-in under `data_dir`, as a device-code
+/// sign-in would.
+pub fn sign_in_household(data_dir: &Path, expires_in: i64) {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let codex_home = data_dir.join("household/codex");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&codex_home)
+        .unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(codex_home.join("auth.json"))
+        .unwrap();
+    std::io::Write::write_all(&mut file, household_auth(expires_in).as_bytes()).unwrap();
 }
 
 /// What the fake does, shared with the test.
@@ -69,6 +121,10 @@ pub struct Behaviour {
     /// Whether a turn reports its tokens while it is still streaming.
     pub usage_mid_turn: bool,
     pub signed_in: bool,
+    /// Whether the household's refreshes fail, leaving the file as it is.
+    pub refresh_fails: bool,
+    /// How long a refreshed household token lasts, in seconds.
+    pub refreshed_lifetime: i64,
     /// The `account/rateLimits/read` result.
     pub rate_limits: Value,
     pub received: Vec<Received>,
@@ -95,6 +151,8 @@ impl Default for Behaviour {
             garble_turn_answers: false,
             usage_mid_turn: false,
             signed_in: true,
+            refresh_fails: false,
+            refreshed_lifetime: 3600,
             rate_limits: json!({
                 "rateLimits": {"limitId": "codex", "limitName": null, "planType": "pro",
                     "primary": {"usedPercent": 12, "windowDurationMins": 10080, "resetsAt": 1_800_600_000},
@@ -112,10 +170,10 @@ impl Default for Behaviour {
 #[derive(Clone, Default)]
 pub struct FakeCodex {
     pub behaviour: Arc<Mutex<Behaviour>>,
-    /// Each user's outgoing line channel, to inject messages.
-    outlets: Arc<Mutex<HashMap<UserId, mpsc::UnboundedSender<Value>>>>,
-    /// How many app servers each user has had.
-    pub starts: Arc<Mutex<HashMap<UserId, usize>>>,
+    /// Each app server's outgoing line channel, to inject messages.
+    outlets: Arc<Mutex<HashMap<Owner, mpsc::UnboundedSender<Value>>>>,
+    /// How many app servers each owner has had.
+    pub starts: Arc<Mutex<HashMap<Owner, usize>>>,
 }
 
 impl FakeCodex {
@@ -134,45 +192,63 @@ impl FakeCodex {
     }
 
     pub fn starts(&self, user: UserId) -> usize {
-        self.starts.lock().unwrap().get(&user).copied().unwrap_or(0)
+        self.owner_starts(Owner::User(user))
+    }
+
+    pub fn owner_starts(&self, owner: Owner) -> usize {
+        self.starts
+            .lock()
+            .unwrap()
+            .get(&owner)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Sends a raw message from the user's app server to the gateway.
     pub fn inject(&self, user: UserId, message: Value) {
-        let outlet = self.outlets.lock().unwrap().get(&user).cloned();
-        outlet
-            .expect("the user's app server runs")
-            .send(message)
-            .unwrap();
+        self.inject_into(Owner::User(user), message);
+    }
+
+    /// Sends a raw message from an app server to the gateway.
+    pub fn inject_into(&self, owner: Owner, message: Value) {
+        let outlet = self.outlets.lock().unwrap().get(&owner).cloned();
+        outlet.expect("the app server runs").send(message).unwrap();
     }
 
     /// Ends the user's app server, as if it crashed.
     pub fn crash(&self, user: UserId) {
-        self.outlets.lock().unwrap().remove(&user);
+        self.crash_owner(Owner::User(user));
+    }
+
+    pub fn crash_owner(&self, owner: Owner) {
+        self.outlets.lock().unwrap().remove(&owner);
     }
 
     pub fn launcher(&self, data_dir: &Path, catalog: &Path) -> Launcher {
         let fake = self.clone();
         let data_dir = data_dir.to_owned();
         let catalog = catalog.to_owned();
-        Launcher::InProcess(Arc::new(move |user, paths| {
+        Launcher::InProcess(Arc::new(move |owner, paths| {
             fake.connect(
-                user,
+                owner,
                 data_dir.clone(),
                 catalog.clone(),
                 paths.workspace.clone(),
+                paths.codex_home.clone(),
             )
         }))
     }
 
     fn connect(
         &self,
-        user: UserId,
+        owner: Owner,
         data_dir: PathBuf,
         catalog: PathBuf,
         workspace: PathBuf,
+        codex_home: PathBuf,
     ) -> (Client, mpsc::UnboundedReceiver<Incoming>) {
-        *self.starts.lock().unwrap().entry(user).or_default() += 1;
+        let user = owner;
+        *self.starts.lock().unwrap().entry(owner).or_default() += 1;
         let (client_side, server_side) = tokio::io::duplex(1 << 20);
         let (client_read, client_write) = tokio::io::split(client_side);
         let (server_read, mut server_write) = tokio::io::split(server_side);
@@ -190,10 +266,11 @@ impl FakeCodex {
         });
         let fake = self.clone();
         let context = Context {
-            user,
+            owner,
             data_dir,
             catalog,
             workspace,
+            codex_home,
         };
         tokio::spawn(async move {
             let mut lines = BufReader::new(server_read).lines();
@@ -218,7 +295,7 @@ impl FakeCodex {
             // A response to an injected server request; record it.
             self.with(|b| {
                 b.received.push(Received {
-                    user: context.user,
+                    owner: context.owner,
                     method: "<response>".into(),
                     params: message.clone(),
                 })
@@ -228,7 +305,7 @@ impl FakeCodex {
         let params = message["params"].clone();
         self.with(|b| {
             b.received.push(Received {
-                user: context.user,
+                owner: context.owner,
                 method: method.into(),
                 params: params.clone(),
             })
@@ -252,7 +329,11 @@ impl FakeCodex {
             "thread/start" => {
                 let id = self.with(|b| {
                     b.next_id += 1;
-                    format!("thr-{}-{}", context.user, b.next_id)
+                    let user = match context.owner {
+                        Owner::User(user) => user.to_string(),
+                        Owner::Household => "household".into(),
+                    };
+                    format!("thr-{user}-{}", b.next_id)
                 });
                 self.session(&id, &params)
             }
@@ -285,7 +366,7 @@ impl FakeCodex {
                     json!({"method": "turn/started", "params": {"threadId": thread,
                     "turn": {"id": turn, "items": [], "status": "inProgress", "error": null}}}),
                 );
-                self.crash(context.user);
+                self.crash_owner(context.owner);
                 return;
             }
             "turn/start" => {
@@ -326,7 +407,19 @@ impl FakeCodex {
                 json!({})
             }
             "account/read" => {
-                let signed_in = self.with(|b| b.signed_in);
+                if params["refreshToken"] == true
+                    && context.owner == Owner::Household
+                    && !self.with(|b| b.refresh_fails)
+                {
+                    // A refresh rotates the household's tokens in place.
+                    let auth = context.codex_home.join("auth.json");
+                    if auth.exists() {
+                        let lifetime = self.with(|b| b.refreshed_lifetime);
+                        std::fs::write(&auth, household_auth(lifetime)).unwrap();
+                    }
+                }
+                let signed_in =
+                    self.with(|b| b.signed_in) && context.codex_home.join("auth.json").exists();
                 json!({
                     "account": if signed_in {
                         json!({"type": "chatgpt", "email": "owner@example.test", "planType": "pro"})
@@ -336,10 +429,30 @@ impl FakeCodex {
                     "requiresOpenaiAuth": true,
                 })
             }
-            "account/login/start" => json!({
-                "type": "chatgptDeviceCode", "loginId": "login-1",
-                "userCode": "ABCD-EFGH", "verificationUrl": "https://auth.example.test/device",
-            }),
+            "account/login/start" => {
+                let login = self.with(|b| {
+                    b.next_id += 1;
+                    format!("login-{}", b.next_id)
+                });
+                json!({
+                    "type": "chatgptDeviceCode", "loginId": login,
+                    "userCode": "ABCD-EFGH", "verificationUrl": "https://auth.example.test/device",
+                })
+            }
+            "account/login/cancel" => {
+                // As Codex does: the cancelled sign-in then reports failure.
+                let _ = out.send(json!({"id": id, "result": {"status": "canceled"}}));
+                let _ = out.send(json!({"method": "account/login/completed", "params": {
+                    "loginId": params["loginId"], "success": false,
+                    "error": "Login was not completed"}}));
+                return;
+            }
+            "account/logout" => {
+                // Codex revokes the sign-in, then deletes `auth.json`: for a
+                // link, the link alone.
+                let _ = std::fs::remove_file(context.codex_home.join("auth.json"));
+                json!({})
+            }
             "account/rateLimits/read" => self.with(|b| b.rate_limits.clone()),
             _ => {
                 let _ = out.send(json!({"id": id, "error": {"code": -32601, "message": "no"}}));
@@ -362,6 +475,7 @@ impl FakeCodex {
             "features": features,
             "mcp_servers": {},
             "project_doc_max_bytes": 0,
+            "cli_auth_credentials_store": "file",
             "profile": null,
             "permissions": {"bokkie": {
                 "description": null, "extends": null,
@@ -480,10 +594,11 @@ impl FakeCodex {
 }
 
 struct Context {
-    user: UserId,
+    owner: Owner,
     data_dir: PathBuf,
     catalog: PathBuf,
     workspace: PathBuf,
+    codex_home: PathBuf,
 }
 
 fn model_entry(slug: &str) -> Value {

@@ -19,11 +19,11 @@ use crate::protocol::{
     CancelLoginAccountParams, CancelLoginAccountResponse, CommandExecParams, CommandExecResponse,
     ConfigReadParams, ConfigReadResponse, GetAccountParams, GetAccountRateLimitsResponse,
     GetAccountResponse, InitializeParams, InitializeResponse, LoginAccountParams,
-    LoginAccountResponse, ModelListParams, ModelListResponse, PermissionProfileListParams,
-    PermissionProfileListResponse, ServerNotification, ServerRequest, ServerRequestKind,
-    ThreadResumeParams, ThreadResumeResponse, ThreadStartParams, ThreadStartResponse,
-    TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
-    TurnSteerParams, TurnSteerResponse,
+    LoginAccountResponse, LogoutAccountResponse, ModelListParams, ModelListResponse,
+    PermissionProfileListParams, PermissionProfileListResponse, ServerNotification, ServerRequest,
+    ServerRequestKind, ThreadResumeParams, ThreadResumeResponse, ThreadStartParams,
+    ThreadStartResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
+    TurnStartResponse, TurnSteerParams, TurnSteerResponse,
 };
 use crate::rpc::{Error, Message, RequestId, RpcError};
 
@@ -226,6 +226,11 @@ impl Client {
         params: &CancelLoginAccountParams,
     ) -> Result<CancelLoginAccountResponse, Error> {
         self.request("account/login/cancel", Some(params)).await
+    }
+
+    /// Signs out, revoking the sign-in first.
+    pub async fn account_logout(&self) -> Result<LogoutAccountResponse, Error> {
+        self.request::<(), _>("account/logout", None).await
     }
 
     pub async fn account_rate_limits_read(&self) -> Result<GetAccountRateLimitsResponse, Error> {
