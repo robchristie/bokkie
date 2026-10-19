@@ -6,11 +6,14 @@
 
 mod common;
 
+use std::time::Duration;
+
 use axum::http::{Method, StatusCode};
 use bokkie_gateway::clock::{DAY_MS, HOUR_MS, MINUTE_MS};
-use bokkie_gateway::routines::Routines;
-use bokkie_protocol::UserId;
+use bokkie_gateway::codex::Owner;
+use bokkie_gateway::routines::{Routines, store};
 use bokkie_protocol::events::{Event, Seq};
+use bokkie_protocol::{BotId, UserId};
 use common::{Call, Gateway};
 use serde_json::{Value, json};
 
@@ -132,14 +135,12 @@ async fn messages(gateway: &Gateway, cookie: &str, bot: i64) -> Vec<Value> {
         .clone()
 }
 
-/// The scheduler's pass at the clock's time.
+/// The scheduler's pass at the clock's time, and the starts and deadlines
+/// it set off.
 async fn pass(gateway: &Gateway) {
-    gateway
-        .state
-        .routines
-        .pass(gateway.state.clock.now())
-        .await
-        .unwrap();
+    let routines = &gateway.state.routines;
+    routines.pass(gateway.state.clock.now()).await.unwrap();
+    routines.settle().await;
 }
 
 /// Runs the scheduler's pass until the routine's newest run satisfies
@@ -974,6 +975,7 @@ async fn a_restart_ends_running_runs_and_keeps_the_schedule() {
         .await;
     set_clock(&gateway, 2 * HOUR_MS);
     restarted.pass(gateway.state.clock.now()).await.unwrap();
+    restarted.settle().await;
     let late = wait_run(&gateway, &rob, chef, id, |r| r["state"] == "succeeded").await;
     assert_eq!(late["scheduled_for"], START + 30 * MINUTE_MS);
     assert_eq!(late["trigger"], "schedule");
@@ -1125,4 +1127,366 @@ async fn an_app_server_that_stops_fails_its_running_runs() {
     let failed = wait_run(&gateway, &rob, chef, id, |r| r["state"] == "failed").await;
     assert_eq!(failed["reason"], "The Bots' runtime stopped during the run");
     assert_eq!(routine(&gateway, &rob, chef, id).await["failures"], 1);
+}
+
+/// Starts a turn of the user's own that runs until it is stopped.
+async fn busy(gateway: &Gateway, cookie: &str, bot: i64) {
+    let said = gateway
+        .send(
+            Call::post(&format!("/api/v1/bots/{bot}/messages"))
+                .cookie(cookie)
+                .json(&json!({"text": "a long question"})),
+        )
+        .await;
+    assert_eq!(said.status, StatusCode::OK, "{:?}", said.body);
+}
+
+/// Stops the Bot's turn and waits until it is idle.
+async fn stop(gateway: &Gateway, cookie: &str, bot: i64) {
+    let stopped = gateway
+        .send(Call::post(&format!("/api/v1/bots/{bot}/stop")).cookie(cookie))
+        .await;
+    assert_eq!(stopped.body["stopped"], true);
+    gateway
+        .wait_for(cookie, &format!("/api/v1/bots/{bot}"), |b| {
+            b["status"] == "idle"
+        })
+        .await;
+}
+
+/// Waits, a few seconds at most, until `condition` holds.
+async fn eventually(mut condition: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !condition() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the condition holds in time");
+}
+
+#[tokio::test]
+async fn pausing_a_routine_skips_its_waiting_run() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    // Due while the user's turn runs: it waits.
+    busy(&gateway, &rob, chef).await;
+    set_clock(&gateway, 30 * MINUTE_MS);
+    pass(&gateway).await;
+    assert_eq!(runs(&gateway, &rob, chef, id).await[0]["state"], "waiting");
+
+    // Paused: the waiting run is skipped, and says why.
+    let paused = patch_routine(&gateway, &rob, chef, id, json!({"paused": true})).await;
+    assert_eq!(paused.status, StatusCode::OK, "{:?}", paused.body);
+    let skipped = &runs(&gateway, &rob, chef, id).await[0];
+    assert_eq!(skipped["state"], "skipped");
+    assert_eq!(
+        skipped["reason"],
+        "The routine was paused before the run started"
+    );
+    assert_eq!(skipped["finished_at"], START + 30 * MINUTE_MS);
+    // A skip is not a failure.
+    assert_eq!(routine(&gateway, &rob, chef, id).await["failures"], 0);
+    let ended = events(&gateway, 1).await.into_iter().any(|e| {
+        matches!(e, Event::RoutineRunUpdated { run }
+            if run.routine_id.0 == id && format!("{:?}", run.state) == "Skipped")
+    });
+    assert!(ended, "the skip goes out on the event socket");
+
+    // When the Bot is idle, nothing starts.
+    stop(&gateway, &rob, chef).await;
+    pass(&gateway).await;
+    assert_eq!(turn_starts(&gateway).len(), 1);
+    assert_eq!(runs(&gateway, &rob, chef, id).await.len(), 1);
+    // Paused, it can still be run by hand.
+    let manual = run_now(&gateway, &rob, chef, id).await;
+    assert_eq!(manual.body["state"], "running", "{:?}", manual.body);
+    assert_eq!(manual.body["trigger"], "manual");
+}
+
+#[tokio::test]
+async fn a_paused_routines_scheduled_run_never_starts() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    busy(&gateway, &rob, chef).await;
+    set_clock(&gateway, 30 * MINUTE_MS);
+    pass(&gateway).await;
+    assert_eq!(runs(&gateway, &rob, chef, id).await[0]["state"], "waiting");
+    // Paused by a path that leaves its waiting run waiting, as a pause
+    // that raced the run's start could.
+    sqlx::query("UPDATE routines SET paused = 1, next_run_at = NULL WHERE id = ?")
+        .bind(id)
+        .execute(&gateway.state.db)
+        .await
+        .unwrap();
+    stop(&gateway, &rob, chef).await;
+    pass(&gateway).await;
+    // The start refuses it.
+    assert_eq!(turn_starts(&gateway).len(), 1);
+    let skipped = &runs(&gateway, &rob, chef, id).await[0];
+    assert_eq!(skipped["state"], "skipped");
+    assert_eq!(
+        skipped["reason"],
+        "The routine was paused before the run started"
+    );
+    assert!(
+        messages(&gateway, &rob, chef)
+            .await
+            .iter()
+            .all(|m| m["kind"] != "marker" || m["routine"].is_null()),
+        "no marker for a run that never started"
+    );
+}
+
+#[tokio::test]
+async fn a_pause_waits_for_a_start_under_way() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| {
+        b.finish_turns = false;
+        b.hold_thread_starts = true;
+    });
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    set_clock(&gateway, 30 * MINUTE_MS);
+    // The run's start waits on its Bot's new thread.
+    let routines = &gateway.state.routines;
+    routines.pass(gateway.state.clock.now()).await.unwrap();
+    eventually(|| gateway.fake.received("thread/start").len() == 1).await;
+    let pause = patch_routine(&gateway, &rob, chef, id, json!({"paused": true}));
+    tokio::pin!(pause);
+    let early = tokio::time::timeout(Duration::from_millis(100), &mut pause).await;
+    assert!(early.is_err(), "the pause waits for the start");
+    assert_eq!(runs(&gateway, &rob, chef, id).await[0]["state"], "waiting");
+    // The start finishes first: the run is running, and the pause leaves it
+    // to finish.
+    gateway.fake.thread_starts.add_permits(1);
+    let paused = pause.await;
+    routines.settle().await;
+    assert_eq!(paused.status, StatusCode::OK, "{:?}", paused.body);
+    assert_eq!(paused.body["paused"], true);
+    let run = &runs(&gateway, &rob, chef, id).await[0];
+    assert_eq!(run["state"], "running");
+    assert_eq!(turn_starts(&gateway).len(), 1);
+}
+
+#[tokio::test]
+async fn a_tool_call_made_before_its_run_is_running_is_the_runs() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| {
+        b.finish_turns = false;
+        b.hold_turn_answers = true;
+    });
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let granted = gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/bots/{chef}"))
+                .cookie(&rob)
+                .json(&json!({"grants": ["notes"]})),
+        )
+        .await;
+    assert_eq!(granted.status, StatusCode::OK, "{:?}", granted.body);
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    set_clock(&gateway, 30 * MINUTE_MS);
+    let routines = &gateway.state.routines;
+    routines.pass(gateway.state.clock.now()).await.unwrap();
+    // Codex has started the turn but not yet answered `turn/start`, so the
+    // run still waits; the model calls a tool.
+    eventually(|| gateway.fake.with(|b| b.turns.len()) == 1).await;
+    let (thread, turn) = gateway.fake.with(|b| b.turns[0].clone());
+    gateway.fake.inject(
+        UserId(1),
+        json!({"id": 901, "method": "item/tool/call", "params": {
+            "threadId": thread, "turnId": turn, "callId": "call-901",
+            "tool": "notes_append", "namespace": null, "arguments": {"text": "early"}}}),
+    );
+    eventually(|| {
+        gateway
+            .fake
+            .received("<response>")
+            .iter()
+            .any(|r| r.params["id"] == 901)
+    })
+    .await;
+    let calls_path = format!("/api/v1/bots/{chef}/tool-calls");
+    let early = gateway.send(Call::get(&calls_path).cookie(&rob)).await;
+    assert_eq!(early.body["calls"][0]["outcome"], "ok", "{:?}", early.body);
+    assert_eq!(runs(&gateway, &rob, chef, id).await[0]["state"], "waiting");
+
+    // `turn/start` answers: the run is running, and the call is its.
+    gateway.fake.turn_answers.add_permits(1);
+    routines.settle().await;
+    let run = &runs(&gateway, &rob, chef, id).await[0];
+    assert_eq!(run["state"], "running");
+    let calls = gateway.send(Call::get(&calls_path).cookie(&rob)).await;
+    assert_eq!(calls.body["calls"][0]["routine_run_id"], run["id"]);
+}
+
+#[tokio::test]
+async fn one_users_slow_app_server_holds_up_no_one_elses_runs() {
+    let (gateway, rob) = setup().await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    gateway.fake.with(|b| {
+        b.finish_turns = false;
+        b.hold_thread_starts_of = vec![Owner::User(UserId(amy_id))];
+    });
+    let amy_bot = create_bot(&gateway, &amy, "Chef").await;
+    let amy_routine = daily(&gateway, &amy, amy_bot, "Digest", "19:00").await;
+    let amy_routine = amy_routine["id"].as_i64().unwrap();
+    let rob_bot = create_bot(&gateway, &rob, "Chef").await;
+    let rob_routine = daily(&gateway, &rob, rob_bot, "Digest", "19:00").await;
+    let rob_routine = rob_routine["id"].as_i64().unwrap();
+    let routines = &gateway.state.routines;
+    let pass_now = || async {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            routines.pass(gateway.state.clock.now()),
+        )
+        .await
+        .expect("the pass waits on no app server")
+        .unwrap();
+    };
+
+    // Both fall due; Amy's app server does not answer her Bot's new thread.
+    set_clock(&gateway, 30 * MINUTE_MS);
+    pass_now().await;
+    let running = wait_run(&gateway, &rob, rob_bot, rob_routine, |r| {
+        r["state"] == "running"
+    })
+    .await;
+    assert_eq!(running["started_at"], START + 30 * MINUTE_MS);
+    eventually(|| gateway.fake.received("thread/start").len() == 2).await;
+    let amy_waiting = &runs(&gateway, &amy, amy_bot, amy_routine).await[0];
+    assert_eq!(amy_waiting["state"], "waiting");
+
+    // Rob's run passes its deadline and is stopped on time, while Amy's
+    // start still waits; nor is her run started twice.
+    advance(&gateway, 15 * MINUTE_MS);
+    pass_now().await;
+    let interrupted = wait_run(&gateway, &rob, rob_bot, rob_routine, |r| {
+        r["state"] == "interrupted"
+    })
+    .await;
+    assert_eq!(
+        interrupted["reason"],
+        "The run took longer than 15 minutes, so it was stopped"
+    );
+    let amy_threads = gateway
+        .fake
+        .received("thread/start")
+        .iter()
+        .filter(|r| r.owner == Owner::User(UserId(amy_id)))
+        .count();
+    assert_eq!(amy_threads, 1);
+    assert_eq!(
+        runs(&gateway, &amy, amy_bot, amy_routine).await[0]["state"],
+        "waiting"
+    );
+
+    // Her app server answers: her run starts.
+    gateway.fake.thread_starts.add_permits(1);
+    let amy_running = wait_run(&gateway, &amy, amy_bot, amy_routine, |r| {
+        r["state"] == "running"
+    })
+    .await;
+    assert_eq!(amy_running["scheduled_for"], START + 30 * MINUTE_MS);
+    routines.settle().await;
+}
+
+#[tokio::test]
+async fn an_attempt_that_does_not_start_a_run_never_ends_a_running_one() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let digest = daily(&gateway, &rob, chef, "Digest", "07:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    // A snapshot of the run, taken as a pass takes one while it waits.
+    let queued = run_now(&gateway, &rob, chef, id).await;
+    assert_eq!(queued.body["state"], "running", "{:?}", queued.body);
+    let run_id = bokkie_protocol::RoutineRunId(queued.body["id"].as_i64().unwrap());
+    let snapshot = store::run(&gateway.state.db, UserId(1), run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    // A late attempt from that snapshot finds the Bot busy for 30 minutes
+    // since the run was queued, with a message to it being sent.
+    advance(&gateway, 30 * MINUTE_MS);
+    let sending = gateway
+        .state
+        .conversations
+        .lock_bot(UserId(1), BotId(chef))
+        .await;
+    gateway
+        .state
+        .routines
+        .try_start(&snapshot, gateway.state.clock.now())
+        .await
+        .unwrap();
+    drop(sending);
+    // The run that started is left running, and counted neither way.
+    let run = &runs(&gateway, &rob, chef, id).await[0];
+    assert_eq!(run["state"], "running");
+    assert_eq!(run["reason"], Value::Null);
+    assert_eq!(routine(&gateway, &rob, chef, id).await["failures"], 0);
+}
+
+#[tokio::test]
+async fn the_scheduler_loop_passes_on_its_tick() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    let scheduler = tokio::spawn(
+        gateway
+            .state
+            .routines
+            .clone()
+            .run(Duration::from_millis(20)),
+    );
+    // Nothing is due; then its time comes, and the loop runs it.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(runs(&gateway, &rob, chef, id).await.is_empty());
+    set_clock(&gateway, 30 * MINUTE_MS);
+    let run = wait_run(&gateway, &rob, chef, id, |r| r["state"] == "succeeded").await;
+    assert_eq!(run["trigger"], "schedule");
+    assert_eq!(run["scheduled_for"], START + 30 * MINUTE_MS);
+    scheduler.abort();
+}
+
+#[tokio::test]
+async fn the_scheduler_loop_passes_when_a_bot_turns_idle() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    busy(&gateway, &rob, chef).await;
+    set_clock(&gateway, 30 * MINUTE_MS);
+    // A tick an hour apart: the loop's first pass, at once, queues the run,
+    // which waits for the Bot.
+    let scheduler = tokio::spawn(
+        gateway
+            .state
+            .routines
+            .clone()
+            .run(Duration::from_secs(3600)),
+    );
+    let waiting = wait_run(&gateway, &rob, chef, id, |r| {
+        r["reason"] == "Waiting for the Bot to finish its turn"
+    })
+    .await;
+    assert_eq!(waiting["state"], "waiting");
+    // The user's turn ends: the loop passes at once, long before its tick.
+    stop(&gateway, &rob, chef).await;
+    let running = wait_run(&gateway, &rob, chef, id, |r| r["state"] == "running").await;
+    assert_eq!(running["trigger"], "schedule");
+    assert_eq!(turn_starts(&gateway).len(), 2);
+    scheduler.abort();
 }

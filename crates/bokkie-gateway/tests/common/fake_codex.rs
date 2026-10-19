@@ -111,6 +111,12 @@ pub struct Behaviour {
     /// Whether `thread/start` waits for a permit from
     /// [`FakeCodex::thread_starts`] before it answers.
     pub hold_thread_starts: bool,
+    /// App servers whose `thread/start` waits as `hold_thread_starts` makes
+    /// every one wait.
+    pub hold_thread_starts_of: Vec<Owner>,
+    /// Whether `turn/start` starts the turn but waits for a permit from
+    /// [`FakeCodex::turn_answers`] before it answers.
+    pub hold_turn_answers: bool,
     /// Whether `turn/start` answers with an error, starting nothing.
     pub reject_turns: bool,
     /// Whether the app server starts a turn and then exits before
@@ -135,6 +141,8 @@ pub struct Behaviour {
     pub tokens: HashMap<String, i64>,
     /// Turns that have finished; Codex refuses to interrupt them.
     pub finished: std::collections::HashSet<String>,
+    /// Every turn started, by its thread and turn ids, in order.
+    pub turns: Vec<(String, String)>,
     next_id: u64,
 }
 
@@ -149,6 +157,8 @@ impl Default for Behaviour {
             finish_before_answer: false,
             steer_fails: false,
             hold_thread_starts: false,
+            hold_thread_starts_of: Vec::new(),
+            hold_turn_answers: false,
             reject_turns: false,
             hang_up_on_turn: false,
             hang_turns: false,
@@ -166,6 +176,7 @@ impl Default for Behaviour {
             received: Vec::new(),
             tokens: HashMap::new(),
             finished: Default::default(),
+            turns: Vec::new(),
             next_id: 0,
         }
     }
@@ -180,6 +191,8 @@ pub struct FakeCodex {
     pub starts: Arc<Mutex<HashMap<Owner, usize>>>,
     /// Permits for held `thread/start` requests to answer, one each.
     pub thread_starts: Arc<tokio::sync::Semaphore>,
+    /// Permits for held `turn/start` answers, one each.
+    pub turn_answers: Arc<tokio::sync::Semaphore>,
 }
 
 impl Default for FakeCodex {
@@ -189,6 +202,7 @@ impl Default for FakeCodex {
             outlets: Default::default(),
             starts: Default::default(),
             thread_starts: Arc::new(tokio::sync::Semaphore::new(0)),
+            turn_answers: Arc::new(tokio::sync::Semaphore::new(0)),
         }
     }
 }
@@ -353,7 +367,9 @@ impl FakeCodex {
                     format!("thr-{user}-{}", b.next_id)
                 });
                 let session = self.session(&thread, &params);
-                if self.with(|b| b.hold_thread_starts) {
+                if self.with(|b| {
+                    b.hold_thread_starts || b.hold_thread_starts_of.contains(&context.owner)
+                }) {
                     let (gate, out) = (self.thread_starts.clone(), out.clone());
                     tokio::spawn(async move {
                         if let Ok(permit) = gate.acquire().await {
@@ -403,6 +419,7 @@ impl FakeCodex {
                     format!("turn-{}", b.next_id)
                 });
                 let thread = params["threadId"].as_str().unwrap().to_owned();
+                self.with(|b| b.turns.push((thread.clone(), turn.clone())));
                 if self.with(|b| b.finish_before_answer) {
                     for line in self.turn_lines(&thread, &turn) {
                         let _ = out.send(line);
@@ -410,7 +427,18 @@ impl FakeCodex {
                 } else {
                     self.stream_turn(out.clone(), thread, turn.clone());
                 }
-                json!({"turn": {"id": turn, "items": [], "status": "inProgress", "error": null}})
+                let answer = json!({"turn": {"id": turn, "items": [], "status": "inProgress", "error": null}});
+                if self.with(|b| b.hold_turn_answers) {
+                    let (gate, out) = (self.turn_answers.clone(), out.clone());
+                    tokio::spawn(async move {
+                        if let Ok(permit) = gate.acquire().await {
+                            permit.forget();
+                        }
+                        let _ = out.send(json!({"id": id, "result": answer}));
+                    });
+                    return;
+                }
+                answer
             }
             "turn/steer" if self.with(|b| b.steer_fails) => {
                 let _ = out.send(json!({"id": id, "error": {

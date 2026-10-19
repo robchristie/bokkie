@@ -673,12 +673,37 @@ pub async fn finish(
     state: RunState,
     reason: Option<&str>,
 ) -> Result<Option<RunRow>> {
+    finish_from(db, now, user, id, state, reason, "'waiting', 'running'").await
+}
+
+/// Ends a run that is still waiting, leaving one that started alone.
+/// Returns it if it was waiting.
+pub async fn finish_waiting(
+    db: impl SqliteExecutor<'_>,
+    now: Timestamp,
+    user: UserId,
+    id: RoutineRunId,
+    state: RunState,
+    reason: Option<&str>,
+) -> Result<Option<RunRow>> {
+    finish_from(db, now, user, id, state, reason, "'waiting'").await
+}
+
+async fn finish_from(
+    db: impl SqliteExecutor<'_>,
+    now: Timestamp,
+    user: UserId,
+    id: RoutineRunId,
+    state: RunState,
+    reason: Option<&str>,
+    from: &'static str,
+) -> Result<Option<RunRow>> {
     let row = sqlx::query(&format!(
         "UPDATE routine_runs SET state = ?, reason = ?, finished_at = ?, waiting_for = NULL,
              tokens = (SELECT sum(t.tokens) FROM token_usage t
                        WHERE t.user_id = routine_runs.user_id
                          AND t.turn_id = routine_runs.turn_id)
-         WHERE id = ? AND user_id = ? AND state IN ('waiting', 'running')
+         WHERE id = ? AND user_id = ? AND state IN ({from})
          RETURNING {RUN_COLUMNS}"
     ))
     .bind(state_name(state))
