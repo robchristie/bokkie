@@ -675,6 +675,11 @@ fn with_oversight_on_an_admin_reads_a_conversation_and_can_send_nothing() {
     assert_eq!(fixture.fact("reading"), 0_i64.into());
     assert_eq!(fixture.fact("screen"), "account".into());
     assert!(!fixture.shows("Dear diary"));
+    // Before the list is read again, it already shows only what an admin
+    // may see without oversight.
+    assert!(!fixture.shows("Diary") && !fixture.shows("Last words"));
+    assert!(fixture.shows("Coach") && !fixture.shows("Read Coach"));
+    assert!(!fixture.enabled(BokkieAction::ReadConversation));
     assert_eq!(
         fixture.sent(),
         [
@@ -723,6 +728,7 @@ fn a_read_refused_because_oversight_went_off_elsewhere_closes_the_conversation()
     assert_eq!(fixture.fact("reading"), 0_i64.into());
     assert!(!fixture.shows("Dear diary"));
     assert!(fixture.shows(refused));
+    assert!(!fixture.shows("Last words") && !fixture.enabled(BokkieAction::ReadConversation));
     // The account and what may still be seen of its Bots are read again.
     assert_eq!(
         fixture.sent(),

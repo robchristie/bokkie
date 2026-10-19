@@ -122,6 +122,20 @@ impl AccountScreen {
         screen
     }
 
+    /// Oversight is off: drop the conversation being read and everything
+    /// the Bot list showed under oversight, keeping only what an admin may
+    /// see without it, until the list is read again.
+    fn end_oversight(&mut self) {
+        self.reading = None;
+        if let Some(list) = &mut self.bots {
+            list.oversight = false;
+            list.bots.retain(|bot| bot.made_by_admin);
+            for bot in &mut list.bots {
+                bot.overseen = None;
+            }
+        }
+    }
+
     fn show_limits(&mut self, limits: Limits) {
         self.daily_turns = limits
             .daily_turns
@@ -329,7 +343,7 @@ impl App {
                         != Some(updated.user.oversight);
                 if !updated.user.oversight {
                     // Access ends at once: nothing read under it stays.
-                    screen.reading = None;
+                    screen.end_oversight();
                 }
                 let member = updated.user.role == Role::Member;
                 match was {
@@ -458,7 +472,7 @@ impl App {
                     // under it goes at once, and the Bots shown are read
                     // again for what may still be seen.
                     Err(error) if error.code == ErrorCode::Forbidden => {
-                        screen.reading = None;
+                        screen.end_oversight();
                         screen.error = Some(error.message);
                         self.load_accounts();
                         self.load_member_bots(id);
