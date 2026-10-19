@@ -173,6 +173,14 @@ command that runs its arguments where they exist, such as a container
 running `xvfb-run` with this checkout, the Cargo build directory and the
 Node and Playwright caches mounted at the same paths.
 
+CI caches Node in the runner's tool cache, keyed on `.node-version`, which
+must therefore hold one exact version, and Chromium keyed on the lock. It
+does not cache the apt install of Xvfb and Chromium's libraries (about
+12 s): the packages come from Ubuntu's archive at whatever version it holds,
+so caching them would pin nothing, and no first-party action caches apt
+packages. Playwright's own container image, pinned by digest, would pin
+them, at the cost of running the whole job in it.
+
 ### Stobie pin
 
 Stobie is not on crates.io and has no releases. Every Stobie dependency in
