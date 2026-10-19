@@ -134,7 +134,7 @@ impl Fixture {
                 password: "a long password".into(),
             })]
         );
-        self.reply(ApiReply::SignedIn(Ok(SessionResponse { user: user() })));
+        self.reply(ApiReply::SignedIn(Ok(session(user()))));
         assert_eq!(
             self.sent(),
             [
@@ -154,6 +154,16 @@ fn user() -> User {
         role: Role::Admin,
         disabled: false,
         created_at: Timestamp(1_000),
+        permissions: Default::default(),
+        oversight: false,
+        oversight_changed_at: None,
+    }
+}
+
+fn session(user: User) -> SessionResponse {
+    SessionResponse {
+        user,
+        password_reset_by_admin: None,
     }
 }
 
@@ -210,7 +220,7 @@ fn startup_checks_the_session_and_shows_the_sign_in_form() {
 fn a_valid_session_skips_the_form() {
     let mut fixture = Fixture::new();
     let _ = fixture.sent();
-    fixture.reply(ApiReply::Session(Ok(SessionResponse { user: user() })));
+    fixture.reply(ApiReply::Session(Ok(session(user()))));
     assert_eq!(fixture.fact("screen"), "signed_in".into());
     assert_eq!(fixture.fact("user"), "ada".into());
     assert_eq!(fixture.fact("bots"), "loading".into());
@@ -543,7 +553,7 @@ fn a_reply_from_an_earlier_sign_in_is_never_shown_to_the_next_user() {
         display_name: "Grace".into(),
         ..user()
     };
-    fixture.reply(ApiReply::SignedIn(Ok(SessionResponse { user: grace })));
+    fixture.reply(ApiReply::SignedIn(Ok(session(grace))));
     let _ = fixture.sent();
     assert_eq!(fixture.fact("bots"), "loading".into());
     // Ada's list arrives now: it is dropped, and Grace's still counts.

@@ -211,6 +211,7 @@ async fn invitations_create_accounts_once() {
         .send(Call::post("/api/v1/admin/invitations").cookie(&admin).json(
             &CreateInvitationRequest {
                 role: Role::Member,
+                permissions: Default::default(),
                 display_name: Some("Amy".into()),
                 expires_in_hours: Some(2),
             },

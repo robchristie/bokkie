@@ -13,7 +13,7 @@ use bokkie_gateway::clock::Clock;
 use bokkie_gateway::codex::{RuntimeEvent, Supervisor, catalog};
 use bokkie_gateway::config::{Config, PublicOrigin};
 use bokkie_gateway::{AppState, accounts, db, router};
-use bokkie_protocol::api::{CreateInvitationRequest, Role, SessionResponse};
+use bokkie_protocol::api::{CreateInvitationRequest, Permissions, Role, SessionResponse};
 use http_body_util::BodyExt;
 use serde::Serialize;
 use serde_json::Value;
@@ -300,10 +300,24 @@ impl Gateway {
     /// Invites and signs up a member through the admin. Returns its cookie
     /// and user id.
     pub async fn member(&self, admin: &str, username: &str) -> (String, i64) {
+        self.invited(admin, username, Role::Member, Permissions::default())
+            .await
+    }
+
+    /// Invites and signs up an account of `role` with `permissions`
+    /// through the admin. Returns its cookie and user id.
+    pub async fn invited(
+        &self,
+        admin: &str,
+        username: &str,
+        role: Role,
+        permissions: Permissions,
+    ) -> (String, i64) {
         let invitation = self
             .send(Call::post("/api/v1/admin/invitations").cookie(admin).json(
                 &CreateInvitationRequest {
-                    role: Role::Member,
+                    role,
+                    permissions,
                     display_name: None,
                     expires_in_hours: None,
                 },

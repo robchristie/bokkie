@@ -81,9 +81,32 @@ pub struct VersionResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
-    /// Creates, disables and resets accounts and sets their limits.
+    /// Creates, disables and resets members' accounts, sets their limits
+    /// and permissions, switches oversight, and makes and edits Bots for
+    /// them. Admins always have both [`Permissions`], and oversight never
+    /// applies to them.
     Admin,
     Member,
+}
+
+/// What a member may do with their own Bots. Admins always have both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Permissions {
+    /// Off: only an admin creates the member's Bots.
+    pub may_create_bots: bool,
+    /// Off: the name, label, description and avatar of the member's Bots
+    /// are locked. The member can still pin and hide them.
+    pub may_edit_bot_profiles: bool,
+}
+
+impl Default for Permissions {
+    /// Both on.
+    fn default() -> Self {
+        Self {
+            may_create_bots: true,
+            may_edit_bot_profiles: true,
+        }
+    }
 }
 
 /// An account as its owner or an admin sees it.
@@ -95,6 +118,16 @@ pub struct User {
     pub role: Role,
     pub disabled: bool,
     pub created_at: Timestamp,
+    #[serde(default)]
+    pub permissions: Permissions,
+    /// Whether admins can read this member's Bots and conversations,
+    /// read-only. A client shows its owner a notice the whole time it is
+    /// on. Always off for an admin.
+    #[serde(default)]
+    pub oversight: bool,
+    /// When oversight last changed, if it ever has.
+    #[serde(default)]
+    pub oversight_changed_at: Option<Timestamp>,
 }
 
 /// `POST /api/v1/session`: sign in with a password. Success sets the session
@@ -109,6 +142,12 @@ pub struct LoginRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionResponse {
     pub user: User,
+    /// When an admin reset this account's password, if the owner has not
+    /// yet acknowledged it with `DELETE /api/v1/session/password-reset`.
+    /// A client tells the owner, with when, at the first sign-in after the
+    /// reset, and until they acknowledge it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_reset_by_admin: Option<Timestamp>,
 }
 
 /// One of the signed-in user's sessions, from `GET /api/v1/sessions`.
@@ -144,6 +183,10 @@ pub struct ChangePasswordRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateInvitationRequest {
     pub role: Role,
+    /// The new account's permissions; both on when omitted. An admin's
+    /// invitation must leave both on.
+    #[serde(default)]
+    pub permissions: Permissions,
     /// Suggested display name for the new account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
@@ -168,6 +211,8 @@ pub struct CreatedInvitation {
 pub struct InvitationSummary {
     pub id: i64,
     pub role: Role,
+    #[serde(default)]
+    pub permissions: Permissions,
     pub display_name: Option<String>,
     pub created_at: Timestamp,
     pub expires_at: Timestamp,
@@ -217,6 +262,9 @@ pub struct AdminUserList {
 /// `PATCH /api/v1/admin/users/{id}`. Disabling an account revokes its
 /// sessions and stops its Bots. `limits`, when present, replaces both limits
 /// at once: send the whole object, because an omitted field means unlimited.
+/// `permissions`, when present, replaces both permissions. An admin's
+/// permissions cannot be turned off, nor its oversight on. The account's
+/// owner hears of the change as [`Event::AccountUpdated`](crate::events::Event::AccountUpdated).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateUserRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -225,10 +273,17 @@ pub struct UpdateUserRequest {
     pub disabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<Limits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<Permissions>,
+    /// Switches oversight of a member on or off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oversight: Option<bool>,
 }
 
 /// `PUT /api/v1/admin/users/{id}/password`. Revokes every session of that
-/// user.
+/// user. No admin can reset another admin's password. A member whose
+/// password an admin reset is told so at their next sign-in (see
+/// [`SessionResponse::password_reset_by_admin`]).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResetPasswordRequest {
     pub new_password: String,
@@ -283,7 +338,10 @@ pub struct BotList {
     pub seq: Seq,
 }
 
-/// `POST /api/v1/bots`.
+/// `POST /api/v1/bots`, refused with `forbidden` for a member without
+/// [`Permissions::may_create_bots`]. An admin makes a Bot for a member with
+/// the same body at `POST /api/v1/admin/users/{id}/bots`, which returns a
+/// [`MemberBot`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateBotRequest {
     pub name: String,
@@ -294,7 +352,10 @@ pub struct CreateBotRequest {
 }
 
 /// `PATCH /api/v1/bots/{id}`. A changed description reaches the model from
-/// the Bot's next turn.
+/// the Bot's next turn. A member without
+/// [`Permissions::may_edit_bot_profiles`] is refused with `forbidden` when
+/// the request names the name, label, description or avatar; pinning and
+/// hiding are always allowed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateBotRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -314,6 +375,54 @@ pub struct UpdateBotRequest {
     pub pinned: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
+}
+
+/// One of a member's Bots, as an admin sees it. With oversight off, an
+/// admin sees only the Bots an admin made for the member, and only their
+/// profile; with it on, every Bot, and `overseen` too.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberBot {
+    pub id: BotId,
+    pub name: String,
+    pub label: String,
+    pub description: String,
+    pub avatar: Option<String>,
+    /// Whether an admin made the Bot for the member.
+    pub made_by_admin: bool,
+    pub created_at: Timestamp,
+    /// Only while oversight is on: the Bot as the member sees it, with its
+    /// status, pin, visibility and latest message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overseen: Option<Bot>,
+}
+
+/// `GET /api/v1/admin/users/{id}/bots`, for an admin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberBotList {
+    /// Whether oversight of the member is on, as this list was read.
+    pub oversight: bool,
+    pub bots: Vec<MemberBot>,
+}
+
+/// `PATCH /api/v1/admin/users/{id}/bots/{bot}`: an admin changes the
+/// profile of a Bot an admin made for the member. The member's own Bots are
+/// read-only to admins, even under oversight, and pinning and hiding stay
+/// the member's. A request that names no field is refused.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateBotProfileRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// `Some(None)` clears the avatar.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "double_option"
+    )]
+    pub avatar: Option<Option<String>>,
 }
 
 /// Who wrote a message.
@@ -348,7 +457,10 @@ pub struct Message {
 }
 
 /// `GET /api/v1/bots/{id}/messages?before={message_id}&limit={n}`, newest
-/// last.
+/// last. An admin reads a member's conversation, only while oversight of
+/// that member is on, at
+/// `GET /api/v1/admin/users/{id}/bots/{bot}/messages`, with the same query;
+/// there `seq` is the member's log, which the admin cannot follow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessagePage {
     pub messages: Vec<Message>,

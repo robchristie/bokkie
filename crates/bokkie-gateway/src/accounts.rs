@@ -4,7 +4,9 @@
 //! [`UserId`] and puts it in the query's `WHERE` clause. Admin-only functions
 //! say so in their names.
 
-use bokkie_protocol::api::{AdminUser, InvitationSummary, Limits, Role, SessionSummary, User};
+use bokkie_protocol::api::{
+    AdminUser, InvitationSummary, Limits, Permissions, Role, SessionSummary, User,
+};
 use bokkie_protocol::{Timestamp, UserId};
 use sqlx::{Row, SqlitePool};
 
@@ -23,6 +25,14 @@ pub const INVITATION_MAX_MS: i64 = 30 * DAY_MS;
 pub struct Account {
     pub user: User,
     pub limits: Limits,
+    /// When an admin reset the password, until the owner acknowledges it.
+    pub password_reset_by_admin: Option<Timestamp>,
+}
+
+impl Account {
+    pub fn is_admin(&self) -> bool {
+        self.user.role == Role::Admin
+    }
 }
 
 fn role_name(role: Role) -> &'static str {
@@ -40,24 +50,48 @@ fn role_from(name: &str) -> Role {
     }
 }
 
-const ACCOUNT_COLUMNS: &str =
-    "id, username, display_name, role, disabled, created_at, daily_turns, weekly_tokens";
+const ACCOUNT_COLUMNS: &str = "id, username, display_name, role, disabled, created_at, \
+     daily_turns, weekly_tokens, may_create_bots, may_edit_bot_profiles, oversight, \
+     oversight_changed_at, password_reset_by_admin_at";
 
 fn account_from(row: &sqlx::sqlite::SqliteRow) -> Account {
+    let role = role_from(row.get::<&str, _>("role"));
+    let admin = role == Role::Admin;
     Account {
         user: User {
             id: UserId(row.get("id")),
             username: row.get("username"),
             display_name: row.get("display_name"),
-            role: role_from(row.get::<&str, _>("role")),
+            role,
             disabled: row.get::<i64, _>("disabled") != 0,
             created_at: Timestamp(row.get("created_at")),
+            // Admins always have both permissions, and oversight never
+            // applies to them, whatever the row says.
+            permissions: Permissions {
+                may_create_bots: admin || row.get::<i64, _>("may_create_bots") != 0,
+                may_edit_bot_profiles: admin || row.get::<i64, _>("may_edit_bot_profiles") != 0,
+            },
+            oversight: !admin && row.get::<i64, _>("oversight") != 0,
+            oversight_changed_at: row
+                .get::<Option<i64>, _>("oversight_changed_at")
+                .map(Timestamp),
         },
         limits: Limits {
             daily_turns: row.get::<Option<i64>, _>("daily_turns").map(|v| v as u32),
             weekly_tokens: row.get::<Option<i64>, _>("weekly_tokens").map(|v| v as u64),
         },
+        password_reset_by_admin: row
+            .get::<Option<i64>, _>("password_reset_by_admin_at")
+            .map(Timestamp),
     }
+}
+
+/// Refuses permissions that an account of `role` cannot have.
+fn check_permissions(role: Role, permissions: Permissions) -> Result<()> {
+    if role == Role::Admin && permissions != Permissions::default() {
+        return Err(Failure::invalid("Admins always have both permissions"));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +162,16 @@ pub async fn bootstrap_admin(
     if admins > 0 {
         return Err(Failure::conflict("An admin already exists"));
     }
-    let id = insert_user(&mut tx, now, &username, &display_name, Role::Admin, &hash).await?;
+    let id = insert_user(
+        &mut tx,
+        now,
+        &username,
+        &display_name,
+        Role::Admin,
+        Permissions::default(),
+        &hash,
+    )
+    .await?;
     tx.commit().await?;
     Ok(account(db, id).await?.ok_or_else(Failure::not_found)?.user)
 }
@@ -139,15 +182,20 @@ async fn insert_user(
     username: &str,
     display_name: &str,
     role: Role,
+    permissions: Permissions,
     password_hash: &str,
 ) -> Result<UserId> {
+    check_permissions(role, permissions)?;
     let result = sqlx::query(
-        "INSERT INTO users (username, display_name, role, password_hash, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO users (username, display_name, role, may_create_bots,
+                            may_edit_bot_profiles, password_hash, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(username)
     .bind(display_name)
     .bind(role_name(role))
+    .bind(permissions.may_create_bots)
+    .bind(permissions.may_edit_bot_profiles)
     .bind(password_hash)
     .bind(now.0)
     .bind(now.0)
@@ -185,29 +233,75 @@ pub async fn admin_list_users(db: &SqlitePool) -> Result<Vec<AdminUser>> {
         .collect())
 }
 
-/// Changes another account's display name, disabled flag or limits, for an
-/// admin. Disabling revokes every session of that account. Runs inside the
-/// caller's write transaction, so that the change can commit with its
-/// events.
+/// What an admin changes about an account. `None` leaves a field alone.
+#[derive(Debug, Default)]
+pub struct AccountChanges<'a> {
+    pub display_name: Option<&'a str>,
+    pub disabled: Option<bool>,
+    pub limits: Option<Limits>,
+    pub permissions: Option<Permissions>,
+    pub oversight: Option<bool>,
+}
+
+/// Changes another account's display name, disabled flag, limits,
+/// permissions or oversight, for an admin. Disabling revokes every session
+/// of that account. An admin's permissions cannot be turned off, nor its
+/// oversight on. Runs inside the caller's write transaction, so that the
+/// change can commit with its events.
 pub async fn admin_update_user(
     tx: &mut sqlx::SqliteConnection,
     now: Timestamp,
     admin: UserId,
     target: UserId,
-    display_name: Option<&str>,
-    disabled: Option<bool>,
-    limits: Option<Limits>,
+    changes: AccountChanges<'_>,
 ) -> Result<AdminUser> {
+    let AccountChanges {
+        display_name,
+        disabled,
+        limits,
+        permissions,
+        oversight,
+    } = changes;
     if target == admin && disabled == Some(true) {
         return Err(Failure::invalid("You cannot disable your own account"));
     }
     let display_name = display_name.map(normalise_display_name).transpose()?;
-    let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM users WHERE id = ?")
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
         .bind(target.0)
         .fetch_optional(&mut *tx)
         .await?;
-    if exists.is_none() {
-        return Err(Failure::not_found());
+    let role = role_from(&role.ok_or_else(Failure::not_found)?);
+    if role == Role::Admin && oversight == Some(true) {
+        return Err(Failure::forbidden("Oversight applies to members only"));
+    }
+    if let Some(permissions) = permissions {
+        check_permissions(role, permissions)?;
+        sqlx::query(
+            "UPDATE users SET may_create_bots = ?, may_edit_bot_profiles = ?, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(permissions.may_create_bots)
+        .bind(permissions.may_edit_bot_profiles)
+        .bind(now.0)
+        .bind(target.0)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if let Some(oversight) = oversight {
+        // The time records when it last changed, not when it was last set.
+        sqlx::query(
+            "UPDATE users SET
+                 oversight_changed_at = CASE WHEN oversight != ?1 THEN ?2
+                                             ELSE oversight_changed_at END,
+                 oversight = ?1,
+                 updated_at = ?2
+             WHERE id = ?3",
+        )
+        .bind(oversight)
+        .bind(now.0)
+        .bind(target.0)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(name) = display_name {
         sqlx::query("UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?")
@@ -248,28 +342,69 @@ pub async fn admin_update_user(
     })
 }
 
-/// Sets a new password for an account, for an admin. Revokes every session
-/// of that account.
+/// Sets a new password for an account, for an admin, and revokes every
+/// session of that account. No admin can reset another admin's password,
+/// which would let them sign in as that admin. A member's account records
+/// the reset, so that the member is told at their next sign-in.
 pub async fn admin_reset_password(
     db: &SqlitePool,
     now: Timestamp,
+    admin: UserId,
     target: UserId,
     new_password: &str,
 ) -> Result<()> {
+    let refuse_admin = || Failure::forbidden("No admin can reset another admin's password");
+    // Check the target before spending time on the password hash.
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
+        .bind(target.0)
+        .fetch_optional(db)
+        .await?;
+    if role_from(&role.ok_or_else(Failure::not_found)?) == Role::Admin && target != admin {
+        return Err(refuse_admin());
+    }
     check_password(new_password)?;
     let hash = hash_password(new_password).await?;
     let mut tx = crate::db::write(db).await?;
-    let updated = sqlx::query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
-        .bind(hash)
-        .bind(now.0)
+    // Roles never change, but decide again on what this transaction reads.
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
         .bind(target.0)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-    if updated.rows_affected() == 0 {
-        return Err(Failure::not_found());
+    let role = role_from(&role.ok_or_else(Failure::not_found)?);
+    if role == Role::Admin && target != admin {
+        return Err(refuse_admin());
     }
+    let reset_by_admin = (role == Role::Member).then_some(now.0);
+    sqlx::query(
+        "UPDATE users SET password_hash = ?, updated_at = ?,
+             password_reset_by_admin_at = coalesce(?, password_reset_by_admin_at)
+         WHERE id = ?",
+    )
+    .bind(hash)
+    .bind(now.0)
+    .bind(reset_by_admin)
+    .bind(target.0)
+    .execute(&mut *tx)
+    .await?;
     revoke_all_sessions(&mut tx, now, target, None).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+/// Clears the record of an admin's password reset once its owner has been
+/// told, through `session`. A reset revokes every session as it is
+/// recorded, so only while that session is still live: a reset that lands
+/// just before the acknowledgement is not cleared unseen.
+pub async fn acknowledge_password_reset(db: &SqlitePool, user: UserId, session: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE users SET password_reset_by_admin_at = NULL
+         WHERE id = ?1 AND EXISTS (SELECT 1 FROM sessions
+                                   WHERE id = ?2 AND user_id = ?1 AND revoked_at IS NULL)",
+    )
+    .bind(user.0)
+    .bind(session)
+    .execute(db)
+    .await?;
     Ok(())
 }
 
@@ -487,14 +622,17 @@ async fn revoke_all_sessions(
 // Invitations
 
 /// Creates an invitation, for an admin. Returns its id, code and expiry.
+#[allow(clippy::too_many_arguments)]
 pub async fn admin_create_invitation(
     db: &SqlitePool,
     now: Timestamp,
     admin: UserId,
     role: Role,
+    permissions: Permissions,
     display_name: Option<&str>,
     expires_in_hours: Option<u32>,
 ) -> Result<(i64, String, Timestamp)> {
+    check_permissions(role, permissions)?;
     let display_name = display_name.map(normalise_display_name).transpose()?;
     let lifetime = expires_in_hours
         .map(|h| i64::from(h) * crate::clock::HOUR_MS)
@@ -505,11 +643,14 @@ pub async fn admin_create_invitation(
     let code = secrets::random_token();
     let expires_at = Timestamp(now.0 + lifetime);
     let done = sqlx::query(
-        "INSERT INTO invitations (code_hash, role, display_name, created_by, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO invitations (code_hash, role, may_create_bots, may_edit_bot_profiles,
+                                  display_name, created_by, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(secrets::token_hash(&code))
     .bind(role_name(role))
+    .bind(permissions.may_create_bots)
+    .bind(permissions.may_edit_bot_profiles)
     .bind(display_name)
     .bind(admin.0)
     .bind(now.0)
@@ -525,7 +666,9 @@ pub async fn admin_list_invitations(
     now: Timestamp,
 ) -> Result<Vec<InvitationSummary>> {
     let rows = sqlx::query(
-        "SELECT id, role, display_name, created_at, expires_at FROM invitations
+        "SELECT id, role, may_create_bots, may_edit_bot_profiles, display_name, created_at,
+                expires_at
+         FROM invitations
          WHERE used_at IS NULL AND withdrawn_at IS NULL AND expires_at > ? ORDER BY id",
     )
     .bind(now.0)
@@ -536,11 +679,19 @@ pub async fn admin_list_invitations(
         .map(|r| InvitationSummary {
             id: r.get("id"),
             role: role_from(r.get::<&str, _>("role")),
+            permissions: invitation_permissions(r),
             display_name: r.get("display_name"),
             created_at: Timestamp(r.get("created_at")),
             expires_at: Timestamp(r.get("expires_at")),
         })
         .collect())
+}
+
+fn invitation_permissions(row: &sqlx::sqlite::SqliteRow) -> Permissions {
+    Permissions {
+        may_create_bots: row.get::<i64, _>("may_create_bots") != 0,
+        may_edit_bot_profiles: row.get::<i64, _>("may_edit_bot_profiles") != 0,
+    }
 }
 
 /// Withdraws an outstanding invitation, for an admin.
@@ -575,18 +726,29 @@ pub async fn accept_invitation(
     let invalid = || Failure::forbidden("That invitation is not valid");
     let hash_of_code = secrets::token_hash(code.trim());
     // Check the code before spending time on the password hash.
-    let role: Option<String> = sqlx::query_scalar(
-        "SELECT role FROM invitations
+    let invitation = sqlx::query(
+        "SELECT role, may_create_bots, may_edit_bot_profiles FROM invitations
          WHERE code_hash = ? AND used_at IS NULL AND withdrawn_at IS NULL AND expires_at > ?",
     )
     .bind(&hash_of_code)
     .bind(now.0)
     .fetch_optional(db)
-    .await?;
-    let role = role_from(&role.ok_or_else(invalid)?);
+    .await?
+    .ok_or_else(invalid)?;
+    let role = role_from(invitation.get::<&str, _>("role"));
+    let permissions = invitation_permissions(&invitation);
     let password_hash = hash_password(password).await?;
     let mut tx = crate::db::write(db).await?;
-    let user = insert_user(&mut tx, now, &username, &display_name, role, &password_hash).await?;
+    let user = insert_user(
+        &mut tx,
+        now,
+        &username,
+        &display_name,
+        role,
+        permissions,
+        &password_hash,
+    )
+    .await?;
     // Consume the code in the same transaction, so two concurrent accepts
     // cannot both succeed.
     let consumed = sqlx::query(

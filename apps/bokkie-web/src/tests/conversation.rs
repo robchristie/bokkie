@@ -696,7 +696,7 @@ fn a_socket_refused_before_opening_checks_the_session() {
     fixture.socket(Input::Closed { code: Some(1006) });
     assert_eq!(fixture.sent(), [ApiRequest::CheckSession]);
     // Still valid: carry on.
-    fixture.reply(ApiReply::Session(Ok(SessionResponse { user: user() })));
+    fixture.reply(ApiReply::Session(Ok(session(user()))));
     assert_eq!(fixture.fact("screen"), "signed_in".into());
     fixture.socket(Input::RetryDue);
     fixture.socket(Input::Closed { code: Some(1006) });

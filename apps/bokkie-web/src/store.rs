@@ -530,7 +530,8 @@ impl Store {
                 self.errors.insert(*bot_id, message.clone());
                 Applied::changed(changed)
             }
-            Event::UsageUpdated { .. } => Applied::default(),
+            // The client does not show account state yet.
+            Event::UsageUpdated { .. } | Event::AccountUpdated { .. } => Applied::default(),
         }
     }
 

@@ -5,7 +5,10 @@
 //! Every route sits behind [`auth::guard`], which checks `Host` on every
 //! request and `Origin` on every state-changing request. Routes that act
 //! for a user take the [`auth::SignedIn`] extractor and pass its user id to
-//! every query, so one user can never name another user's data.
+//! every query, so one user can never name another user's data. The
+//! exception is an admin's view of a member's account and Bots, in
+//! [`routes::admin`], which the member's permissions and oversight switch
+//! bound.
 //!
 //! With `BOKKIE_WEB_ROOT` set, [`web::serve`] is the fallback and serves the
 //! production web package at the same origin; otherwise every unrouted path
@@ -107,6 +110,10 @@ pub fn router(state: AppState) -> Router {
                 .delete(accounts::logout),
         )
         .route("/session/password", put(accounts::change_password))
+        .route(
+            "/session/password-reset",
+            delete(accounts::acknowledge_password_reset),
+        )
         .route("/sessions", get(accounts::list_sessions))
         .route("/sessions/{id}", delete(accounts::revoke_session))
         .route("/invitations/accept", post(accounts::accept_invitation))
@@ -128,6 +135,18 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/users", get(admin::list_users))
         .route("/admin/users/{id}", patch(admin::update_user))
         .route("/admin/users/{id}/password", put(admin::reset_password))
+        .route(
+            "/admin/users/{id}/bots",
+            get(admin::member_bots).post(admin::create_member_bot),
+        )
+        .route(
+            "/admin/users/{id}/bots/{bot}",
+            patch(admin::update_member_bot),
+        )
+        .route(
+            "/admin/users/{id}/bots/{bot}/messages",
+            get(admin::member_messages),
+        )
         .route(
             "/admin/invitations",
             get(admin::list_invitations).post(admin::create_invitation),

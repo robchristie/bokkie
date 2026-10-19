@@ -86,23 +86,76 @@ fn errors_name_their_code_and_status() {
     }
 }
 
-#[test]
-fn account_types() {
-    let user = User {
+fn user() -> User {
+    User {
         id: UserId(1),
         username: "rob".into(),
         display_name: "Rob".into(),
         role: Role::Admin,
         disabled: false,
         created_at: Timestamp(10),
+        permissions: Permissions::default(),
+        oversight: false,
+        oversight_changed_at: None,
+    }
+}
+
+fn user_json() -> Value {
+    json!({
+        "id": 1, "username": "rob", "display_name": "Rob", "role": "admin",
+        "disabled": false, "created_at": 10,
+        "permissions": {"may_create_bots": true, "may_edit_bot_profiles": true},
+        "oversight": false, "oversight_changed_at": null,
+    })
+}
+
+#[test]
+fn account_types() {
+    let user = user();
+    pin(
+        &SessionResponse {
+            user: user.clone(),
+            password_reset_by_admin: None,
+        },
+        json!({"user": user_json()}),
+    );
+    // An admin's reset that the owner has not acknowledged.
+    let member = User {
+        id: UserId(2),
+        username: "amy".into(),
+        display_name: "Amy".into(),
+        role: Role::Member,
+        permissions: Permissions {
+            may_create_bots: false,
+            may_edit_bot_profiles: true,
+        },
+        oversight: true,
+        oversight_changed_at: Some(Timestamp(20)),
+        ..user.clone()
     };
     pin(
-        &SessionResponse { user: user.clone() },
-        json!({"user": {
-            "id": 1, "username": "rob", "display_name": "Rob", "role": "admin",
-            "disabled": false, "created_at": 10,
-        }}),
+        &SessionResponse {
+            user: member.clone(),
+            password_reset_by_admin: Some(Timestamp(30)),
+        },
+        json!({
+            "user": {
+                "id": 2, "username": "amy", "display_name": "Amy", "role": "member",
+                "disabled": false, "created_at": 10,
+                "permissions": {"may_create_bots": false, "may_edit_bot_profiles": true},
+                "oversight": true, "oversight_changed_at": 20,
+            },
+            "password_reset_by_admin": 30,
+        }),
     );
+    // An account from a gateway before permissions decodes with today's
+    // behaviour: both permissions on, oversight off.
+    let older: User = serde_json::from_value(json!({
+        "id": 1, "username": "rob", "display_name": "Rob", "role": "admin",
+        "disabled": false, "created_at": 10,
+    }))
+    .unwrap();
+    assert_eq!(older, user);
     pin(
         &LoginRequest {
             username: "rob".into(),
@@ -119,21 +172,34 @@ fn account_types() {
             },
         },
         json!({
-            "user": {"id": 1, "username": "rob", "display_name": "Rob", "role": "admin",
-                     "disabled": false, "created_at": 10},
+            "user": user_json(),
             "limits": {"daily_turns": 20, "weekly_tokens": null},
         }),
     );
-    // Optional request fields may be omitted.
+    // Optional request fields may be omitted; permissions default to both.
     let request: CreateInvitationRequest =
         serde_json::from_value(json!({"role": "member"})).unwrap();
     assert_eq!(
         request,
         CreateInvitationRequest {
             role: Role::Member,
+            permissions: Permissions::default(),
             display_name: None,
             expires_in_hours: None,
         }
+    );
+    pin(
+        &CreateInvitationRequest {
+            role: Role::Member,
+            permissions: Permissions {
+                may_create_bots: false,
+                may_edit_bot_profiles: false,
+            },
+            display_name: None,
+            expires_in_hours: None,
+        },
+        json!({"role": "member",
+               "permissions": {"may_create_bots": false, "may_edit_bot_profiles": false}}),
     );
     pin(
         &UpdateUserRequest {
@@ -142,6 +208,64 @@ fn account_types() {
         },
         json!({"disabled": true}),
     );
+    pin(
+        &UpdateUserRequest {
+            permissions: Some(Permissions {
+                may_create_bots: true,
+                may_edit_bot_profiles: false,
+            }),
+            oversight: Some(true),
+            ..UpdateUserRequest::default()
+        },
+        json!({"permissions": {"may_create_bots": true, "may_edit_bot_profiles": false},
+               "oversight": true}),
+    );
+}
+
+#[test]
+fn an_admins_view_of_a_members_bots() {
+    let profile_only = MemberBot {
+        id: BotId(7),
+        name: "Chef".into(),
+        label: "Meal planner".into(),
+        description: "Plans dinners.".into(),
+        avatar: Some("🍳".into()),
+        made_by_admin: true,
+        created_at: Timestamp(1_000),
+        overseen: None,
+    };
+    pin(
+        &MemberBotList {
+            oversight: false,
+            bots: vec![profile_only.clone()],
+        },
+        json!({"oversight": false, "bots": [{
+            "id": 7, "name": "Chef", "label": "Meal planner", "description": "Plans dinners.",
+            "avatar": "🍳", "made_by_admin": true, "created_at": 1000,
+        }]}),
+    );
+    let overseen = MemberBot {
+        made_by_admin: false,
+        overseen: Some(bot()),
+        ..profile_only
+    };
+    let encoded = serde_json::to_value(&overseen).unwrap();
+    assert_eq!(encoded["made_by_admin"], false);
+    assert_eq!(encoded["overseen"]["status"], "idle");
+    assert_eq!(
+        encoded["overseen"]["last_message"]["text"],
+        "Pasta tonight?"
+    );
+    assert_eq!(
+        serde_json::from_value::<MemberBot>(encoded).unwrap(),
+        overseen
+    );
+    // A profile edit names only profile fields; `null` clears the avatar.
+    let edit: UpdateBotProfileRequest =
+        serde_json::from_value(json!({"label": "Cook", "avatar": null})).unwrap();
+    assert_eq!(edit.label.as_deref(), Some("Cook"));
+    assert_eq!(edit.avatar, Some(None));
+    pin(&edit, json!({"label": "Cook", "avatar": null}));
 }
 
 #[test]
@@ -265,12 +389,17 @@ fn events_are_tagged_by_type() {
             bot_id: BotId(7),
             message: "The Bot is unavailable".into(),
         },
+        Event::AccountUpdated { user: user() },
     ];
     for event in events {
         let encoded = serde_json::to_value(&event).unwrap();
         assert!(encoded["type"].is_string(), "{encoded}");
         assert_eq!(serde_json::from_value::<Event>(encoded).unwrap(), event);
     }
+    pin(
+        &Event::AccountUpdated { user: user() },
+        json!({"type": "account_updated", "user": user_json()}),
+    );
 }
 
 #[test]
@@ -408,13 +537,16 @@ fn more_request_and_response_shapes() {
             invitations: vec![InvitationSummary {
                 id: 3,
                 role: Role::Admin,
+                permissions: Permissions::default(),
                 display_name: None,
                 created_at: Timestamp(1),
                 expires_at: Timestamp(9),
             }],
         },
-        json!({"invitations": [{"id": 3, "role": "admin", "display_name": null,
-                                 "created_at": 1, "expires_at": 9}]}),
+        json!({"invitations": [{"id": 3, "role": "admin",
+                                 "permissions": {"may_create_bots": true,
+                                                 "may_edit_bot_profiles": true},
+                                 "display_name": null, "created_at": 1, "expires_at": 9}]}),
     );
     pin(
         &SessionList {

@@ -82,18 +82,20 @@ pub async fn login(
     let token =
         accounts::create_session(&state.db, now, account.user.id, user_agent(&headers)).await?;
     tracing::info!(user = %account.user.id, "signed in");
-    Ok(signed_in_response(
-        &token,
-        SessionResponse { user: account.user },
-    ))
+    Ok(signed_in_response(&token, session_response(account)))
+}
+
+fn session_response(account: accounts::Account) -> SessionResponse {
+    SessionResponse {
+        user: account.user,
+        password_reset_by_admin: account.password_reset_by_admin,
+    }
 }
 
 /// `GET /api/v1/session`. Also refreshes the cookie's lifetime in the
 /// browser.
 pub async fn current(signed_in: SignedIn, headers: HeaderMap) -> Response {
-    let body = SessionResponse {
-        user: signed_in.account.user,
-    };
+    let body = session_response(signed_in.account);
     match auth::session_token(&headers) {
         Some(token) => signed_in_response(&token, body),
         None => Json(body).into_response(),
@@ -114,6 +116,16 @@ pub async fn logout(State(state): State<AppState>, signed_in: SignedIn) -> Resul
         .headers_mut()
         .insert(SET_COOKIE, auth::clear_session_cookie());
     Ok(response)
+}
+
+/// `DELETE /api/v1/session/password-reset`: the owner has been told that an
+/// admin reset their password, so stop telling them.
+pub async fn acknowledge_password_reset(
+    State(state): State<AppState>,
+    signed_in: SignedIn,
+) -> Result<StatusCode> {
+    accounts::acknowledge_password_reset(&state.db, signed_in.id(), signed_in.session_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `GET /api/v1/sessions`.
@@ -210,8 +222,5 @@ pub async fn accept_invitation(
         .ok_or_else(Failure::not_found)?;
     let token = accounts::create_session(&state.db, now, user, user_agent(&headers)).await?;
     tracing::info!(user = %user, "accepted an invitation");
-    Ok(signed_in_response(
-        &token,
-        SessionResponse { user: account.user },
-    ))
+    Ok(signed_in_response(&token, session_response(account)))
 }
