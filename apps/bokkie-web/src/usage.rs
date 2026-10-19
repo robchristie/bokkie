@@ -6,7 +6,7 @@
 //! on screen.
 
 use bokkie_protocol::Timestamp;
-use bokkie_protocol::api::{RateLimitBucket, RateLimitWindow, Usage};
+use bokkie_protocol::api::{Allowance, RateLimitBucket, RateLimitWindow, Usage};
 
 const MINUTE: i64 = 60_000;
 
@@ -93,23 +93,29 @@ pub fn meter_lines(usage: &Usage, now: Timestamp) -> Vec<String> {
     if usage.subscription.is_empty() {
         lines.push("Subscription: not reported yet".into());
     }
-    let allowance = &usage.allowance;
-    lines.push(match allowance.limits.daily_turns {
-        Some(limit) => format!("Your turns today: {} of {limit}", allowance.turns_today),
-        None => format!("Your turns today: {}, no limit", allowance.turns_today),
-    });
-    lines.push(match allowance.limits.weekly_tokens {
-        Some(limit) => format!(
-            "Your tokens this week: {} of {}",
-            thousands(allowance.tokens_this_week),
-            thousands(limit)
-        ),
-        None => format!(
-            "Your tokens this week: {}, no limit",
-            thousands(allowance.tokens_this_week)
-        ),
-    });
+    lines.extend(allowance_lines(&usage.allowance, "Your"));
     lines
+}
+
+/// An allowance's lines, for its owner ("Your") or an admin ("Their").
+pub fn allowance_lines(allowance: &Allowance, whose: &str) -> [String; 2] {
+    [
+        match allowance.limits.daily_turns {
+            Some(limit) => format!("{whose} turns today: {} of {limit}", allowance.turns_today),
+            None => format!("{whose} turns today: {}, no limit", allowance.turns_today),
+        },
+        match allowance.limits.weekly_tokens {
+            Some(limit) => format!(
+                "{whose} tokens this week: {} of {}",
+                thousands(allowance.tokens_this_week),
+                thousands(limit)
+            ),
+            None => format!(
+                "{whose} tokens this week: {}, no limit",
+                thousands(allowance.tokens_this_week)
+            ),
+        },
+    ]
 }
 
 /// The limit-reached banner, when a subscription bucket is reached or the

@@ -123,7 +123,15 @@ empty at the conversation's start), `reply`, `reply_chars` and
 for the New Bot form `new_bot_name`, `creating` and `create_error`; and
 `chatgpt` (whether the household is signed in), `chatgpt_login` and
 `chatgpt_sign_out` for an admin's household sign-in screen, which never
-publishes its device code. Name a new Bot with `stobie set-text
+publishes its device code; `joining` while the sign-in screen takes an
+invitation code instead; and for the admin section (`screen` is `admin`,
+`account` or `overseen`) `accounts`, `invitations`, `inviting`,
+`invite_error`, `invitation_shown` (never the code itself), `account` (the
+open account's ID), `account_role`, `account_may_create_bots`,
+`account_may_edit_profiles`, `account_oversight`, `account_disabled`,
+`account_daily_turns` (-1 for no limit), `account_saving`,
+`account_error`, `reset`, `member_bots`, `reading` (the Bot whose
+conversation is read under oversight) and `reading_count`. Name a new Bot with `stobie set-text
 bokkie.bot-name`. Open a Bot with `stobie invoke bokkie.open-bot --value
 ID` and fill the message field with `stobie set-text bokkie.draft`. A
 conversation opens on its newest 50 messages; `stobie invoke
@@ -152,6 +160,13 @@ checks:
 - a conversation longer than one page opens on its newest 50 messages, and
   loading the older ones while a reply streams leaves both whole;
 - the subscription meter and the limit-reached banner show;
+- the admin invites a member from the accounts screen, with permissions,
+  and the member joins with the code in a second browser context and sees
+  only whether the household is signed in;
+- the admin sets the member's limit and permissions, which the member's
+  page follows live; the member's second turn is refused beyond the limit;
+- oversight, switched on while the member is signed in, shows its notice
+  on the member's page, and the admin reads the conversation read-only;
 - the manifest has no errors and the page is installable, the service
   worker controls the page, and nothing from `/api/` is in Cache Storage;
 - the font notices are served as text;

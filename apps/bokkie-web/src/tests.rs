@@ -21,6 +21,7 @@ use crate::api::{ApiReply, ApiRequest, Generation, Recorder};
 use crate::socket::{Driver, Io, Step};
 use crate::wire::CommandError;
 
+mod admin;
 mod conversation;
 mod household;
 mod limits;

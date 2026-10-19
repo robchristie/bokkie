@@ -13,16 +13,17 @@ use crate::app::{
     Login, NewBot, Open, PASSWORD_ID, PROFILE_DESCRIPTION_ID, PROFILE_LABEL_ID, PROFILE_NAME_ID,
     ProfileEditor, Session, SignInForm, SignOut, SignedIn, USERNAME_ID,
 };
+use crate::app::{DISPLAY_NAME_ID, INVITATION_CODE_ID};
 use crate::socket::Link;
 
-type BokkieFrame<'a, 'b> = Frame<'a, BokkieAction, BokkieIntent>;
+pub(crate) type BokkieFrame<'a, 'b> = Frame<'a, BokkieAction, BokkieIntent>;
 
 /// Room kept below a conversation's messages for the message field, its
 /// buttons and a status line.
 const COMPOSER_HEIGHT: f32 = 230.0;
 
 /// How often a meter with reset times is shown again, so they stay true.
-const METER_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
+pub(crate) const METER_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
 
 pub(crate) fn present(app: &App, ui: &mut egui::Ui, frame: &mut BokkieFrame<'_, '_>) {
     egui::CentralPanel::default().show(ui, |ui| {
@@ -33,6 +34,9 @@ pub(crate) fn present(app: &App, ui: &mut egui::Ui, frame: &mut BokkieFrame<'_, 
                 p.status(ui, "status", "Checking your session…", false);
             }
             Session::SignedOut(form) => sign_in_ui(ui, &mut p, frame, form),
+            Session::SignedIn(signed_in) if signed_in.admin.is_some() => {
+                crate::admin::present(ui, &mut p, frame, app, signed_in);
+            }
             Session::SignedIn(signed_in) => match (&signed_in.household, &signed_in.open) {
                 (Some(household), _) => household_ui(ui, &mut p, frame, app, signed_in, household),
                 (None, Some(open)) => conversation_ui(ui, &mut p, frame, app, signed_in, open),
@@ -42,7 +46,7 @@ pub(crate) fn present(app: &App, ui: &mut egui::Ui, frame: &mut BokkieFrame<'_, 
     });
 }
 
-fn line(role: TextRole, max_lines: u8) -> ContentTextSpec {
+pub(crate) fn line(role: TextRole, max_lines: u8) -> ContentTextSpec {
     ContentTextSpec {
         role,
         overflow: TextOverflow::Wrap,
@@ -53,7 +57,7 @@ fn line(role: TextRole, max_lines: u8) -> ContentTextSpec {
 
 /// A text field observed as a text input, so agents can fill it with
 /// `stobie set-text`. Returns the edited copy and the field's response.
-fn text_field(
+pub(crate) fn text_field(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
     id: &'static str,
@@ -65,7 +69,7 @@ fn text_field(
 }
 
 /// A text field of several lines, such as a Bot's description.
-fn text_area(
+pub(crate) fn text_area(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
     id: &'static str,
@@ -110,7 +114,7 @@ fn field(
 }
 
 /// Enter pressed in a field that just lost focus to it.
-fn submitted(ui: &egui::Ui, field: &egui::Response) -> bool {
+pub(crate) fn submitted(ui: &egui::Ui, field: &egui::Response) -> bool {
     field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter))
 }
 
@@ -121,24 +125,67 @@ fn sign_in_ui(
     form: &SignInForm,
 ) {
     p.heading(ui, "title", APPLICATION_NAME);
+    let submit = if form.joining {
+        BokkieAction::AcceptInvitation
+    } else {
+        BokkieAction::SignIn
+    };
     ui.add_enabled_ui(!form.busy, |ui| {
+        if form.joining {
+            p.content(
+                ui,
+                "join-about",
+                "Enter the invitation code an admin gave you, and choose your username, name and password.",
+                line(TextRole::Secondary, 3),
+            );
+            let (code, _) = text_field(
+                ui,
+                p,
+                INVITATION_CODE_ID,
+                "Invitation code",
+                &form.code,
+                false,
+            );
+            if code != form.code {
+                frame.emit(BokkieIntent::EditInvitationCode(code));
+            }
+        }
         let (username, _) = text_field(ui, p, USERNAME_ID, "Username", &form.username, false);
         if username != form.username {
             frame.emit(BokkieIntent::EditUsername(username));
+        }
+        if form.joining {
+            let (name, _) = text_field(
+                ui,
+                p,
+                DISPLAY_NAME_ID,
+                "Your name",
+                &form.display_name,
+                false,
+            );
+            if name != form.display_name {
+                frame.emit(BokkieIntent::EditDisplayName(name));
+            }
         }
         let (password, field) = text_field(ui, p, PASSWORD_ID, "Password", &form.password, true);
         if password != form.password {
             frame.emit(BokkieIntent::EditPassword(password));
         }
-        // Enter in the password field signs in. The host rechecks
-        // availability, after this pass's edits apply.
+        // Enter in the password field signs in, or joins. The host
+        // rechecks availability, after this pass's edits apply.
         if submitted(ui, &field) {
-            frame.trigger(BokkieAction::SignIn);
+            frame.trigger(submit);
         }
     });
-    frame.action(ui, p, BokkieAction::SignIn, ActionEmphasis::Primary);
+    frame.action(ui, p, submit, ActionEmphasis::Primary);
+    frame.toggle(ui, p, "join", BokkieAction::Join, form.joining);
     if form.busy {
-        p.status(ui, "status", "Signing in…", false);
+        let text = if form.joining {
+            "Joining…"
+        } else {
+            "Signing in…"
+        };
+        p.status(ui, "status", text, false);
     } else if let Some(message) = &form.message {
         p.status(ui, "status", message, true);
     }
@@ -160,7 +207,7 @@ fn details(bot: &Bot) -> String {
     details
 }
 
-fn status_text(status: BotStatus) -> &'static str {
+pub(crate) fn status_text(status: BotStatus) -> &'static str {
     match status {
         BotStatus::Idle => "Idle",
         BotStatus::Working => "Working",
@@ -193,6 +240,9 @@ fn bots_ui(
     let who = format!("Signed in as {}", signed_in.user.display_name);
     p.content(ui, "user", &who, line(TextRole::Secondary, 1));
     frame.action(ui, p, BokkieAction::SignOut, ActionEmphasis::Normal);
+    if signed_in.is_admin() {
+        frame.action(ui, p, BokkieAction::Admin, ActionEmphasis::Normal);
+    }
     if signed_in.signing_out {
         p.status(ui, "status", "Signing out…", false);
     } else if let Some(message) = &signed_in.message {
@@ -581,25 +631,45 @@ fn bot_row(
             line(TextRole::Caption, 2),
         );
     }
-    // A Stobie action has no per-row target, so each row's control triggers
-    // the Open action with its Bot's ID.
-    let name = format!("Open {}", bot.name);
-    let (open, ()) = p.native(ui, NativeTextControlKind::Button, |ui| {
-        (ui.button(name.as_str()), ())
+    row_button(
+        ui,
+        p,
+        frame,
+        &format!("Open {}", bot.name),
+        "bokkie.open-bot",
+        BokkieAction::OpenBot,
+        key,
+    );
+    ui.separator();
+}
+
+/// A control on one row of a list, such as Open on a Bot's row. A Stobie
+/// action has no per-row target, so the control triggers its action with
+/// the row's ID, and is observed as a button by hand.
+pub(crate) fn row_button(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    label: &str,
+    id_prefix: &str,
+    action: BokkieAction,
+    key: i64,
+) {
+    let (button, ()) = p.native(ui, NativeTextControlKind::Button, |ui| {
+        (ui.button(label), ())
     });
     let mut node = UiNode::container(
-        SemanticUiId::new(format!("bokkie.open-bot.{key}")),
+        SemanticUiId::new(format!("{id_prefix}.{key}")),
         Some(SemanticUiId::root()),
         UiRole::Button,
-        open.rect.into(),
+        button.rect.into(),
     );
-    node.name = name;
-    node.focused = open.has_focus();
+    node.name = label.to_owned();
+    node.focused = button.has_focus();
     p.observe_node(ui, node);
-    if open.clicked() {
-        frame.trigger_with(BokkieAction::OpenBot, ActionArgument::Number(key as f64));
+    if button.clicked() {
+        frame.trigger_with(action, ActionArgument::Number(key as f64));
     }
-    ui.separator();
 }
 
 fn conversation_ui(
@@ -820,15 +890,27 @@ fn messages_ui(
 }
 
 /// One message. Returns its byline's response.
-fn message_ui(
+pub(crate) fn message_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
     message: &Message,
     bot_name: &str,
 ) -> egui::Response {
+    message_by(ui, p, message, "You", bot_name)
+}
+
+/// One message, its author named for whoever reads it. Returns its byline's
+/// response.
+pub(crate) fn message_by(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    message: &Message,
+    user_name: &str,
+    bot_name: &str,
+) -> egui::Response {
     let key = message.id.0;
     let author = match message.author {
-        Author::User => "You",
+        Author::User => user_name,
         Author::Bot => bot_name,
     };
     let byline = match message.state {

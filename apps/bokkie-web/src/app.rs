@@ -25,6 +25,7 @@ use stobie_ui_egui::{
     Availability, Frame, IntentSender, Observation, PassContext, application_identity,
 };
 
+use crate::admin::Field;
 use crate::api::{Api, ApiReply, ApiRequest, Generation};
 use crate::socket::{Link, SocketUpdate};
 use crate::store::{Snapshot, Store};
@@ -41,6 +42,10 @@ pub const PASSWORD_ID: &str = "bokkie.password";
 pub const DRAFT_ID: &str = "bokkie.draft";
 /// The New Bot name field's stable ID.
 pub const BOT_NAME_ID: &str = "bokkie.bot-name";
+/// The invitation code field's stable ID.
+pub const INVITATION_CODE_ID: &str = "bokkie.invitation-code";
+/// The new account's name field's stable ID.
+pub const DISPLAY_NAME_ID: &str = "bokkie.display-name";
 /// The profile editor's name field's stable ID.
 pub const PROFILE_NAME_ID: &str = "bokkie.profile-name";
 /// The profile editor's label field's stable ID.
@@ -166,6 +171,143 @@ pub enum BokkieAction {
         id = "bokkie.keep-chatgpt"
     )]
     KeepChatGpt,
+    #[action(
+        label = "I have an invitation",
+        description = "Join Bokkie with an invitation code instead of signing in",
+        id = "bokkie.join"
+    )]
+    Join,
+    #[action(
+        label = "Join Bokkie",
+        description = "Create your account from the invitation code, and sign in",
+        id = "bokkie.accept-invitation"
+    )]
+    AcceptInvitation,
+    #[action(
+        label = "Accounts",
+        description = "Manage the household's accounts and invitations",
+        id = "bokkie.admin"
+    )]
+    Admin,
+    #[action(
+        label = "Open account",
+        description = "Open the account with this ID",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    OpenAccount,
+    #[action(
+        label = "New account is an admin",
+        description = "Invite an admin rather than a member",
+        id = "bokkie.invite-admin"
+    )]
+    InviteAdmin,
+    #[action(
+        label = "New account may create Bots",
+        description = "Let the invited member create their own Bots",
+        id = "bokkie.invite-may-create-bots"
+    )]
+    InviteMayCreateBots,
+    #[action(
+        label = "New account may edit Bot profiles",
+        description = "Let the invited member change their Bots' name, label, description and avatar",
+        id = "bokkie.invite-may-edit-profiles"
+    )]
+    InviteMayEditProfiles,
+    #[action(
+        label = "Create invitation",
+        description = "Create an invitation code, shown once"
+    )]
+    CreateInvitation,
+    #[action(
+        label = "Hide the code",
+        description = "Take the invitation code off the screen",
+        id = "bokkie.hide-invitation-code"
+    )]
+    HideInvitationCode,
+    #[action(
+        label = "Withdraw invitation",
+        description = "Withdraw the invitation with this ID",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    WithdrawInvitation,
+    #[action(
+        label = "May create Bots",
+        description = "Let the member create their own Bots, or only an admin",
+        id = "bokkie.may-create-bots"
+    )]
+    MayCreateBots,
+    #[action(
+        label = "May edit Bot profiles",
+        description = "Let the member change their Bots' name, label, description and avatar",
+        id = "bokkie.may-edit-profiles"
+    )]
+    MayEditProfiles,
+    #[action(
+        label = "Oversight",
+        description = "Let admins read all of the member's Bots and conversations, read-only; the member is shown a notice the whole time",
+        id = "bokkie.oversight"
+    )]
+    Oversight,
+    #[action(
+        label = "Account disabled",
+        description = "Disable the account, which ends its sessions and stops its Bots, or enable it again",
+        id = "bokkie.disabled"
+    )]
+    Disabled,
+    #[action(
+        label = "Save limits",
+        description = "Save the account's turn and token limits"
+    )]
+    SaveLimits,
+    #[action(
+        label = "Reset password",
+        description = "Set the account's password, which ends its sessions"
+    )]
+    ResetPassword,
+    #[action(label = "Make Bot", description = "Make a Bot for the member")]
+    MakeMemberBot,
+    #[action(
+        label = "Edit Bot",
+        description = "Edit the profile of the admin-made Bot with this ID",
+        id = "bokkie.edit-member-bot",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    EditMemberBot,
+    #[action(
+        label = "Save Bot",
+        description = "Save the Bot's profile",
+        id = "bokkie.save-member-bot"
+    )]
+    SaveMemberBot,
+    #[action(
+        label = "Cancel Bot edit",
+        description = "Close the Bot's profile without saving it",
+        id = "bokkie.cancel-member-bot"
+    )]
+    CancelMemberBot,
+    #[action(
+        label = "Read conversation",
+        description = "Read the conversation of the member's Bot with this ID, under oversight",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    ReadConversation,
+    #[action(
+        label = "Load earlier",
+        description = "Load the earlier messages of the conversation being read"
+    )]
+    LoadEarlier,
     #[action(label = "Stop", description = "Stop the Bot's reply in progress")]
     Stop,
     #[action(
@@ -184,6 +326,13 @@ pub enum BokkieIntent {
     EditProfileName(String),
     EditProfileLabel(String),
     EditProfileDescription(String),
+    EditInvitationCode(String),
+    EditDisplayName(String),
+    EditInviteName(String),
+    EditDailyTurns(String),
+    EditWeeklyTokens(String),
+    EditNewPassword(String),
+    EditMemberBotName(String),
     /// A command's reply, with the generation it was sent in.
     Reply {
         generation: Generation,
@@ -212,6 +361,15 @@ impl std::fmt::Debug for BokkieIntent {
                 .debug_tuple("EditProfileDescription")
                 .field(description)
                 .finish(),
+            Self::EditInvitationCode(_) => f.write_str("EditInvitationCode(<redacted>)"),
+            Self::EditDisplayName(name) => f.debug_tuple("EditDisplayName").field(name).finish(),
+            Self::EditInviteName(name) => f.debug_tuple("EditInviteName").field(name).finish(),
+            Self::EditDailyTurns(text) => f.debug_tuple("EditDailyTurns").field(text).finish(),
+            Self::EditWeeklyTokens(text) => f.debug_tuple("EditWeeklyTokens").field(text).finish(),
+            Self::EditNewPassword(_) => f.write_str("EditNewPassword(<redacted>)"),
+            Self::EditMemberBotName(name) => {
+                f.debug_tuple("EditMemberBotName").field(name).finish()
+            }
             Self::Reply { generation, reply } => f
                 .debug_struct("Reply")
                 .field("generation", generation)
@@ -240,6 +398,12 @@ pub(crate) enum Session {
 
 #[derive(Debug, Default)]
 pub(crate) struct SignInForm {
+    /// Joining with an invitation rather than signing in.
+    pub(crate) joining: bool,
+    /// The invitation code, while joining.
+    pub(crate) code: String,
+    /// The new account's name, while joining.
+    pub(crate) display_name: String,
     pub(crate) username: String,
     pub(crate) password: String,
     /// A sign-in is under way.
@@ -278,10 +442,12 @@ pub(crate) struct SignedIn {
     pub(crate) account: Account,
     /// The household's ChatGPT sign-in screen, when an admin has it open.
     pub(crate) household: Option<Household>,
+    /// The admin section, when an admin has it open.
+    pub(crate) admin: Option<crate::admin::Admin>,
 }
 
 impl SignedIn {
-    fn is_admin(&self) -> bool {
+    pub(crate) fn is_admin(&self) -> bool {
         self.user.role == Role::Admin
     }
 
@@ -312,6 +478,7 @@ impl SignedIn {
         }
         if !self.is_admin() {
             self.household = None;
+            self.admin = None;
         }
     }
 }
@@ -512,6 +679,9 @@ impl App {
             Session::SignedOut(_) => "signed_out",
             Session::SignedIn(signed_in) if signed_in.signing_out => "signing_out",
             Session::SignedIn(signed_in) if signed_in.household.is_some() => "household",
+            Session::SignedIn(_) if self.admin_screen().is_some() => {
+                self.admin_screen().unwrap_or_default()
+            }
             Session::SignedIn(signed_in) if signed_in.open.is_some() => "conversation",
             Session::SignedIn(_) => "signed_in",
         }
@@ -617,7 +787,7 @@ impl App {
             .find(|message| message.author == Author::Bot)
     }
 
-    fn send(&self, request: ApiRequest) {
+    pub(crate) fn send(&self, request: ApiRequest) {
         if let Some(api) = &self.api {
             api.send(self.generation, request);
         }
@@ -668,6 +838,7 @@ impl App {
             show_hidden: false,
             account: Account::Checking,
             household: None,
+            admin: None,
         }));
         // The list shows at once. Once the socket is live it is loaded again,
         // so that no event can fall between the list and the socket.
@@ -750,12 +921,26 @@ impl App {
     }
 
     /// A signed-in command answered 401: the session is gone.
-    fn session_ended(&mut self) {
+    pub(crate) fn session_ended(&mut self) {
         self.signed_out(Some("Your session has ended. Sign in again".into()));
     }
 
     fn reply(&mut self, reply: ApiReply) -> bool {
+        let reply = match self.admin_reply(reply) {
+            Ok(changed) => return changed,
+            Err(reply) => *reply,
+        };
         match (reply, &mut self.session) {
+            (ApiReply::Joined(result), Session::SignedOut(form)) if form.busy && form.joining => {
+                match result {
+                    Ok(session) => self.signed_in(session),
+                    // The code and names stay, to correct.
+                    Err(error) => {
+                        form.busy = false;
+                        form.message = Some(error.message);
+                    }
+                }
+            }
             (ApiReply::Session(Ok(session)), Session::Checking) => self.signed_in(session),
             // A session check while signed in: the account as it now is,
             // unless an event has said something newer meanwhile, and
@@ -1157,8 +1342,26 @@ impl App {
         true
     }
 
-    /// Change one field of the profile being edited, unless it is saving.
+    /// Change one field of an admin form.
+    fn edit_admin(&mut self, field: Field, text: String) -> bool {
+        match &mut self.session {
+            Session::SignedIn(signed_in) => crate::admin::edit(signed_in, field, text),
+            _ => false,
+        }
+    }
+
+    /// Change one field of the profile being edited, unless it is saving:
+    /// an admin-made Bot's in the admin section, or the open Bot's.
     fn edit_profile(&mut self, field: fn(&mut ProfileEditor) -> &mut String, text: String) -> bool {
+        if let Session::SignedIn(signed_in) = &mut self.session
+            && let Some(editor) = crate::admin::editor(signed_in)
+        {
+            if editor.busy {
+                return false;
+            }
+            *field(editor) = text;
+            return true;
+        }
         match self.open_mut().and_then(|open| open.editor.as_mut()) {
             Some(editor) if !editor.busy => {
                 *field(editor) = text;
@@ -1351,13 +1554,20 @@ impl Application for App {
     }
 
     fn availability(&self, target: ActionTarget<BokkieAction>) -> Availability {
+        if let Some(reason) = self.admin_availability(target.action) {
+            return reason.map_or(Availability::Enabled, |reason| Availability::Disabled {
+                reason: reason.into(),
+            });
+        }
         let signed_in = match &self.session {
             Session::SignedIn(signed_in) => Some(signed_in),
             _ => None,
         };
         let reason = match (target.action, &self.session) {
             (BokkieAction::SignIn, Session::SignedOut(form)) => {
-                if form.busy {
+                if form.joining {
+                    Some("Join with your invitation, or sign in instead")
+                } else if form.busy {
                     Some("Signing in")
                 } else if form.username.trim().is_empty() {
                     Some("Enter your username")
@@ -1368,6 +1578,27 @@ impl Application for App {
                 }
             }
             (BokkieAction::SignIn, _) => Some("Already signed in"),
+            (BokkieAction::Join, Session::SignedOut(form)) if form.busy => Some("Signing in"),
+            (BokkieAction::Join, Session::SignedOut(_)) => None,
+            (BokkieAction::Join, _) => Some("Already signed in"),
+            (BokkieAction::AcceptInvitation, Session::SignedOut(form)) => {
+                if !form.joining {
+                    Some("Choose I have an invitation first")
+                } else if form.busy {
+                    Some("Joining")
+                } else if form.code.trim().is_empty() {
+                    Some("Enter the invitation code")
+                } else if form.username.trim().is_empty() {
+                    Some("Choose a username")
+                } else if form.display_name.trim().is_empty() {
+                    Some("Enter your name")
+                } else if form.password.chars().count() < 10 {
+                    Some("Choose a password of at least 10 characters")
+                } else {
+                    None
+                }
+            }
+            (BokkieAction::AcceptInvitation, _) => Some("Already signed in"),
             (BokkieAction::ReloadPage, _) => {
                 (self.link() != Link::Outdated).then_some("This page matches Bokkie's server")
             }
@@ -1392,9 +1623,16 @@ impl Application for App {
             (BokkieAction::OpenBot, _) if self.household().is_some() => {
                 Some("Leave the ChatGPT sign-in first")
             }
+            (BokkieAction::OpenBot, _) if self.admin_screen().is_some() => {
+                Some("Leave the accounts first")
+            }
             (BokkieAction::OpenBot, _) if !self.store.bots_loaded() => Some("Loading the Bots"),
             (BokkieAction::OpenBot, _) => None,
-            (BokkieAction::Back, _) if self.open().is_none() && self.household().is_none() => {
+            (BokkieAction::Back, _)
+                if self.open().is_none()
+                    && self.household().is_none()
+                    && self.admin_screen().is_none() =>
+            {
                 Some("Already on the list of Bots")
             }
             (BokkieAction::Back, _) => None,
@@ -1419,7 +1657,11 @@ impl Application for App {
                 }
             }),
             (BokkieAction::ShowHidden, _) => match signed_in {
-                Some(signed_in) if signed_in.open.is_some() || signed_in.household.is_some() => {
+                Some(signed_in)
+                    if signed_in.open.is_some()
+                        || signed_in.household.is_some()
+                        || signed_in.admin.is_some() =>
+                {
                     Some("Return to the list of Bots first")
                 }
                 _ => None,
@@ -1461,7 +1703,10 @@ impl Application for App {
             (BokkieAction::Household, _) => signed_in.and_then(|signed_in| {
                 if !signed_in.is_admin() {
                     Some("Only an admin signs the household in to ChatGPT or out")
-                } else if signed_in.open.is_some() || signed_in.household.is_some() {
+                } else if signed_in.open.is_some()
+                    || signed_in.household.is_some()
+                    || signed_in.admin.is_some()
+                {
                     Some("Return to the list of Bots first")
                 } else {
                     None
@@ -1482,6 +1727,8 @@ impl Application for App {
             },
             (BokkieAction::Send, _) => self.can_send().err(),
             (BokkieAction::Stop, _) => self.can_stop().err(),
+            // The admin section's actions answered above.
+            _ => None,
         };
         reason.map_or(Availability::Enabled, |reason| Availability::Disabled {
             reason: reason.into(),
@@ -1559,6 +1806,25 @@ impl Application for App {
                 }
                 _ => false,
             },
+            BokkieIntent::EditInvitationCode(text) => match &mut self.session {
+                Session::SignedOut(form) if !form.busy => {
+                    form.code = text;
+                    true
+                }
+                _ => false,
+            },
+            BokkieIntent::EditDisplayName(text) => match &mut self.session {
+                Session::SignedOut(form) if !form.busy => {
+                    form.display_name = text;
+                    true
+                }
+                _ => false,
+            },
+            BokkieIntent::EditInviteName(text) => self.edit_admin(Field::InviteName, text),
+            BokkieIntent::EditDailyTurns(text) => self.edit_admin(Field::DailyTurns, text),
+            BokkieIntent::EditWeeklyTokens(text) => self.edit_admin(Field::WeeklyTokens, text),
+            BokkieIntent::EditNewPassword(text) => self.edit_admin(Field::NewPassword, text),
+            BokkieIntent::EditMemberBotName(text) => self.edit_admin(Field::MemberBotName, text),
             BokkieIntent::EditProfileName(text) => self.edit_profile(|e| &mut e.name, text),
             BokkieIntent::EditProfileLabel(text) => self.edit_profile(|e| &mut e.label, text),
             BokkieIntent::EditProfileDescription(text) => {
@@ -1574,7 +1840,33 @@ impl Application for App {
     }
 
     fn perform(&mut self, target: ActionTarget<BokkieAction>, _: &mut ()) -> Result<bool, String> {
+        if let Some(done) = self.admin_perform(target.action) {
+            return done;
+        }
+        if self.admin_screen().is_some() {
+            match target.action {
+                BokkieAction::Refresh => return Ok(self.admin_refresh()),
+                BokkieAction::Back => return Ok(self.admin_back()),
+                _ => {}
+            }
+        }
         match (target.action, &mut self.session) {
+            (BokkieAction::Join, Session::SignedOut(form)) => {
+                form.joining = !form.joining;
+                form.message = None;
+            }
+            (BokkieAction::AcceptInvitation, Session::SignedOut(form)) => {
+                form.busy = true;
+                form.message = None;
+                // The password leaves the form as soon as it is sent.
+                let accept = bokkie_protocol::api::AcceptInvitationRequest {
+                    code: form.code.trim().to_owned(),
+                    username: form.username.trim().to_owned(),
+                    password: std::mem::take(&mut form.password),
+                    display_name: form.display_name.trim().to_owned(),
+                };
+                self.send(ApiRequest::AcceptInvitation(accept));
+            }
             (BokkieAction::SignIn, Session::SignedOut(form)) => {
                 form.busy = true;
                 form.message = None;
@@ -1791,6 +2083,25 @@ impl Application for App {
         state: &mut (),
     ) -> Result<bool, String> {
         match (target.action, argument) {
+            (
+                action @ (BokkieAction::OpenAccount
+                | BokkieAction::WithdrawInvitation
+                | BokkieAction::EditMemberBot
+                | BokkieAction::ReadConversation),
+                ActionArgument::Number(id),
+            ) if id.fract() == 0.0 && (1.0..=MAX_BOT_ID).contains(&id) => self
+                .admin_perform_with(action, id as i64)
+                .unwrap_or(Ok(false)),
+            (
+                BokkieAction::OpenAccount
+                | BokkieAction::WithdrawInvitation
+                | BokkieAction::EditMemberBot
+                | BokkieAction::ReadConversation,
+                _,
+            ) => Err(format!(
+                "{} needs an ID",
+                target.action.specification().label
+            )),
             (BokkieAction::OpenBot, ActionArgument::Number(id))
                 if id.fract() == 0.0 && (1.0..=MAX_BOT_ID).contains(&id) =>
             {
@@ -1830,6 +2141,11 @@ impl Application for App {
     /// never one of them.
     fn observe(&self, observation: &mut Observation<'_>) {
         observation.fact("screen", self.screen());
+        observation.fact(
+            "joining",
+            matches!(&self.session, Session::SignedOut(form) if form.joining),
+        );
+        self.observe_admin(observation);
         observation.fact(
             "user",
             self.user().map_or("", |user| user.username.as_str()),
@@ -2015,7 +2331,7 @@ impl Application for App {
 }
 
 /// At most 200 characters of a text, for a fact.
-fn bounded(text: &str) -> String {
+pub(crate) fn bounded(text: &str) -> String {
     text.chars().take(200).collect()
 }
 

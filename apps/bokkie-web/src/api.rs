@@ -6,11 +6,13 @@
 //! tests record them and reply by hand.
 
 use bokkie_protocol::api::{
-    Bot, BotList, CodexAccount, CreateBotRequest, DeviceCodeLogin, LoginRequest, MessagePage,
-    SendMessageRequest, SendMessageResponse, SessionResponse, StopResponse, UpdateBotRequest,
-    Usage,
+    AcceptInvitationRequest, AdminUser, AdminUserList, Allowance, Bot, BotList, CodexAccount,
+    CreateBotRequest, CreateInvitationRequest, CreatedInvitation, DeviceCodeLogin, InvitationList,
+    LoginRequest, MemberBot, MemberBotList, MessagePage, ResetPasswordRequest, SendMessageRequest,
+    SendMessageResponse, SessionResponse, StopResponse, UpdateBotProfileRequest, UpdateBotRequest,
+    UpdateUserRequest, Usage,
 };
-use bokkie_protocol::{API_PREFIX, BotId, MessageId, Timestamp};
+use bokkie_protocol::{API_PREFIX, BotId, MessageId, Timestamp, UserId};
 
 use crate::wire::{self, CommandError};
 
@@ -58,6 +60,35 @@ pub enum ApiRequest {
     /// `POST /api/v1/codex/logout`: sign the household out, which signs out
     /// every account's Bots.
     CodexLogout,
+    /// `POST /api/v1/invitations/accept`: create an account from an
+    /// invitation code, and sign in as it.
+    AcceptInvitation(AcceptInvitationRequest),
+    /// `GET /api/v1/admin/users`: every account (admins only, as are the
+    /// rest).
+    ListAccounts,
+    /// `PATCH /api/v1/admin/users/{id}`: change an account.
+    UpdateAccount(UserId, UpdateUserRequest),
+    /// `PUT /api/v1/admin/users/{id}/password`: reset an account's password.
+    ResetPassword(UserId, ResetPasswordRequest),
+    /// `GET /api/v1/admin/users/{id}/usage`: an account's allowance.
+    AccountUsage(UserId),
+    /// `GET /api/v1/admin/invitations`: the outstanding invitations.
+    ListInvitations,
+    /// `POST /api/v1/admin/invitations`: invite someone.
+    CreateInvitation(CreateInvitationRequest),
+    /// `DELETE /api/v1/admin/invitations/{id}`: withdraw an invitation.
+    WithdrawInvitation(i64),
+    /// `GET /api/v1/admin/users/{id}/bots`: the member's Bots an admin may
+    /// see.
+    MemberBots(UserId),
+    /// `POST /api/v1/admin/users/{id}/bots`: make a Bot for the member.
+    CreateMemberBot(UserId, CreateBotRequest),
+    /// `PATCH /api/v1/admin/users/{id}/bots/{bot}`: change an admin-made
+    /// Bot's profile.
+    UpdateMemberBot(UserId, BotId, UpdateBotProfileRequest),
+    /// `GET /api/v1/admin/users/{id}/bots/{bot}/messages[?before=]`: read a
+    /// member's conversation, under oversight.
+    MemberMessages(UserId, BotId, Option<MessageId>),
 }
 
 // The password must never reach a log line.
@@ -91,6 +122,44 @@ impl std::fmt::Debug for ApiRequest {
             Self::CodexLoginStatus => f.write_str("CodexLoginStatus"),
             Self::CancelCodexLogin => f.write_str("CancelCodexLogin"),
             Self::CodexLogout => f.write_str("CodexLogout"),
+            Self::AcceptInvitation(accept) => {
+                f.debug_tuple("AcceptInvitation").field(accept).finish()
+            }
+            Self::ListAccounts => f.write_str("ListAccounts"),
+            Self::UpdateAccount(user, changes) => f
+                .debug_tuple("UpdateAccount")
+                .field(user)
+                .field(changes)
+                .finish(),
+            Self::ResetPassword(user, reset) => f
+                .debug_tuple("ResetPassword")
+                .field(user)
+                .field(reset)
+                .finish(),
+            Self::AccountUsage(user) => f.debug_tuple("AccountUsage").field(user).finish(),
+            Self::ListInvitations => f.write_str("ListInvitations"),
+            Self::CreateInvitation(invitation) => {
+                f.debug_tuple("CreateInvitation").field(invitation).finish()
+            }
+            Self::WithdrawInvitation(id) => f.debug_tuple("WithdrawInvitation").field(id).finish(),
+            Self::MemberBots(user) => f.debug_tuple("MemberBots").field(user).finish(),
+            Self::CreateMemberBot(user, bot) => f
+                .debug_tuple("CreateMemberBot")
+                .field(user)
+                .field(bot)
+                .finish(),
+            Self::UpdateMemberBot(user, bot, changes) => f
+                .debug_tuple("UpdateMemberBot")
+                .field(user)
+                .field(bot)
+                .field(changes)
+                .finish(),
+            Self::MemberMessages(user, bot, before) => f
+                .debug_tuple("MemberMessages")
+                .field(user)
+                .field(bot)
+                .field(before)
+                .finish(),
         }
     }
 }
@@ -100,6 +169,7 @@ impl std::fmt::Debug for ApiRequest {
 pub enum Method {
     Get,
     Post,
+    Put,
     Patch,
     Delete,
 }
@@ -109,6 +179,7 @@ impl Method {
         match self {
             Self::Get => "GET",
             Self::Post => "POST",
+            Self::Put => "PUT",
             Self::Patch => "PATCH",
             Self::Delete => "DELETE",
         }
@@ -139,7 +210,32 @@ pub enum ApiReply {
     /// The sign-in as cancelling left it.
     LoginCancelled(Result<DeviceCode, CommandError>),
     HouseholdSignedOut(Result<(), CommandError>),
+    /// An invitation accepted: the new account, signed in.
+    Joined(Result<SessionResponse, CommandError>),
+    Accounts(Result<AdminUserList, CommandError>),
+    AccountUpdated(UserId, Result<AdminUser, CommandError>),
+    PasswordReset(UserId, Result<(), CommandError>),
+    AccountUsage(UserId, Result<Allowance, CommandError>),
+    Invitations(Result<InvitationList, CommandError>),
+    /// A new invitation, with its code, which is shown once.
+    Invited(Result<Invitation, CommandError>),
+    InvitationWithdrawn(i64, Result<(), CommandError>),
+    MemberBots(UserId, Result<MemberBotList, CommandError>),
+    MemberBotCreated(UserId, Result<MemberBot, CommandError>),
+    MemberBotUpdated(UserId, BotId, Result<MemberBot, CommandError>),
+    MemberMessages(
+        UserId,
+        BotId,
+        Option<MessageId>,
+        Result<MessagePage, CommandError>,
+    ),
 }
+
+/// A new invitation. Its code is shown on screen once and nowhere else;
+/// [`CreatedInvitation`]'s `Debug` leaves it out.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Invitation(pub CreatedInvitation);
 
 /// A device-code sign-in as the gateway started it. The code is shown on
 /// screen and nowhere else, so its `Debug` leaves it out.
@@ -168,15 +264,29 @@ impl ApiRequest {
             | Self::LoadOlder(..)
             | Self::LoadUsage
             | Self::CodexAccount
-            | Self::CodexLoginStatus => Method::Get,
+            | Self::CodexLoginStatus
+            | Self::ListAccounts
+            | Self::AccountUsage(_)
+            | Self::ListInvitations
+            | Self::MemberBots(_)
+            | Self::MemberMessages(..) => Method::Get,
             Self::SignIn(_)
             | Self::SendMessage(..)
             | Self::StopBot(_)
             | Self::CreateBot(_)
             | Self::CodexLogin
-            | Self::CodexLogout => Method::Post,
-            Self::UpdateBot(..) => Method::Patch,
-            Self::SignOut | Self::AcknowledgeReset | Self::CancelCodexLogin => Method::Delete,
+            | Self::CodexLogout
+            | Self::AcceptInvitation(_)
+            | Self::CreateInvitation(_)
+            | Self::CreateMemberBot(..) => Method::Post,
+            Self::ResetPassword(..) => Method::Put,
+            Self::UpdateBot(..) | Self::UpdateAccount(..) | Self::UpdateMemberBot(..) => {
+                Method::Patch
+            }
+            Self::SignOut
+            | Self::AcknowledgeReset
+            | Self::CancelCodexLogin
+            | Self::WithdrawInvitation(_) => Method::Delete,
         }
     }
 
@@ -192,6 +302,23 @@ impl ApiRequest {
                 "/codex/login".into()
             }
             Self::CodexLogout => "/codex/logout".into(),
+            Self::AcceptInvitation(_) => "/invitations/accept".into(),
+            Self::ListAccounts => "/admin/users".into(),
+            Self::UpdateAccount(user, _) => format!("/admin/users/{user}"),
+            Self::ResetPassword(user, _) => format!("/admin/users/{user}/password"),
+            Self::AccountUsage(user) => format!("/admin/users/{user}/usage"),
+            Self::ListInvitations | Self::CreateInvitation(_) => "/admin/invitations".into(),
+            Self::WithdrawInvitation(id) => format!("/admin/invitations/{id}"),
+            Self::MemberBots(user) | Self::CreateMemberBot(user, _) => {
+                format!("/admin/users/{user}/bots")
+            }
+            Self::UpdateMemberBot(user, bot, _) => format!("/admin/users/{user}/bots/{bot}"),
+            Self::MemberMessages(user, bot, None) => {
+                format!("/admin/users/{user}/bots/{bot}/messages")
+            }
+            Self::MemberMessages(user, bot, Some(before)) => {
+                format!("/admin/users/{user}/bots/{bot}/messages?before={before}")
+            }
             Self::LoadMessages(bot) | Self::SendMessage(bot, _) => format!("/bots/{bot}/messages"),
             Self::LoadOlder(bot, before) => format!("/bots/{bot}/messages?before={before}"),
             Self::StopBot(bot) => format!("/bots/{bot}/stop"),
@@ -207,6 +334,12 @@ impl ApiRequest {
             Self::SendMessage(_, message) => Some(json(message)),
             Self::CreateBot(bot) => Some(json(bot)),
             Self::UpdateBot(_, changes) => Some(json(changes)),
+            Self::AcceptInvitation(accept) => Some(json(accept)),
+            Self::UpdateAccount(_, changes) => Some(json(changes)),
+            Self::ResetPassword(_, reset) => Some(json(reset)),
+            Self::CreateInvitation(invitation) => Some(json(invitation)),
+            Self::CreateMemberBot(_, bot) => Some(json(bot)),
+            Self::UpdateMemberBot(_, _, changes) => Some(json(changes)),
             _ => None,
         }
     }
@@ -237,6 +370,34 @@ impl ApiRequest {
             Self::CodexLoginStatus => ApiReply::LoginStatus(wire::decode_response(status, body)),
             Self::CancelCodexLogin => ApiReply::LoginCancelled(wire::decode_response(status, body)),
             Self::CodexLogout => ApiReply::HouseholdSignedOut(wire::decode_empty(status, body)),
+            Self::AcceptInvitation(_) => ApiReply::Joined(wire::decode_response(status, body)),
+            Self::ListAccounts => ApiReply::Accounts(wire::decode_response(status, body)),
+            Self::UpdateAccount(user, _) => {
+                ApiReply::AccountUpdated(*user, wire::decode_response(status, body))
+            }
+            Self::ResetPassword(user, _) => {
+                ApiReply::PasswordReset(*user, wire::decode_empty(status, body))
+            }
+            Self::AccountUsage(user) => {
+                ApiReply::AccountUsage(*user, wire::decode_response(status, body))
+            }
+            Self::ListInvitations => ApiReply::Invitations(wire::decode_response(status, body)),
+            Self::CreateInvitation(_) => ApiReply::Invited(wire::decode_response(status, body)),
+            Self::WithdrawInvitation(id) => {
+                ApiReply::InvitationWithdrawn(*id, wire::decode_empty(status, body))
+            }
+            Self::MemberBots(user) => {
+                ApiReply::MemberBots(*user, wire::decode_response(status, body))
+            }
+            Self::CreateMemberBot(user, _) => {
+                ApiReply::MemberBotCreated(*user, wire::decode_response(status, body))
+            }
+            Self::UpdateMemberBot(user, bot, _) => {
+                ApiReply::MemberBotUpdated(*user, *bot, wire::decode_response(status, body))
+            }
+            Self::MemberMessages(user, bot, before) => {
+                ApiReply::MemberMessages(*user, *bot, *before, wire::decode_response(status, body))
+            }
         }
     }
 
@@ -261,6 +422,22 @@ impl ApiRequest {
             Self::CodexLoginStatus => ApiReply::LoginStatus(Err(error)),
             Self::CancelCodexLogin => ApiReply::LoginCancelled(Err(error)),
             Self::CodexLogout => ApiReply::HouseholdSignedOut(Err(error)),
+            Self::AcceptInvitation(_) => ApiReply::Joined(Err(error)),
+            Self::ListAccounts => ApiReply::Accounts(Err(error)),
+            Self::UpdateAccount(user, _) => ApiReply::AccountUpdated(*user, Err(error)),
+            Self::ResetPassword(user, _) => ApiReply::PasswordReset(*user, Err(error)),
+            Self::AccountUsage(user) => ApiReply::AccountUsage(*user, Err(error)),
+            Self::ListInvitations => ApiReply::Invitations(Err(error)),
+            Self::CreateInvitation(_) => ApiReply::Invited(Err(error)),
+            Self::WithdrawInvitation(id) => ApiReply::InvitationWithdrawn(*id, Err(error)),
+            Self::MemberBots(user) => ApiReply::MemberBots(*user, Err(error)),
+            Self::CreateMemberBot(user, _) => ApiReply::MemberBotCreated(*user, Err(error)),
+            Self::UpdateMemberBot(user, bot, _) => {
+                ApiReply::MemberBotUpdated(*user, *bot, Err(error))
+            }
+            Self::MemberMessages(user, bot, before) => {
+                ApiReply::MemberMessages(*user, *bot, *before, Err(error))
+            }
         }
     }
 }
@@ -492,6 +669,102 @@ mod tests {
             assert!(!logged.contains("WXYZ-1234"), "{logged}");
             assert!(logged.contains("Expired"), "{logged}");
         }
+    }
+
+    #[test]
+    fn admin_commands_name_their_routes_and_keep_their_secrets() {
+        use bokkie_protocol::api::{
+            AcceptInvitationRequest, CreateInvitationRequest, Permissions, ResetPasswordRequest,
+            Role, UpdateBotProfileRequest, UpdateUserRequest,
+        };
+        let user = UserId(2);
+        let reset = ApiRequest::ResetPassword(
+            user,
+            ResetPasswordRequest {
+                new_password: "a new long password".into(),
+            },
+        );
+        let accept = ApiRequest::AcceptInvitation(AcceptInvitationRequest {
+            code: "the-code".into(),
+            username: "grace".into(),
+            password: "a long password".into(),
+            display_name: "Grace".into(),
+        });
+        let routes: Vec<(&str, String)> = [
+            accept.clone(),
+            ApiRequest::ListAccounts,
+            ApiRequest::UpdateAccount(user, UpdateUserRequest::default()),
+            reset.clone(),
+            ApiRequest::AccountUsage(user),
+            ApiRequest::ListInvitations,
+            ApiRequest::CreateInvitation(CreateInvitationRequest {
+                role: Role::Member,
+                permissions: Permissions::default(),
+                display_name: None,
+                expires_in_hours: None,
+            }),
+            ApiRequest::WithdrawInvitation(4),
+            ApiRequest::MemberBots(user),
+            ApiRequest::CreateMemberBot(
+                user,
+                CreateBotRequest {
+                    name: "Coach".into(),
+                    label: String::new(),
+                    description: String::new(),
+                    avatar: None,
+                },
+            ),
+            ApiRequest::UpdateMemberBot(user, BotId(7), UpdateBotProfileRequest::default()),
+            ApiRequest::MemberMessages(user, BotId(7), None),
+            ApiRequest::MemberMessages(user, BotId(7), Some(MessageId(11))),
+        ]
+        .iter()
+        .map(|request| (request.method().as_str(), request.path()))
+        .collect();
+        assert_eq!(
+            routes,
+            [
+                ("POST", "/api/v1/invitations/accept".to_owned()),
+                ("GET", "/api/v1/admin/users".to_owned()),
+                ("PATCH", "/api/v1/admin/users/2".to_owned()),
+                ("PUT", "/api/v1/admin/users/2/password".to_owned()),
+                ("GET", "/api/v1/admin/users/2/usage".to_owned()),
+                ("GET", "/api/v1/admin/invitations".to_owned()),
+                ("POST", "/api/v1/admin/invitations".to_owned()),
+                ("DELETE", "/api/v1/admin/invitations/4".to_owned()),
+                ("GET", "/api/v1/admin/users/2/bots".to_owned()),
+                ("POST", "/api/v1/admin/users/2/bots".to_owned()),
+                ("PATCH", "/api/v1/admin/users/2/bots/7".to_owned()),
+                ("GET", "/api/v1/admin/users/2/bots/7/messages".to_owned()),
+                (
+                    "GET",
+                    "/api/v1/admin/users/2/bots/7/messages?before=11".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(
+            reset.body().as_deref(),
+            Some(r#"{"new_password":"a new long password"}"#)
+        );
+        let logged = format!("{reset:?} {accept:?}");
+        for secret in ["a new long password", "a long password", "the-code"] {
+            assert!(!logged.contains(secret), "{logged}");
+        }
+        let invited = ApiRequest::CreateInvitation(CreateInvitationRequest {
+            role: Role::Member,
+            permissions: Permissions::default(),
+            display_name: None,
+            expires_in_hours: None,
+        })
+        .decode(
+            201,
+            r#"{"id":5,"code":"the-code","role":"member","expires_at":1800000900000}"#,
+        );
+        let ApiReply::Invited(Ok(invitation)) = &invited else {
+            panic!("an invitation");
+        };
+        assert_eq!(invitation.0.code, "the-code");
+        assert!(!format!("{invited:?}").contains("the-code"));
     }
 
     #[test]
