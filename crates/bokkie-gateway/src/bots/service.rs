@@ -705,25 +705,24 @@ impl Conversations {
                             TurnStatus::Interrupted => MessageState::Interrupted,
                             TurnStatus::Failed => MessageState::Failed,
                         };
-                        self.finish_streaming(user, Some(bot.id), state).await?;
+                        let mut batch = self.finish_streaming(user, Some(bot.id), state).await?;
                         // Only a turn the token stop actually cut short is
                         // announced as stopped. A chat-only turn usually
                         // reports its tokens after its reply is complete.
                         if stopped_for_tokens && done.turn.status == TurnStatus::Interrupted {
-                            self.emit(
-                                user,
-                                Event::BotError {
+                            batch
+                                .emit(Event::BotError {
                                     bot_id: bot.id,
                                     message: "Your token allowance is used up, so this turn was \
                                               stopped"
                                         .into(),
-                                },
-                            )
-                            .await;
+                                })
+                                .await?;
                         }
                         if ended {
-                            self.status(user, bot.id).await;
+                            self.emit_status(&mut batch, bot.id).await?;
                         }
+                        self.commit(batch).await;
                     }
                 }
                 ServerNotification::ThreadTokenUsageUpdated(update) => {
@@ -777,9 +776,9 @@ impl Conversations {
                             live.token_stops.remove(&(user, turn.turn_id));
                         }
                     }
-                    self.finish_streaming(user, Some(bot.id), MessageState::Failed)
+                    let mut batch = self
+                        .finish_streaming(user, Some(bot.id), MessageState::Failed)
                         .await?;
-                    let mut batch = self.events.begin(user).await?;
                     store::set_refused(&mut *batch, self.clock.now(), user, bot.id, &reason)
                         .await?;
                     self.emit_status(&mut batch, bot.id).await?;
@@ -800,11 +799,13 @@ impl Conversations {
                         .copied()
                         .collect()
                 };
-                self.finish_streaming(user, None, MessageState::Failed)
+                let mut batch = self
+                    .finish_streaming(user, None, MessageState::Failed)
                     .await?;
                 for bot in stopped {
-                    self.status(user, bot).await;
+                    self.emit_status(&mut batch, bot).await?;
                 }
+                self.commit(batch).await;
             }
         }
         Ok(())
@@ -870,13 +871,15 @@ impl Conversations {
         Ok(Some(message))
     }
 
-    /// Ends the user's replies still streaming, for one Bot or all of them.
+    /// Ends the user's replies still streaming, for one Bot or all of them,
+    /// in a batch that the caller adds the rest of the change to and
+    /// commits, so that clients see the replies end with it.
     async fn finish_streaming(
         &self,
         user: UserId,
         bot: Option<BotId>,
         state: MessageState,
-    ) -> Result<()> {
+    ) -> Result<Batch> {
         self.flush().await?;
         self.live()
             .replies
@@ -890,8 +893,7 @@ impl Conversations {
                 batch.emit(Event::MessageCompleted { message }).await?;
             }
         }
-        batch.commit().await?;
-        Ok(())
+        Ok(batch)
     }
 
     /// The user's allowance now, with their current limits.
