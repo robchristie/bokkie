@@ -624,3 +624,31 @@ fn the_gateway_will_not_start_with_a_bad_web_root() {
     // It stopped before touching the data directory.
     assert!(!dir.path().join("data").exists());
 }
+
+#[test]
+fn the_gateway_will_not_start_with_a_bad_origin() {
+    // A control character once passed the origin check and then panicked
+    // building the web package's Content-Security-Policy.
+    let dir = tempfile::tempdir().unwrap();
+    let web = dir.path().join("web");
+    std::fs::create_dir(&web).unwrap();
+    std::fs::write(web.join("index.html"), "<!doctype html>").unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bokkie-gateway"))
+        .arg("serve")
+        .env_clear()
+        .env("BOKKIE_ORIGIN", "https://bokkie\u{7}.example.lan")
+        .env("BOKKIE_DATA", dir.path().join("data"))
+        .env("BOKKIE_LISTEN", "127.0.0.1:0")
+        .env("BOKKIE_CODEX_BIN", "/nonexistent/codex")
+        .env("BOKKIE_WEB_ROOT", &web)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("bokkie-gateway: origin \"https://bokkie\\u{7}.example.lan\" must be"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert!(!dir.path().join("data").exists());
+}
