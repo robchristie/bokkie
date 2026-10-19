@@ -646,17 +646,6 @@ fn with_oversight_on_an_admin_reads_a_conversation_and_can_send_nothing() {
     ));
     assert_eq!(fixture.fact("reading_count"), 3_u64.into());
     assert!(!fixture.shows("Load earlier"));
-    // A refused read says why.
-    fixture.click("Refresh");
-    let refused = "Oversight of this member is off";
-    let _ = fixture.sent();
-    fixture.reply(ApiReply::MemberMessages(
-        GRACE,
-        BotId(7),
-        None,
-        Err(error(403, ErrorCode::Forbidden, refused)),
-    ));
-    assert!(fixture.shows(refused));
     // Her own Bot cannot be edited by naming it either.
     let own = fixture.harness.state_mut().app_mut().perform_with(
         stobie_ui_egui::ActionTarget::application(BokkieAction::EditMemberBot),
@@ -701,6 +690,67 @@ fn with_oversight_on_an_admin_reads_a_conversation_and_can_send_nothing() {
         }),
     ));
     assert!(!fixture.shows("Read Coach") && !fixture.shows("Diary"));
+}
+
+#[test]
+fn a_read_refused_because_oversight_went_off_elsewhere_closes_the_conversation() {
+    let mut fixture = Fixture::new();
+    fixture.grace_open(true, vec![member_bot(7, "Diary", false, true)]);
+    fixture.act_with(BokkieAction::ReadConversation, 7);
+    let _ = fixture.sent();
+    fixture.reply(ApiReply::MemberMessages(
+        GRACE,
+        BotId(7),
+        None,
+        Ok(MessagePage {
+            messages: vec![read_message(11, Author::User, "Dear diary")],
+            older: None,
+            seq: Seq(40),
+        }),
+    ));
+    assert!(fixture.shows("Dear diary"));
+    // Another admin switched oversight off: the next read is refused.
+    fixture.click("Refresh");
+    let _ = fixture.sent();
+    let refused = "Oversight of this account is off";
+    fixture.reply(ApiReply::MemberMessages(
+        GRACE,
+        BotId(7),
+        None,
+        Err(error(403, ErrorCode::Forbidden, refused)),
+    ));
+    assert_eq!(fixture.fact("screen"), "account".into());
+    assert_eq!(fixture.fact("reading"), 0_i64.into());
+    assert!(!fixture.shows("Dear diary"));
+    assert!(fixture.shows(refused));
+    // The account and what may still be seen of its Bots are read again.
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::ListAccounts, ApiRequest::MemberBots(GRACE)]
+    );
+    fixture.reply(ApiReply::MemberBots(
+        GRACE,
+        Ok(MemberBotList {
+            oversight: false,
+            bots: Vec::new(),
+        }),
+    ));
+    assert!(!fixture.shows("Last words") && !fixture.shows("Read Diary"));
+
+    // Another failure keeps the conversation, with why.
+    let mut fixture = Fixture::new();
+    fixture.grace_open(true, vec![member_bot(7, "Diary", false, true)]);
+    fixture.act_with(BokkieAction::ReadConversation, 7);
+    let _ = fixture.sent();
+    let down = "Bokkie's server is not available. Try again shortly";
+    fixture.reply(ApiReply::MemberMessages(
+        GRACE,
+        BotId(7),
+        None,
+        Err(error(502, ErrorCode::Unavailable, down)),
+    ));
+    assert_eq!(fixture.fact("screen"), "overseen".into());
+    assert!(fixture.shows(down));
 }
 
 #[test]

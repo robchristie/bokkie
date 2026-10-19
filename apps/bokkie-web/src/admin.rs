@@ -12,9 +12,9 @@ mod view;
 use std::collections::BTreeMap;
 
 use bokkie_protocol::api::{
-    AdminUser, Allowance, CreateBotRequest, CreateInvitationRequest, InvitationSummary, Limits,
-    MemberBotList, Message, Permissions, ResetPasswordRequest, Role, UpdateBotProfileRequest,
-    UpdateUserRequest,
+    AdminUser, Allowance, CreateBotRequest, CreateInvitationRequest, ErrorCode, InvitationSummary,
+    Limits, MemberBotList, Message, Permissions, ResetPasswordRequest, Role,
+    UpdateBotProfileRequest, UpdateUserRequest,
 };
 use bokkie_protocol::{BotId, MessageId, UserId};
 
@@ -426,11 +426,12 @@ impl App {
                 }
             }
             ApiReply::MemberMessages(id, bot, before, result) => {
-                let Some(reading) = admin
-                    .account
+                let Some(screen) = admin.account.as_mut().filter(|s| s.id == id) else {
+                    return Ok(false);
+                };
+                let Some(reading) = screen
+                    .reading
                     .as_mut()
-                    .filter(|s| s.id == id)
-                    .and_then(|s| s.reading.as_mut())
                     .filter(|r| r.bot == bot && r.loading == Some(before))
                 else {
                     return Ok(false);
@@ -453,6 +454,15 @@ impl App {
                         );
                     }
                     Err(error) if ended(&error) => return Ok(self.session_ended_now()),
+                    // Oversight went off, here or elsewhere: what was read
+                    // under it goes at once, and the Bots shown are read
+                    // again for what may still be seen.
+                    Err(error) if error.code == ErrorCode::Forbidden => {
+                        screen.reading = None;
+                        screen.error = Some(error.message);
+                        self.load_accounts();
+                        self.load_member_bots(id);
+                    }
                     Err(error) => reading.error = Some(error.message),
                 }
             }

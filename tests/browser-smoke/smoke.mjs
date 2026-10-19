@@ -600,6 +600,7 @@ try {
   await member.until('the name entered', facts => facts.new_bot_name === 'Helper', 5000);
   await member.action('bokkie.create-bot');
   await member.until('the member\'s Bot', facts => facts.bot_count === 1 && facts.creating === false, 30000);
+  assert((await pageTexts(memberPage)).includes('Create Bot'), 'New Bot is on the member\'s page');
 
   // The admin sets the member's limit and permissions, which reach the
   // member's page live.
