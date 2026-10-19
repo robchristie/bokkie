@@ -160,16 +160,35 @@ class Automation {
     throw new Error(`timed out waiting for ${description}; last facts ${JSON.stringify(facts)}`);
   }
   async invoke(selector, value) {
-    const discovered = await this.request({ op: 'discover', selector, limit: 2 });
-    assert.equal(discovered.capabilities.length, 1, `one capability for ${JSON.stringify(selector)}`);
-    const operation = { op: 'invoke', selector, expected: discovered.capabilities[0].target };
-    if (value !== undefined) operation.arguments = { value };
-    let { receipt } = await this.request(operation);
-    for (let tries = 0; receipt.state === 'queued' && tries < 400; tries++) {
-      await wait(25);
-      ({ receipt } = await this.request({ op: 'receipt', request_id: receipt.request_id }));
+    // A field or control that the view presents afresh between discovery
+    // and invocation, as when a reply arrives, is rejected as no longer
+    // presented, or stale: discover it again once the view has settled.
+    for (let attempt = 0; ; attempt++) {
+      const discovered = await this.request({ op: 'discover', selector, limit: 2 });
+      assert.equal(discovered.capabilities.length, 1, `one capability for ${JSON.stringify(selector)}`);
+      const operation = { op: 'invoke', selector, expected: discovered.capabilities[0].target };
+      if (value !== undefined) operation.arguments = { value };
+      let receipt;
+      try {
+        ({ receipt } = await this.request(operation));
+      } catch (error) {
+        if (!/stale_target|is no longer presented/.test(error.message) || attempt >= 20) throw error;
+        await wait(50);
+        continue;
+      }
+      for (let tries = 0; receipt.state === 'queued' && tries < 400; tries++) {
+        await wait(25);
+        ({ receipt } = await this.request({ op: 'receipt', request_id: receipt.request_id }));
+      }
+      const represented = receipt.error?.code === 'stale_target'
+        || /is no longer presented/.test(receipt.error?.message ?? '');
+      if (receipt.state === 'rejected' && represented && attempt < 20) {
+        await wait(50);
+        continue;
+      }
+      assert.equal(receipt.state, 'completed', `${JSON.stringify(selector)}: ${JSON.stringify(receipt)}`);
+      return;
     }
-    assert.equal(receipt.state, 'completed', `${JSON.stringify(selector)}: ${JSON.stringify(receipt)}`);
   }
   action(id, value) { return this.invoke({ capability: id }, value); }
   setText(id, text) { return this.invoke({ id, capability: 'stobie.set-text' }, text); }
