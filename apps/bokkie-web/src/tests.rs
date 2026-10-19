@@ -22,7 +22,9 @@ use crate::socket::{Driver, Io, Step};
 use crate::wire::CommandError;
 
 mod conversation;
+mod household;
 mod limits;
+mod member;
 mod stand_ins;
 
 struct Fixture {
@@ -121,20 +123,26 @@ impl Fixture {
             .enabled()
     }
 
-    /// Sign in as `ada` through the form.
+    /// Sign in as `ada`, an admin, through the form.
     fn sign_in(&mut self) {
+        self.sign_in_with(session(user()));
+    }
+
+    /// Sign in through the form, as the gateway's answer says.
+    fn sign_in_with(&mut self, session: SessionResponse) {
         self.reply(ApiReply::Session(Err(unauthenticated())));
-        self.send(BokkieIntent::EditUsername(" ada ".into()));
+        let username = session.user.username.clone();
+        self.send(BokkieIntent::EditUsername(format!(" {username} ")));
         self.send(BokkieIntent::EditPassword("a long password".into()));
         self.click("Sign in");
         assert_eq!(
             self.sent(),
             [ApiRequest::SignIn(LoginRequest {
-                username: "ada".into(),
+                username,
                 password: "a long password".into(),
             })]
         );
-        self.reply(ApiReply::SignedIn(Ok(session(user()))));
+        self.reply(ApiReply::SignedIn(Ok(session)));
         assert_eq!(
             self.sent(),
             [
@@ -157,6 +165,17 @@ fn user() -> User {
         permissions: Default::default(),
         oversight: false,
         oversight_changed_at: None,
+    }
+}
+
+/// Grace, a member with both permissions and oversight off.
+fn member() -> User {
+    User {
+        id: UserId(2),
+        username: "grace".into(),
+        display_name: "Grace".into(),
+        role: Role::Member,
+        ..user()
     }
 }
 
@@ -386,7 +405,11 @@ fn a_failed_list_can_be_refreshed() {
     assert_eq!(fixture.fact("message"), down.into());
     assert!(fixture.shows(down));
     fixture.click("Refresh");
-    assert_eq!(fixture.sent(), [ApiRequest::ListBots]);
+    // The household's sign-in announces no events, so it is asked too.
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::ListBots, ApiRequest::CodexAccount]
+    );
     assert_eq!(fixture.fact("bots"), "loading".into());
     fixture.reply(ApiReply::Bots(Ok(BotList {
         bots: vec![bot(1, "Tutor", "Maths help", BotStatus::Idle, None)],

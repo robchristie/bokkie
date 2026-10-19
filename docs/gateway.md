@@ -292,8 +292,10 @@ asks to sign in, refresh or sign out.
   for a code. `GET /api/v1/codex/login` reports the latest one since the
   gateway started: `pending`, `completed`, `expired` (the code's time
   passed), `failed` (with `error`, also when the household app server
-  stops) or `cancelled`. `DELETE /api/v1/codex/login` cancels a pending one
-  in Codex too.
+  stops) or `cancelled`. A sign-in fails only when the app server it was
+  started on stops: one started on the app server that replaced it stays
+  pending, however late the first one's exit is noticed.
+  `DELETE /api/v1/codex/login` cancels a pending one in Codex too.
 - **Signing out.** Only an admin signs the household out:
   `POST /api/v1/codex/logout` asks the household app server to sign out,
   which revokes the sign-in and deletes the file. That signs out every app

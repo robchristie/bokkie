@@ -283,7 +283,14 @@ fn one_meter_request_is_in_flight_at_a_time_and_a_later_one_follows_it() {
     // The first live asks for the meter again while the sign-in's request
     // is still out: it waits.
     fixture.frame(bokkie_protocol::events::ServerFrame::Live { latest: Seq(3) });
-    assert_eq!(fixture.sent(), [ApiRequest::ListBots]);
+    assert_eq!(
+        fixture.sent(),
+        [
+            ApiRequest::ListBots,
+            ApiRequest::CheckSession,
+            ApiRequest::CodexAccount
+        ]
+    );
     fixture.reply(ApiReply::Usage(Ok(usage(false, false))));
     assert_eq!(fixture.sent(), [ApiRequest::LoadUsage]);
     let mut newer = usage(false, false);

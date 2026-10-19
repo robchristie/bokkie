@@ -254,6 +254,40 @@ async fn a_pending_sign_in_expires_fails_or_is_cancelled() {
 }
 
 #[tokio::test]
+async fn a_closed_household_app_server_never_fails_its_successors_sign_in() {
+    let gateway = Gateway::new().await;
+    let admin = gateway.admin("rob").await;
+    let first = gateway.state.supervisor.household().await.unwrap();
+    let stale = first.serial;
+    gateway.fake.crash_owner(Owner::Household);
+    let _ = first.rate_limits().await;
+    wait_until(|| !first.is_alive()).await;
+    drop(first);
+
+    // The next sign-in starts the household's next app server.
+    let started = gateway
+        .send(Call::post("/api/v1/codex/login").cookie(&admin))
+        .await;
+    assert_eq!(started.status, StatusCode::OK, "{:?}", started.body);
+    let current = gateway.state.supervisor.household().await.unwrap();
+    assert_ne!(current.serial, stale);
+    assert_eq!(gateway.fake.owner_starts(Owner::Household), 2);
+
+    // The closed app server's watcher finishing only now, as it can on
+    // another thread, leaves the new sign-in pending.
+    gateway.state.supervisor.household_exited(stale);
+    let pending = gateway
+        .send(Call::get("/api/v1/codex/login").cookie(&admin))
+        .await;
+    assert_eq!(pending.body["state"], "pending", "{:?}", pending.body);
+
+    // Its own app server closing fails it.
+    gateway.state.supervisor.household_exited(current.serial);
+    let failed = wait_for_state(&gateway, &admin, "failed").await;
+    assert_eq!(failed["error"], "The household's app server stopped");
+}
+
+#[tokio::test]
 async fn an_admin_signs_the_household_out_for_everyone() {
     let gateway = Gateway::new().await;
     let admin = gateway.admin("rob").await;
