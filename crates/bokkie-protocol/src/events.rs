@@ -36,10 +36,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{Bot, BotStatus, Message, Usage, User};
+use crate::api::{Bot, BotStatus, Message, Routine, RoutineRun, Usage, User};
 #[cfg(doc)]
 use crate::api::{BotList, MessagePage};
-use crate::{BotId, MessageId, Timestamp};
+use crate::{BotId, MessageId, RoutineId, Timestamp};
 
 /// A position in a user's event log. Sequence numbers start at 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -94,9 +94,24 @@ pub enum Event {
     UsageUpdated { usage: Usage },
     /// A Bot could not complete a request. The message is safe to show.
     BotError { bot_id: BotId, message: String },
-    /// An admin changed the user's account: its display name, permissions
-    /// or oversight. `user` is the account as it now is.
+    /// The user's account changed: an admin changed its display name,
+    /// permissions or oversight, or the user their time zone. `user` is
+    /// the account as it now is.
     AccountUpdated { user: User },
+    /// A routine was created.
+    RoutineCreated { routine: Routine },
+    /// A routine changed: it was edited, paused or resumed, ran, or was
+    /// rescheduled.
+    RoutineUpdated { routine: Routine },
+    /// A routine was deleted, with its run history.
+    RoutineDeleted {
+        bot_id: BotId,
+        routine_id: RoutineId,
+    },
+    /// A routine run was queued, started or ended. `run` is the run as it
+    /// now is; [`RunState::is_finished`](crate::api::RunState::is_finished)
+    /// says whether this is its end.
+    RoutineRunUpdated { run: RoutineRun },
 }
 
 /// A frame from the client.

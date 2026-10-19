@@ -32,6 +32,7 @@ fn message(id: i64, author: Author, text: &str, state: MessageState) -> Message 
         created_at: Timestamp(2_000 + id),
         updated_at: Timestamp(2_000 + id),
         kind: MessageKind::Text,
+        routine: None,
     }
 }
 

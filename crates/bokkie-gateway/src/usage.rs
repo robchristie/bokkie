@@ -73,6 +73,20 @@ pub async fn record_tokens(
     thread_id: &str,
     thread_total: u64,
 ) -> Result<u64> {
+    record_turn_tokens(conn, now, user, bot, thread_id, None, thread_total).await
+}
+
+/// [`record_tokens`], noting the Codex turn that reported them, so that a
+/// routine run's tokens can be totalled when it ends.
+pub async fn record_turn_tokens(
+    conn: &mut SqliteConnection,
+    now: Timestamp,
+    user: UserId,
+    bot: BotId,
+    thread_id: &str,
+    turn_id: Option<&str>,
+    thread_total: u64,
+) -> Result<u64> {
     let reported: Option<i64> = sqlx::query_scalar(
         "SELECT tokens_reported FROM bot_threads
          WHERE user_id = ? AND thread_id = ? AND bot_id = ?",
@@ -96,13 +110,16 @@ pub async fn record_tokens(
         .execute(&mut *conn)
         .await?;
     if growth > 0 {
-        sqlx::query("INSERT INTO token_usage (user_id, bot_id, at, tokens) VALUES (?, ?, ?, ?)")
-            .bind(user.0)
-            .bind(bot.0)
-            .bind(now.0)
-            .bind(growth)
-            .execute(&mut *conn)
-            .await?;
+        sqlx::query(
+            "INSERT INTO token_usage (user_id, bot_id, at, tokens, turn_id) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(user.0)
+        .bind(bot.0)
+        .bind(now.0)
+        .bind(growth)
+        .bind(turn_id)
+        .execute(&mut *conn)
+        .await?;
     }
     Ok(growth as u64)
 }

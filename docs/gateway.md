@@ -511,6 +511,90 @@ Every query names the signed-in user, or for the broker the app server's
 user: another user's Bot's grants, notes, seen items and tool calls read as
 not found.
 
+## Routines
+
+A routine is a prompt one of a user's Bots runs on a schedule. Each run is
+a new turn in the Bot's own conversation, on its own thread, with the Bot's
+grants exactly as a turn the user starts, so a follow-up message carries on
+from it.
+
+- **Time zone.** Every account has an IANA time zone, `time_zone` on the
+  account (`GET /api/v1/session`), `Australia/Adelaide` by default. Its
+  owner sets it with `PUT /api/v1/session/time-zone`
+  (`{"time_zone": "Europe/London"}`); a name the system's time-zone database
+  does not know is refused (`invalid_request`), and a name in another case
+  is stored as the database spells it. The change reschedules the user's
+  routines at once and arrives on their event socket as `account_updated`
+  and a `routine_updated` for each routine. The gateway reads the system's
+  tzdata (`/usr/share/zoneinfo`) through `jiff`, and refuses to start
+  without it. A stored zone that a tzdata update removed is read as the
+  default.
+- **Schedules.** A schedule is structured, not cron: `daily`, `weekdays`
+  (Monday to Friday), chosen `days`, or every `every` hours, each at a
+  local time `at` (`"07:00"`). Every few hours runs at `at` and at the
+  local times a multiple of `every` from it, so `every` divides a day: 1, 2,
+  3, 4, 6, 8 or 12. A local time that does not exist, on the day the clocks
+  go forward, runs at the first instant after it, the moment the clocks
+  change; one that happens twice, on the day they go back, runs once, the
+  first time. Runs of one routine are at least an hour apart: a skipped
+  time that would land within an hour of another of its times is covered
+  by that one instead.
+- **The routes.** All are the signed-in user's own; another user's Bot or
+  routine reads as not found, for an admin too, and no admin route shows a
+  member's routines.
+
+  | Route | Does |
+  | --- | --- |
+  | `GET /api/v1/routines` | Lists every routine of the user's, by id, with the `seq` it reflects |
+  | `GET`, `POST /api/v1/bots/{id}/routines` | Lists the Bot's routines, or creates one: `name` (1 to 60 characters, one line, unique on the Bot whatever its case), `prompt` (1 to 8,000 characters), `schedule`, `push` (`every_run`, the default, or `notify_only`) and `paused`. A user has at most 20 routines (`conflict` beyond) |
+  | `GET`, `PATCH`, `DELETE /api/v1/bots/{id}/routines/{routine}` | Reads, changes or deletes one. A new schedule, or resuming a paused routine, schedules it from now, so times missed while paused do not run; resuming also clears its failures. Deleting it deletes its runs; the conversation keeps its markers |
+  | `POST /api/v1/bots/{id}/routines/{routine}/run` | "Run now": a `manual` run, queued and started exactly as a scheduled one, paused or not. Answers with the run as it then is |
+  | `GET /api/v1/bots/{id}/routines/{routine}/runs?before=&limit=` | The routine's run history, newest first |
+
+  A routine carries `next_run_at` (none while paused), `failures` (failed
+  runs in a row) and `paused`. Each change arrives on the event socket as
+  `routine_created`, `routine_updated` or `routine_deleted`. `push` is
+  stored for notifications, which are not built yet.
+- **The scheduler.** Every 10 seconds, and as soon as a Bot's turn ends,
+  the gateway queues a run of each routine whose time has come and starts
+  the runs that can start. A run records its routine, its trigger
+  (`schedule` or `manual`), when it was due (`scheduled_for`) and when its
+  turn started and ended, its state and why, the messages it added to the
+  conversation and the tokens its turn used. Each change arrives as
+  `routine_run_updated`. A run is `waiting`, then `running`, then ends:
+  - `succeeded`, `failed` or `interrupted`, with its turn;
+  - `missed`: due more than six hours ago, while the gateway was not
+    running, or due while ChatGPT stayed signed out for the household for
+    six hours after it, or due while the account was disabled. Several
+    times missed within six hours are coalesced into one run of the latest,
+    late; times missed longer ago are recorded as one missed run;
+  - `skipped`: the routine's previous run was still running (one run per
+    routine at a time; a time that falls due while its previous run still
+    waits is coalesced into it), or the Bot was mid-turn for 30 minutes. A
+    run never steers a turn: it waits for the Bot to be idle;
+  - `failed` before it starts: the user's allowance was used up, or the
+    Bot was refused or its runtime unavailable.
+- **A run's turn.** The conversation gets a marker message (kind `marker`,
+  author `bot`), such as "Morning digest · 7:00" in the user's time zone,
+  or "Morning digest · 9:41 · test run" for a manual run, whose `routine`
+  holds the routine, the run and the prompt for a client to show folded
+  away. The turn's input is the prompt, and a `bokkie-routine` context
+  fragment (kind `application`) tells the model which routine's run it is
+  and when it was due. The turn counts against the user's turn and token
+  allowances like any other. It is interrupted after 15 minutes, and ended
+  a minute later if the app server never confirms it. A user's message
+  while it runs steers it, as any message to a working Bot does. A tool it
+  calls is logged with the run (`routine_run_id` on the Bot's tool calls).
+- **Failures.** A run that fails, or is interrupted for running too long,
+  adds one to its routine's `failures`; a run that succeeds clears them.
+  Three in a row pause the routine. Missed and skipped runs, and a turn
+  stopped by the user or by the token allowance, count neither way.
+- **Restarts.** A run left running by a gateway that stopped ends `failed`
+  when the gateway starts; waiting runs carry on, and times missed while it
+  was down follow the misfire rule above. App servers that stop end their
+  user's running runs `failed`.
+- The minute pass deletes runs queued more than 90 days ago.
+
 ## The event WebSocket
 
 `GET /api/v1/events` upgrades to a WebSocket that carries the signed-in
@@ -583,6 +667,8 @@ limits, and when a window rolls over.
   tool call) is cut short. Only a turn that actually ends `interrupted`
   this way gets a `bot_error` saying so. Turns are not cut short for the
   daily turn limit, which is checked only when a turn starts.
+- A routine's run is a turn like any other: it is counted when it starts,
+  and its tokens count (see [Routines](#routines)).
 - Sends to one Bot are handled one at a time, so that its thread starts
   once and each message either steers its running turn or starts one.
   Sends to the user's other Bots do not wait for a Codex call that hangs

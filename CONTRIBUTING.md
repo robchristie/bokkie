@@ -14,6 +14,10 @@ cargo build --workspace
 cargo test --workspace
 ```
 
+The gateway schedules routines with the system's time-zone database
+(tzdata, `/usr/share/zoneinfo`), and its tests read it too: it must hold
+`Australia/Adelaide`.
+
 Full verification is `scripts/verify`, and CI runs exactly that. It checks
 formatting, runs Clippy with warnings denied, runs every test and builds
 `crates/bokkie-protocol` and `apps/bokkie-web` for `wasm32-unknown-unknown`,

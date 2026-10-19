@@ -37,7 +37,9 @@ new member accepts on the sign-in screen, permissions, oversight, limits,
 password resets, a member's Bots and, while oversight is on, a read-only view
 of their conversations. A member sees only whether the household is signed
 in, with a view that follows their permissions and shows when an admin can
-read their conversations or has reset their password. It
+read their conversations or has reset their password. The gateway also
+runs each Bot's routines, prompts on a schedule in the owner's time zone,
+through its API; the web client has no routine view yet. The client
 builds as an installable web application named Bokkie, which the gateway
 serves with a Content-Security-Policy, and verification drives it in
 Chromium against the real gateway and a mock model.

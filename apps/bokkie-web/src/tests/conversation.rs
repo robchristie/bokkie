@@ -141,6 +141,7 @@ pub(super) fn message(id: i64, author: Author, text: &str, state: MessageState) 
         created_at: Timestamp(3_000 + id),
         updated_at: Timestamp(3_000 + id),
         kind: MessageKind::Text,
+        routine: None,
     }
 }
 

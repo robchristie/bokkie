@@ -541,6 +541,11 @@ impl Store {
             }
             // The application keeps the account itself.
             Event::UsageUpdated { .. } | Event::AccountUpdated { .. } => Applied::default(),
+            // This client has no routine view yet.
+            Event::RoutineCreated { .. }
+            | Event::RoutineUpdated { .. }
+            | Event::RoutineDeleted { .. }
+            | Event::RoutineRunUpdated { .. } => Applied::default(),
         }
     }
 
