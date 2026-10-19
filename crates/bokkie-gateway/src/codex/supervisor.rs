@@ -497,7 +497,8 @@ impl Supervisor {
     }
 
     /// Signs out a user's own earlier sign-in through the user's app server,
-    /// which revokes it and deletes the file. The only time the gateway asks
+    /// which asks the authority to revoke it and deletes the file (even if
+    /// the revoke request fails). The only time the gateway asks
     /// a user's app server to sign out.
     async fn sign_out_own(&self, user: UserId) -> Result<(), CodexError> {
         tracing::info!(user = %user, "signing out the user's own earlier ChatGPT sign-in");

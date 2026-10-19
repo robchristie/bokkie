@@ -180,7 +180,9 @@ asks to sign in, refresh or sign out.
   replaces it. The gateway does this for every user when it starts, whether
   or not the household is signed in, and again if one appears later. It is
   the only time the gateway asks a user's app server to sign out; it never
-  asks one to sign in.
+  asks one to sign in. Codex 0.163.0's sign-out asks the authority to revoke
+  the sign-in and deletes the file even if that request fails, so the
+  gateway can confirm the file is gone but not that the revoke succeeded.
 - **Configuration.** Every `config.toml` sets
   `cli_auth_credentials_store = "file"`, so Codex keeps the sign-in in
   `auth.json` and never in a keyring, and turns off `use_agent_identity`,
