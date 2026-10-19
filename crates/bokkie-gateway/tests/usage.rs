@@ -671,7 +671,8 @@ async fn a_turn_still_running_when_the_token_allowance_is_used_up_is_stopped() {
         })
         .await;
     // Only Amy's turn is stopped, once, and she is told why in the same
-    // update that ends the reply, so the error is there as soon as it is.
+    // update that ends the reply, so the error is there once the reply
+    // reads interrupted.
     let interrupts = gateway.fake.received("turn/interrupt");
     assert_eq!(interrupts.len(), 1);
     assert_eq!(interrupts[0].user, UserId(amy_id));
