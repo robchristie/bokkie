@@ -629,6 +629,8 @@ impl App {
                     Ok(page) => {
                         if let Some(open) = self.open_mut() {
                             open.error = None;
+                            // The older pages it failed among are gone too.
+                            open.older_error = None;
                         }
                         let applied = self.store.load_messages(bot, page);
                         self.load_all(applied.reload);

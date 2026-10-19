@@ -1146,3 +1146,41 @@ impl Fixture {
         );
     }
 }
+
+#[test]
+fn reloading_the_newest_page_clears_a_failed_older_page() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor_with_history();
+    fixture.click("Load older");
+    let _ = fixture.sent();
+    fixture.reply(ApiReply::Older(
+        TUTOR,
+        MessageId(20),
+        Err(CommandError::unreachable()),
+    ));
+    assert_eq!(fixture.fact("older"), "failed".into());
+    assert_eq!(
+        fixture
+            .harness
+            .state_mut()
+            .app_mut()
+            .perform(ActionTarget::application(BokkieAction::Refresh), &mut ()),
+        Ok(true)
+    );
+    fixture.harness.run();
+    assert_eq!(fixture.sent(), [ApiRequest::LoadMessages(TUTOR)]);
+    fixture.reply(ApiReply::Messages(
+        TUTOR,
+        Ok(page(
+            vec![
+                message(20, Author::User, "Hi", MessageState::Complete),
+                message(21, Author::Bot, "Kia ora!", MessageState::Complete),
+            ],
+            Some(20),
+            10,
+        )),
+    ));
+    assert_eq!(fixture.fact("older"), "more".into());
+    assert!(!fixture.shows(&CommandError::unreachable().message));
+}

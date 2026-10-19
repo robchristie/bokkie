@@ -610,11 +610,15 @@ fn an_older_page_arriving_during_a_stream_leaves_the_stream_whole() {
 fn events_held_while_an_older_page_loads_replay_onto_its_messages() {
     let mut store = open_with_history(5, complete(12, "Twelve"));
     assert_eq!(store.request_older(BOT), Some(MessageId(10)));
-    // Message 9, older than the newest page, is still streaming. The page
-    // reflects event 7 but not 8 or 9.
-    let _ = store.apply(&delta(7, 9, 0, "Still "));
-    let _ = store.apply(&delta(8, 9, 6, "going"));
-    let _ = store.apply(&delta(9, 9, 11, ", done"));
+    // Message 9, older than the newest page, is still streaming, as a reply
+    // can be after 50 steers. The page reflects event 7 but not 8 or 9. The
+    // newest page cannot place the deltas and asks to be reloaded, which
+    // would drop the older page; here the older page arrives first.
+    let reload = BTreeSet::from([Snapshot::Messages(BOT)]);
+    assert_eq!(store.apply(&delta(7, 9, 0, "Still ")).reload, reload);
+    for envelope in [delta(8, 9, 6, "going"), delta(9, 9, 11, ", done")] {
+        assert!(!store.apply(&envelope).changed);
+    }
     let applied = store.load_older(
         BOT,
         MessageId(10),
