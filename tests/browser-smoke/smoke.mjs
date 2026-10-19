@@ -2,10 +2,12 @@
 // see CONTRIBUTING.md, "Browser smoke".
 //
 // It serves a production web package from the real gateway binary, with the
-// pinned Codex app server pointed at the gateway tests' mock model (through
-// a wrapper that adds the mock's `-c` overrides, so the gateway itself has
-// no test seam), a synthetic admin in a temporary data directory and one
-// Bot. Pinned Chromium, headful, then:
+// pinned Codex app servers pointed at the gateway tests' mocks (through a
+// wrapper that adds the mocks' `-c` overrides and environment, so the
+// gateway itself has no test seam): the model, and a ChatGPT sign-in
+// authority and backend that issued the household's synthetic sign-in. A
+// synthetic admin in a temporary data directory has one Bot. Pinned
+// Chromium, headful, then:
 //
 // - starts the page under the gateway's Content-Security-Policy;
 // - signs in by clicking the fields and typing;
@@ -19,9 +21,10 @@
 //   the mock reports;
 // - checks the installable application as Stobie's pwa-smoke.mjs does, and
 //   that the font notices are served as text;
-// - fails on any CSP violation, page error or console error.
+// - fails on any CSP violation, page error or console error;
+// - shows that no app server tried to reach any host but the mocks.
 //
-// It never calls a real model and never uses a ChatGPT credential.
+// It never calls a real model and never uses a real ChatGPT credential.
 //
 // node smoke.mjs GATEWAY_BIN MOCK_BIN CODEX_BIN WEB_ROOT EVIDENCE_DIR
 import assert from 'node:assert/strict';
@@ -170,10 +173,22 @@ let context;
 let failed = true;
 try {
   // The mock model, and the pinned Codex pointed at it.
-  const mock = start('mock-model', mockBin, ['127.0.0.1:0']);
-  // The mock prints one JSON line once it serves.
-  const [line] = await once(mock.child.stdout, 'data', { signal: AbortSignal.timeout(30000) });
-  const { overrides, control } = JSON.parse(String(line).split('\n')[0]);
+  const mock = start('mock-model', mockBin, ['127.0.0.1:0', scratch]);
+  // The mock prints one JSON line once it serves, which may arrive in
+  // more than one piece.
+  const line = await new Promise((fulfil, reject) => {
+    let text = '';
+    const timer = setTimeout(() => reject(new Error(`the mock did not start: ${text}`)), 30000);
+    const read = chunk => {
+      text += chunk;
+      if (!text.includes('\n')) return;
+      clearTimeout(timer);
+      mock.child.stdout.off('data', read);
+      fulfil(text.slice(0, text.indexOf('\n')));
+    };
+    mock.child.stdout.on('data', read);
+  });
+  const { overrides, env: mockEnv, household_auth: householdAuth, control } = JSON.parse(line);
   const controlRequest = async (path, body) => {
     const response = await fetch(`${control}/${path}`, {
       method: body === undefined ? 'GET' : 'PUT',
@@ -185,12 +200,13 @@ try {
   };
   await controlRequest('reply', { pieces: PIECES, piece_delay_ms: PIECE_MS });
   // The gateway starts app servers with a cleared environment, so the
-  // wrapper carries the overrides itself.
+  // wrapper carries the overrides and environment itself.
   const quote = text => `'${text.replaceAll("'", "'\\''")}'`;
   const wrapper = join(scratch, 'codex');
   await writeFile(wrapper, [
     '#!/bin/sh',
-    '# The pinned Codex with the mock model\'s overrides before app-server.',
+    '# The pinned Codex with the mocks\' overrides before app-server.',
+    ...Object.entries(mockEnv).map(([name, value]) => `export ${name}=${quote(value)}`),
     'if [ "$1" = app-server ]; then',
     `  exec ${quote(codexBin)} ${overrides.map(o => `-c ${quote(o)}`).join(' ')} "$@"`,
     'fi',
@@ -204,6 +220,10 @@ try {
   const origin = `http://localhost:${port}`;
   const data = join(scratch, 'data');
   await mkdir(data);
+  // The household's synthetic sign-in, as an admin's device-code sign-in
+  // would leave it.
+  await mkdir(join(data, 'household', 'codex'), { recursive: true, mode: 0o700 });
+  await writeFile(join(data, 'household', 'codex', 'auth.json'), householdAuth, { mode: 0o600 });
   const env = {
     PATH: process.env.PATH, HOME: scratch, BOKKIE_DATA: data, BOKKIE_ORIGIN: origin,
     BOKKIE_LISTEN: `127.0.0.1:${gatewayPort}`, BOKKIE_WEB_ROOT: webRoot, BOKKIE_CODEX_BIN: wrapper,
@@ -494,6 +514,13 @@ try {
   assert.deepEqual(violations, [], 'CSP violations');
   assert.deepEqual(problems, [], 'page errors');
   step('no CSP violation, page error or console error');
+
+  // Every app server ran on the synthetic household sign-in, which needed
+  // no refresh, and asked no host but the mocks.
+  const mocked = await controlRequest('requests');
+  assert.deepEqual(mocked.refused, [], 'hosts the app servers tried to reach');
+  assert.equal(mocked.refreshes, 0, 'refreshes');
+  step('nothing left the machine', { model_requests: mocked.count });
   failed = false;
 } finally {
   report.passed = !failed;

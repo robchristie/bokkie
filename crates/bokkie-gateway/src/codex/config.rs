@@ -21,7 +21,10 @@ pub const PROFILE: &str = "bokkie";
 
 /// Features that must be off. Each would offer the model a tool that acts
 /// outside the conversation: a shell, files, images, the network, other
-/// agents, apps, plugins, hooks or memories.
+/// agents, apps, plugins, hooks or memories. The last, `use_agent_identity`,
+/// would make each app server store its own agent identity in the shared
+/// `auth.json`, where the household's app servers would overwrite each
+/// other's.
 pub const DISABLED_FEATURES: &[&str] = &[
     "shell_tool",
     "unified_exec",
@@ -45,7 +48,13 @@ pub const DISABLED_FEATURES: &[&str] = &[
     "hooks",
     "memories",
     "realtime_conversation",
+    "use_agent_identity",
 ];
+
+/// Where Codex keeps the ChatGPT sign-in: in `auth.json`, so that the
+/// household's file and the links to it are what every app server uses,
+/// never an operating-system keyring.
+pub const CREDENTIALS_STORE: &str = "file";
 
 /// TOML-quotes a string. JSON's string escapes are valid in TOML basic
 /// strings.
@@ -71,7 +80,11 @@ pub fn render(data_dir: &Path, catalog: &Path) -> String {
     // Bubblewrap. Chat-only threads need neither, and a workspace file must
     // not add instructions.
     out.push_str("project_doc_max_bytes = 0\n");
-    out.push_str("check_for_update_on_startup = false\n\n");
+    out.push_str("check_for_update_on_startup = false\n");
+    out.push_str(&format!(
+        "cli_auth_credentials_store = {}\n\n",
+        quote(CREDENTIALS_STORE)
+    ));
     out.push_str("[features]\n");
     for feature in DISABLED_FEATURES {
         out.push_str(&format!("{feature} = false\n"));
@@ -100,6 +113,8 @@ mod tests {
         assert!(text.contains("model_catalog_json = \"/data/codex/models.json\"\n"));
         assert!(text.contains("\"/data\" = \"deny\"\n"));
         assert!(text.contains("project_doc_max_bytes = 0\n"));
+        assert!(text.contains("cli_auth_credentials_store = \"file\"\n"));
+        assert!(text.contains("\nuse_agent_identity = false\n"));
         for feature in DISABLED_FEATURES {
             assert!(
                 text.contains(&format!("\n{feature} = false\n")),

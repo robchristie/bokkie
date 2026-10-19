@@ -20,11 +20,17 @@ deploy/e2e/run.sh            # host: nostromo.yutani.tech
   the checkout and bind-mounted read-only. Set `E2E_IMAGE` to use another.
   The project network takes the explicit subnet `172.30.52.112/28`, because
   nostromo's address pools are exhausted.
-- **Sign-in.** The run's account uses the Phase 0 qualification sign-in in
-  place: the `bokkie-qualify-data` volume's `users/alice/codex` is mounted as
-  its `CODEX_HOME`. Nothing is copied out of the volume. The run rewrites
-  that directory's `config.toml` and adds thread files, as each
-  qualification run does.
+- **Sign-in.** The run uses the Phase 0 qualification sign-in in place as
+  the household's ChatGPT sign-in (see
+  [docs/gateway.md](../../docs/gateway.md#the-households-chatgpt-sign-in)):
+  the `bokkie-qualify-data` volume's `users/alice/codex` is mounted as the
+  household app server's `CODEX_HOME`, and the account's `auth.json` is the
+  gateway's link to it. Nothing is copied out of the volume. The run
+  rewrites that directory's `config.toml`, as each qualification run does,
+  and Codex refreshes the sign-in there when it is due; the account's
+  threads stay in the run's own data volume. Do not mount it as a user's
+  `CODEX_HOME`: the gateway signs out a user's own sign-in, which revokes
+  it.
 - **Data.** A fresh `bokkie-e2e-data` volume holds the gateway's database and
   is removed afterwards. The admin's password is random and is not kept.
 - **Result.** `bokkie-e2e` prints one JSON line and exits 0 when every check

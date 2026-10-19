@@ -1,9 +1,10 @@
 //! A gateway on a temporary database, driven in-process, with a fake app
-//! server per user.
+//! server per user and for the household, which is signed in.
 
 #![allow(dead_code)]
 
 pub mod fake_codex;
+pub mod live;
 
 use axum::Router;
 use axum::body::Body;
@@ -139,6 +140,8 @@ impl Gateway {
         let pool = db::open(&config.database_path()).await.unwrap();
         let catalog =
             catalog::write(&config.catalog_path(), fake_codex::bundled_catalog()).unwrap();
+        // The household is signed in for a day.
+        fake_codex::sign_in_household(&config.data_dir, 86_400);
         let fake = fake_codex::FakeCodex::default();
         let (supervisor, events) = Supervisor::new(
             &config.data_dir,
@@ -146,7 +149,7 @@ impl Gateway {
             fake.launcher(&config.data_dir, &catalog.path),
         );
         let clock = Clock::manual(1_800_000_000_000);
-        let mut state = AppState::new(config, pool, clock.clone(), std::sync::Arc::new(supervisor));
+        let mut state = AppState::new(config, pool, clock.clone(), supervisor);
         // As `serve` does.
         state.limiter = std::sync::Arc::new(
             bokkie_gateway::auth::LoginLimiter::persistent(state.db.clone(), clock.now_ms())
@@ -163,8 +166,24 @@ impl Gateway {
     }
 
     /// A gateway whose app servers are the real `codex` binary, pointed at
-    /// a mock model by `overrides`.
-    pub async fn live(program: std::path::PathBuf, overrides: Vec<String>) -> Self {
+    /// `live`'s mocks, with the household signed in for a day.
+    pub async fn live(live: &live::Live) -> Self {
+        Self::live_with(
+            live,
+            bokkie_gateway::codex::HouseholdSettings::default(),
+            86_400,
+        )
+        .await
+    }
+
+    /// The same, with the household's refresh timing and its access token
+    /// expiring in `expires_in` seconds.
+    pub async fn live_with(
+        live: &live::Live,
+        settings: bokkie_gateway::codex::HouseholdSettings,
+        expires_in: i64,
+    ) -> Self {
+        let program = live.program.clone();
         let dir = tempfile::tempdir().unwrap();
         let config = Config {
             data_dir: dir.path().to_owned(),
@@ -181,21 +200,10 @@ impl Gateway {
                 .await
                 .unwrap();
         let catalog = catalog::write(&config.catalog_path(), bundled).unwrap();
-        let (supervisor, events) = Supervisor::new(
-            &config.data_dir,
-            catalog,
-            bokkie_gateway::codex::Launcher::Process {
-                program,
-                overrides,
-                env: Vec::new(),
-            },
-        );
-        let state = AppState::new(
-            config,
-            pool,
-            Clock::system(),
-            std::sync::Arc::new(supervisor),
-        );
+        live.sign_in_household(&config.data_dir, expires_in);
+        let (supervisor, events) =
+            Supervisor::with_settings(&config.data_dir, catalog, live.launcher(), settings);
+        let state = AppState::new(config, pool, Clock::system(), supervisor);
         Self {
             app: router(state.clone()),
             state,

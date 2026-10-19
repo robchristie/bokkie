@@ -2,7 +2,7 @@
 //! ChatGPT device-code sign-in, against scripted replies. No real sign-in is
 //! attempted.
 
-use bokkie_protocol::api::{CodexAccount, CreateBotRequest, DeviceCodeLogin};
+use bokkie_protocol::api::{CodexAccount, CreateBotRequest, DeviceCodeLogin, LoginState};
 use bokkie_protocol::events::Event;
 
 use super::*;
@@ -17,6 +17,7 @@ fn account(signed_in: bool) -> CodexAccount {
     CodexAccount {
         signed_in,
         plan: signed_in.then(|| "plus".into()),
+        email: None,
     }
 }
 
@@ -24,6 +25,9 @@ fn code() -> DeviceCode {
     DeviceCode(DeviceCodeLogin {
         verification_url: URL.into(),
         user_code: CODE.into(),
+        state: LoginState::Pending,
+        expires_at: Timestamp(NOW + 15 * 60 * 1000),
+        error: None,
     })
 }
 
@@ -346,6 +350,9 @@ fn an_expired_code_can_be_replaced() {
     fixture.reply(ApiReply::Login(Ok(DeviceCode(DeviceCodeLogin {
         verification_url: URL.into(),
         user_code: "ABCD-5678".into(),
+        state: LoginState::Pending,
+        expires_at: Timestamp(NOW + 15 * 60 * 1000),
+        error: None,
     }))));
     assert!(fixture.shows("ABCD-5678"));
     assert!(!fixture.shows(CODE));

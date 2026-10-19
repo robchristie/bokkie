@@ -14,9 +14,11 @@
 #    stream over the event WebSocket from the real app server;
 # 4. always brings the project down and removes bokkie-e2e-data.
 #
-# The account's CODEX_HOME is the Phase 0 qualification sign-in in the
-# bokkie-qualify-data volume, mounted in place. The run adds thread files to
-# it and rewrites its config.toml, as each qualification run does.
+# The household's CODEX_HOME is the Phase 0 qualification sign-in in the
+# bokkie-qualify-data volume, mounted in place, and the account's auth.json
+# links to it. The run rewrites that directory's config.toml, as each
+# qualification run does, and Codex refreshes the sign-in there when it is
+# due.
 #
 # Results go to ~/.local/state/bokkie-e2e/<run>/ on the host, outside the
 # repository.

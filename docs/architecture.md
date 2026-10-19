@@ -18,10 +18,12 @@ iPhone PWA / browser ──HTTPS──▶ Traefik (nostromo) ──▶ bokkie co
                ├─ accounts, sessions, roles          ─┐
                ├─ Bots, conversations, routing        ├─ SQLite (/data)
                ├─ client event log (resumable WS)    ─┘
-               └─ Codex supervisor: one app-server per user
+               └─ Codex supervisor: one app-server per user,
+                  and the household's, which holds the sign-in
                       │ JSON-RPC over stdio
                       ▼
-               codex app-server  (CODEX_HOME=/data/users/<id>/codex)
+               codex app-server  (CODEX_HOME=/data/users/<id>/codex,
+                      │           auth.json → /data/household/codex/auth.json)
                       │ per-command Bubblewrap + seccomp sandbox
                       ▼
                /data/users/<id>/workspace  (the Bots' computer)
@@ -92,7 +94,9 @@ These crates appear as each phase needs them:
   checks the `Host` header and rejects cross-origin requests.
 - **Isolation.**
   - Every user has their own Bots, conversations, Codex app-server process,
-    `CODEX_HOME` and workspace directory.
+    `CODEX_HOME` and workspace directory. Only the ChatGPT sign-in is
+    shared: one household sign-in serves every app server (see
+    [Codex credentials](#codex-credentials)).
   - Gateway queries are always scoped by the authenticated user, and tests
     prove that one user cannot read, act on or approve another user's data.
   - Bot messaging stays within one user. Household or cross-user Bots are a
@@ -175,8 +179,8 @@ Invariants that tests must prove, checked by real reads and writes rather than
 by startup success. Bubblewrap 0.8 is known to silently leave mounts writable,
 and Codex silently drops the fresh procfs.
 
-1. A sandboxed command cannot read any `CODEX_HOME`, so it cannot read
-   `auth.json`.
+1. A sandboxed command cannot read any `CODEX_HOME` or the household
+   sign-in, so it cannot read `auth.json`.
 2. A sandboxed command cannot write outside its own user's workspace.
 3. A sandboxed command cannot read another user's workspace, data or Bokkie's
    database.
@@ -214,8 +218,53 @@ checks this at startup and for each thread through `config/read` and the
 
 ### Codex credentials
 
-Codex credentials live in a persistent per-user `CODEX_HOME` on a volume, not
-in a read-only bind of the owner's personal `auth.json`. That lets token
-refresh work, and nothing on the host needs re-binding. Sign-in uses the
-app-server's `account/login/start` device-code flow, driven from Bokkie's UI
-and visible only to that user and the admin.
+One household ChatGPT sign-in is shared by every app server. It lives in
+one file, `auth.json` in the `CODEX_HOME` of a household app server under
+the data directory, on a volume, not in a read-only bind of anyone's
+personal `auth.json`, so token refresh works and nothing on the host needs
+re-binding.
+
+- **The household app server** holds the only real `auth.json`, runs no
+  threads, and is the only app server that signs in, refreshes or signs
+  out. Only an admin signs it in, with the app server's
+  `account/login/start` device-code flow driven from Bokkie's UI, and only
+  an admin signs it out, which signs out every app server at once.
+- **Links.** Each user's `auth.json` is a symbolic link to the household's
+  file. The gateway makes the link before it starts a user's app server and
+  refuses to start one whose `auth.json` is anything else. A user's own
+  earlier sign-in is signed out through that user's app server, which
+  revokes it, before the link replaces it. Every app server keeps the
+  sign-in in the file (`cli_auth_credentials_store = "file"`), and Codex's
+  agent identity, which would write per-app-server records into the shared
+  file, is off; the startup `config/read` check covers both.
+- **One refresher.** Refresh tokens are single-use, and Codex refreshes on
+  its own five minutes before an access token expires, with no lock across
+  processes. The gateway therefore asks the household app server to refresh
+  well before that, so a user's app server finds a fresh token on disk when
+  its cached one goes stale and never refreshes itself in normal running.
+  The gateway reads only the access token's expiry claim to schedule this.
+- **Cold starts.** The household app server starts first. Before a user's
+  app server starts, or a turn runs, the household's token must lie outside
+  the refresh window, refreshed first if not; while the household is signed
+  out or its app server is down, no user's app server starts and no turn
+  runs.
+- **Recovery.** A user's app server whose turn fails on its credential
+  while the household's sign-in is good is restarted once, so it reads the
+  file again. A user's app server can still refresh by itself after a
+  repeated 401; it writes the rotated token to the shared file, which the
+  others reload.
+- **Visibility.** Members see only whether the household is signed in,
+  never the account's email or plan, and have no sign-in or sign-out
+  control. The shared subscription windows stay on everyone's usage meter.
+- **Isolation.** Each user keeps their own app server, `CODEX_HOME`,
+  threads and workspace; one user's app server still cannot load another's
+  thread. The household directory sits under the data directory, which the
+  `bokkie` permission profile denies to the sandbox (invariant 1).
+- **A UID per user.** If Phase 4 gives each user's app server its own UID,
+  the household file must be readable and writable by every app server's UID
+  (a shared group), or users' app servers must be unable to refresh at all:
+  one that refreshed without being able to save would lose the rotated token
+  and sign out everyone. Phase 4's per-UID decision includes this.
+
+[docs/gateway.md](gateway.md#the-households-chatgpt-sign-in) describes what
+the gateway does today.

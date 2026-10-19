@@ -97,14 +97,17 @@ docker compose up -d
 ```
 
 The gateway refuses to start unless it can make Bokkie's model catalog
-from the pinned Codex. The chat-only checks run later, per user: each
-user's app server starts on that user's first request that needs it, such
-as the client asking for the ChatGPT sign-in state just after signing in,
+from the pinned Codex. It then signs out any user's own earlier ChatGPT
+sign-in and links that user to the household's (see
+[Update](#update)), and starts the household's app server, which holds
+the one ChatGPT sign-in every app server shares
+([docs/gateway.md](../../docs/gateway.md#the-households-chatgpt-sign-in))
 and is refused unless its configuration passes
 ([docs/gateway.md](../../docs/gateway.md#chat-only-until-phase-4)); the
-gateway logs why. So a deployment with no account has run only the
-catalog step. The health check asks `/healthz`, and Traefik routes to the
-container once it is healthy.
+gateway logs why. Each user's app server starts on that user's first
+request that needs it, only while the household is signed in, and passes
+the same checks. The health check asks `/healthz`, and Traefik routes to
+the container once it is healthy.
 
 ## Check
 
@@ -140,9 +143,11 @@ bash -c 'read -rsp "Password: " password && echo &&
   docker compose exec -T gateway bokkie-gateway bootstrap-admin rob Rob'
 ```
 
-It refuses once an admin exists. The owner then signs in at the origin and
-signs their own app server in to ChatGPT from the client; the credential
-lives in the `bokkie-next-data` volume and nowhere else.
+It refuses once an admin exists. The owner then signs in at the origin and,
+as an admin, signs the household in to ChatGPT from the client's ChatGPT
+screen, which `POST /api/v1/codex/login` serves for admins. The credential
+lives in the `bokkie-next-data` volume, in `/data/household/codex/`, and
+nowhere else; every account's app server uses it.
 
 ## Update
 
@@ -158,6 +163,14 @@ docker image rm bokkie-next:<the previous commit>   # once the new one is health
 
 The data volume carries over. A reply that is streaming during the restart
 ends `failed`.
+
+An update to the first revision with the household sign-in changes how
+ChatGPT is signed in. As the gateway starts, it signs out each account's
+own earlier sign-in (the owner's, on this deployment), which revokes it,
+and links the account to the household's sign-in, which is empty until an
+admin signs the household in. Bots cannot reply until then. Deploying that
+revision, and signing the household in with a real account, each need the
+owner at the time.
 
 ### Pages left open across an update
 
@@ -185,11 +198,12 @@ earlier assets would mean a second store outside the image.
 ```sh
 docker compose logs --tail 200 gateway
 docker compose exec gateway ls /data/users     # each user's app-server.log sits under it
+docker compose exec gateway ls /data/household # and the household app server's
 ```
 
 The gateway logs to standard output (`BOKKIE_LOG` filter `info`), rotated
-by Docker at 10 MB, five files. Each user's app server writes its own
-`app-server.log` in the volume.
+by Docker at 10 MB, five files. Each app server, the household's included,
+writes its own `app-server.log` in the volume.
 
 ## Removal
 

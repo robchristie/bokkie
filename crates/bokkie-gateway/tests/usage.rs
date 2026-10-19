@@ -675,7 +675,7 @@ async fn a_turn_still_running_when_the_token_allowance_is_used_up_is_stopped() {
     // reads interrupted.
     let interrupts = gateway.fake.received("turn/interrupt");
     assert_eq!(interrupts.len(), 1);
-    assert_eq!(interrupts[0].user, UserId(amy_id));
+    assert_eq!(interrupts[0].user(), UserId(amy_id));
     let errors = bot_errors(&gateway, amy_id).await;
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(errors[0].contains("allowance"));

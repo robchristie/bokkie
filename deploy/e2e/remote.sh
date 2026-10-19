@@ -18,12 +18,13 @@ docker image inspect "$E2E_IMAGE" >/dev/null
 docker volume inspect bokkie-qualify-data >/dev/null
 docker volume rm bokkie-e2e-data >/dev/null 2>&1 || true
 docker volume create --label tech.yutani.bokkie.purpose=phase-2-e2e bokkie-e2e-data >/dev/null
-# The volume starts root-owned; hand it to the gateway's user. The account's
-# directory must exist before the credential is mounted inside it.
+# The volume starts root-owned; hand it to the gateway's user. The
+# household's directory must exist before the credential is mounted inside
+# it.
 docker run --rm --user 0 --network none --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE \
   --entrypoint sh \
   -v bokkie-e2e-data:/data "$E2E_IMAGE" \
-  -c 'mkdir -p /data/users/1 && chown -R 10001:10001 /data && chmod 700 /data /data/users /data/users/1'
+  -c 'mkdir -p /data/household && chown -R 10001:10001 /data && chmod 700 /data /data/household'
 
 compose up -d --force-recreate --quiet-pull
 password="$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"

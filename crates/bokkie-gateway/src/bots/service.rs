@@ -174,6 +174,7 @@ fn unavailable(error: CodexError) -> Failure {
         CodexError::Refused(_) | CodexError::ThreadRefused(_) => Failure::unavailable(
             "This Bot is unavailable because a safety check failed. An admin has been told",
         ),
+        CodexError::SignedOut(_) => crate::routes::codex::signed_out(),
         CodexError::AppServer(_) | CodexError::Rejected(_) => {
             Failure::unavailable("The Bots' runtime is unavailable")
         }
@@ -374,6 +375,9 @@ impl Conversations {
                         .refusing::<()>(user, &bot, Err(refused))
                         .await
                         .unwrap_err());
+                }
+                Err(signed_out @ CodexError::SignedOut(_)) => {
+                    return Err(unavailable(signed_out));
                 }
             }
         }

@@ -41,7 +41,8 @@ the release tag to its commit with `gh api repos/<owner>/<repo>/commits/<tag>
 The end-to-end check, `deploy/e2e/run.sh`, runs the gateway and a real app
 server in the qualified image on the Docker host and streams a Bot reply
 over the event WebSocket. It uses Docker's default confinement and the Phase 0
-qualification sign-in in place; see [its README](deploy/e2e/README.md). Run
+qualification sign-in in place, as the household's; see
+[its README](deploy/e2e/README.md). Run
 it from a clean checkout of the exact commit under test, after changes to
 the gateway's Codex path.
 
@@ -121,9 +122,13 @@ ChatGPT sign-in, which never publishes its device code. Name a new Bot with
 bokkie.open-bot --value ID` and fill the message field with `stobie set-text
 bokkie.draft`. A conversation opens on its newest 50 messages; `stobie
 invoke bokkie.load-older` loads the 50 before them. Stobie offers no
-`set-text` on the password field, so type into it with the keyboard. To
-watch a reply stream without a ChatGPT sign-in, point the app server at the
-mock model, as the browser smoke does.
+`set-text` on the password field, so type into it with the keyboard. Bots
+reply only while the household is signed in to ChatGPT (see
+[docs/gateway.md](docs/gateway.md#the-households-chatgpt-sign-in)). To
+watch a reply stream without a ChatGPT account, use the mocks as the
+browser smoke does: `bokkie-mock-model` prints the `-c` overrides and the
+environment for a wrapper around `codex`, and a synthetic household
+`auth.json` for `$BOKKIE_DATA/household/codex/`.
 
 ### Browser smoke
 
@@ -149,17 +154,36 @@ checks:
 Its logs and `smoke.json` go to ignored `.tools/runtime/browser-smoke/`,
 which CI keeps as an artifact.
 
-It never calls a real model or uses a ChatGPT credential:
+It never calls a real model or uses a real ChatGPT credential, and no
+request leaves the machine:
 
 - The gateway is the ordinary `bokkie-gateway` binary, with a synthetic admin
   in a temporary data directory.
+- The household is signed in with a synthetic sign-in: tokens that the
+  mock authority issued, written to the household's `auth.json` before the
+  gateway starts.
 - `BOKKIE_CODEX_BIN` names a wrapper script that runs the pinned Codex with
-  the `-c` overrides from `MockModel::overrides`, which point it at the mock
-  model. The gateway itself has no test seam.
-- The mock model is the gateway tests' own, `crates/bokkie-mock-model`. Its
+  the mocks' `-c` overrides and environment. They point the model provider
+  at the mock model, the ChatGPT backend (`chatgpt_base_url`) at the mock
+  backend, the token and revoke endpoints at the mock authority
+  (`CODEX_REFRESH_TOKEN_URL_OVERRIDE`, from which Codex derives the revoke
+  URL), trust the mock's own certificate authority (`CODEX_CA_CERTIFICATE`),
+  and send every other host to a local proxy that refuses it. The smoke
+  fails if that proxy was asked for anything, or if any app server
+  refreshed. The gateway itself has no test seam: it starts app servers
+  with a cleared environment, and nothing in its configuration reaches
+  them.
+- The mocks are the gateway tests' own, `crates/bokkie-mock-model`. Its
   binary streams a reply piece by piece and reports subscription windows
-  in the `x-codex-*` headers that Codex reads. No production crate depends on
-  it; the gateway takes it only as a development dependency.
+  in the `x-codex-*` headers that Codex reads, and serves the authority and
+  backend over HTTPS, which Codex requires of a ChatGPT backend, with a
+  certificate authority it makes as it starts. No production crate depends
+  on it; the gateway takes it only as a development dependency.
+
+The gateway's live tests (`crates/bokkie-gateway/tests/live_*.rs`) use the
+same mocks in-process, and each fails if any app server asked the refusing
+proxy for anything. A device-code sign-in is never started against the real
+authority: the gateway's tests drive it with a fake app server.
 
 Its tools are pinned:
 
@@ -267,7 +291,8 @@ generates, vendored as
 - `tests/live.rs` runs only when `BOKKIE_CODEX_BIN` names a Codex binary. It
   checks the binary's version, regenerates the schema and requires it to be
   byte-identical to the vendored copy, and runs signed-out startup queries
-  against a real app server. It never signs in or calls a model.
+  against a real app server. It never signs in or calls a model, and sends
+  the hosts Codex asks for by default to a local proxy that refuses them.
 
 The pinned version moves only after the Phase 0 qualification probe passes
 against the new version. To move it:
@@ -282,10 +307,15 @@ against the new version. To move it:
    update the provenance `README.md` (tag, commit and command).
 3. Run `scripts/verify`, fix any type drift, and rerun the qualification
    probe before relying on the new version. The gateway's live tests
-   (`crates/bokkie-gateway/tests/live_codex.rs`) must pass too: they prove
+   (`crates/bokkie-gateway/tests/live_*.rs`) must pass too: they prove
    that the gateway's configuration and model catalog leave no tool that acts
    outside the conversation, and their control test must still see the
-   unsafe tools, so the capture is known to work.
+   unsafe tools, so the capture is known to work. `live_household.rs`
+   proves the shared household sign-in against the new version's refresh,
+   reload and sign-out behaviour, and records what it does on a repeated
+   401 and on two simultaneous refreshes; read its output and update
+   [docs/gateway.md](docs/gateway.md#the-households-chatgpt-sign-in) if that
+   changed.
 
 Use `--experimental`: experimental methods and fields such as `dynamicTools`
 appear only in that output, and they need `capabilities.experimentalApi` at

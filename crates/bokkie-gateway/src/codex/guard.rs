@@ -12,7 +12,7 @@ use std::path::Path;
 use bokkie_codex::protocol::{ModelListResponse, ThreadItem, ThreadSessionResponse};
 use serde_json::Value;
 
-use super::config::{DISABLED_FEATURES, PROFILE};
+use super::config::{CREDENTIALS_STORE, DISABLED_FEATURES, PROFILE};
 
 /// Why the gateway refuses to serve an app server or thread. The reason is
 /// logged and may be shown to an admin; it holds no secrets.
@@ -88,6 +88,16 @@ pub fn check_config(config: &Value, expected: &Expected) -> Result<(), Refusal> 
             format!(
                 "project_doc_max_bytes is {}, so AGENTS.md files would be read",
                 at(config, &["project_doc_max_bytes"])
+            )
+        },
+    )?;
+    // The shared sign-in must be the file every app server links to.
+    require(
+        text(&["cli_auth_credentials_store"]).as_deref() == Some(CREDENTIALS_STORE),
+        || {
+            format!(
+                "cli_auth_credentials_store is {}, not {CREDENTIALS_STORE:?}",
+                at(config, &["cli_auth_credentials_store"])
             )
         },
     )?;
@@ -247,6 +257,7 @@ mod tests {
             "web_search": "disabled",
             "model_catalog_json": "/data/codex/models.json",
             "project_doc_max_bytes": 0,
+            "cli_auth_credentials_store": "file",
             "profile": null,
             "features": features,
             "mcp_servers": {},
@@ -288,6 +299,18 @@ mod tests {
             (
                 "shell_tool",
                 Box::new(|c| c["features"]["shell_tool"] = json!(true)),
+            ),
+            (
+                "use_agent_identity",
+                Box::new(|c| c["features"]["use_agent_identity"] = json!(true)),
+            ),
+            (
+                "cli_auth_credentials_store",
+                Box::new(|c| c["cli_auth_credentials_store"] = json!("keyring")),
+            ),
+            (
+                "cli_auth_credentials_store",
+                Box::new(|c| c["cli_auth_credentials_store"] = Value::Null),
             ),
             (
                 "unified_exec",

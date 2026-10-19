@@ -387,7 +387,7 @@ mod tests {
         );
         let reply = ApiRequest::CodexLogin.decode(
             200,
-            r#"{"verification_url":"https://auth.example/device","user_code":"WXYZ-1234"}"#,
+            r#"{"verification_url":"https://auth.example/device","user_code":"WXYZ-1234","state":"pending","expires_at":1800000900000}"#,
         );
         let ApiReply::Login(Ok(login)) = &reply else {
             panic!("a device code");

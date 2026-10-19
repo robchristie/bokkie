@@ -1,15 +1,21 @@
 //! A stand-in for the OpenAI Responses API, so a real `codex app-server`
-//! can run turns without signing in or calling a model. It records every
-//! request body, which shows exactly which tools Codex offered the model.
+//! can run turns without calling a model. It records every request body,
+//! which shows exactly which tools Codex offered the model, and the bearer
+//! token each request carried.
 //!
 //! The gateway's tests use it in-process; the `bokkie-mock-model` binary
 //! serves it for the browser smoke. Point an app server at it with
-//! [`MockModel::overrides`]. Nothing here is reachable from a production
+//! [`MockModel::overrides`], or with [`MockModel::signed_in_overrides`]
+//! when the app server holds a synthetic ChatGPT sign-in from
+//! [`chatgpt::MockChatgpt`], which stands in for ChatGPT's sign-in
+//! authority and backend. Nothing here is reachable from a production
 //! configuration: no production crate depends on this one.
 //!
 //! A reply streams in pieces, optionally with a pause before each, and the
 //! response can report the subscription's rate-limit windows in the
 //! `x-codex-*` headers that Codex reads from the real API.
+
+pub mod chatgpt;
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
@@ -26,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// The mock and what it has seen. Clones share their state.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct MockModel {
     pub requests: Arc<Mutex<Vec<Value>>>,
     /// The reply, streamed in these pieces.
@@ -37,6 +43,23 @@ pub struct MockModel {
     pub rate_limits: Arc<Mutex<Option<RateLimits>>>,
     /// When set, the next request waits for this before it is answered.
     pub gate: Arc<Mutex<Option<tokio::sync::oneshot::Receiver<()>>>>,
+    /// The bearer token of each request, in order, if it carried one.
+    pub bearers: Arc<Mutex<Vec<Option<String>>>>,
+    /// Answers this many requests with 401 before answering normally.
+    pub unauthorized: Arc<Mutex<u32>>,
+    /// When set, a request whose bearer token this refuses is answered 401.
+    pub authorizer: Arc<Mutex<Option<Authorizer>>>,
+}
+
+/// Decides whether a bearer token may call the model.
+pub type Authorizer = Arc<dyn Fn(Option<&str>) -> bool + Send + Sync>;
+
+impl std::fmt::Debug for MockModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MockModel")
+            .field("requests", &self.requests.lock().unwrap().len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// The subscription's windows, as the real API reports them in headers.
@@ -124,6 +147,18 @@ impl MockModel {
         ]
     }
 
+    /// The same, for an app server that holds a ChatGPT sign-in: Codex then
+    /// sends the sign-in's access token to the model as a bearer token, so
+    /// tests can see which token each turn used. Add
+    /// [`chatgpt::MockChatgpt::overrides`] so that the sign-in's backend is
+    /// the mock's too.
+    pub fn signed_in_overrides(base_url: &str) -> Vec<String> {
+        Self::overrides(base_url)
+            .into_iter()
+            .map(|o| o.replace("requires_openai_auth=false", "requires_openai_auth=true"))
+            .collect()
+    }
+
     /// Every tool offered in any request, by name. Namespaces are opened,
     /// tools in the `additional_tools` input item are included, and so are
     /// the nested tools that a code-mode `exec` tool describes.
@@ -184,7 +219,35 @@ fn event(event: &Value) -> String {
     )
 }
 
-async fn respond(State(mock): State<MockModel>, body: axum::body::Bytes) -> Response {
+async fn respond(
+    State(mock): State<MockModel>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_owned);
+    mock.bearers.lock().unwrap().push(bearer.clone());
+    let refused = {
+        let mut unauthorized = mock.unauthorized.lock().unwrap();
+        if *unauthorized > 0 {
+            *unauthorized -= 1;
+            true
+        } else {
+            let authorizer = mock.authorizer.lock().unwrap().clone();
+            authorizer.is_some_and(|accepts| !accepts(bearer.as_deref()))
+        }
+    };
+    if refused {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({"error": {
+                "message": "The access token is not valid.", "code": "invalid_token"}})),
+        )
+            .into_response();
+    }
     let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     mock.requests.lock().unwrap().push(request);
     let gate = mock.gate.lock().unwrap().take();
