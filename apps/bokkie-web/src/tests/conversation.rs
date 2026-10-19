@@ -8,12 +8,13 @@ use bokkie_protocol::api::{
 };
 use bokkie_protocol::events::{ClientFrame, Event, EventEnvelope, ServerFrame};
 
-use stobie_ui_egui::ActionArgument;
+use stobie_ui_egui::{ActionArgument, Availability};
 
 use super::*;
 use crate::api::SocketControl;
 use crate::connection::{CLOSE_SIGNED_OUT, Input};
 use crate::socket::Link;
+use crate::store::Snapshot;
 
 pub(super) const TUTOR: BotId = BotId(1);
 
@@ -229,7 +230,7 @@ fn opening_a_bot_shows_its_conversation_and_back_returns_to_the_list() {
         "You",
         "Hi",
         "Kia ora! What shall we study?",
-        "Older messages are not shown",
+        "Load older",
         "Message",
         "Send",
         "Back",
@@ -756,4 +757,430 @@ fn the_conversation_presents_its_controls_at_phone_width() {
     fixture.write("Hello");
     fixture.assert_presentable();
     assert!(fixture.shows("Send") && fixture.shows("Back"));
+}
+
+fn streaming(id: i64, offset: u64, text: &str) -> Event {
+    Event::MessageDelta {
+        bot_id: TUTOR,
+        message_id: MessageId(id),
+        offset,
+        delta: text.into(),
+    }
+}
+
+fn page(messages: Vec<Message>, older: Option<i64>, seq: u64) -> MessagePage {
+    MessagePage {
+        messages,
+        older: older.map(MessageId),
+        seq: Seq(seq),
+    }
+}
+
+impl Fixture {
+    /// Open the Tutor on its newest page, messages 20 and 21 at event 10,
+    /// with older messages before them.
+    fn open_tutor_with_history(&mut self) {
+        self.click("Open Tutor");
+        assert_eq!(self.sent(), [ApiRequest::LoadMessages(TUTOR)]);
+        self.reply(ApiReply::Messages(
+            TUTOR,
+            Ok(page(
+                vec![
+                    message(20, Author::User, "Hi", MessageState::Complete),
+                    message(21, Author::Bot, "Kia ora!", MessageState::Complete),
+                ],
+                Some(20),
+                10,
+            )),
+        ));
+        assert_eq!(self.fact("older"), "more".into());
+        assert!(self.enabled(BokkieAction::LoadOlder));
+    }
+
+    fn message_ids(&self) -> Vec<i64> {
+        self.app()
+            .store()
+            .conversation(TUTOR)
+            .unwrap()
+            .messages()
+            .map(|message| message.id.0)
+            .collect()
+    }
+}
+
+#[test]
+fn load_older_prepends_a_page_while_a_reply_streams() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor_with_history();
+    fixture.event(
+        11,
+        Event::MessageCreated {
+            message: message(
+                22,
+                Author::User,
+                "Explain fractions",
+                MessageState::Complete,
+            ),
+        },
+    );
+    fixture.event(
+        12,
+        Event::BotStatusChanged {
+            bot_id: TUTOR,
+            status: BotStatus::Working,
+        },
+    );
+    fixture.event(
+        13,
+        Event::MessageCreated {
+            message: message(23, Author::Bot, "", MessageState::Streaming),
+        },
+    );
+    fixture.event(14, streaming(23, 0, "A fraction "));
+    fixture.click("Load older");
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::LoadOlder(TUTOR, MessageId(20))]
+    );
+    assert_eq!(fixture.fact("older"), "loading".into());
+    assert!(fixture.shows("Loading older messages…"));
+    assert!(
+        !fixture.enabled(BokkieAction::LoadOlder),
+        "one page at a time"
+    );
+    // The reply streams on while the page loads.
+    fixture.event(15, streaming(23, 11, "is a part "));
+    assert_eq!(fixture.fact("reply"), "A fraction is a part ".into());
+    // The page was read at event 14.
+    fixture.reply(ApiReply::Older(
+        TUTOR,
+        MessageId(20),
+        Ok(page(
+            vec![
+                message(18, Author::User, "Earlier question", MessageState::Complete),
+                message(19, Author::Bot, "Earlier answer", MessageState::Complete),
+            ],
+            Some(18),
+            14,
+        )),
+    ));
+    assert_eq!(fixture.message_ids(), [18, 19, 20, 21, 22, 23]);
+    assert_eq!(fixture.fact("message_count"), 6_u64.into());
+    assert_eq!(fixture.fact("reply"), "A fraction is a part ".into());
+    assert_eq!(fixture.fact("reply_state"), "streaming".into());
+    assert_eq!(fixture.fact("older"), "more".into());
+    assert_eq!(
+        fixture.app().open().unwrap().anchor,
+        Some((1, MessageId(20)))
+    );
+    assert!(fixture.shows("Earlier question") && fixture.shows("Earlier answer"));
+    assert!(fixture.sent().is_empty());
+    // The rest of the reply arrives once, and completes.
+    fixture.event(16, streaming(23, 21, "of a whole."));
+    fixture.event(
+        17,
+        Event::MessageCompleted {
+            message: message(
+                23,
+                Author::Bot,
+                "A fraction is a part of a whole.",
+                MessageState::Complete,
+            ),
+        },
+    );
+    assert_eq!(
+        fixture.fact("reply"),
+        "A fraction is a part of a whole.".into()
+    );
+    assert_eq!(fixture.fact("reply_state"), "complete".into());
+    assert_eq!(fixture.fact("message_count"), 6_u64.into());
+}
+
+#[test]
+fn a_failed_older_page_says_why_and_the_start_ends_the_control() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor_with_history();
+    fixture.click("Load older");
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::LoadOlder(TUTOR, MessageId(20))]
+    );
+    fixture.reply(ApiReply::Older(
+        TUTOR,
+        MessageId(20),
+        Err(CommandError::unreachable()),
+    ));
+    assert_eq!(fixture.fact("older"), "failed".into());
+    assert!(fixture.shows(&CommandError::unreachable().message));
+    // Events are no longer held for it.
+    assert!(!fixture.app().store().is_loading(Snapshot::Older(TUTOR)));
+    // Asking again sends the same page, which reaches the start.
+    fixture.click("Load older");
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::LoadOlder(TUTOR, MessageId(20))]
+    );
+    fixture.reply(ApiReply::Older(
+        TUTOR,
+        MessageId(20),
+        Ok(page(
+            vec![message(
+                19,
+                Author::Bot,
+                "The very first",
+                MessageState::Complete,
+            )],
+            None,
+            10,
+        )),
+    ));
+    assert_eq!(fixture.message_ids(), [19, 20, 21]);
+    assert_eq!(fixture.fact("older"), "".into());
+    assert!(!fixture.shows("Load older"));
+    assert!(!fixture.shows(&CommandError::unreachable().message));
+    assert_eq!(
+        fixture
+            .app()
+            .availability(ActionTarget::application(BokkieAction::LoadOlder)),
+        Availability::Disabled {
+            reason: "No older messages".into()
+        }
+    );
+}
+
+#[test]
+fn an_older_page_out_across_a_reset_or_back_is_dropped() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor_with_history();
+    fixture.click("Load older");
+    let _ = fixture.sent();
+    // A reset reloads the newest page while the older page is out.
+    fixture.socket(Input::Closed { code: None });
+    fixture.socket(Input::RetryDue);
+    fixture.socket(Input::Opened);
+    fixture.frame(ServerFrame::Reset { after: Seq(6_000) });
+    let mut sent = fixture.sent();
+    sent.sort_by_key(|request| format!("{request:?}"));
+    assert_eq!(
+        sent,
+        [ApiRequest::ListBots, ApiRequest::LoadMessages(TUTOR)]
+    );
+    fixture.reply(ApiReply::Bots(Ok(tutor_list(BotStatus::Idle, 6_000))));
+    fixture.reply(ApiReply::Messages(
+        TUTOR,
+        Ok(page(
+            vec![
+                message(20, Author::User, "Hi", MessageState::Complete),
+                message(21, Author::Bot, "Kia ora!", MessageState::Complete),
+            ],
+            Some(20),
+            6_000,
+        )),
+    ));
+    // The page answers for the copy from before the reset: it is dropped.
+    fixture.reply(ApiReply::Older(
+        TUTOR,
+        MessageId(20),
+        Ok(page(
+            vec![message(
+                19,
+                Author::Bot,
+                "From before",
+                MessageState::Complete,
+            )],
+            Some(19),
+            10,
+        )),
+    ));
+    assert_eq!(fixture.message_ids(), [20, 21]);
+    assert_eq!(fixture.fact("older"), "more".into());
+    assert!(fixture.enabled(BokkieAction::LoadOlder));
+    assert_eq!(fixture.app().open().unwrap().anchor, None);
+    // Going back while a page is out drops it too.
+    fixture.click("Load older");
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::LoadOlder(TUTOR, MessageId(20))]
+    );
+    fixture.click("Back");
+    fixture.reply(ApiReply::Older(
+        TUTOR,
+        MessageId(20),
+        Ok(page(vec![], None, 6_000)),
+    ));
+    assert!(fixture.store_has_no_conversation());
+    assert_eq!(fixture.fact("older"), "".into());
+}
+
+#[test]
+fn the_message_that_was_oldest_stays_in_view_when_older_ones_arrive() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.click("Open Tutor");
+    let _ = fixture.sent();
+    let newest = (100..120)
+        .map(|id| {
+            message(
+                id,
+                Author::User,
+                &format!("Newer message {id}"),
+                MessageState::Complete,
+            )
+        })
+        .collect();
+    fixture.reply(ApiReply::Messages(TUTOR, Ok(page(newest, Some(100), 10))));
+    // The view starts at the newest message, so the control at the top is out
+    // of view; an agent loads the page as the button would.
+    assert_eq!(
+        fixture
+            .harness
+            .state_mut()
+            .app_mut()
+            .perform(ActionTarget::application(BokkieAction::LoadOlder), &mut ()),
+        Ok(true)
+    );
+    fixture.harness.run();
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::LoadOlder(TUTOR, MessageId(100))]
+    );
+    let older = (80..100)
+        .map(|id| {
+            message(
+                id,
+                Author::User,
+                &format!("Older message {id}"),
+                MessageState::Complete,
+            )
+        })
+        .collect();
+    fixture.reply(ApiReply::Older(
+        TUTOR,
+        MessageId(100),
+        Ok(page(older, Some(80), 10)),
+    ));
+    fixture.harness.run();
+    fixture.assert_anchored();
+    assert_eq!(
+        fixture.app().open().unwrap().anchor,
+        Some((1, MessageId(100)))
+    );
+    // Reloading the newest page drops the older one; loading it again moves
+    // the view again, although the anchor is the same message.
+    assert_eq!(
+        fixture
+            .harness
+            .state_mut()
+            .app_mut()
+            .perform(ActionTarget::application(BokkieAction::Refresh), &mut ()),
+        Ok(true)
+    );
+    fixture.harness.run();
+    assert_eq!(fixture.sent(), [ApiRequest::LoadMessages(TUTOR)]);
+    let newest = (100..120)
+        .map(|id| {
+            message(
+                id,
+                Author::User,
+                &format!("Newer message {id}"),
+                MessageState::Complete,
+            )
+        })
+        .collect();
+    fixture.reply(ApiReply::Messages(TUTOR, Ok(page(newest, Some(100), 10))));
+    assert_eq!(fixture.fact("message_count"), 20_u64.into());
+    assert_eq!(
+        fixture
+            .harness
+            .state_mut()
+            .app_mut()
+            .perform(ActionTarget::application(BokkieAction::LoadOlder), &mut ()),
+        Ok(true)
+    );
+    let _ = fixture.sent();
+    let older = (80..100)
+        .map(|id| {
+            message(
+                id,
+                Author::User,
+                &format!("Older message {id}"),
+                MessageState::Complete,
+            )
+        })
+        .collect();
+    fixture.reply(ApiReply::Older(
+        TUTOR,
+        MessageId(100),
+        Ok(page(older, Some(80), 10)),
+    ));
+    fixture.harness.run();
+    fixture.assert_anchored();
+    assert_eq!(
+        fixture.app().open().unwrap().anchor,
+        Some((2, MessageId(100)))
+    );
+}
+
+impl Fixture {
+    /// The scroll area starts below the heading; message 100 sits at its
+    /// top, with message 99 and the rest of the page above it, out of view.
+    fn assert_anchored(&self) {
+        let anchor = self.harness.get_by_label("Newer message 100").rect();
+        let above = self.harness.get_by_label("Older message 99").rect();
+        let heading = self.harness.get_by_label("Tutor").rect();
+        assert!(above.bottom() <= anchor.top(), "{above:?} above {anchor:?}");
+        assert!(
+            anchor.top() > heading.bottom(),
+            "{anchor:?} below {heading:?}"
+        );
+        assert!(
+            anchor.top() < 400.0,
+            "the anchor is near the top of the view: {anchor:?}"
+        );
+        assert!(
+            above.bottom() < heading.bottom() + 60.0,
+            "the older page is above the view: {above:?}"
+        );
+    }
+}
+
+#[test]
+fn reloading_the_newest_page_clears_a_failed_older_page() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor_with_history();
+    fixture.click("Load older");
+    let _ = fixture.sent();
+    fixture.reply(ApiReply::Older(
+        TUTOR,
+        MessageId(20),
+        Err(CommandError::unreachable()),
+    ));
+    assert_eq!(fixture.fact("older"), "failed".into());
+    assert_eq!(
+        fixture
+            .harness
+            .state_mut()
+            .app_mut()
+            .perform(ActionTarget::application(BokkieAction::Refresh), &mut ()),
+        Ok(true)
+    );
+    fixture.harness.run();
+    assert_eq!(fixture.sent(), [ApiRequest::LoadMessages(TUTOR)]);
+    fixture.reply(ApiReply::Messages(
+        TUTOR,
+        Ok(page(
+            vec![
+                message(20, Author::User, "Hi", MessageState::Complete),
+                message(21, Author::Bot, "Kia ora!", MessageState::Complete),
+            ],
+            Some(20),
+            10,
+        )),
+    ));
+    assert_eq!(fixture.fact("older"), "more".into());
+    assert!(!fixture.shows(&CommandError::unreachable().message));
 }

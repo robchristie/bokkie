@@ -9,7 +9,7 @@ use bokkie_protocol::api::{
     Bot, BotList, CodexAccount, CreateBotRequest, DeviceCodeLogin, LoginRequest, MessagePage,
     SendMessageRequest, SendMessageResponse, SessionResponse, StopResponse, Usage,
 };
-use bokkie_protocol::{API_PREFIX, BotId, Timestamp};
+use bokkie_protocol::{API_PREFIX, BotId, MessageId, Timestamp};
 
 use crate::wire::{self, CommandError};
 
@@ -26,6 +26,9 @@ pub enum ApiRequest {
     ListBots,
     /// `GET /api/v1/bots/{id}/messages`: the newest page of a conversation.
     LoadMessages(BotId),
+    /// `GET /api/v1/bots/{id}/messages?before={message_id}`: the page of a
+    /// conversation before that message.
+    LoadOlder(BotId, MessageId),
     /// `POST /api/v1/bots/{id}/messages`: send a message, which starts a
     /// turn or steers the running one.
     SendMessage(BotId, SendMessageRequest),
@@ -51,6 +54,9 @@ impl std::fmt::Debug for ApiRequest {
             Self::SignOut => f.write_str("SignOut"),
             Self::ListBots => f.write_str("ListBots"),
             Self::LoadMessages(bot) => f.debug_tuple("LoadMessages").field(bot).finish(),
+            Self::LoadOlder(bot, before) => {
+                f.debug_tuple("LoadOlder").field(bot).field(before).finish()
+            }
             Self::SendMessage(bot, message) => f
                 .debug_tuple("SendMessage")
                 .field(bot)
@@ -91,6 +97,8 @@ pub enum ApiReply {
     SignedOut(Result<(), CommandError>),
     Bots(Result<BotList, CommandError>),
     Messages(BotId, Result<MessagePage, CommandError>),
+    /// The page before the message named, for that Bot.
+    Older(BotId, MessageId, Result<MessagePage, CommandError>),
     Sent(BotId, Result<SendMessageResponse, CommandError>),
     Stopped(BotId, Result<StopResponse, CommandError>),
     Usage(Result<Usage, CommandError>),
@@ -120,6 +128,7 @@ impl ApiRequest {
             Self::CheckSession
             | Self::ListBots
             | Self::LoadMessages(_)
+            | Self::LoadOlder(..)
             | Self::LoadUsage
             | Self::CodexAccount => Method::Get,
             Self::SignIn(_)
@@ -139,6 +148,7 @@ impl ApiRequest {
             Self::CodexAccount => "/codex/account".into(),
             Self::CodexLogin => "/codex/login".into(),
             Self::LoadMessages(bot) | Self::SendMessage(bot, _) => format!("/bots/{bot}/messages"),
+            Self::LoadOlder(bot, before) => format!("/bots/{bot}/messages?before={before}"),
             Self::StopBot(bot) => format!("/bots/{bot}/stop"),
             Self::LoadUsage => "/usage".into(),
         };
@@ -165,6 +175,9 @@ impl ApiRequest {
             Self::LoadMessages(bot) => {
                 ApiReply::Messages(*bot, wire::decode_response(status, body))
             }
+            Self::LoadOlder(bot, before) => {
+                ApiReply::Older(*bot, *before, wire::decode_response(status, body))
+            }
             Self::SendMessage(bot, _) => ApiReply::Sent(*bot, wire::decode_response(status, body)),
             Self::StopBot(bot) => ApiReply::Stopped(*bot, wire::decode_response(status, body)),
             Self::LoadUsage => ApiReply::Usage(wire::decode_response(status, body)),
@@ -183,6 +196,7 @@ impl ApiRequest {
             Self::SignOut => ApiReply::SignedOut(Err(error)),
             Self::ListBots => ApiReply::Bots(Err(error)),
             Self::LoadMessages(bot) => ApiReply::Messages(*bot, Err(error)),
+            Self::LoadOlder(bot, before) => ApiReply::Older(*bot, *before, Err(error)),
             Self::SendMessage(bot, _) => ApiReply::Sent(*bot, Err(error)),
             Self::StopBot(bot) => ApiReply::Stopped(*bot, Err(error)),
             Self::LoadUsage => ApiReply::Usage(Err(error)),
@@ -302,6 +316,7 @@ mod tests {
             ApiRequest::SignOut,
             ApiRequest::ListBots,
             ApiRequest::LoadMessages(BotId(3)),
+            ApiRequest::LoadOlder(BotId(3), MessageId(41)),
             ApiRequest::SendMessage(
                 BotId(3),
                 SendMessageRequest {
@@ -330,6 +345,7 @@ mod tests {
                 ("DELETE", "/api/v1/session".to_owned()),
                 ("GET", "/api/v1/bots".to_owned()),
                 ("GET", "/api/v1/bots/3/messages".to_owned()),
+                ("GET", "/api/v1/bots/3/messages?before=41".to_owned()),
                 ("POST", "/api/v1/bots/3/messages".to_owned()),
                 ("POST", "/api/v1/bots/3/stop".to_owned()),
                 ("GET", "/api/v1/usage".to_owned()),
