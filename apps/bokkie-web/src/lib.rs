@@ -9,7 +9,9 @@
 //!   one Bot's conversation, kept current by the event socket, with what
 //!   the account's role and permissions allow: an admin's household ChatGPT
 //!   sign-in, and a member's notices of oversight and of an admin's
-//!   password reset.
+//!   password reset;
+//! - `admin` is the admin section: accounts, invitations, permissions,
+//!   oversight, limits, password resets and a member's Bots.
 //! - [`api`] describes each HTTP command and decodes its reply;
 //!   `browser` sends them with `fetch` and runs the event WebSocket.
 //!
@@ -26,6 +28,7 @@
 //!   I/O, and filters what reaches the application;
 //! - [`usage`] words the usage meter and the limit-reached banner.
 
+mod admin;
 pub mod api;
 pub mod app;
 #[cfg(target_arch = "wasm32")]

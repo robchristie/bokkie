@@ -32,9 +32,12 @@ reference. The web client (`apps/bokkie-web`) signs in, lists the user's
 Bots and holds one Bot's conversation, with replies streaming over the event
 socket, a Stop action, the usage meter, the limit-reached banner and a New
 Bot form. An admin signs in the one household ChatGPT sign-in that every app
-server shares, by device code; a member sees only whether it is signed in,
-with a view that follows their permissions and shows when an admin can read
-their conversations or has reset their password. It
+server shares, by device code, and manages accounts: invitations, which a
+new member accepts on the sign-in screen, permissions, oversight, limits,
+password resets, a member's Bots and, while oversight is on, a read-only view
+of their conversations. A member sees only whether the household is signed
+in, with a view that follows their permissions and shows when an admin can
+read their conversations or has reset their password. It
 builds as an installable web application named Bokkie, which the gateway
 serves with a Content-Security-Policy, and verification drives it in
 Chromium against the real gateway and a mock model.

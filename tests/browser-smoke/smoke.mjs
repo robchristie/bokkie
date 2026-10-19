@@ -19,6 +19,13 @@
 //   nothing lost or repeated;
 // - shows the subscription meter and the limit-reached banner from windows
 //   the mock reports;
+// - has the admin invite a member, with permissions, from the accounts
+//   screen; the member joins with the code in a second browser context and
+//   sees the household's status only; the member makes a Bot; the admin
+//   sets the member's limit and permissions, which reach the member live;
+//   the member is refused beyond the limit; and oversight, switched on while
+//   the member is signed in, shows its notice on the member's page while
+//   the admin reads the conversation, read-only;
 // - checks the installable application as Stobie's pwa-smoke.mjs does, and
 //   that the font notices are served as text;
 // - fails on any CSP violation, page error or console error;
@@ -153,23 +160,57 @@ class Automation {
     throw new Error(`timed out waiting for ${description}; last facts ${JSON.stringify(facts)}`);
   }
   async invoke(selector, value) {
-    const discovered = await this.request({ op: 'discover', selector, limit: 2 });
-    assert.equal(discovered.capabilities.length, 1, `one capability for ${JSON.stringify(selector)}`);
-    const operation = { op: 'invoke', selector, expected: discovered.capabilities[0].target };
-    if (value !== undefined) operation.arguments = { value };
-    let { receipt } = await this.request(operation);
-    for (let tries = 0; receipt.state === 'queued' && tries < 400; tries++) {
-      await wait(25);
-      ({ receipt } = await this.request({ op: 'receipt', request_id: receipt.request_id }));
+    // A field or control that the view presents afresh between discovery
+    // and invocation, as when a reply arrives, is rejected as no longer
+    // presented, or stale: discover it again once the view has settled.
+    for (let attempt = 0; ; attempt++) {
+      const discovered = await this.request({ op: 'discover', selector, limit: 2 });
+      assert.equal(discovered.capabilities.length, 1, `one capability for ${JSON.stringify(selector)}`);
+      const operation = { op: 'invoke', selector, expected: discovered.capabilities[0].target };
+      if (value !== undefined) operation.arguments = { value };
+      let receipt;
+      try {
+        ({ receipt } = await this.request(operation));
+      } catch (error) {
+        if (!/stale_target|is no longer presented/.test(error.message) || attempt >= 20) throw error;
+        await wait(50);
+        continue;
+      }
+      for (let tries = 0; receipt.state === 'queued' && tries < 400; tries++) {
+        await wait(25);
+        ({ receipt } = await this.request({ op: 'receipt', request_id: receipt.request_id }));
+      }
+      const represented = receipt.error?.code === 'stale_target'
+        || /is no longer presented/.test(receipt.error?.message ?? '');
+      if (receipt.state === 'rejected' && represented && attempt < 20) {
+        await wait(50);
+        continue;
+      }
+      assert.equal(receipt.state, 'completed', `${JSON.stringify(selector)}: ${JSON.stringify(receipt)}`);
+      return;
     }
-    assert.equal(receipt.state, 'completed', `${JSON.stringify(selector)}: ${JSON.stringify(receipt)}`);
   }
   action(id, value) { return this.invoke({ capability: id }, value); }
   setText(id, text) { return this.invoke({ id, capability: 'stobie.set-text' }, text); }
 }
 
+// Visible text the page's accessibility layer carries: aria-labels and leaf
+// text. Facts never carry content text, nor ever an invitation code.
+const pageTexts = page => page.evaluate(() => {
+  const texts = new Set();
+  for (const element of document.querySelectorAll('body *:not(style):not(script)')) {
+    const label = element.getAttribute('aria-label');
+    if (label) texts.add(label.trim());
+    for (const node of element.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) texts.add(node.textContent.trim());
+    }
+  }
+  return [...texts];
+});
+
 const scratch = await mkdtemp(join(tmpdir(), 'bokkie-smoke-'));
 let context;
+let memberContext;
 let failed = true;
 try {
   // The mock model, and the pinned Codex pointed at it.
@@ -275,23 +316,27 @@ try {
   report.browser = context.browser()?.version() ?? 'persistent context';
   const page = context.pages()[0] ?? await context.newPage();
   const problems = [];
-  page.on('pageerror', error => problems.push(`page error: ${error}`));
   // Failed requests are expected: the session check before signing in
-  // (401) and the dropped and refused connections. They are recorded, not
-  // failed on; every other console error fails the smoke.
+  // (401), the dropped and refused connections, and a send refused beyond
+  // a limit (429). They are recorded, not failed on; every other console
+  // error fails the smoke.
   report.network_errors = [];
-  page.on('console', message => {
-    const text = message.text();
-    if (/Content.Security.Policy/i.test(text)) problems.push(`console ${message.type()}: ${text}`);
-    else if (message.type() !== 'error') return;
-    else if (/^Failed to load resource|^WebSocket connection to .* failed/.test(text)) report.network_errors.push(text);
-    else problems.push(`console error: ${text}`);
-  });
-  await page.addInitScript(() => {
-    window.__cspViolations = [];
-    document.addEventListener('securitypolicyviolation', event => window.__cspViolations.push(
-      `${event.effectiveDirective} blocked ${event.blockedURI || 'inline'} (${event.sourceFile}:${event.lineNumber})`));
-  });
+  const watch = async page => {
+    page.on('pageerror', error => problems.push(`page error: ${error}`));
+    page.on('console', message => {
+      const text = message.text();
+      if (/Content.Security.Policy/i.test(text)) problems.push(`console ${message.type()}: ${text}`);
+      else if (message.type() !== 'error') return;
+      else if (/^Failed to load resource|^WebSocket connection to .* failed/.test(text)) report.network_errors.push(text);
+      else problems.push(`console error: ${text}`);
+    });
+    await page.addInitScript(() => {
+      window.__cspViolations = [];
+      document.addEventListener('securitypolicyviolation', event => window.__cspViolations.push(
+        `${event.effectiveDirective} blocked ${event.blockedURI || 'inline'} (${event.sourceFile}:${event.lineNumber})`));
+    });
+  };
+  await watch(page);
   // Every event frame the page receives, and which API responses the
   // service worker answered.
   const frames = [];
@@ -316,13 +361,13 @@ try {
   const focus = await context.newCDPSession(page);
   await focus.send('Emulation.setFocusEmulationEnabled', { enabled: true });
   await page.bringToFront();
-  const typeInto = async (name, text) => {
-    const field = page.getByRole('textbox', { name, exact: true });
+  const typeInto = async (name, text, into = page) => {
+    const field = into.getByRole('textbox', { name, exact: true });
     await field.click();
-    await page.waitForFunction(() => document.activeElement?.tagName === 'INPUT', null, { timeout: 5000 });
+    await into.waitForFunction(() => document.activeElement?.tagName === 'INPUT', null, { timeout: 5000 });
     report.focus ??= [];
-    report.focus.push(await page.evaluate(() => document.activeElement?.outerHTML?.slice(0, 300)));
-    await page.keyboard.type(text);
+    report.focus.push(await into.evaluate(() => document.activeElement?.outerHTML?.slice(0, 300)));
+    await into.keyboard.type(text);
   };
   await typeInto('Username', USERNAME);
   await typeInto('Password', PASSWORD);
@@ -502,6 +547,129 @@ try {
   assert.match(reached.limit, /^The shared ChatGPT subscription has reached its limit\. Bots can reply again in /);
   step('subscription meter and banner', { used: meter.subscription_used, banner: reached.limit });
 
+  // The admin invites a member, with permissions, from the accounts screen.
+  await controlRequest('rate-limits', {
+    primary: { used_percent: 42, window_minutes: 300, resets_at: resetsAt },
+    secondary: null,
+  });
+  await controlRequest('reply', { pieces: ['Hello ', 'there.'], piece_delay_ms: 50 });
+  await app.action('bokkie.back');
+  await app.until('the list', facts => facts.screen === 'signed_in');
+  await app.action('bokkie.admin');
+  await app.until('the accounts', facts => facts.screen === 'admin' && facts.accounts === 1);
+  // A member who may create Bots but not edit their profiles.
+  await app.action('bokkie.invite-may-edit-profiles');
+  await app.setText('bokkie.invite-name', 'Smoke Member');
+  await app.action('bokkie.create-invitation');
+  await app.until('the code shown', facts => facts.invitation_shown === true && facts.invitations === 1);
+  // The code is on the page, which a person reads off it, and never a fact.
+  const codes = (await pageTexts(page)).filter(text => /^[A-Za-z0-9_-]{43}$/.test(text));
+  assert.equal(codes.length, 1, `one invitation code on the page: ${codes.length}`);
+  const [invitationCode] = codes;
+  assert(!JSON.stringify(await app.facts()).includes(invitationCode), 'the code is no fact');
+  step('admin invited a member', { invitations: 1 });
+
+  // The member joins in a second browser context, with its own cookies.
+  memberContext = await chromium.launchPersistentContext(join(scratch, 'member-profile'), {
+    headless: false,
+    args: ['--ozone-platform=x11', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+    viewport: { width: 430, height: 900 },
+  });
+  const memberPage = memberContext.pages()[0] ?? await memberContext.newPage();
+  await watch(memberPage);
+  await (await memberContext.newCDPSession(memberPage)).send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  await memberPage.goto(`${origin}/?automation=1`);
+  await memberPage.waitForFunction(() => window.__STOBIE_STARTUP?.status === 'ready', null, { timeout: 60000 });
+  const member = new Automation(memberPage);
+  await member.hello();
+  await member.until('the member\'s sign-in screen', facts => facts.screen === 'signed_out');
+  await member.action('bokkie.join');
+  await member.until('the join form', facts => facts.joining === true);
+  await member.setText('bokkie.invitation-code', invitationCode);
+  await member.setText('bokkie.username', 'member');
+  await member.setText('bokkie.display-name', 'Smoke Member');
+  const memberPassword = `member ${randomUUID()}`;
+  await memberPage.bringToFront();
+  // Enter in the password field joins, after every key typed before it, so
+  // the account gets the whole password.
+  await typeInto('Password', memberPassword, memberPage);
+  await memberPage.keyboard.press('Enter');
+  const joined = await member.until('the member signed in and live', facts => facts.user === 'member'
+    && facts.connection === 'live' && facts.bots === 'loaded' && facts.chatgpt === 'signed_in', 30000);
+  assert.equal(joined.role, 'member');
+  assert.equal(joined.may_create_bots, true);
+  assert.equal(joined.may_edit_profiles, false, 'the invitation\'s permissions');
+  assert.equal(joined.oversight, false);
+  // Household status only: signed in, never as whom.
+  const memberTexts = await pageTexts(memberPage);
+  assert(memberTexts.includes('ChatGPT: signed in for the household'), 'the household status');
+  assert(!memberTexts.some(text => text.includes('@')), 'no email on the member\'s page');
+  step('member joined in a second context', { role: joined.role, chatgpt: joined.chatgpt });
+
+  // The member makes a Bot, as the invitation allows.
+  await member.setText('bokkie.bot-name', 'Helper');
+  await member.until('the name entered', facts => facts.new_bot_name === 'Helper', 5000);
+  await member.action('bokkie.create-bot');
+  await member.until('the member\'s Bot', facts => facts.bot_count === 1 && facts.creating === false, 30000);
+  assert((await pageTexts(memberPage)).includes('Create Bot'), 'New Bot is on the member\'s page');
+
+  // The admin sets the member's limit and permissions, which reach the
+  // member's page live.
+  const { body: listed } = await api('GET', '/admin/users', undefined, cookie);
+  const memberId = listed.users.find(entry => entry.user.username === 'member').user.id;
+  await page.bringToFront();
+  // The list shows the new account once loaded again.
+  await app.action('bokkie.refresh');
+  await app.until('the new account listed', facts => facts.accounts === 2 && facts.invitations === 0);
+  await app.action('bokkie.open-account', memberId);
+  await app.until('the member\'s account', facts => facts.screen === 'account' && facts.account === memberId);
+  await app.setText('bokkie.daily-turns', '1');
+  await app.action('bokkie.save-limits');
+  await app.until('one turn a day', facts => facts.account_daily_turns === 1 && facts.account_saving === false);
+  await app.action('bokkie.may-create-bots');
+  await app.until('may not create Bots', facts => facts.account_may_create_bots === false && facts.account_saving === false);
+  const limited = await member.until('the permission taken back live', facts => facts.may_create_bots === false, 30000);
+  assert(!(await pageTexts(memberPage)).includes('Create Bot'), 'New Bot is gone from the member\'s page');
+  step('admin set limits and permissions', { daily_turns: 1, may_create_bots: limited.may_create_bots });
+
+  // The member's one turn runs; the next is refused beyond the limit.
+  const memberSession = await api('POST', '/session', { username: 'member', password: memberPassword });
+  assert.equal(memberSession.response.status, 200, 'the member\'s API sign-in');
+  const memberCookie = memberSession.response.headers.get('set-cookie').split(';')[0];
+  const helper = (await api('GET', '/bots', undefined, memberCookie)).body.bots[0];
+  await member.action('bokkie.open-bot', helper.id);
+  await member.until('the Helper', facts => facts.conversation === 'loaded' && facts.bot === helper.id);
+  await member.setText('bokkie.draft', 'Hello');
+  await member.until('the draft entered', facts => facts.draft === 'Hello', 5000);
+  await member.action('bokkie.send');
+  await member.until('the member\'s reply', facts => facts.reply === 'Hello there.' && facts.reply_state === 'complete'
+    && facts.bot_status === 'idle', 60000);
+  await member.setText('bokkie.draft', 'And again');
+  await member.until('the second draft entered', facts => facts.draft === 'And again', 5000);
+  await member.action('bokkie.send');
+  const refused = await member.until('the send refused', facts => facts.sending === false && facts.send_error !== '', 30000);
+  assert.equal(refused.send_error, 'You have used your allowance for now. It refills over the next day or week');
+  assert.equal(refused.draft, 'And again', 'the draft stays');
+  assert.equal(refused.message_count, 2, 'nothing more was stored');
+  step('member refused beyond the limit', { send_error: refused.send_error });
+
+  // Oversight, switched on while the member is signed in, shows at once.
+  await app.action('bokkie.oversight');
+  await app.until('oversight on', facts => facts.account_oversight === true && facts.account_saving === false);
+  const overseen = await member.until('the oversight notice', facts => facts.oversight === true, 30000);
+  const noticeTexts = await pageTexts(memberPage);
+  const notice = noticeTexts.find(text => text.startsWith('Oversight is on: an admin can read all your Bots and conversations'));
+  assert(notice, `the oversight notice is on the member's page: ${JSON.stringify(noticeTexts)}`);
+  // The admin reads the conversation, read-only.
+  await app.until('every Bot under oversight', facts => facts.member_bots === 1 && facts.account_saving === false);
+  await app.action('bokkie.read-conversation', helper.id);
+  const reading = await app.until('the conversation read', facts => facts.screen === 'overseen' && facts.reading === helper.id
+    && facts.reading_count === 2, 30000);
+  step('oversight notice and read-only view', { notice, oversight: overseen.oversight, read: reading.reading_count });
+  for (const each of [page, memberPage]) {
+    assert.deepEqual(await each.evaluate(() => window.__cspViolations), [], 'CSP violations');
+  }
+
   // Nothing from the API reached the service worker's cache.
   const cached = await page.evaluate(async () => (await Promise.all((await caches.keys()).map(async name =>
     (await (await caches.open(name)).keys()).map(request => request.url)))).flat());
@@ -526,6 +694,7 @@ try {
   report.passed = !failed;
   if (failed) await context?.pages()[0]?.screenshot({ path: join(evidence, 'failure.png') }).catch(() => {});
   report.duration_ms = Date.now() - started;
+  await memberContext?.close().catch(() => {});
   await context?.close().catch(() => {});
   for (const close of closers) close();
   // SIGINT, which the gateway and the mock take as a request to shut down:
