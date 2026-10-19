@@ -84,7 +84,9 @@ These crates appear as each phase needs them:
 ## Multi-user model
 
 - **Roles.** `admin` and `member`. Only an admin creates, disables or resets
-  accounts. Signup is invitation-only, with no open registration.
+  accounts. Signup is invitation-only, with no open registration. No admin
+  can reset another admin's password, and a member whose password an admin
+  reset is told so, with when, at their next sign-in.
 - **Sign-in.** A password from the first release, plus passkeys when Stobie
   and the PWA support them. Sessions are long-lived, revocable, HttpOnly,
   Secure and SameSite=Lax cookies, because a home-screen launch must carry
@@ -99,8 +101,21 @@ These crates appear as each phase needs them:
     [Codex credentials](#codex-credentials)).
   - Gateway queries are always scoped by the authenticated user, and tests
     prove that one user cannot read, act on or approve another user's data.
+  - The one exception is an admin's view of a member, at admin-only routes
+    that name the member. An admin can make Bots for a member and edit the
+    profiles of the Bots an admin made. Everything else needs the member's
+    **oversight** switch, which is off by default: while an admin has it
+    on, admins can read all of that member's Bots and conversations,
+    read-only, and the member's client shows a notice the whole time.
+    Turning it off ends that access at once. Oversight applies to members
+    only, so no admin can read another admin's conversations. No admin
+    route sends, steers or stops, and each admin change to a member's Bots
+    or account goes to the member's own event log.
   - Bot messaging stays within one user. Household or cross-user Bots are a
     later, explicit feature.
+- **Per-member permissions.** An admin sets whether a member may create
+  Bots, and whether they may edit their Bots' name, label, description and
+  avatar (they can always pin and hide them). Admins always have both.
 - **Per-user limits.** These are set by the admin, for example for children:
   - the turns or tokens a user may spend in a day or week, measured from
     `thread/tokenUsage/updated` because the subscription's own limits are

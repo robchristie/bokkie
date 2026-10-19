@@ -1,5 +1,8 @@
 //! Bots and their conversations. Every route acts only on the signed-in
-//! user's own Bots; another user's Bot reads as not found.
+//! user's own Bots; another user's Bot reads as not found, even for an
+//! admin, whose view of a member's Bots is in [`super::admin`]. A member
+//! without a permission is refused creating Bots or changing their
+//! profiles.
 
 use axum::Json;
 use axum::extract::State;
@@ -13,12 +16,18 @@ use bokkie_protocol::{BotId, MessageId};
 use serde::Deserialize;
 
 use crate::AppState;
+use crate::accounts::{self, Account};
 use crate::auth::SignedIn;
 use crate::bots::store::{self, BotChanges, BotRow};
 use crate::error::{Body, Failure, Path, Query, Result};
 use sqlx::sqlite::SqliteExecutor;
 
-async fn to_api(state: &AppState, db: impl SqliteExecutor<'_>, bot: &BotRow) -> Result<Bot> {
+/// The Bot as its owner sees it.
+pub(crate) async fn to_api(
+    state: &AppState,
+    db: impl SqliteExecutor<'_>,
+    bot: &BotRow,
+) -> Result<Bot> {
     let previews = store::previews(db, bot.user).await?;
     Ok(bot.to_api(
         state.conversations.is_working(bot.id),
@@ -49,12 +58,23 @@ pub async fn create(
     signed_in: SignedIn,
     Body(request): Body<CreateBotRequest>,
 ) -> Result<(StatusCode, Json<Bot>)> {
-    // The Bot and its event commit together, or neither does.
+    // The Bot and its event commit together, or neither does. The
+    // permission is read in the same transaction, so a Bot is never made
+    // after an admin withdrew it.
     let mut batch = state.events.begin(signed_in.id()).await?;
+    if !own_account(&mut *batch, signed_in.id())
+        .await?
+        .user
+        .permissions
+        .may_create_bots
+    {
+        return Err(Failure::forbidden("Only an admin can create your Bots"));
+    }
     let bot = store::create_bot(
         &mut *batch,
         state.clock.now(),
         signed_in.id(),
+        None,
         &request.name,
         &request.label,
         &request.description,
@@ -89,6 +109,21 @@ pub async fn update(
     // The edit and its event commit together under the user's log lock, so
     // concurrent edits announce the Bot in the order they took effect.
     let mut batch = state.events.begin(signed_in.id()).await?;
+    let profile = request.name.is_some()
+        || request.label.is_some()
+        || request.description.is_some()
+        || request.avatar.is_some();
+    if profile
+        && !own_account(&mut *batch, signed_in.id())
+            .await?
+            .user
+            .permissions
+            .may_edit_bot_profiles
+    {
+        return Err(Failure::forbidden(
+            "Only an admin can change your Bots' profiles",
+        ));
+    }
     let bot = store::update_bot(
         &mut *batch,
         state.clock.now(),
@@ -110,10 +145,20 @@ pub async fn update(
     Ok(Json(bot))
 }
 
+/// The signed-in user's account as it is now, for its permissions.
+async fn own_account(
+    db: impl SqliteExecutor<'_>,
+    user: bokkie_protocol::UserId,
+) -> Result<Account> {
+    accounts::account(db, user)
+        .await?
+        .ok_or_else(Failure::unauthenticated)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PageQuery {
-    before: Option<i64>,
-    limit: Option<u32>,
+    pub before: Option<i64>,
+    pub limit: Option<u32>,
 }
 
 /// `GET /api/v1/bots/{id}/messages?before=&limit=`.

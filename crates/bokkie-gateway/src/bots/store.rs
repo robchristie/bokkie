@@ -32,6 +32,8 @@ pub struct BotRow {
     pub profile_revision: i64,
     pub profile_sent_revision: i64,
     pub refused_reason: Option<String>,
+    /// The admin who made the Bot for its owner, if an admin did.
+    pub made_by: Option<UserId>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -62,7 +64,8 @@ impl BotRow {
 }
 
 const BOT_COLUMNS: &str = "id, user_id, name, label, description, avatar, pinned, hidden, \
-     thread_id, profile_revision, profile_sent_revision, refused_reason, created_at, updated_at";
+     thread_id, profile_revision, profile_sent_revision, refused_reason, made_by, created_at, \
+     updated_at";
 
 fn bot_from(row: &sqlx::sqlite::SqliteRow) -> BotRow {
     BotRow {
@@ -78,6 +81,7 @@ fn bot_from(row: &sqlx::sqlite::SqliteRow) -> BotRow {
         profile_revision: row.get("profile_revision"),
         profile_sent_revision: row.get("profile_sent_revision"),
         refused_reason: row.get("refused_reason"),
+        made_by: row.get::<Option<i64>, _>("made_by").map(UserId),
         created_at: Timestamp(row.get("created_at")),
         updated_at: Timestamp(row.get("updated_at")),
     }
@@ -195,10 +199,14 @@ async fn unique_name<T>(result: std::result::Result<T, sqlx::Error>) -> Result<T
     }
 }
 
+/// Creates one of `user`'s Bots; `made_by` names the admin who made it for
+/// them, if an admin did.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_bot(
     db: impl SqliteExecutor<'_>,
     now: Timestamp,
     user: UserId,
+    made_by: Option<UserId>,
     name: &str,
     label: &str,
     description: &str,
@@ -210,10 +218,12 @@ pub async fn create_bot(
     let avatar = avatar.map(check_avatar).transpose()?;
     let row = unique_name(
         sqlx::query(&format!(
-            "INSERT INTO bots (user_id, name, label, description, avatar, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING {BOT_COLUMNS}"
+            "INSERT INTO bots (user_id, made_by, name, label, description, avatar, created_at,
+                               updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING {BOT_COLUMNS}"
         ))
         .bind(user.0)
+        .bind(made_by.map(|admin| admin.0))
         .bind(&name)
         .bind(&label)
         .bind(&description)

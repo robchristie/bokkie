@@ -36,7 +36,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{Bot, BotStatus, Message, Usage};
+use crate::api::{Bot, BotStatus, Message, Usage, User};
 #[cfg(doc)]
 use crate::api::{BotList, MessagePage};
 use crate::{BotId, MessageId, Timestamp};
@@ -94,6 +94,9 @@ pub enum Event {
     UsageUpdated { usage: Usage },
     /// A Bot could not complete a request. The message is safe to show.
     BotError { bot_id: BotId, message: String },
+    /// An admin changed the user's account: its display name, permissions
+    /// or oversight. `user` is the account as it now is.
+    AccountUpdated { user: User },
 }
 
 /// A frame from the client.

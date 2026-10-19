@@ -116,6 +116,67 @@ and lasts three days by default, at most thirty. Accepting it creates the
 account and signs it in. Admins can disable accounts, reset passwords and set
 per-user limits; disabling or resetting revokes that account's sessions.
 
+### Permissions and oversight
+
+An admin manages each member's account with
+`PATCH /api/v1/admin/users/{id}`. As well as the display name, the
+disabled flag and the [allowances](#usage-and-allowances), it sets:
+
+- **Permissions**, `permissions`, replaced whole:
+  - `may_create_bots`: off, the member is refused creating a Bot
+    (`forbidden`), and only an admin makes their Bots;
+  - `may_edit_bot_profiles`: off, the member is refused changing a Bot's
+    name, label, description or avatar (`forbidden`, for the whole
+    request); pinning and hiding still work.
+
+  Both are on for an account that existed before them, and by default for
+  an invitation, which can set them (`permissions` in the request). Admins
+  always have both: an admin's invitation or account that would lose one is
+  refused.
+- **Oversight**, `oversight`: off by default. While it is on, admins can
+  read all of that member's Bots and conversations, past and new,
+  read-only. Turning it off refuses the next read. The account records
+  when it last changed (`oversight_changed_at`). Oversight applies to
+  members only: switching it on for an admin, the admin's own account
+  included, is refused, so no admin reads another admin's conversations.
+
+The member's own account (`GET /api/v1/session`) carries both, and a
+change to the display name, permissions or oversight arrives on the
+member's event socket as `account_updated`, with the account as it now is,
+so a client can show the member that oversight is on the whole time it is,
+and update at once.
+
+An admin's view of a member's Bots, at routes that refuse an admin's
+account (`forbidden`):
+
+| Route | Does |
+| --- | --- |
+| `GET /api/v1/admin/users/{id}/bots` | Lists the member's Bots. With oversight off, only the Bots an admin made for the member, and only their profile (name, label, description, avatar), ordered by id. With it on, every Bot, hidden ones too, each with the member's own view of it (`overseen`: status, pin, visibility and latest message) |
+| `POST /api/v1/admin/users/{id}/bots` | Makes a Bot for the member, whatever the switches say. The gateway records that an admin made it |
+| `PATCH /api/v1/admin/users/{id}/bots/{bot}` | Changes a Bot's name, label, description or avatar. With oversight off, only a Bot an admin made; the member's own Bots read as not found. Pinning and hiding stay the member's |
+| `GET /api/v1/admin/users/{id}/bots/{bot}/messages` | Reads a conversation, paged like the member's own, only while oversight is on (`forbidden` otherwise) |
+
+No admin route sends, steers or stops: the member's own routes still read
+another user's Bot as not found, for an admin too. A Bot an admin makes or
+edits commits with its `bot_created` or `bot_updated` event in the
+member's own log, as the member's own changes do, so the member's client
+shows it at once. Each of these admin actions, and each read under
+oversight, is logged with the admin's and the member's ids.
+
+### Password resets
+
+`PUT /api/v1/admin/users/{id}/password` sets a new password and revokes
+every session of the account. No admin can reset another admin's password
+(`forbidden`), which would let them sign in as that admin and read what
+oversight keeps from them. An admin's reset of a member's password is
+recorded on the member's account: the sign-in response and
+`GET /api/v1/session` carry `password_reset_by_admin`, the time of the
+reset, from the first sign-in after it until the member acknowledges it
+with `DELETE /api/v1/session/password-reset`. So oversight off means no
+admin reads a member's conversations without the member being told. A
+member's own password change, or an admin resetting their own, records
+nothing.
+
 ## Sessions and request checks
 
 - Sign-in sets `__Host-bokkie_session`, a random token that the database stores only
@@ -332,7 +393,9 @@ long-lived Codex thread in that user's app server.
   stopped Codex for the whole gateway.
 - Every query names the signed-in user. Another user's Bot, even for an
   admin, reads as not found, and an app server's events are routed only to
-  Bots of the user it belongs to.
+  Bots of the user it belongs to. An admin's view of a member's Bots has its
+  own routes (see [Permissions and oversight](#permissions-and-oversight)),
+  which name the member.
 
 ## The event WebSocket
 
@@ -423,4 +486,5 @@ limits, and when a window rolls over.
   from the user's app server if it is running. Usage that no window counts
   any more is then deleted.
 - `GET /api/v1/admin/users/{id}/usage` shows an admin another account's
-  counts, never its conversations.
+  counts, never its conversations; those need
+  [oversight](#permissions-and-oversight).

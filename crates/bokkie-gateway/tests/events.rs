@@ -624,6 +624,7 @@ async fn a_change_and_its_event_commit_together_or_not_at_all() {
         &mut *batch,
         gateway.state.clock.now(),
         user,
+        None,
         "Tutor",
         "",
         "",
