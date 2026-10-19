@@ -42,6 +42,7 @@ jobs:
       # where setup-node looks before downloading), Playwright's Chromium
       # (cached by the Playwright version the lock names), its system
       # libraries and Xvfb.
+      # .node-version holds one exact version, which names the directory.
       - name: Read the pinned Node version
         id: node
         run: echo "version=$(cat tests/browser-smoke/.node-version)" >> "$GITHUB_OUTPUT"

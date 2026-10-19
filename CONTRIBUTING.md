@@ -168,15 +168,18 @@ Its tools are pinned:
 Chromium runs headful, because egui's text fields take no typing in headless
 Chromium. The script uses `DISPLAY` when it is set, or else `xvfb-run`; CI
 installs Xvfb and Chromium's libraries (`playwright install-deps
-chromium`). CI caches Node in the runner's tool cache, keyed on
-`.node-version`, and Chromium keyed on the lock, but not that apt install
-(about 12 s): the packages come from Ubuntu's archive at whatever version it
-holds, so caching them would pin nothing, and no first-party action caches
-apt packages. Playwright's own container image, pinned by digest, would pin
-them, at the cost of running the whole job in it. On a host that has neither, set `BOKKIE_BROWSER_RUNNER` to a
+chromium`). On a host that has neither, set `BOKKIE_BROWSER_RUNNER` to a
 command that runs its arguments where they exist, such as a container
 running `xvfb-run` with this checkout, the Cargo build directory and the
 Node and Playwright caches mounted at the same paths.
+
+CI caches Node in the runner's tool cache, keyed on `.node-version`, which
+must therefore hold one exact version, and Chromium keyed on the lock. It
+does not cache the apt install of Xvfb and Chromium's libraries (about
+12 s): the packages come from Ubuntu's archive at whatever version it holds,
+so caching them would pin nothing, and no first-party action caches apt
+packages. Playwright's own container image, pinned by digest, would pin
+them, at the cost of running the whole job in it.
 
 ### Stobie pin
 
