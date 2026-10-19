@@ -6,7 +6,7 @@
 use bokkie_protocol::api::{
     AcceptInvitationRequest, AdminUser, AdminUserList, Allowance, CreateBotRequest,
     CreateInvitationRequest, CreatedInvitation, InvitationList, InvitationSummary, Limits,
-    MemberBot, MemberBotList, Message, MessagePage, MessageState, Permissions,
+    MemberBot, MemberBotList, Message, MessageKind, MessagePage, MessageState, Permissions,
     ResetPasswordRequest, UpdateBotProfileRequest, UpdateUserRequest,
 };
 use bokkie_protocol::{BotId, MessageId};
@@ -74,6 +74,7 @@ fn member_bot(id: i64, name: &str, made_by_admin: bool, overseen: bool) -> Membe
         avatar: None,
         made_by_admin,
         created_at: Timestamp(1_000),
+        grants: Vec::new(),
         overseen: overseen.then(|| bot(id, name, "Helps", BotStatus::Idle, Some("Last words"))),
     }
 }
@@ -98,6 +99,7 @@ fn read_message(id: i64, author: Author, text: &str) -> Message {
         state: MessageState::Complete,
         created_at: Timestamp(3_000 + id),
         updated_at: Timestamp(3_000 + id),
+        kind: MessageKind::Text,
     }
 }
 

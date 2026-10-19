@@ -76,6 +76,9 @@ pub enum State {
 }
 
 /// What happened, as the transport or the application reports it.
+// Inputs are handled one at a time as they arrive, so the size of the
+// frame variant costs nothing worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
     /// Start connecting, after sign-in or when the application starts signed

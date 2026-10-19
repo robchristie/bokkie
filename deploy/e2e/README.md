@@ -13,7 +13,7 @@ deploy/e2e/run.sh            # host: nostromo.yutani.tech
 - **Confinement.** The container runs under Docker's default seccomp and
   AppArmor confinement, with the qualification harness's hardening: non-root,
   `cap_drop: ALL`, `no-new-privileges`, read-only root, an init process,
-  limits and a tmpfs `/tmp`. Chat-only threads need no Bubblewrap (see
+  limits and a tmpfs `/tmp`. Threads that run no command need no Bubblewrap (see
   [docs/gateway.md](../../docs/gateway.md)), so no relaxed profile is used.
 - **Image.** `bokkie-qualify:c94cebe67cf1`, the image Phase 0 qualified
   (Codex 0.163.0). The gateway and the `bokkie-e2e` client are built from

@@ -768,7 +768,7 @@ impl App {
                     name: changed(editor.name.trim(), held.map(|b| b.name.as_str())),
                     label: changed(editor.label.trim(), held.map(|b| b.label.as_str())),
                     description: changed(&editor.description, held.map(|b| b.description.as_str())),
-                    avatar: None,
+                    ..Default::default()
                 };
                 if changes == UpdateBotProfileRequest::default() {
                     screen.editing = None;

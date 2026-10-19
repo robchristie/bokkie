@@ -1,10 +1,11 @@
 //! The `config.toml` the gateway writes into every user's `CODEX_HOME`.
 //!
-//! Until Phase 4's sandbox gate passes, every thread is chat-only: no command
-//! execution, no file changes, no shell, and no other built-in tool that
-//! reaches outside the conversation. Two things together achieve that with
-//! the pinned Codex, and [`super::guard`] checks both at startup and for
-//! every thread:
+//! Until Phase 4's sandbox gate passes, every Codex built-in tool stays off:
+//! no command execution, no file changes, no shell, and no other built-in
+//! tool that reaches outside the conversation. A thread's only tools are
+//! the Bokkie tools of its grants ([`crate::tools`]), which run in the
+//! gateway. Two things together keep Codex's tools off with the pinned
+//! Codex, and [`super::guard`] checks both at startup and for every thread:
 //!
 //! - the feature flags in [`DISABLED_FEATURES`] and `web_search = "disabled"`;
 //! - Bokkie's own model catalog ([`super::catalog`]), which removes the
@@ -77,8 +78,8 @@ pub fn render(data_dir: &Path, catalog: &Path) -> String {
         quote(&catalog.display().to_string())
     ));
     // Codex reads AGENTS.md through its sandbox helper, which needs a working
-    // Bubblewrap. Chat-only threads need neither, and a workspace file must
-    // not add instructions.
+    // Bubblewrap. Threads that run no command need neither, and a workspace
+    // file must not add instructions.
     out.push_str("project_doc_max_bytes = 0\n");
     out.push_str("check_for_update_on_startup = false\n");
     out.push_str(&format!(

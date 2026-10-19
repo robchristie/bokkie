@@ -14,8 +14,8 @@ use std::collections::BTreeSet;
 
 use bokkie_protocol::api::{
     Author, Bot, BotStatus, CodexAccount, CreateBotRequest, Delivery, ErrorCode, LoginRequest,
-    LoginState, Message, MessageState, Role, SendMessageRequest, SessionResponse, UpdateBotRequest,
-    User,
+    LoginState, Message, MessageKind, MessageState, Role, SendMessageRequest, SessionResponse,
+    UpdateBotRequest, User,
 };
 use bokkie_protocol::events::Event;
 use bokkie_protocol::{BotId, MessageId, Timestamp};
@@ -777,14 +777,15 @@ impl App {
         }
     }
 
-    /// The open conversation's latest Bot reply, if it holds one.
+    /// The open conversation's latest Bot reply, if it holds one. The
+    /// gateway's markers are not replies.
     pub(crate) fn latest_reply(&self) -> Option<&Message> {
         let bot = self.open_bot()?;
         self.store
             .conversation(bot)?
             .messages()
             .rev()
-            .find(|message| message.author == Author::Bot)
+            .find(|message| message.author == Author::Bot && message.kind == MessageKind::Text)
     }
 
     pub(crate) fn send(&self, request: ApiRequest) {

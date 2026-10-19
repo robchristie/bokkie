@@ -1,5 +1,5 @@
 use bokkie_protocol::Timestamp;
-use bokkie_protocol::api::{Allowance, Author, BotStatus, Limits, RateLimitBucket};
+use bokkie_protocol::api::{Allowance, Author, BotStatus, Limits, MessageKind, RateLimitBucket};
 
 use super::*;
 
@@ -18,6 +18,7 @@ fn bot(id: i64, name: &str) -> Bot {
         created_at: Timestamp(1_000),
         updated_at: Timestamp(1_000),
         last_message: None,
+        grants: Vec::new(),
     }
 }
 
@@ -30,6 +31,7 @@ fn message(id: i64, author: Author, text: &str, state: MessageState) -> Message 
         state,
         created_at: Timestamp(2_000 + id),
         updated_at: Timestamp(2_000 + id),
+        kind: MessageKind::Text,
     }
 }
 

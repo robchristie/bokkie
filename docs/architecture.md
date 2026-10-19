@@ -1,7 +1,8 @@
 # Architecture
 
 This page owns Bokkie's architecture, its multi-user model and its container
-and sandbox posture, including the sandbox invariants and the chat-only rule.
+and sandbox posture, including the sandbox invariants and the capability
+model.
 It describes the design; parts of it land phase by phase.
 [docs/gateway.md](gateway.md) is the operator's reference for what the gateway
 does today, and the [Phase 0 report](phase-0-report.md) records the evidence
@@ -61,12 +62,15 @@ These crates appear as each phase needs them:
 - The thread resumes with `thread/resume`. User messages become
   `turn/start`. "Stop now" maps to `turn/interrupt`. A message sent while the
   Bot is mid-turn maps to `turn/steer`.
-- Bokkie's own capabilities are tools the Bot can call. The first is
-  "message another Bot". A memory note and a routine follow later.
+- Bokkie's own capabilities are tools the Bot can call, each brought by a
+  grant (see [The capability model](#the-capability-model)). The first are
+  the Bot's notes; seen items, notifications and web access follow, and
+  "message another Bot" later.
 - Those tools are experimental app-server `dynamicTools`, served through
   `item/tool/call`. Phase 0 chose them over an MCP server: the call names the
   calling thread and turn, needs no extra process, and survives
-  `thread/resume`.
+  `thread/resume`. Every one runs in the gateway, brokered off the app
+  server's read loop.
 - Approvals arrive as app-server server-to-client requests:
   `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`
   and `item/permissions/requestApproval`. They are shown only to the owning
@@ -224,13 +228,66 @@ App-server features that run in-process, outside the sandbox (for example,
 image and file reads), run as the app-server's UID. That favours per-user UIDs
 or containers over relying on Codex's filesystem policy alone.
 
-### The chat-only rule
+### The capability model
 
-Until Phase 4's acceptance passes on the deployed profile, every thread runs
-with command execution, file changes and shell tools disabled. The gateway
-checks this at startup and for each thread through `config/read` and the
-`thread/start` response, and refuses to serve a thread that does not match.
-[docs/gateway.md](gateway.md#chat-only-until-phase-4) describes how.
+Each Bot holds explicit capability grants, and the gateway enforces them.
+[docs/gateway.md](gateway.md#the-capability-rule) describes what the
+gateway does today.
+
+1. **Per-Bot grants, enforced by the gateway.** The catalogue is `notes`,
+   `seen`, `notify`, `web.search` and `web.fetch`; `host.*` and `github.*`
+   come later. Every Bokkie tool a grant brings runs in the gateway, so no
+   credential enters the sandbox.
+2. **The capability rule.** Every Codex built-in tool stays off until
+   Phase 4's acceptance passes on the deployed profile: command execution,
+   file changes, shell, MCP, memories and the tools that model catalogue
+   entries add. The one exception is web search, which is on only for a
+   thread of a Bot holding `web.search`. A thread's `dynamicTools` are
+   exactly the tools of its Bot's grants. The gateway checks the
+   configuration at startup and for each thread through `config/read` and
+   the `thread/start` or `thread/resume` response. Each thread records the
+   grants it started with, and a turn runs only while they equal the Bot's
+   grants. During a turn, a call of a tool the thread was not granted, or a
+   web search on a thread without `web.search`, is a violation: the gateway
+   refuses the thread and stops Codex for every user. Live tests capture
+   the tools offered to the model for every combination of the grants that
+   have tools, with a control that shows the capture sees unsafe tools.
+3. **A grant change starts a fresh thread** at the Bot's next turn, because
+   Codex fixes a thread's `dynamicTools` and developer instructions when it
+   starts. The conversation continues with a "Capabilities changed" marker,
+   and the fresh thread's first turn carries the Bot's notes and its latest
+   20 messages (about 8,000 characters at most) as untrusted context.
+4. **The taint rule.** A Bot granted `web.search` or `web.fetch` reads
+   untrusted input, and can never hold `host.*`, `github.*` or any later
+   privileged grant. When Bots can message each other, such a Bot may not
+   message a privileged Bot. The gateway enforces this when grants are set.
+5. **Who grants what.** Admins grant anything; a member may grant only
+   `notes`, `seen` and `notify`. Outward-facing grants on a member's Bot are
+   admin-only, and since a member's own Bots stay read-only to admins, an
+   admin sets them on a Bot an admin made for the member.
+6. **Approval policy.** Every tool so far runs without asking. Asking the
+   owner first (an approval card that expires, and a notification) arrives
+   with the first tool that acts on a host.
+7. **The tool-call log.** Every brokered call is recorded: user, Bot,
+   thread and turn, routine run, tool, a bounded summary of its arguments
+   (such as a size, a URL or a notification's title), outcome and duration.
+   Entries are kept 90 days, and each Bot's owner can read its entries.
+8. **Deadlines.** Codex sets no deadline on a tool call; it waits until the
+   turn is interrupted. The gateway answers each call from its own task,
+   never inside the app server's read loop, each within a deadline (30
+   seconds for a fetch).
+9. **Any public host, and its risk.** A Bot that reads the web may fetch
+   from any public host. Such a Bot can leak what it is told through the
+   URLs it fetches or searches for; the Bot's grants say so where they are
+   set, and a per-Bot domain allowlist is a later option.
+10. **Memory through tools.** A Bot's notes and seen items live in the
+    gateway's database, reached only through tools, with no command
+    execution. Notes are one Markdown document per Bot, at most 16 KB, that
+    the Bot reads, replaces and appends to; they are not authoritative, and
+    the owner can read and clear them. Seen items record which canonical
+    ids (arXiv id, DOI, normalised URL) are new and which items the Bot
+    showed, kept 365 days. A tool resolves its Bot and user from the
+    calling thread, never from its arguments.
 
 ### Codex credentials
 

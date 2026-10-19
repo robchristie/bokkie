@@ -23,8 +23,10 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod events;
+pub mod grants;
 pub mod routes;
 pub mod secrets;
+pub mod tools;
 pub mod usage;
 pub mod web;
 
@@ -121,6 +123,11 @@ pub fn router(state: AppState) -> Router {
         .route("/bots/{id}", get(bots::get).patch(bots::update))
         .route("/bots/{id}/messages", get(bots::messages).post(bots::send))
         .route("/bots/{id}/stop", post(bots::stop))
+        .route(
+            "/bots/{id}/notes",
+            get(bots::notes).delete(bots::clear_notes),
+        )
+        .route("/bots/{id}/tool-calls", get(bots::tool_calls))
         .route("/events", get(events::events))
         .route("/usage", get(usage::usage))
         .route("/admin/users/{id}/usage", get(usage::admin_usage))

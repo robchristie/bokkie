@@ -58,9 +58,10 @@ port directly, past the allowlist, and can set their own
 hold; they are the owner's own services, and the gateway still checks
 `Host`, `Origin` and the session on every request.
 
-The gateway runs chat-only, as it enforces today
-([docs/gateway.md](../../docs/gateway.md#chat-only-until-phase-4)), so it
-needs no Bubblewrap and no relaxed confinement. The image carries no
+Every Codex tool stays off and Bokkie's own tools run in the gateway, as it
+enforces today ([docs/gateway.md](../../docs/gateway.md#the-capability-rule)),
+so no thread runs a command, and the gateway needs no Bubblewrap and no
+relaxed confinement. The image carries no
 ChatGPT credential and no account. Changing the container's confinement,
 the hostname or any other stack needs the owner's go-ahead.
 
@@ -103,7 +104,7 @@ sign-in and links that user to the household's (see
 the one ChatGPT sign-in every app server shares
 ([docs/gateway.md](../../docs/gateway.md#the-households-chatgpt-sign-in))
 and is refused unless its configuration passes
-([docs/gateway.md](../../docs/gateway.md#chat-only-until-phase-4)); the
+([docs/gateway.md](../../docs/gateway.md#the-capability-rule)); the
 gateway logs why. Each user's app server starts on that user's first
 request that needs it, only while the household is signed in, and passes
 the same checks. The health check asks `/healthz`, and Traefik routes to

@@ -204,6 +204,7 @@ fn bot(id: i64, name: &str, label: &str, status: BotStatus, preview: Option<&str
             text: text.into(),
             at: Timestamp(2_000 + id),
         }),
+        grants: Vec::new(),
     }
 }
 
