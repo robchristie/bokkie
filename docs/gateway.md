@@ -153,10 +153,11 @@ account (`forbidden`):
 | --- | --- |
 | `GET /api/v1/admin/users/{id}/bots` | Lists the member's Bots. With oversight off, only the Bots an admin made for the member, and only their profile (name, label, description, avatar), ordered by id. With it on, every Bot, hidden ones too, each with the member's own view of it (`overseen`: status, pin, visibility and latest message) |
 | `POST /api/v1/admin/users/{id}/bots` | Makes a Bot for the member, whatever the switches say. The gateway records that an admin made it |
-| `PATCH /api/v1/admin/users/{id}/bots/{bot}` | Changes a Bot's name, label, description or avatar. With oversight off, only a Bot an admin made; the member's own Bots read as not found. Pinning and hiding stay the member's |
+| `PATCH /api/v1/admin/users/{id}/bots/{bot}` | Changes the name, label, description or avatar of a Bot an admin made. The member's own Bots are read-only to admins: with oversight off they read as not found, and with it on a change is refused (`forbidden`). Pinning and hiding stay the member's |
 | `GET /api/v1/admin/users/{id}/bots/{bot}/messages` | Reads a conversation, paged like the member's own, only while oversight is on (`forbidden` otherwise) |
 
-No admin route sends, steers or stops: the member's own routes still read
+No admin route changes a member's own Bot, or sends, steers or stops: the
+member's own routes still read
 another user's Bot as not found, for an admin too. A Bot an admin makes or
 edits commits with its `bot_created` or `bot_updated` event in the
 member's own log, as the member's own changes do, so the member's client

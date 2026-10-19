@@ -3,9 +3,10 @@
 //!
 //! Admins see accounts, limits, permissions and invitations. They make
 //! Bots for a member and edit the profiles of the Bots an admin made for
-//! that member. They read a member's other Bots and any conversation only
+//! that member. They read a member's own Bots and any conversation only
 //! while oversight of that member is on, and then read-only: no route here
-//! sends, steers or stops. Oversight never applies to an admin, so no admin
+//! changes a member's own Bot, or sends, steers or stops. Oversight never
+//! applies to an admin, so no admin
 //! reads another admin's Bots or conversations. Each change to a member's
 //! account or Bots commits with its event in the member's own log.
 
@@ -270,22 +271,33 @@ pub async fn create_member_bot(
     ))
 }
 
-/// `PATCH /api/v1/admin/users/{id}/bots/{bot}`: an admin changes a member's
-/// Bot's profile.
+/// `PATCH /api/v1/admin/users/{id}/bots/{bot}`: an admin changes the profile
+/// of a Bot an admin made for the member. The member's own Bots are
+/// read-only to admins, even under oversight.
 pub async fn update_member_bot(
     State(state): State<AppState>,
     SignedInAdmin(admin): SignedInAdmin,
     Path((id, bot_id)): Path<(i64, i64)>,
     Body(request): Body<UpdateBotProfileRequest>,
 ) -> Result<Json<MemberBot>> {
+    if request == UpdateBotProfileRequest::default() {
+        return Err(Failure::invalid(
+            "Name the name, label, description or avatar to change",
+        ));
+    }
     // The edit and its event commit together, in the member's log, and
     // oversight is read in the same transaction.
     let mut batch = state.events.begin(UserId(id)).await?;
     let member = member(&mut *batch, UserId(id)).await?;
-    store::bot(&mut *batch, member.user.id, BotId(bot_id))
+    let existing = store::bot(&mut *batch, member.user.id, BotId(bot_id))
         .await?
         .filter(|bot| visible(&member, bot))
         .ok_or_else(Failure::not_found)?;
+    if existing.made_by.is_none() {
+        return Err(Failure::forbidden(
+            "A member's own Bots are read-only to admins",
+        ));
+    }
     let bot = store::update_bot(
         &mut *batch,
         state.clock.now(),

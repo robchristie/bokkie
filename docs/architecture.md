@@ -109,8 +109,9 @@ These crates appear as each phase needs them:
     read-only, and the member's client shows a notice the whole time.
     Turning it off ends that access at once. Oversight applies to members
     only, so no admin can read another admin's conversations. No admin
-    route sends, steers or stops, and each admin change to a member's Bots
-    or account goes to the member's own event log.
+    route changes a member's own Bot, or sends, steers or stops, and each
+    admin change to a member's Bots or account goes to the member's own
+    event log.
   - Bot messaging stays within one user. Household or cross-user Bots are a
     later, explicit feature.
 - **Per-member permissions.** An admin sets whether a member may create

@@ -404,9 +404,10 @@ pub struct MemberBotList {
     pub bots: Vec<MemberBot>,
 }
 
-/// `PATCH /api/v1/admin/users/{id}/bots/{bot}`: an admin changes a member's
-/// Bot's profile. Pinning and hiding stay the member's own. With oversight
-/// off, only a Bot an admin made for the member can be changed.
+/// `PATCH /api/v1/admin/users/{id}/bots/{bot}`: an admin changes the
+/// profile of a Bot an admin made for the member. The member's own Bots are
+/// read-only to admins, even under oversight, and pinning and hiding stay
+/// the member's. A request that names no field is refused.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateBotProfileRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]

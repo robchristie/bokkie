@@ -505,8 +505,9 @@ async fn with_oversight_on_an_admin_reads_everything_read_only_until_it_is_turne
         )
         .await;
     assert_eq!(reply.status, StatusCode::NOT_FOUND);
-    // While on, the admin may edit any of Amy's Bots' profiles.
-    let edited = gateway
+    // Even under oversight, Amy's own Bot is read-only to the admin; the
+    // admin-made one can still be edited, and an edit must name a field.
+    let refused = gateway
         .send(
             Call::new(
                 Method::PATCH,
@@ -516,8 +517,37 @@ async fn with_oversight_on_an_admin_reads_everything_read_only_until_it_is_turne
             .json(&json!({"label": "Journal"})),
         )
         .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{:?}", refused.body);
+    let diary_now = gateway
+        .send(Call::get(&format!("/api/v1/bots/{diary}")).cookie(&amy))
+        .await;
+    assert_eq!(diary_now.body["label"], "Diarist");
+    let events_before = log(&gateway, amy_id).await.len();
+    let empty = gateway
+        .send(
+            Call::new(
+                Method::PATCH,
+                &format!("/api/v1/admin/users/{amy_id}/bots/{tutor}"),
+            )
+            .cookie(&rob)
+            .json(&json!({"pinned": true})),
+        )
+        .await;
+    assert_eq!(empty.status, StatusCode::BAD_REQUEST, "{:?}", empty.body);
+    assert_eq!(log(&gateway, amy_id).await.len(), events_before);
+    let edited = gateway
+        .send(
+            Call::new(
+                Method::PATCH,
+                &format!("/api/v1/admin/users/{amy_id}/bots/{tutor}"),
+            )
+            .cookie(&rob)
+            .json(&json!({"label": "Maths tutor"})),
+        )
+        .await;
     assert_eq!(edited.status, StatusCode::OK, "{:?}", edited.body);
-    assert_eq!(edited.body["overseen"]["hidden"], true, "pins stay Amy's");
+    assert_eq!(edited.body["overseen"]["label"], "Maths tutor");
+    assert_eq!(edited.body["overseen"]["pinned"], false, "pins stay Amy's");
 
     // Read-only: the admin cannot send, steer or stop.
     let starts_before = gateway.fake.received("turn/start").len();
