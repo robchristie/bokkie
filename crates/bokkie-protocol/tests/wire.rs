@@ -36,6 +36,7 @@ fn bot() -> Bot {
             text: "Pasta tonight?".into(),
             at: Timestamp(2_000),
         }),
+        grants: vec![Grant::Notes, Grant::WebSearch],
     }
 }
 
@@ -48,6 +49,7 @@ fn message() -> Message {
         state: MessageState::Streaming,
         created_at: Timestamp(3_000),
         updated_at: Timestamp(3_500),
+        kind: MessageKind::Text,
     }
 }
 
@@ -232,6 +234,7 @@ fn an_admins_view_of_a_members_bots() {
         avatar: Some("🍳".into()),
         made_by_admin: true,
         created_at: Timestamp(1_000),
+        grants: vec![Grant::Notes],
         overseen: None,
     };
     pin(
@@ -241,13 +244,13 @@ fn an_admins_view_of_a_members_bots() {
         },
         json!({"oversight": false, "bots": [{
             "id": 7, "name": "Chef", "label": "Meal planner", "description": "Plans dinners.",
-            "avatar": "🍳", "made_by_admin": true, "created_at": 1000,
+            "avatar": "🍳", "made_by_admin": true, "created_at": 1000, "grants": ["notes"],
         }]}),
     );
     let overseen = MemberBot {
         made_by_admin: false,
         overseen: Some(bot()),
-        ..profile_only
+        ..profile_only.clone()
     };
     let encoded = serde_json::to_value(&overseen).unwrap();
     assert_eq!(encoded["made_by_admin"], false);
@@ -266,6 +269,18 @@ fn an_admins_view_of_a_members_bots() {
     assert_eq!(edit.label.as_deref(), Some("Cook"));
     assert_eq!(edit.avatar, Some(None));
     pin(&edit, json!({"label": "Cook", "avatar": null}));
+    let grants: UpdateBotProfileRequest =
+        serde_json::from_value(json!({"grants": ["web.search", "notes"]})).unwrap();
+    assert_eq!(grants.grants, Some(vec![Grant::WebSearch, Grant::Notes]));
+    // A list from before grants existed decodes with none.
+    let mut old = serde_json::to_value(&profile_only).unwrap();
+    old.as_object_mut().unwrap().remove("grants");
+    assert!(
+        serde_json::from_value::<MemberBot>(old)
+            .unwrap()
+            .grants
+            .is_empty()
+    );
 }
 
 #[test]
@@ -277,7 +292,17 @@ fn bot_types() {
             "avatar": "🍳", "pinned": true, "hidden": false, "status": "idle",
             "created_at": 1000, "updated_at": 2000,
             "last_message": {"author": "bot", "text": "Pasta tonight?", "at": 2000},
+            "grants": ["notes", "web.search"],
         }),
+    );
+    // A Bot stored in an event before grants existed decodes with none.
+    let mut old = serde_json::to_value(bot()).unwrap();
+    old.as_object_mut().unwrap().remove("grants");
+    assert!(
+        serde_json::from_value::<Bot>(old)
+            .unwrap()
+            .grants
+            .is_empty()
     );
     pin(
         &SendMessageResponse {
@@ -286,10 +311,78 @@ fn bot_types() {
         },
         json!({
             "message": {"id": 42, "bot_id": 7, "author": "bot", "text": "Hello",
-                        "state": "streaming", "created_at": 3000, "updated_at": 3500},
+                        "state": "streaming", "created_at": 3000, "updated_at": 3500,
+                        "kind": "text"},
             "delivery": "steered",
         }),
     );
+    // A message stored before kinds existed is text.
+    let old = json!({"id": 42, "bot_id": 7, "author": "bot", "text": "Hello",
+                     "state": "streaming", "created_at": 3000, "updated_at": 3500});
+    assert_eq!(serde_json::from_value::<Message>(old).unwrap(), message());
+    let marker = Message {
+        kind: MessageKind::Marker,
+        ..message()
+    };
+    assert_eq!(serde_json::to_value(&marker).unwrap()["kind"], "marker");
+}
+
+#[test]
+fn grants_are_named_as_the_catalogue_names_them() {
+    let names: Vec<&str> = Grant::ALL.iter().map(|g| g.name()).collect();
+    assert_eq!(
+        names,
+        ["notes", "seen", "notify", "web.search", "web.fetch"]
+    );
+    for grant in Grant::ALL {
+        pin(&grant, json!(grant.name()));
+        assert_eq!(Grant::from_name(grant.name()), Some(grant));
+        assert_eq!(grant.to_string(), grant.name());
+    }
+    assert_eq!(Grant::from_name("host.run"), None);
+    assert!(serde_json::from_value::<Grant>(json!("host.run")).is_err());
+    let mut sorted = Grant::ALL.to_vec();
+    sorted.sort();
+    assert_eq!(sorted, Grant::ALL, "the order is the catalogue's");
+    let set: UpdateBotRequest =
+        serde_json::from_value(json!({"grants": ["notes", "seen"]})).unwrap();
+    assert_eq!(set.grants, Some(vec![Grant::Notes, Grant::Seen]));
+    pin(&set, json!({"grants": ["notes", "seen"]}));
+}
+
+#[test]
+fn notes_and_tool_calls() {
+    pin(
+        &BotNotes {
+            text: "# Seen\n".into(),
+            updated_at: Some(Timestamp(5)),
+        },
+        json!({"text": "# Seen\n", "updated_at": 5}),
+    );
+    pin(
+        &ToolCallPage {
+            calls: vec![ToolCall {
+                id: 3,
+                tool: "notes_append".into(),
+                summary: "12 bytes".into(),
+                outcome: ToolCallOutcome::TimedOut,
+                duration_ms: 30_000,
+                at: Timestamp(9),
+            }],
+            older: Some(3),
+        },
+        json!({"calls": [{"id": 3, "tool": "notes_append", "summary": "12 bytes",
+                          "outcome": "timed_out", "duration_ms": 30000, "at": 9}],
+               "older": 3}),
+    );
+    for (outcome, name) in [
+        (ToolCallOutcome::Ok, "ok"),
+        (ToolCallOutcome::Failed, "failed"),
+        (ToolCallOutcome::Refused, "refused"),
+        (ToolCallOutcome::TimedOut, "timed_out"),
+    ] {
+        pin(&outcome, json!(name));
+    }
 }
 
 #[test]
@@ -596,7 +689,7 @@ fn more_request_and_response_shapes() {
             seq: Seq(5),
         },
         json!({"messages": [{"id": 42, "bot_id": 7, "author": "bot", "text": "Hello",
-                             "state": "streaming", "created_at": 3000, "updated_at": 3500}],
+                             "state": "streaming", "created_at": 3000, "updated_at": 3500, "kind": "text"}],
                "older": 40, "seq": 5}),
     );
 }

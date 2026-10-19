@@ -4,7 +4,8 @@
 //! pass at startup. Each thread is served only after `config/read` passes
 //! [`check_config`] again and its `thread/start` or `thread/resume` response
 //! passes [`check_thread`]. While a turn runs, every item must pass
-//! [`check_item`]. Any failure refuses the thread.
+//! [`check_item`] against the grants its thread started with. Any failure
+//! refuses the thread.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -13,6 +14,8 @@ use bokkie_codex::protocol::{ModelListResponse, ThreadItem, ThreadSessionRespons
 use serde_json::Value;
 
 use super::config::{CREDENTIALS_STORE, DISABLED_FEATURES, PROFILE};
+use crate::grants::GrantSet;
+use bokkie_protocol::api::Grant;
 
 /// Why the gateway refuses to serve an app server or thread. The reason is
 /// logged and may be shown to an admin; it holds no secrets.
@@ -205,16 +208,33 @@ pub fn check_thread(response: &ThreadSessionResponse, expected: &Expected) -> Re
     Ok(())
 }
 
-/// Checks one item of a running turn. Only conversation items and Bokkie's
-/// own dynamic tools may appear while threads are chat-only.
-pub fn check_item(item: &ThreadItem) -> Result<(), Refusal> {
+/// Checks one item of a running turn on a thread started with `grants`.
+/// Only conversation items, the Bokkie tools of those grants, and a web
+/// search on a thread granted `web.search`, may appear: every Codex
+/// built-in tool stays off until Phase 4.
+pub fn check_item(item: &ThreadItem, grants: &GrantSet) -> Result<(), Refusal> {
     match item {
         ThreadItem::UserMessage { .. }
         | ThreadItem::AgentMessage { .. }
         | ThreadItem::Reasoning { .. }
         | ThreadItem::Plan { .. }
-        | ThreadItem::ContextCompaction { .. }
-        | ThreadItem::DynamicToolCall { .. } => Ok(()),
+        | ThreadItem::ContextCompaction { .. } => Ok(()),
+        ThreadItem::DynamicToolCall {
+            tool, namespace, ..
+        } => {
+            if crate::tools::allows(grants, tool, namespace.as_deref()) {
+                Ok(())
+            } else {
+                let name: String = tool.chars().take(64).collect();
+                Err(Refusal::new(format!(
+                    "the model called tool {name}, which its thread was not granted"
+                )))
+            }
+        }
+        // The query is the user's business; it is never repeated.
+        ThreadItem::WebSearch { .. } => require(grants.contains(&Grant::WebSearch), || {
+            "the model searched the web on a thread without web.search".into()
+        }),
         ThreadItem::CommandExecution { command, .. } => Err(Refusal::new(format!(
             "the model ran a command ({} characters) while commands are disabled",
             command.len()
@@ -223,7 +243,7 @@ pub fn check_item(item: &ThreadItem) -> Result<(), Refusal> {
             "the model called MCP tool {server}/{tool}"
         ))),
         ThreadItem::Unknown => Err(Refusal::new(
-            "the model used a tool that is not allowed while threads are chat-only",
+            "the model used a Codex tool, and every Codex tool is off",
         )),
     }
 }
@@ -436,25 +456,60 @@ mod tests {
     }
 
     #[test]
-    fn only_conversation_items_are_allowed() {
+    fn only_conversation_items_and_granted_tools_are_allowed() {
+        let notes: GrantSet = [Grant::Notes].into();
         let allowed = [
             json!({"type": "userMessage", "id": "1"}),
             json!({"type": "agentMessage", "id": "2", "text": "hi"}),
             json!({"type": "reasoning", "id": "3"}),
-            json!({"type": "dynamicToolCall", "id": "4", "tool": "message_bot",
+            json!({"type": "dynamicToolCall", "id": "4", "tool": "notes_read",
                    "namespace": null, "arguments": {}, "status": "inProgress",
                    "success": null}),
         ];
         for item in allowed {
             let item: ThreadItem = serde_json::from_value(item).unwrap();
-            check_item(&item).unwrap();
+            check_item(&item, &notes).unwrap();
         }
+        // A tool of a grant the thread did not start with, a tool that is
+        // not Bokkie's, and a namespaced tool are refused.
+        let ungranted = [
+            (
+                json!({"type": "dynamicToolCall", "id": "4", "tool": "notes_read",
+                    "namespace": null, "arguments": {}, "status": "inProgress"}),
+                GrantSet::new(),
+            ),
+            (
+                json!({"type": "dynamicToolCall", "id": "4", "tool": "message_bot",
+                    "namespace": null, "arguments": {}, "status": "inProgress"}),
+                notes.clone(),
+            ),
+            (
+                json!({"type": "dynamicToolCall", "id": "4", "tool": "notes_read",
+                    "namespace": "web", "arguments": {}, "status": "inProgress"}),
+                notes.clone(),
+            ),
+        ];
+        for (item, grants) in ungranted {
+            let item: ThreadItem = serde_json::from_value(item).unwrap();
+            let refusal = check_item(&item, &grants).unwrap_err();
+            assert!(refusal.0.contains("not granted"), "{refusal}");
+        }
+        // A web search needs web.search, and its query is never repeated.
+        let search: ThreadItem = serde_json::from_value(
+            json!({"type": "webSearch", "id": "7", "query": "private query", "action": null}),
+        )
+        .unwrap();
+        assert!(matches!(search, ThreadItem::WebSearch { .. }));
+        for grants in [GrantSet::new(), notes.clone(), [Grant::WebFetch].into()] {
+            let refusal = check_item(&search, &grants).unwrap_err();
+            assert!(!refusal.0.contains("private"), "{refusal}");
+        }
+        check_item(&search, &[Grant::WebSearch].into()).unwrap();
         let refused = [
             json!({"type": "commandExecution", "id": "5", "command": "cat /etc/passwd",
                    "cwd": "/", "status": "inProgress", "aggregatedOutput": null,
                    "exitCode": null}),
             json!({"type": "fileChange", "id": "6", "changes": [], "status": "inProgress"}),
-            json!({"type": "webSearch", "id": "7", "query": "x"}),
             json!({"type": "imageView", "id": "8", "path": "/data/x.png"}),
             json!({"type": "collabAgentToolCall", "id": "9"}),
             json!({"type": "mcpToolCall", "id": "10", "server": "s", "tool": "t",
@@ -462,7 +517,9 @@ mod tests {
         ];
         for item in refused {
             let item: ThreadItem = serde_json::from_value(item).unwrap();
-            let refusal = check_item(&item).unwrap_err();
+            // Whatever the thread was granted.
+            let every: GrantSet = Grant::ALL.into();
+            let refusal = check_item(&item, &every).unwrap_err();
             // The command itself is never repeated.
             assert!(!refusal.0.contains("passwd"), "{refusal}");
         }

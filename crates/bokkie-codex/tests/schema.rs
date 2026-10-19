@@ -621,6 +621,7 @@ fn every_thread_item_variant_decodes() {
             "contextCompaction",
             "commandExecution",
             "dynamicToolCall",
+            "webSearch",
             "mcpToolCall",
         ];
         assert_eq!(

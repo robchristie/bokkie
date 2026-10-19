@@ -4,7 +4,8 @@
 
 use bokkie_protocol::MessageId;
 use bokkie_protocol::api::{
-    Delivery, Message, MessagePage, MessageState, SendMessageRequest, SendMessageResponse,
+    Delivery, Message, MessageKind, MessagePage, MessageState, SendMessageRequest,
+    SendMessageResponse,
 };
 use bokkie_protocol::events::{ClientFrame, Event, EventEnvelope, ServerFrame};
 
@@ -139,6 +140,7 @@ pub(super) fn message(id: i64, author: Author, text: &str, state: MessageState) 
         state,
         created_at: Timestamp(3_000 + id),
         updated_at: Timestamp(3_000 + id),
+        kind: MessageKind::Text,
     }
 }
 

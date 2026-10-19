@@ -112,6 +112,9 @@ pub enum ClientFrame {
 }
 
 /// A frame from the gateway.
+// Frames are decoded one at a time and handed on at once, so the size of
+// the event variant costs nothing worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerFrame {

@@ -499,6 +499,16 @@ pub enum ThreadItem {
         status: String,
         success: Option<bool>,
     },
+    /// A built-in web search. `results` stays null for hosted search.
+    #[serde(rename_all = "camelCase")]
+    WebSearch {
+        id: String,
+        query: String,
+        #[serde(default)]
+        action: Option<Value>,
+        #[serde(default)]
+        results: Option<Vec<Value>>,
+    },
     #[serde(rename_all = "camelCase")]
     McpToolCall {
         id: String,

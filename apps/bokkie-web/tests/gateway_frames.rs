@@ -11,8 +11,8 @@ use bokkie_gateway::error::Failure;
 use bokkie_gateway::events::EventLog;
 use bokkie_gateway::{accounts, auth, db};
 use bokkie_protocol::api::{
-    Allowance, Author, Bot, BotList, BotStatus, ErrorCode, Limits, Message, MessagePage,
-    MessageState, RateLimitBucket, RateLimitWindow, SessionResponse, Usage,
+    Allowance, Author, Bot, BotList, BotStatus, ErrorCode, Limits, Message, MessageKind,
+    MessagePage, MessageState, RateLimitBucket, RateLimitWindow, SessionResponse, Usage,
 };
 use bokkie_protocol::events::{ClientFrame, Event, EventEnvelope, Seq, ServerFrame};
 use bokkie_protocol::{BotId, MessageId, Timestamp, UserId};
@@ -85,6 +85,7 @@ fn bot(status: BotStatus) -> Bot {
         created_at: Timestamp(1_800_000_000_000),
         updated_at: Timestamp(1_800_000_000_000),
         last_message: None,
+        grants: Vec::new(),
     }
 }
 
@@ -97,6 +98,7 @@ fn message(id: MessageId, author: Author, text: &str, state: MessageState) -> Me
         state,
         created_at: Timestamp(1_800_000_000_100),
         updated_at: Timestamp(1_800_000_000_200),
+        kind: MessageKind::Text,
     }
 }
 

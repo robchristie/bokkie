@@ -36,6 +36,9 @@ pub enum Io {
 }
 
 /// What the application hears from the event socket.
+// Updates are applied one at a time as they arrive, so the size of the
+// event variant costs nothing worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SocketUpdate {
     /// Apply this event from the log.

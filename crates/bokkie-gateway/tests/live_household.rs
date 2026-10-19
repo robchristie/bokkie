@@ -149,13 +149,13 @@ async fn a_household_refresh_reaches_both_users_without_their_refreshing() {
         );
     }
     let amys = amy
-        .start_thread("Amy's Bot".into(), None)
+        .start_thread("Amy's Bot".into(), &Default::default())
         .await
         .unwrap()
         .thread
         .id;
     let bens = ben
-        .start_thread("Ben's Bot".into(), None)
+        .start_thread("Ben's Bot".into(), &Default::default())
         .await
         .unwrap()
         .thread
@@ -223,13 +223,13 @@ async fn simultaneous_refreshes_from_two_app_servers_recover() {
     let amy = supervisor.runtime(UserId(1)).await.unwrap();
     let ben = supervisor.runtime(UserId(2)).await.unwrap();
     let amys = amy
-        .start_thread("Amy's Bot".into(), None)
+        .start_thread("Amy's Bot".into(), &Default::default())
         .await
         .unwrap()
         .thread
         .id;
     let bens = ben
-        .start_thread("Ben's Bot".into(), None)
+        .start_thread("Ben's Bot".into(), &Default::default())
         .await
         .unwrap()
         .thread
@@ -314,7 +314,7 @@ async fn a_cold_start_with_an_expired_token_refreshes_once_in_the_household() {
     );
     for runtime in [&amy, &ben] {
         let thread = runtime
-            .start_thread("Bot".into(), None)
+            .start_thread("Bot".into(), &Default::default())
             .await
             .unwrap()
             .thread
@@ -342,7 +342,7 @@ async fn a_member_given_repeated_401s() {
         supervisor(&live, data.path(), HouseholdSettings::default(), 86_400).await;
     let amy = supervisor.runtime(UserId(1)).await.unwrap();
     let thread = amy
-        .start_thread("Bot".into(), None)
+        .start_thread("Bot".into(), &Default::default())
         .await
         .unwrap()
         .thread
@@ -384,7 +384,7 @@ async fn a_member_given_repeated_401s() {
     assert!(!amy.is_alive());
     let restarted = supervisor.runtime(UserId(1)).await.unwrap();
     restarted
-        .resume_thread(&thread, "Bot".into())
+        .resume_thread(&thread, "Bot".into(), &Default::default())
         .await
         .unwrap();
     // Still refused, it fails again and is not restarted again.
@@ -439,7 +439,7 @@ async fn an_earlier_own_sign_in_is_revoked_and_other_files_are_refused() {
     // The household's sign-in (the second generation) is untouched.
     let runtime = supervisor.runtime(amy).await.unwrap();
     let thread = runtime
-        .start_thread("Bot".into(), None)
+        .start_thread("Bot".into(), &Default::default())
         .await
         .unwrap()
         .thread

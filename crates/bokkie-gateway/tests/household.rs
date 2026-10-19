@@ -379,7 +379,9 @@ async fn each_users_auth_json_is_a_link_to_the_households() {
     assert_eq!(gateway.fake.owner_starts(Owner::Household), 1);
     let household = gateway.state.supervisor.household().await.unwrap();
     assert!(matches!(
-        household.start_thread("x".into(), None).await,
+        household
+            .start_thread("x".into(), &Default::default())
+            .await,
         Err(CodexError::Refused(_))
     ));
     assert!(gateway.fake.received("thread/start").is_empty());
@@ -571,7 +573,7 @@ async fn a_member_failing_on_its_credential_is_restarted_once() {
     let amy = UserId(1);
     let runtime = gateway.state.supervisor.runtime(amy).await.unwrap();
     let thread = runtime
-        .start_thread("x".into(), None)
+        .start_thread("x".into(), &Default::default())
         .await
         .unwrap()
         .thread
@@ -636,7 +638,7 @@ async fn a_member_is_not_restarted_while_the_household_is_signed_out() {
     let amy = UserId(1);
     let runtime = gateway.state.supervisor.runtime(amy).await.unwrap();
     let thread = runtime
-        .start_thread("x".into(), None)
+        .start_thread("x".into(), &Default::default())
         .await
         .unwrap()
         .thread

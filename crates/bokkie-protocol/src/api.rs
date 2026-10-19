@@ -292,6 +292,66 @@ pub struct ResetPasswordRequest {
 // ---------------------------------------------------------------------------
 // Bots and conversations
 
+/// A capability a Bot can be granted. The gateway runs every tool a grant
+/// brings, so no credential enters a Bot's sandbox. A Bot's thread offers
+/// the model exactly the tools of its grants.
+///
+/// A grant is named on the wire as its [`Grant::name`]. Some grants are in
+/// the catalogue before their tools exist; the gateway refuses to grant
+/// those until they do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Grant {
+    /// One Markdown notes document of the Bot's own, which it reads,
+    /// replaces and appends to.
+    #[serde(rename = "notes")]
+    Notes,
+    /// A record of the items the Bot has shown its owner.
+    #[serde(rename = "seen")]
+    Seen,
+    /// Notifications to the Bot's owner.
+    #[serde(rename = "notify")]
+    Notify,
+    /// Searching the web. The Bot then reads untrusted input.
+    #[serde(rename = "web.search")]
+    WebSearch,
+    /// Fetching web pages and feeds. The Bot then reads untrusted input.
+    #[serde(rename = "web.fetch")]
+    WebFetch,
+}
+
+impl Grant {
+    /// Every grant in the catalogue, in order.
+    pub const ALL: [Self; 5] = [
+        Self::Notes,
+        Self::Seen,
+        Self::Notify,
+        Self::WebSearch,
+        Self::WebFetch,
+    ];
+
+    /// The grant's name on the wire, such as `web.search`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Notes => "notes",
+            Self::Seen => "seen",
+            Self::Notify => "notify",
+            Self::WebSearch => "web.search",
+            Self::WebFetch => "web.fetch",
+        }
+    }
+
+    /// The grant with this name, if the catalogue has one.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|grant| grant.name() == name)
+    }
+}
+
+impl std::fmt::Display for Grant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 /// What a Bot is doing now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -321,6 +381,10 @@ pub struct Bot {
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub last_message: Option<MessagePreview>,
+    /// The Bot's grants, in catalogue order. A change reaches the model
+    /// from the Bot's next turn, which starts a fresh Codex thread.
+    #[serde(default)]
+    pub grants: Vec<Grant>,
 }
 
 /// The start of a conversation's latest message, for the conversation list.
@@ -375,6 +439,12 @@ pub struct UpdateBotRequest {
     pub pinned: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
+    /// Replaces the Bot's grants. A member may add only `notes`, `seen`
+    /// and `notify` (`forbidden` otherwise); removing any grant is allowed.
+    /// A grant whose tools do not exist yet, or a set that breaks the taint
+    /// rule, is refused with `invalid_request`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grants: Option<Vec<Grant>>,
 }
 
 /// One of a member's Bots, as an admin sees it. With oversight off, an
@@ -390,6 +460,9 @@ pub struct MemberBot {
     /// Whether an admin made the Bot for the member.
     pub made_by_admin: bool,
     pub created_at: Timestamp,
+    /// The Bot's grants, in catalogue order.
+    #[serde(default)]
+    pub grants: Vec<Grant>,
     /// Only while oversight is on: the Bot as the member sees it, with its
     /// status, pin, visibility and latest message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -405,9 +478,10 @@ pub struct MemberBotList {
 }
 
 /// `PATCH /api/v1/admin/users/{id}/bots/{bot}`: an admin changes the
-/// profile of a Bot an admin made for the member. The member's own Bots are
-/// read-only to admins, even under oversight, and pinning and hiding stay
-/// the member's. A request that names no field is refused.
+/// profile or the grants of a Bot an admin made for the member. The
+/// member's own Bots are read-only to admins, even under oversight, and
+/// pinning and hiding stay the member's. A request that names no field is
+/// refused.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateBotProfileRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -423,6 +497,10 @@ pub struct UpdateBotProfileRequest {
         with = "double_option"
     )]
     pub avatar: Option<Option<String>>,
+    /// Replaces the Bot's grants. An admin may grant anything the gateway
+    /// offers, within the taint rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grants: Option<Vec<Grant>>,
 }
 
 /// Who wrote a message.
@@ -445,6 +523,18 @@ pub enum MessageState {
     Failed,
 }
 
+/// What a message is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageKind {
+    /// Something the user or the Bot said.
+    #[default]
+    Text,
+    /// A note from the gateway in the conversation, such as "Capabilities
+    /// changed". Its author is the Bot; the model never wrote it.
+    Marker,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageId,
@@ -454,6 +544,8 @@ pub struct Message {
     pub state: MessageState,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    #[serde(default)]
+    pub kind: MessageKind,
 }
 
 /// `GET /api/v1/bots/{id}/messages?before={message_id}&limit={n}`, newest
@@ -497,6 +589,55 @@ pub struct SendMessageResponse {
 pub struct StopResponse {
     /// Whether a turn was running.
     pub stopped: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Bots' notes and tool calls
+
+/// `GET /api/v1/bots/{id}/notes`: the Bot's notes, one Markdown document
+/// the Bot keeps for itself through its `notes` tools. They are the Bot's
+/// own working memory, not instructions. `DELETE` clears them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BotNotes {
+    pub text: String,
+    /// When the notes last changed; `None` if the Bot never wrote any.
+    pub updated_at: Option<Timestamp>,
+}
+
+/// How a brokered tool call ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallOutcome {
+    /// The tool ran and answered.
+    Ok,
+    /// The tool ran and failed, for example on invalid arguments.
+    Failed,
+    /// The gateway refused the call: the Bot no longer holds the grant.
+    Refused,
+    /// The tool did not finish within its deadline.
+    TimedOut,
+}
+
+/// One entry of a Bot's tool-call log, kept 90 days.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: i64,
+    /// The tool's name, such as `notes_append`.
+    pub tool: String,
+    /// A short, bounded summary of the arguments, such as a size or a URL.
+    pub summary: String,
+    pub outcome: ToolCallOutcome,
+    pub duration_ms: u64,
+    pub at: Timestamp,
+}
+
+/// `GET /api/v1/bots/{id}/tool-calls?before={id}&limit={n}`: the Bot's
+/// tool calls, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCallPage {
+    pub calls: Vec<ToolCall>,
+    /// Pass as `before` to fetch older calls; `None` at the end.
+    pub older: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------

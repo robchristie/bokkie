@@ -41,7 +41,7 @@ async fn a_checked_app_server_serves_bokkie_threads() {
     let user = UserId(1);
     let runtime = gateway.state.supervisor.runtime(user).await.unwrap();
     let thread = runtime
-        .start_thread("You are Chef.".into(), None)
+        .start_thread("You are Chef.".into(), &Default::default())
         .await
         .unwrap();
     assert_eq!(thread.active_permission_profile.unwrap().id, "bokkie");
@@ -116,7 +116,10 @@ async fn one_users_app_server_will_not_act_on_anothers_thread() {
     let gateway = Gateway::new().await;
     let amy = gateway.state.supervisor.runtime(UserId(1)).await.unwrap();
     let ben = gateway.state.supervisor.runtime(UserId(2)).await.unwrap();
-    let thread = amy.start_thread("Amy's Bot".into(), None).await.unwrap();
+    let thread = amy
+        .start_thread("Amy's Bot".into(), &Default::default())
+        .await
+        .unwrap();
     // Ben's runtime has never checked Amy's thread, so it refuses to start
     // or steer a turn on it.
     let reason = refused(ben.start_turn(&thread.thread.id, "hi", None).await);
@@ -186,10 +189,14 @@ async fn a_thread_without_the_bokkie_profile_is_not_served() {
     let gateway = Gateway::new().await;
     let runtime = gateway.state.supervisor.runtime(UserId(1)).await.unwrap();
     gateway.fake.with(|b| b.profile = ":workspace".into());
-    let reason = refused(runtime.start_thread("x".into(), None).await);
+    let reason = refused(runtime.start_thread("x".into(), &Default::default()).await);
     assert!(reason.contains(":workspace"), "{reason}");
     // Resume is checked the same way.
-    let reason = refused(runtime.resume_thread("thr-old", "x".into()).await);
+    let reason = refused(
+        runtime
+            .resume_thread("thr-old", "x".into(), &Default::default())
+            .await,
+    );
     assert!(reason.contains("bokkie"), "{reason}");
     refused(runtime.start_turn("thr-old", "hi", None).await);
     assert!(gateway.fake.received("turn/start").is_empty());
@@ -201,7 +208,7 @@ async fn threads_must_be_resumed_on_a_new_app_server() {
     let user = UserId(1);
     let first = gateway.state.supervisor.runtime(user).await.unwrap();
     let thread = first
-        .start_thread("x".into(), None)
+        .start_thread("x".into(), &Default::default())
         .await
         .unwrap()
         .thread
@@ -215,7 +222,10 @@ async fn threads_must_be_resumed_on_a_new_app_server() {
     let second = gateway.state.supervisor.runtime(user).await.unwrap();
     assert_eq!(gateway.fake.starts(user), 2);
     refused(second.start_turn(&thread, "hi", None).await);
-    second.resume_thread(&thread, "x".into()).await.unwrap();
+    second
+        .resume_thread(&thread, "x".into(), &Default::default())
+        .await
+        .unwrap();
     second.start_turn(&thread, "hi", None).await.unwrap();
 }
 
@@ -237,7 +247,7 @@ async fn a_forbidden_item_mid_turn_stops_codex_for_the_whole_gateway() {
     let runtime = gateway.state.supervisor.runtime(amy).await.unwrap();
     let bens = gateway.state.supervisor.runtime(ben).await.unwrap();
     let thread = runtime
-        .start_thread("x".into(), None)
+        .start_thread("x".into(), &Default::default())
         .await
         .unwrap()
         .thread
@@ -264,7 +274,11 @@ async fn a_forbidden_item_mid_turn_stops_codex_for_the_whole_gateway() {
     refused(gateway.state.supervisor.runtime(amy).await);
     refused(gateway.state.supervisor.runtime(ben).await);
     refused(runtime.start_turn(&thread, "again", None).await);
-    refused(runtime.resume_thread(&thread, "x".into()).await);
+    refused(
+        runtime
+            .resume_thread(&thread, "x".into(), &Default::default())
+            .await,
+    );
 }
 
 #[tokio::test]
@@ -273,13 +287,17 @@ async fn a_refused_thread_stays_refused_on_the_next_app_server() {
     let user = UserId(1);
     let first = gateway.state.supervisor.runtime(user).await.unwrap();
     let good = first
-        .start_thread("x".into(), None)
+        .start_thread("x".into(), &Default::default())
         .await
         .unwrap()
         .thread
         .id;
     gateway.fake.with(|b| b.profile = ":workspace".into());
-    refused(first.resume_thread("thr-bad", "x".into()).await);
+    refused(
+        first
+            .resume_thread("thr-bad", "x".into(), &Default::default())
+            .await,
+    );
     gateway.fake.crash(user);
     let _ = first.start_turn(&good, "hi", None).await;
     next_event(&gateway, |k| matches!(k, RuntimeEventKind::Exited)).await;
@@ -288,9 +306,16 @@ async fn a_refused_thread_stays_refused_on_the_next_app_server() {
     // refused thread is not served again; the other thread is.
     gateway.fake.with(|b| b.profile = "bokkie".into());
     let second = gateway.state.supervisor.runtime(user).await.unwrap();
-    refused(second.resume_thread("thr-bad", "x".into()).await);
+    refused(
+        second
+            .resume_thread("thr-bad", "x".into(), &Default::default())
+            .await,
+    );
     refused(second.start_turn("thr-bad", "hi", None).await);
-    second.resume_thread(&good, "x".into()).await.unwrap();
+    second
+        .resume_thread(&good, "x".into(), &Default::default())
+        .await
+        .unwrap();
     second.start_turn(&good, "hi", None).await.unwrap();
 }
 
@@ -300,7 +325,7 @@ async fn approval_requests_are_declined_and_stop_codex() {
     let user = UserId(1);
     let runtime = gateway.state.supervisor.runtime(user).await.unwrap();
     let thread = runtime
-        .start_thread("x".into(), None)
+        .start_thread("x".into(), &Default::default())
         .await
         .unwrap()
         .thread
@@ -328,7 +353,7 @@ async fn unknown_approval_kinds_stop_codex_too() {
     let user = UserId(1);
     let runtime = gateway.state.supervisor.runtime(user).await.unwrap();
     let thread = runtime
-        .start_thread("y".into(), None)
+        .start_thread("y".into(), &Default::default())
         .await
         .unwrap()
         .thread
@@ -383,7 +408,7 @@ async fn questions_to_the_user_are_answered_with_an_error() {
     let user = UserId(1);
     let runtime = gateway.state.supervisor.runtime(user).await.unwrap();
     let thread = runtime
-        .start_thread("x".into(), None)
+        .start_thread("x".into(), &Default::default())
         .await
         .unwrap()
         .thread

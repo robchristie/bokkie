@@ -13,11 +13,13 @@
 //!
 //! A reply streams in pieces, optionally with a pause before each, and the
 //! response can report the subscription's rate-limit windows in the
-//! `x-codex-*` headers that Codex reads from the real API.
+//! `x-codex-*` headers that Codex reads from the real API. A test can also
+//! script the model to call a tool ([`MockModel::call_tool_next`]): that
+//! request is answered with a function call instead of the reply.
 
 pub mod chatgpt;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -49,6 +51,16 @@ pub struct MockModel {
     pub unauthorized: Arc<Mutex<u32>>,
     /// When set, a request whose bearer token this refuses is answered 401.
     pub authorizer: Arc<Mutex<Option<Authorizer>>>,
+    /// Tool calls to answer the next requests with, in order, instead of
+    /// the reply.
+    pub tool_calls: Arc<Mutex<VecDeque<ToolCall>>>,
+}
+
+/// A function call the model makes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCall {
+    pub name: String,
+    pub arguments: Value,
 }
 
 /// Decides whether a bearer token may call the model.
@@ -109,6 +121,29 @@ impl MockModel {
         release
     }
 
+    /// Answers the next request not yet scripted with a call of `name`
+    /// with `arguments`, instead of the reply. Codex then runs the tool and
+    /// asks again with its output, which gets the reply.
+    pub fn call_tool_next(&self, name: &str, arguments: Value) {
+        self.tool_calls.lock().unwrap().push_back(ToolCall {
+            name: name.into(),
+            arguments,
+        });
+    }
+
+    /// The tools one request offered, by name, as
+    /// [`MockModel::offered_tools`] reads them.
+    pub fn tools_in(request: &Value) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        collect(&request["tools"], &mut names);
+        for item in request["input"].as_array().into_iter().flatten() {
+            if item["type"] == "additional_tools" {
+                collect(&item["tools"], &mut names);
+            }
+        }
+        names
+    }
+
     /// A mock that streams `reply` with no pauses.
     pub fn new(reply: &[&str]) -> Self {
         let mock = Self::default();
@@ -163,16 +198,12 @@ impl MockModel {
     /// tools in the `additional_tools` input item are included, and so are
     /// the nested tools that a code-mode `exec` tool describes.
     pub fn offered_tools(&self) -> BTreeSet<String> {
-        let mut names = BTreeSet::new();
-        for request in self.requests.lock().unwrap().iter() {
-            collect(&request["tools"], &mut names);
-            for item in request["input"].as_array().into_iter().flatten() {
-                if item["type"] == "additional_tools" {
-                    collect(&item["tools"], &mut names);
-                }
-            }
-        }
-        names
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(Self::tools_in)
+            .collect()
     }
 }
 
@@ -210,6 +241,29 @@ fn collect(tools: &Value, names: &mut BTreeSet<String>) {
             }
         }
     }
+}
+
+/// A response whose only output is a call of `call`.
+fn function_call(call: &ToolCall) -> Response {
+    let item = |arguments: &str| {
+        json!({"type": "function_call", "id": "fc-1", "call_id": "call-1",
+               "name": call.name, "arguments": arguments, "status": "completed"})
+    };
+    let events = [
+        json!({"type": "response.created", "response": {"id": "resp-call"}}),
+        json!({"type": "response.output_item.added", "item": item("")}),
+        json!({"type": "response.output_item.done",
+               "item": item(&call.arguments.to_string())}),
+        json!({"type": "response.completed", "response": {"id": "resp-call", "usage": {
+            "input_tokens": 100, "input_tokens_details": null, "output_tokens": 10,
+            "output_tokens_details": null, "total_tokens": 110}}}),
+    ];
+    let body: String = events.iter().map(event).collect();
+    let mut response = Body::from(body).into_response();
+    response
+        .headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+    response
 }
 
 fn event(event: &Value) -> String {
@@ -253,6 +307,10 @@ async fn respond(
     let gate = mock.gate.lock().unwrap().take();
     if let Some(gate) = gate {
         let _ = gate.await;
+    }
+    let tool_call = mock.tool_calls.lock().unwrap().pop_front();
+    if let Some(call) = tool_call {
+        return function_call(&call);
     }
     let reply = mock.reply.lock().unwrap().clone();
     let delay = *mock.piece_delay.lock().unwrap();

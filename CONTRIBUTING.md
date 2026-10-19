@@ -2,7 +2,7 @@
 
 These rules apply to every change. [docs/architecture.md](docs/architecture.md)
 owns the architecture, the multi-user model and the container and sandbox
-posture, including the sandbox invariants and the chat-only rule; read it
+posture, including the sandbox invariants and the capability model; read it
 before product work.
 
 ## Build and test
@@ -329,9 +329,10 @@ against the new version. To move it:
 3. Run `scripts/verify`, fix any type drift, and rerun the qualification
    probe before relying on the new version. The gateway's live tests
    (`crates/bokkie-gateway/tests/live_*.rs`) must pass too: they prove
-   that the gateway's configuration and model catalog leave no tool that acts
-   outside the conversation, and their control test must still see the
-   unsafe tools, so the capture is known to work. `live_household.rs`
+   that the gateway's configuration and model catalog leave every Codex
+   tool off, that a thread offers exactly the Bokkie tools of its grants,
+   and that a tool call reaches the gateway's broker, and their control test
+   must still see the unsafe tools, so the capture is known to work. `live_household.rs`
    proves the shared household sign-in against the new version's refresh,
    reload and sign-out behaviour, and records what it does on a repeated
    401 and on two simultaneous refreshes; read its output and update

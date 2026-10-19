@@ -2,8 +2,8 @@
 //! Bots. Every route needs an admin.
 //!
 //! Admins see accounts, limits, permissions and invitations. They make
-//! Bots for a member and edit the profiles of the Bots an admin made for
-//! that member. They read a member's own Bots and any conversation only
+//! Bots for a member and edit the profiles and grants of the Bots an admin
+//! made for that member. They read a member's own Bots and any conversation only
 //! while oversight of that member is on, and then read-only: no route here
 //! changes a member's own Bot, or sends, steers or stops. Oversight never
 //! applies to an admin, so no admin
@@ -15,7 +15,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use bokkie_protocol::api::{
     AdminUser, AdminUserList, Bot, CreateBotRequest, CreateInvitationRequest, CreatedInvitation,
-    ErrorCode, InvitationList, MemberBot, MemberBotList, MessagePage, ResetPasswordRequest,
+    ErrorCode, InvitationList, MemberBot, MemberBotList, MessagePage, ResetPasswordRequest, Role,
     UpdateBotProfileRequest, UpdateUserRequest,
 };
 use bokkie_protocol::events::Event;
@@ -27,6 +27,7 @@ use crate::accounts::{self, Account, AccountChanges};
 use crate::auth::SignedInAdmin;
 use crate::bots::store::{self, BotChanges, BotRow};
 use crate::error::{Body, Failure, Path, Query, Result};
+use crate::grants;
 use crate::routes::bots::{PageQuery, to_api};
 
 /// `GET /api/v1/admin/users`.
@@ -193,6 +194,7 @@ fn member_bot(bot: &BotRow, overseen: Option<Bot>) -> MemberBot {
         avatar: bot.avatar.clone(),
         made_by_admin: bot.made_by.is_some(),
         created_at: bot.created_at,
+        grants: bot.grants.iter().copied().collect(),
         overseen,
     }
 }
@@ -272,8 +274,8 @@ pub async fn create_member_bot(
 }
 
 /// `PATCH /api/v1/admin/users/{id}/bots/{bot}`: an admin changes the profile
-/// of a Bot an admin made for the member. The member's own Bots are
-/// read-only to admins, even under oversight.
+/// or grants of a Bot an admin made for the member. The member's own Bots
+/// are read-only to admins, even under oversight.
 pub async fn update_member_bot(
     State(state): State<AppState>,
     SignedInAdmin(admin): SignedInAdmin,
@@ -282,9 +284,20 @@ pub async fn update_member_bot(
 ) -> Result<Json<MemberBot>> {
     if request == UpdateBotProfileRequest::default() {
         return Err(Failure::invalid(
-            "Name the name, label, description or avatar to change",
+            "Name the name, label, description, avatar or grants to change",
         ));
     }
+    // A grant change waits for any send to the Bot, so that every turn runs
+    // on a thread whose grants are the Bot's.
+    let _sends = match request.grants {
+        Some(_) => Some(
+            state
+                .conversations
+                .lock_bot(UserId(id), BotId(bot_id))
+                .await,
+        ),
+        None => None,
+    };
     // The edit and its event commit together, in the member's log, and
     // oversight is read in the same transaction.
     let mut batch = state.events.begin(UserId(id)).await?;
@@ -297,6 +310,26 @@ pub async fn update_member_bot(
         return Err(Failure::forbidden(
             "A member's own Bots are read-only to admins",
         ));
+    }
+    if let Some(requested) = &request.grants {
+        let grants = grants::check_change(Role::Admin, &existing.grants, requested)?;
+        if grants != existing.grants {
+            store::set_grants(
+                &mut *batch,
+                state.clock.now(),
+                member.user.id,
+                existing.id,
+                &grants,
+            )
+            .await?;
+            tracing::info!(
+                admin = %admin.id(),
+                user = id,
+                bot = bot_id,
+                grants = %grants::to_stored(&grants),
+                "set a member's Bot's grants"
+            );
+        }
     }
     let bot = store::update_bot(
         &mut *batch,

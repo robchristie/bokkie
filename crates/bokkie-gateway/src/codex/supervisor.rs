@@ -23,14 +23,14 @@ use std::time::Duration;
 
 use bokkie_codex::protocol::{
     AccountLoginCompletedNotification, ApprovalDecision, ApprovalResponse, AskForApproval,
-    CancelLoginAccountParams, ClientInfo, ConfigReadParams, DynamicToolCallResponse,
-    DynamicToolSpec, GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse,
+    CancelLoginAccountParams, ClientInfo, ConfigReadParams, DynamicToolCallParams,
+    DynamicToolCallResponse, GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse,
     InitializeCapabilities, InitializeParams, LoginAccountParams, LoginAccountResponse,
     ModelListParams, ServerNotification, ServerRequestKind, ThreadResumeParams,
     ThreadSessionResponse, ThreadStartParams, Turn, TurnInterruptParams, TurnStartParams,
     TurnStatus, TurnSteerParams, UserInput,
 };
-use bokkie_codex::{AppServer, AppServerCommand, Client, Incoming, RpcError};
+use bokkie_codex::{AppServer, AppServerCommand, Client, Incoming, RequestId, RpcError};
 use bokkie_protocol::api::LoginState;
 use bokkie_protocol::{Timestamp, UserId};
 use tokio::sync::mpsc;
@@ -39,6 +39,8 @@ use super::catalog::Catalog;
 use super::config::{self, PROFILE};
 use super::guard::{self, Expected, Refusal};
 use super::household::{self, AuthFile, HouseholdSettings, Login};
+use crate::grants::GrantSet;
+use crate::tools;
 
 /// How long one app-server request may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -255,13 +257,60 @@ pub enum RuntimeEventKind {
     },
     /// The app server exited. Threads must be resumed on its successor.
     Exited,
+    /// The model called one of Bokkie's tools on a thread that was granted
+    /// it. The broker serves it and answers through `reply`.
+    ToolCall {
+        call: DynamicToolCallParams,
+        reply: ToolReply,
+    },
+}
+
+/// The answer to one `item/tool/call`, given at most once. A reply dropped
+/// unanswered answers the call with an error, because Codex sets no
+/// deadline of its own and would wait until the turn is interrupted.
+#[derive(Debug, Clone)]
+pub struct ToolReply(Arc<ReplySlot>);
+
+#[derive(Debug)]
+struct ReplySlot(std::sync::Mutex<Option<(Client, RequestId)>>);
+
+impl ToolReply {
+    fn new(client: Client, id: RequestId) -> Self {
+        Self(Arc::new(ReplySlot(std::sync::Mutex::new(Some((
+            client, id,
+        ))))))
+    }
+
+    /// Answers the call, unless it was answered already.
+    pub async fn answer(&self, response: &DynamicToolCallResponse) {
+        let taken = lock(&self.0.0).take();
+        if let Some((client, id)) = taken
+            && let Err(error) = client.respond(id, response).await
+        {
+            tracing::warn!(%error, "could not answer a tool call");
+        }
+    }
+}
+
+impl Drop for ReplySlot {
+    fn drop(&mut self) {
+        let taken = lock(&self.0).take();
+        if let Some((client, id)) = taken
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                let answer = DynamicToolCallResponse::text(false, tools::NOT_AVAILABLE);
+                let _ = client.respond(id, &answer).await;
+            });
+        }
+    }
 }
 
 /// Refusals that outlive any one app server.
 ///
 /// A thread that fails its checks stays refused on every later app server.
-/// A safety rule broken mid-turn shows that the chat-only configuration did
-/// not hold, so it taints Codex for the whole gateway: every app server is
+/// A safety rule broken mid-turn shows that the capability rule did not
+/// hold, so it taints Codex for the whole gateway: every app server is
 /// stopped and none is served again until the gateway restarts, which is
 /// the operator's decision. Neither survives a gateway restart.
 #[derive(Debug)]
@@ -986,8 +1035,9 @@ pub struct Runtime {
     server: std::sync::Mutex<Option<AppServer>>,
     expected: Expected,
     alive: Arc<AtomicBool>,
-    /// Threads that passed their checks on this app server.
-    served: std::sync::Mutex<HashSet<String>>,
+    /// Threads that passed their checks on this app server, with the grants
+    /// each was started with: the only tools it may call.
+    served: std::sync::Mutex<HashMap<String, GrantSet>>,
     latch: Arc<Latch>,
 }
 
@@ -1051,23 +1101,28 @@ impl Runtime {
         Ok(())
     }
 
-    fn served(&self, response: ThreadSessionResponse) -> Result<ThreadSessionResponse, CodexError> {
+    fn served(
+        &self,
+        response: ThreadSessionResponse,
+        grants: &GrantSet,
+    ) -> Result<ThreadSessionResponse, CodexError> {
         let user = self.user()?;
         if let Err(refusal) = guard::check_thread(&response, &self.expected) {
             tracing::error!(user = %user, thread = %response.thread.id, %refusal, "refusing a thread");
             self.refuse(user, &response.thread.id, &refusal.0);
             return Err(CodexError::ThreadRefused(refusal));
         }
-        lock(&self.served).insert(response.thread.id.clone());
+        lock(&self.served).insert(response.thread.id.clone(), grants.clone());
         Ok(response)
     }
 
     /// Starts a thread in the user's workspace under the `bokkie` profile,
-    /// and checks it before serving it.
+    /// offering exactly the tools of `grants`, and checks it before serving
+    /// it.
     pub async fn start_thread(
         &self,
         developer_instructions: String,
-        dynamic_tools: Option<Vec<DynamicToolSpec>>,
+        grants: &GrantSet,
     ) -> Result<ThreadSessionResponse, CodexError> {
         self.user()?;
         if let Some(reason) = self.latch.tainted() {
@@ -1080,19 +1135,21 @@ impl Runtime {
             permissions: Some(PROFILE.into()),
             developer_instructions: Some(developer_instructions),
             ephemeral: Some(false),
-            dynamic_tools,
+            dynamic_tools: tools::specs(grants),
             ..ThreadStartParams::default()
         }))
         .await?;
-        self.served(response)
+        self.served(response, grants)
     }
 
-    /// Loads a thread into this app server, replacing its developer
-    /// instructions, and checks it before serving it.
+    /// Loads a thread into this app server and checks it before serving it.
+    /// `grants` are those the thread started with: Codex restores its tools
+    /// and its developer instructions from then.
     pub async fn resume_thread(
         &self,
         thread_id: &str,
         developer_instructions: String,
+        grants: &GrantSet,
     ) -> Result<ThreadSessionResponse, CodexError> {
         self.ensure_not_refused(thread_id)?;
         self.check_config().await?;
@@ -1108,7 +1165,12 @@ impl Runtime {
         if response.thread.id != thread_id {
             return Err(Refusal::new("thread/resume answered for a different thread").into());
         }
-        self.served(response)
+        self.served(response, grants)
+    }
+
+    /// The grants a thread served here started with.
+    pub fn thread_grants(&self, thread_id: &str) -> Option<GrantSet> {
+        lock(&self.served).get(thread_id).cloned()
     }
 
     /// Whether the thread passed its checks on this app server.
@@ -1117,7 +1179,7 @@ impl Runtime {
             return false;
         };
         self.is_alive()
-            && lock(&self.served).contains(thread_id)
+            && lock(&self.served).contains_key(thread_id)
             && self.latch.thread_refusal(user, thread_id).is_none()
     }
 
@@ -1134,7 +1196,7 @@ impl Runtime {
 
     fn ensure_served(&self, thread_id: &str) -> Result<(), CodexError> {
         self.ensure_not_refused(thread_id)?;
-        if !lock(&self.served).contains(thread_id) {
+        if !lock(&self.served).contains_key(thread_id) {
             return Err(
                 Refusal::new("the thread has not passed its checks on this app server").into(),
             );
@@ -1236,9 +1298,12 @@ async fn watch(runtime: Arc<Runtime>, mut incoming: mpsc::UnboundedReceiver<Inco
             Incoming::Notification(notification) => {
                 if let ServerNotification::ItemStarted(item)
                 | ServerNotification::ItemCompleted(item) = &notification
-                    && let Err(refusal) = guard::check_item(&item.item)
                 {
-                    violation(&runtime, Some(&item.thread_id), &refusal, &sink).await;
+                    // A thread this app server never served has no grants.
+                    let grants = runtime.thread_grants(&item.thread_id).unwrap_or_default();
+                    if let Err(refusal) = guard::check_item(&item.item, &grants) {
+                        violation(&runtime, Some(&item.thread_id), &refusal, &sink).await;
+                    }
                 }
                 match (&sink, &notification) {
                     (Sink::User(user, _, supervisor), ServerNotification::TurnCompleted(done)) => {
@@ -1261,17 +1326,47 @@ async fn watch(runtime: Arc<Runtime>, mut incoming: mpsc::UnboundedReceiver<Inco
             Incoming::Request(request) => {
                 let answer = match request.kind {
                     ServerRequestKind::DynamicToolCall(call) => {
-                        // Phase 2 Bots have no tools; Phase 3 adds them.
-                        tracing::warn!(%owner, tool = %call.tool, "unexpected tool call");
-                        client
-                            .respond(
-                                request.id,
-                                &DynamicToolCallResponse::text(
-                                    false,
-                                    "This tool is not available.",
-                                ),
-                            )
-                            .await
+                        match (&sink, runtime.thread_grants(&call.thread_id)) {
+                            // Granted: the broker serves it in its own task,
+                            // so this loop never waits on a tool.
+                            (Sink::User(..), Some(grants))
+                                if tools::allows(
+                                    &grants,
+                                    &call.tool,
+                                    call.namespace.as_deref(),
+                                ) =>
+                            {
+                                sink.send(RuntimeEventKind::ToolCall {
+                                    call,
+                                    reply: ToolReply::new(client.clone(), request.id),
+                                });
+                                Ok(())
+                            }
+                            // A tool the thread was not granted.
+                            (_, Some(_)) => {
+                                let refusal = Refusal::new(format!(
+                                    "the model called {}, which its thread was not granted",
+                                    tool_name(&call)
+                                ));
+                                violation(&runtime, Some(&call.thread_id), &refusal, &sink).await;
+                                client
+                                    .respond(
+                                        request.id,
+                                        &DynamicToolCallResponse::text(false, tools::NOT_AVAILABLE),
+                                    )
+                                    .await
+                            }
+                            // A thread this app server does not serve.
+                            (_, None) => {
+                                tracing::warn!(%owner, tool = %tool_name(&call), "a tool call from a thread that is not served here");
+                                client
+                                    .respond(
+                                        request.id,
+                                        &DynamicToolCallResponse::text(false, tools::NOT_AVAILABLE),
+                                    )
+                                    .await
+                            }
+                        }
                     }
                     ServerRequestKind::CommandExecutionApproval(params) => {
                         let refusal = Refusal::new("the app server asked to approve a command");
@@ -1299,7 +1394,7 @@ async fn watch(runtime: Arc<Runtime>, mut incoming: mpsc::UnboundedReceiver<Inco
                     }
                     ServerRequestKind::Unknown { method, params } => {
                         if method.contains("pproval") {
-                            // Any other approval also breaks the chat-only rule.
+                            // Any other approval also breaks the capability rule.
                             if let Some(thread_id) = params
                                 .as_ref()
                                 .and_then(|p| p.get("threadId").or_else(|| p.get("conversationId")))
@@ -1360,6 +1455,15 @@ async fn watch(runtime: Arc<Runtime>, mut incoming: mpsc::UnboundedReceiver<Inco
         supervisor.household_exited(serial);
     }
     sink.send(RuntimeEventKind::Exited);
+}
+
+/// A tool call's name for logs, bounded: the model chose it.
+fn tool_name(call: &DynamicToolCallParams) -> String {
+    let name = match &call.namespace {
+        Some(namespace) => format!("{namespace}/{}", call.tool),
+        None => call.tool.clone(),
+    };
+    name.chars().take(64).collect()
 }
 
 /// Handles a broken safety rule: refuses the thread, taints Codex for the

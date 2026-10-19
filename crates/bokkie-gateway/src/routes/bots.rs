@@ -1,15 +1,16 @@
-//! Bots and their conversations. Every route acts only on the signed-in
-//! user's own Bots; another user's Bot reads as not found, even for an
-//! admin, whose view of a member's Bots is in [`super::admin`]. A member
-//! without a permission is refused creating Bots or changing their
-//! profiles.
+//! Bots and their conversations, grants, notes and tool calls. Every route
+//! acts only on the signed-in user's own Bots; another user's Bot reads as
+//! not found, even for an admin, whose view of a member's Bots is in
+//! [`super::admin`]. A member without a permission is refused creating Bots
+//! or changing their profiles, and a member may add only the grants
+//! [`grants::member_may_grant`] allows.
 
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use bokkie_protocol::api::{
-    Bot, BotList, CreateBotRequest, MessagePage, SendMessageRequest, SendMessageResponse,
-    StopResponse, UpdateBotRequest,
+    Bot, BotList, BotNotes, CreateBotRequest, MessagePage, SendMessageRequest, SendMessageResponse,
+    StopResponse, ToolCallPage, UpdateBotRequest,
 };
 use bokkie_protocol::events::Event;
 use bokkie_protocol::{BotId, MessageId};
@@ -20,6 +21,7 @@ use crate::accounts::{self, Account};
 use crate::auth::SignedIn;
 use crate::bots::store::{self, BotChanges, BotRow};
 use crate::error::{Body, Failure, Path, Query, Result};
+use crate::{grants, tools};
 use sqlx::sqlite::SqliteExecutor;
 
 /// The Bot as its owner sees it.
@@ -106,6 +108,17 @@ pub async fn update(
     Path(id): Path<i64>,
     Body(request): Body<UpdateBotRequest>,
 ) -> Result<Json<Bot>> {
+    // A grant change waits for any send to the Bot, so that every turn runs
+    // on a thread whose grants are the Bot's.
+    let _sends = match request.grants {
+        Some(_) => Some(
+            state
+                .conversations
+                .lock_bot(signed_in.id(), BotId(id))
+                .await,
+        ),
+        None => None,
+    };
     // The edit and its event commit together under the user's log lock, so
     // concurrent edits announce the Bot in the order they took effect.
     let mut batch = state.events.begin(signed_in.id()).await?;
@@ -123,6 +136,30 @@ pub async fn update(
         return Err(Failure::forbidden(
             "Only an admin can change your Bots' profiles",
         ));
+    }
+    if let Some(requested) = &request.grants {
+        // The role is read in the same transaction as the change.
+        let role = own_account(&mut *batch, signed_in.id()).await?.user.role;
+        let existing = store::bot(&mut *batch, signed_in.id(), BotId(id))
+            .await?
+            .ok_or_else(Failure::not_found)?;
+        let grants = grants::check_change(role, &existing.grants, requested)?;
+        if grants != existing.grants {
+            store::set_grants(
+                &mut *batch,
+                state.clock.now(),
+                signed_in.id(),
+                existing.id,
+                &grants,
+            )
+            .await?;
+            tracing::info!(
+                user = %signed_in.id(),
+                bot = id,
+                grants = %grants::to_stored(&grants),
+                "set a Bot's grants"
+            );
+        }
     }
     let bot = store::update_bot(
         &mut *batch,
@@ -213,4 +250,60 @@ pub async fn stop(
 ) -> Result<Json<StopResponse>> {
     let stopped = state.conversations.stop(signed_in.id(), BotId(id)).await?;
     Ok(Json(StopResponse { stopped }))
+}
+
+/// The Bot, if it is the signed-in user's.
+async fn own_bot(state: &AppState, signed_in: &SignedIn, id: i64) -> Result<BotRow> {
+    store::bot(&state.db, signed_in.id(), BotId(id))
+        .await?
+        .ok_or_else(Failure::not_found)
+}
+
+/// `GET /api/v1/bots/{id}/notes`.
+pub async fn notes(
+    State(state): State<AppState>,
+    signed_in: SignedIn,
+    Path(id): Path<i64>,
+) -> Result<Json<BotNotes>> {
+    let bot = own_bot(&state, &signed_in, id).await?;
+    Ok(Json(
+        tools::notes::read(&state.db, signed_in.id(), bot.id).await?,
+    ))
+}
+
+/// `DELETE /api/v1/bots/{id}/notes`.
+pub async fn clear_notes(
+    State(state): State<AppState>,
+    signed_in: SignedIn,
+    Path(id): Path<i64>,
+) -> Result<StatusCode> {
+    let bot = own_bot(&state, &signed_in, id).await?;
+    tools::notes::clear(&state.db, signed_in.id(), bot.id).await?;
+    tracing::info!(user = %signed_in.id(), bot = id, "cleared a Bot's notes");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CallQuery {
+    pub before: Option<i64>,
+    pub limit: Option<u32>,
+}
+
+/// `GET /api/v1/bots/{id}/tool-calls?before=&limit=`.
+pub async fn tool_calls(
+    State(state): State<AppState>,
+    signed_in: SignedIn,
+    Path(id): Path<i64>,
+    Query(query): Query<CallQuery>,
+) -> Result<Json<ToolCallPage>> {
+    let bot = own_bot(&state, &signed_in, id).await?;
+    let (calls, older) = tools::audit::page(
+        &state.db,
+        signed_in.id(),
+        bot.id,
+        query.before,
+        query.limit.unwrap_or(50),
+    )
+    .await?;
+    Ok(Json(ToolCallPage { calls, older }))
 }

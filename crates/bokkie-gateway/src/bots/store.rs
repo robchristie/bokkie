@@ -5,12 +5,15 @@
 //! Each is one statement, so it runs on the pool or inside an event
 //! [`Batch`](crate::events::Batch) alike.
 
-use bokkie_protocol::api::{Author, Bot, BotStatus, Message, MessagePreview, MessageState};
+use bokkie_protocol::api::{
+    Author, Bot, BotStatus, Message, MessageKind, MessagePreview, MessageState,
+};
 use bokkie_protocol::{BotId, MessageId, Timestamp, UserId};
 use sqlx::Row;
 use sqlx::sqlite::SqliteExecutor;
 
 use crate::error::{Failure, Result};
+use crate::grants::{self, GrantSet};
 
 /// The longest message accepted from a user, in characters.
 pub const MAX_MESSAGE_CHARS: usize = 20_000;
@@ -36,6 +39,12 @@ pub struct BotRow {
     pub made_by: Option<UserId>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// The Bot's grants.
+    pub grants: GrantSet,
+    /// The grants its current thread started with.
+    pub thread_grants: GrantSet,
+    /// The marker that begins a fresh thread which has had no turn yet.
+    pub carryover_marker: Option<MessageId>,
 }
 
 impl BotRow {
@@ -59,13 +68,14 @@ impl BotRow {
             created_at: self.created_at,
             updated_at: self.updated_at,
             last_message,
+            grants: self.grants.iter().copied().collect(),
         }
     }
 }
 
 const BOT_COLUMNS: &str = "id, user_id, name, label, description, avatar, pinned, hidden, \
      thread_id, profile_revision, profile_sent_revision, refused_reason, made_by, created_at, \
-     updated_at";
+     updated_at, grants, thread_grants, carryover_marker";
 
 fn bot_from(row: &sqlx::sqlite::SqliteRow) -> BotRow {
     BotRow {
@@ -84,6 +94,9 @@ fn bot_from(row: &sqlx::sqlite::SqliteRow) -> BotRow {
         made_by: row.get::<Option<i64>, _>("made_by").map(UserId),
         created_at: Timestamp(row.get("created_at")),
         updated_at: Timestamp(row.get("updated_at")),
+        grants: grants::from_stored(row.get("grants")),
+        thread_grants: grants::from_stored(row.get("thread_grants")),
+        carryover_marker: row.get::<Option<i64>, _>("carryover_marker").map(MessageId),
     }
 }
 
@@ -120,7 +133,21 @@ fn state_from(name: &str) -> MessageState {
     }
 }
 
-const MESSAGE_COLUMNS: &str = "id, bot_id, author, text, state, created_at, updated_at";
+fn kind_name(kind: MessageKind) -> &'static str {
+    match kind {
+        MessageKind::Text => "text",
+        MessageKind::Marker => "marker",
+    }
+}
+
+fn kind_from(name: &str) -> MessageKind {
+    match name {
+        "marker" => MessageKind::Marker,
+        _ => MessageKind::Text,
+    }
+}
+
+const MESSAGE_COLUMNS: &str = "id, bot_id, author, text, state, created_at, updated_at, kind";
 
 fn message_from(row: &sqlx::sqlite::SqliteRow) -> Message {
     Message {
@@ -131,6 +158,7 @@ fn message_from(row: &sqlx::sqlite::SqliteRow) -> Message {
         state: state_from(row.get::<&str, _>("state")),
         created_at: Timestamp(row.get("created_at")),
         updated_at: Timestamp(row.get("updated_at")),
+        kind: kind_from(row.get::<&str, _>("kind")),
     }
 }
 
@@ -343,24 +371,100 @@ pub async fn update_bot(
     row.as_ref().map(bot_from).ok_or_else(Failure::not_found)
 }
 
+/// Records the Bot's first thread, with the profile revision and grants it
+/// started with.
 pub async fn set_thread(
     db: impl SqliteExecutor<'_>,
     user: UserId,
     bot: BotId,
     thread_id: &str,
     revision: i64,
+    grants: &GrantSet,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE bots SET thread_id = ?, profile_sent_revision = ?
+        "UPDATE bots SET thread_id = ?, profile_sent_revision = ?, thread_grants = ?
          WHERE id = ? AND user_id = ? AND thread_id IS NULL",
     )
     .bind(thread_id)
     .bind(revision)
+    .bind(grants::to_stored(grants))
     .bind(bot.0)
     .bind(user.0)
     .execute(db)
     .await?;
     Ok(())
+}
+
+/// Replaces the Bot's thread `old` with a fresh one, started with the
+/// profile revision and grants given, and begun by `marker`. Returns
+/// whether `old` was still the Bot's thread.
+#[allow(clippy::too_many_arguments)]
+pub async fn replace_thread(
+    db: impl SqliteExecutor<'_>,
+    user: UserId,
+    bot: BotId,
+    old: &str,
+    new: &str,
+    revision: i64,
+    grants: &GrantSet,
+    marker: MessageId,
+) -> Result<bool> {
+    let done = sqlx::query(
+        "UPDATE bots SET thread_id = ?, profile_sent_revision = ?, thread_grants = ?,
+             carryover_marker = ?
+         WHERE id = ? AND user_id = ? AND thread_id = ?",
+    )
+    .bind(new)
+    .bind(revision)
+    .bind(grants::to_stored(grants))
+    .bind(marker.0)
+    .bind(bot.0)
+    .bind(user.0)
+    .bind(old)
+    .execute(db)
+    .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+/// Clears the carry-over once a turn on the fresh thread has started.
+pub async fn clear_carryover(
+    db: impl SqliteExecutor<'_>,
+    user: UserId,
+    bot: BotId,
+    marker: MessageId,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE bots SET carryover_marker = NULL
+         WHERE id = ? AND user_id = ? AND carryover_marker = ?",
+    )
+    .bind(bot.0)
+    .bind(user.0)
+    .bind(marker.0)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Sets the Bot's grants. Its thread keeps the grants it started with
+/// until the next turn replaces it.
+pub async fn set_grants(
+    db: impl SqliteExecutor<'_>,
+    now: Timestamp,
+    user: UserId,
+    bot: BotId,
+    grants: &GrantSet,
+) -> Result<BotRow> {
+    let row = sqlx::query(&format!(
+        "UPDATE bots SET grants = ?, updated_at = ? WHERE id = ? AND user_id = ?
+         RETURNING {BOT_COLUMNS}"
+    ))
+    .bind(grants::to_stored(grants))
+    .bind(now.0)
+    .bind(bot.0)
+    .bind(user.0)
+    .fetch_optional(db)
+    .await?;
+    row.as_ref().map(bot_from).ok_or_else(Failure::not_found)
 }
 
 pub async fn set_profile_sent(
@@ -410,6 +514,7 @@ pub struct NewMessage<'a> {
     pub state: MessageState,
     /// For Bot replies: the Codex turn and item.
     pub turn: Option<(&'a str, &'a str)>,
+    pub kind: MessageKind,
 }
 
 pub async fn insert_message(
@@ -424,11 +529,12 @@ pub async fn insert_message(
         text,
         state,
         turn,
+        kind,
     } = new;
     let row = sqlx::query(&format!(
         "INSERT INTO messages (bot_id, user_id, author, text, state, turn_id, item_id,
-                               created_at, updated_at)
-         SELECT id, user_id, ?, ?, ?, ?, ?, ?, ? FROM bots WHERE id = ? AND user_id = ?
+                               created_at, updated_at, kind)
+         SELECT id, user_id, ?, ?, ?, ?, ?, ?, ?, ? FROM bots WHERE id = ? AND user_id = ?
          RETURNING {MESSAGE_COLUMNS}"
     ))
     .bind(author_name(author))
@@ -438,6 +544,7 @@ pub async fn insert_message(
     .bind(turn.map(|t| t.1))
     .bind(now.0)
     .bind(now.0)
+    .bind(kind_name(kind))
     .bind(bot.0)
     .bind(user.0)
     .fetch_optional(db)
@@ -445,6 +552,31 @@ pub async fn insert_message(
     row.as_ref()
         .map(message_from)
         .ok_or_else(Failure::not_found)
+}
+
+/// Up to `limit` of the Bot's latest text messages before `before`,
+/// oldest first. Markers are left out.
+pub async fn recent_text(
+    db: impl SqliteExecutor<'_>,
+    user: UserId,
+    bot: BotId,
+    before: MessageId,
+    limit: u32,
+) -> Result<Vec<Message>> {
+    let rows = sqlx::query(&format!(
+        "SELECT {MESSAGE_COLUMNS} FROM messages
+         WHERE bot_id = ? AND user_id = ? AND id < ? AND kind = 'text'
+         ORDER BY id DESC LIMIT ?"
+    ))
+    .bind(bot.0)
+    .bind(user.0)
+    .bind(before.0)
+    .bind(i64::from(limit))
+    .fetch_all(db)
+    .await?;
+    let mut messages: Vec<Message> = rows.iter().map(message_from).collect();
+    messages.reverse();
+    Ok(messages)
 }
 
 pub async fn message(

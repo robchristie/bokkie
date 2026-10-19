@@ -307,11 +307,13 @@ asks to sign in, refresh or sign out.
 synthetic sign-in from a mock token endpoint (see
 [CONTRIBUTING](../CONTRIBUTING.md#browser-smoke)).
 
-### Chat-only until Phase 4
+### The capability rule
 
 Until Phase 4's sandbox gate passes, threads may not run commands, change
-files or use a shell or any other tool that reaches outside the
-conversation. With the pinned Codex this takes two things together:
+files or use a shell or any other Codex tool; the only tools a thread
+offers are the Bokkie tools of its Bot's grants, which run in the gateway
+(see [Grants and tools](#grants-and-tools)). With the pinned Codex, keeping
+every Codex tool off takes two things together:
 
 - The gateway writes each `config.toml` itself on every start: the `bokkie`
   permission profile as the default, approvals `never`, web search disabled,
@@ -320,8 +322,9 @@ conversation. With the pinned Codex this takes two things together:
   which also turns off `use_agent_identity`), and the sign-in kept in
   `auth.json`.
   Codex reads `AGENTS.md` files through its sandbox helper, so turning
-  project docs off means chat-only threads need no working Bubblewrap; it
-  also stops a file in the workspace from adding instructions.
+  project docs off means threads that run no command need no working
+  Bubblewrap; it also stops a file in the workspace from adding
+  instructions.
 - Some tools come from the model's catalog entry rather than from features:
   `apply_patch`, a JavaScript `exec` tool that orchestrates nested tools, and
   multi-agent spawning. At startup the gateway exports the binary's bundled
@@ -345,23 +348,33 @@ The gateway refuses to serve an app server or thread unless these all hold:
 - a thread must pass these checks on the current app server before any turn
   runs on it, so after a restart every thread is resumed and checked again;
 - a thread that fails its checks stays refused on every later app server;
+- each thread records the grants it started with, and its `dynamicTools`
+  are exactly their tools; a new turn runs only on a thread whose grants
+  are the Bot's (see [Grants and tools](#grants-and-tools));
 - during a turn, every item must be a message, reasoning, a plan, a
-  compaction or one of Bokkie's own tools. Any other item, any approval
+  compaction, or a call of a Bokkie tool that the thread's grants bring,
+  and every `item/tool/call` must name such a tool. A web search
+  (`webSearch` item) is allowed only on a thread granted `web.search`,
+  which cannot be granted yet. Any other item or tool call, any approval
   request (declined), and any item or approval the gateway cannot decode
   shows that the configuration did not hold. The gateway then refuses the
   thread, stops every user's app server and serves no Codex at all until it
   is restarted, which is the operator's decision. The refusals live in
   memory, so a restart clears them; Bots record their own refusal in the
-  database.
+  database. A violation's reason names the tool but never repeats a
+  command or a search query.
 
 `tests/live_codex.rs` proves the result against the real pinned app server
-with a mock model and a synthetic household sign-in: the only tools it
-offers are Bokkie's own and
+with a mock model and a synthetic household sign-in: a thread offers
+exactly the tools of its grants, for no grants and for `notes`, plus
 `request_user_input`, which the gateway answers with an error. Its control
 test shows that the same capture sees `apply_patch`, `exec_command` and
 `spawn_agent` without the gateway's configuration. Other live tests show
 that a thread runs with every Bubblewrap broken, and that one user's app
-server cannot load another user's thread.
+server cannot load another user's thread. `tests/live_tools.rs` drives the
+whole gateway: a grant change starts a fresh thread with the new tools,
+and a tool call the mock model makes reaches the broker and is answered
+from the calling Bot's notes.
 
 These results hold for the pinned release: the tool flags, the catalog
 fields and the static catalog are all Codex 0.163.0 behaviour. Moving the
@@ -373,7 +386,8 @@ Each Bot belongs to one user and has one conversation, carried by one
 long-lived Codex thread in that user's app server.
 
 - The first message starts the thread with the Bot's profile (name, label,
-  description) and Bokkie's chat-only rules as its developer instructions.
+  description) and a description of exactly what its grants let it do as
+  its developer instructions, and with its grants' tools.
 - Codex 0.163.0 fixes developer instructions when a thread starts:
   `thread/resume` ignores new ones, warm or cold. So when a user edits a
   Bot's name, label or description, the next turn carries the new profile as
@@ -399,6 +413,59 @@ long-lived Codex thread in that user's app server.
   Bots of the user it belongs to. An admin's view of a member's Bots has its
   own routes (see [Permissions and oversight](#permissions-and-oversight)),
   which name the member.
+
+## Grants and tools
+
+Each Bot holds a set of grants from the catalogue `notes`, `seen`,
+`notify`, `web.search` and `web.fetch`, carried as `grants` on the Bot (in
+`GET /api/v1/bots` and `bot_updated` events). Today only `notes` has tools;
+the gateway refuses to grant the others (`invalid_request`) until their
+tools exist.
+
+- **Setting them.** `PATCH /api/v1/bots/{id}` with `grants` replaces the
+  Bot's set, which commits with a `bot_updated` event. An admin may grant
+  anything available on their own Bots, and on a Bot an admin made for a
+  member through `PATCH /api/v1/admin/users/{id}/bots/{bot}`; a member's own
+  Bots stay read-only to admins. A member may add only `notes`, `seen` and
+  `notify` (`forbidden` otherwise) and may remove any grant. A set that
+  holds both an untrusted-input grant (`web.search`, `web.fetch`) and a
+  privileged one is refused; no privileged grant exists yet.
+- **Threads follow them.** A thread records the grants it started with,
+  and offers exactly their tools. A change waits for any send to the Bot
+  and takes effect at the Bot's next turn, which starts a fresh thread:
+  the conversation gets a `marker` message, "Capabilities changed: notes"
+  for example, and that thread's first turn carries the Bot's notes (when
+  it holds `notes`) and its latest 20 messages, about 8,000 characters at
+  most, as a `bokkie-earlier-conversation` context fragment marked
+  untrusted, which Codex 0.163.0 gives the model as a user message. A
+  message sent while a turn runs still steers that turn on its thread.
+- **The broker.** The app server asks for a tool with `item/tool/call`.
+  Its read loop checks the thread's grants and hands the call to the
+  broker, which runs it in its own task. The broker finds the Bot by the
+  calling thread, in the app server's own user's Bots, never from the
+  call's arguments; a call from a thread with no Bot is answered with an
+  error. If the Bot lost the grant since its thread started, the call is
+  refused with an error. Otherwise the tool runs within its deadline (10
+  seconds for the notes tools), and the answer, or an error if the
+  deadline passes, goes back to the app server. A call that nobody serves,
+  because the gateway is shutting down, is answered with an error, since
+  Codex itself would wait until the turn is interrupted.
+- **Notes.** `notes` brings `notes_read`, `notes_replace` and
+  `notes_append` over one Markdown document per Bot, at most 16 KB (16,384
+  bytes of UTF-8); `notes_append` adds its text on a new line. The tools and
+  the instructions tell the model the notes are its own working memory,
+  not instructions. The owner reads them with `GET /api/v1/bots/{id}/notes`
+  (`text` and `updated_at`) and clears them with `DELETE`.
+- **The tool-call log.** Every call the broker resolves to a Bot is
+  recorded with its user, Bot, thread, turn and call ids, the tool, a
+  bounded summary of its arguments (for the notes tools, the size of the
+  text, never the text), the outcome (`ok`, `failed`, `refused` or
+  `timed_out`) and how long it took. The owner reads a Bot's calls, newest
+  first, with `GET /api/v1/bots/{id}/tool-calls?before=&limit=`. The minute
+  pass deletes entries older than 90 days.
+
+Every query names the signed-in user, or for the broker the app server's
+user: another user's Bot's grants, notes and tool calls read as not found.
 
 ## The event WebSocket
 
@@ -466,10 +533,10 @@ limits, and when a window rolls over.
   When a report uses up the weekly tokens, the gateway interrupts every
   turn the user still has running, once each. The allowance is therefore
   overshot by at most one model response per running turn, and those
-  tokens are counted. A chat-only turn has usually finished its reply by
-  the time its tokens arrive, so its reply stays `complete`; a turn that
-  would ask the model again (after a steer, a compaction or, from Phase 4,
-  a tool call) is cut short. Only a turn that actually ends `interrupted`
+  tokens are counted. A turn without tool calls has usually finished its
+  reply by the time its tokens arrive, so its reply stays `complete`; a
+  turn that would ask the model again (after a steer, a compaction or a
+  tool call) is cut short. Only a turn that actually ends `interrupted`
   this way gets a `bot_error` saying so. Turns are not cut short for the
   daily turn limit, which is checked only when a turn starts.
 - Sends to one Bot are handled one at a time, so that its thread starts

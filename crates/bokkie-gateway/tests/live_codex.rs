@@ -4,36 +4,36 @@
 //! It never uses a real ChatGPT credential or calls a real model, and each
 //! test shows that nothing tried to leave the machine.
 //!
-//! This is the proof that the gateway's configuration makes threads
-//! chat-only: it captures the tools the app server actually offers a model.
+//! This is the proof of the capability rule: the gateway's configuration
+//! leaves every Codex tool off, and a thread offers exactly the Bokkie
+//! tools of its grants. It captures the tools the app server actually
+//! offers a model.
 
 mod common;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use bokkie_codex::protocol::{DynamicToolSpec, ServerNotification, TurnStatus};
+use bokkie_codex::protocol::{ServerNotification, TurnStatus};
 use bokkie_gateway::codex::{
     CodexError, HouseholdSettings, Launcher, RuntimeEventKind, Supervisor, catalog,
 };
+use bokkie_gateway::grants::GrantSet;
 use bokkie_mock_model::MockModel;
 use bokkie_protocol::UserId;
+use bokkie_protocol::api::Grant;
 use common::live::Live;
-use serde_json::json;
 
-/// Tools that may be offered while threads are chat-only: Bokkie's own
-/// dynamic tools, and Codex's question to the user, which the gateway
+/// Codex's question to the user, which every thread offers and the gateway
 /// answers with an error.
-const ALLOWED_TOOLS: &[&str] = &["message_bot", "request_user_input"];
+const ALWAYS_OFFERED: &str = "request_user_input";
 
-fn message_bot() -> DynamicToolSpec {
-    DynamicToolSpec::Function {
-        name: "message_bot".into(),
-        description: "Send a message to another of the user's Bots.".into(),
-        input_schema: json!({"type": "object", "properties": {
-            "bot": {"type": "string"}, "message": {"type": "string"}},
-            "required": ["bot", "message"]}),
-    }
+/// Exactly what a thread with these grants may offer the model.
+fn expected_tools(grants: &GrantSet) -> std::collections::BTreeSet<String> {
+    bokkie_gateway::tools::granted(grants)
+        .map(|tool| tool.name.to_owned())
+        .chain([ALWAYS_OFFERED.to_owned()])
+        .collect()
 }
 
 type Events = tokio::sync::mpsc::UnboundedReceiver<bokkie_gateway::codex::RuntimeEvent>;
@@ -57,29 +57,28 @@ async fn supervisor_with(
     Supervisor::with_settings(data, catalog, launcher, HouseholdSettings::default())
 }
 
-#[tokio::test]
-async fn the_real_app_server_passes_the_checks_and_offers_no_unsafe_tools() {
-    let Some(live) = Live::start(&["Hello", " from", " a mock"]).await else {
-        return;
-    };
-    let mock = &live.model;
-    let data = tempfile::tempdir().unwrap();
-    let (supervisor, mut events) = supervisor(&live, data.path()).await;
-    let user = UserId(1);
-    let runtime = supervisor.runtime(user).await.expect("the checks pass");
+/// Starts a thread with `grants`, runs one turn on it, and returns the
+/// tools the model was offered in that turn and the reply.
+async fn capture(
+    runtime: &bokkie_gateway::codex::Runtime,
+    events: &mut Events,
+    mock: &MockModel,
+    grants: &GrantSet,
+) -> (std::collections::BTreeSet<String>, String) {
+    let asked = mock.requests.lock().unwrap().len();
     let thread = runtime
-        .start_thread("You are a test Bot.".into(), Some(vec![message_bot()]))
+        .start_thread("You are a test Bot.".into(), grants)
         .await
         .expect("the thread is served");
     assert_eq!(
         thread.active_permission_profile.as_ref().unwrap().id,
         "bokkie"
     );
+    assert!(thread.cwd.ends_with("users/1/workspace"), "{}", thread.cwd);
     let turn = runtime
         .start_turn(&thread.thread.id, "hi", None)
         .await
         .unwrap();
-
     let mut text = String::new();
     let status = tokio::time::timeout(Duration::from_secs(60), async {
         loop {
@@ -101,28 +100,45 @@ async fn the_real_app_server_passes_the_checks_and_offers_no_unsafe_tools() {
     .await
     .expect("the turn completes");
     assert_eq!(status, TurnStatus::Completed);
-    assert_eq!(text, "Hello from a mock");
+    let requests = mock.requests.lock().unwrap();
+    assert_eq!(requests.len(), asked + 1, "one model request per turn");
+    (MockModel::tools_in(&requests[asked]), text)
+}
 
-    let offered = mock.offered_tools();
-    eprintln!("offered tools: {offered:?}");
-    assert!(
-        offered.contains("message_bot"),
-        "capture works: {offered:?}"
-    );
-    let unsafe_tools: Vec<_> = offered
-        .iter()
-        .filter(|name| !ALLOWED_TOOLS.contains(&name.as_str()))
-        .collect();
-    assert!(
-        unsafe_tools.is_empty(),
-        "the app server offered {unsafe_tools:?}"
-    );
+#[tokio::test]
+async fn the_real_app_server_offers_exactly_the_granted_tools() {
+    let Some(live) = Live::start(&["Hello", " from", " a mock"]).await else {
+        return;
+    };
+    let mock = &live.model;
+    let data = tempfile::tempdir().unwrap();
+    let (supervisor, mut events) = supervisor(&live, data.path()).await;
+    let user = UserId(1);
+    let runtime = supervisor.runtime(user).await.expect("the checks pass");
+    // Every grant with tools today, alone and together, and none.
+    let combinations: Vec<GrantSet> = vec![GrantSet::new(), [Grant::Notes].into()];
+    for grants in &combinations {
+        let (offered, text) = capture(&runtime, &mut events, mock, grants).await;
+        eprintln!("grants {grants:?}: offered {offered:?}");
+        assert_eq!(text, "Hello from a mock");
+        // The capture sees the always-offered tool, so it works, and
+        // nothing else but the grants' tools.
+        assert_eq!(offered, expected_tools(grants), "grants {grants:?}");
+    }
+    // The grants whose tools do not exist yet offer nothing.
+    for grant in [
+        Grant::Seen,
+        Grant::Notify,
+        Grant::WebSearch,
+        Grant::WebFetch,
+    ] {
+        assert_eq!(bokkie_gateway::tools::granted(&[grant].into()).count(), 0);
+    }
 
     // The configuration and the catalog both matter: this app server's
     // config.toml is the gateway's, and its CODEX_HOME is the user's own.
     let paths = supervisor.paths(user);
     assert!(paths.codex_home.join("config.toml").exists());
-    assert!(thread.cwd.ends_with("users/1/workspace"), "{}", thread.cwd);
     live.assert_nothing_left_the_machine();
 }
 
@@ -317,7 +333,7 @@ async fn chat_only_threads_run_without_a_working_sandbox() {
         .await
         .expect("the checks pass");
     let thread = runtime
-        .start_thread("You are a test Bot.".into(), None)
+        .start_thread("You are a test Bot.".into(), &Default::default())
         .await
         .expect("a thread starts without a sandbox");
     assert_eq!(
@@ -337,12 +353,15 @@ async fn one_users_app_server_cannot_resume_anothers_thread() {
     let data = tempfile::tempdir().unwrap();
     let (supervisor, mut events) = supervisor(&live, data.path()).await;
     let amy = supervisor.runtime(UserId(1)).await.unwrap();
-    let thread = amy.start_thread("Amy's Bot".into(), None).await.unwrap();
+    let thread = amy
+        .start_thread("Amy's Bot".into(), &Default::default())
+        .await
+        .unwrap();
     run_turn(&amy, &mut events, &thread.thread.id).await;
 
     let ben = supervisor.runtime(UserId(2)).await.unwrap();
     match ben
-        .resume_thread(&thread.thread.id, "Ben's Bot".into())
+        .resume_thread(&thread.thread.id, "Ben's Bot".into(), &Default::default())
         .await
     {
         Err(CodexError::Rejected(error)) => eprintln!("refused as expected: {error}"),
@@ -376,7 +395,7 @@ async fn developer_instructions_are_fixed_at_thread_start() {
     let user = UserId(1);
     let runtime = supervisor.runtime(user).await.unwrap();
     let thread = runtime
-        .start_thread("INSTRUCTIONS-ALPHA".into(), None)
+        .start_thread("INSTRUCTIONS-ALPHA".into(), &Default::default())
         .await
         .unwrap()
         .thread
@@ -384,7 +403,7 @@ async fn developer_instructions_are_fixed_at_thread_start() {
     run_turn(&runtime, &mut events, &thread).await;
     // Warm resume with new instructions.
     runtime
-        .resume_thread(&thread, "INSTRUCTIONS-BETA".into())
+        .resume_thread(&thread, "INSTRUCTIONS-BETA".into(), &Default::default())
         .await
         .unwrap();
     run_turn(&runtime, &mut events, &thread).await;
@@ -392,7 +411,7 @@ async fn developer_instructions_are_fixed_at_thread_start() {
     supervisor.stop(user).await;
     let runtime = supervisor.runtime(user).await.unwrap();
     runtime
-        .resume_thread(&thread, "INSTRUCTIONS-GAMMA".into())
+        .resume_thread(&thread, "INSTRUCTIONS-GAMMA".into(), &Default::default())
         .await
         .unwrap();
     run_turn(&runtime, &mut events, &thread).await;
@@ -420,7 +439,7 @@ async fn profile_context_reaches_the_model_and_stays_in_history() {
     let user = UserId(1);
     let runtime = supervisor.runtime(user).await.unwrap();
     let thread = runtime
-        .start_thread("You are a test Bot.".into(), None)
+        .start_thread("You are a test Bot.".into(), &Default::default())
         .await
         .unwrap()
         .thread
@@ -475,7 +494,7 @@ async fn profile_context_on_a_steer_reaches_the_model() {
     let (supervisor, mut events) = supervisor(&live, data.path()).await;
     let runtime = supervisor.runtime(UserId(1)).await.unwrap();
     let thread = runtime
-        .start_thread("You are a test Bot.".into(), None)
+        .start_thread("You are a test Bot.".into(), &Default::default())
         .await
         .unwrap()
         .thread
