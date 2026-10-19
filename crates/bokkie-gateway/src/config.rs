@@ -39,10 +39,13 @@ pub struct PublicOrigin {
 }
 
 impl PublicOrigin {
-    /// Accepts only an origin that browsers send unchanged in `Origin` and
-    /// `Host`: an ASCII host name (punycode for an international one), an
-    /// IPv4 address or a bracketed IPv6 address, and an optional port other
-    /// than the scheme's default, without leading zeros.
+    /// Accepts only a host and port that are safe in a header and could
+    /// match what browsers send in `Origin` and `Host`: an ASCII host name
+    /// (punycode for an international one) or IPv4 address of letters,
+    /// digits, `-`, `_` and dots, or a bracketed IPv6 address, and an
+    /// optional port other than the scheme's default, without leading zeros.
+    /// It does not canonicalise addresses: write one as browsers do, such as
+    /// `127.0.0.1` rather than `127.1`.
     pub fn parse(value: &str) -> Result<Self, String> {
         let origin = value.trim().trim_end_matches('/').to_ascii_lowercase();
         let (authority, default_port) = match origin.strip_prefix("https://") {
