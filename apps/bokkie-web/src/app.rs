@@ -769,10 +769,12 @@ impl App {
                 if !self.account_event_seen {
                     signed_in.account_changed(session.user);
                 }
-                if !signed_in.acknowledging
-                    && session.password_reset_by_admin != signed_in.acknowledged
-                {
-                    signed_in.reset_notice = session.password_reset_by_admin;
+                match session.password_reset_by_admin {
+                    _ if signed_in.acknowledging => {}
+                    // Acknowledged here after this check was read.
+                    Some(at) if Some(at) == signed_in.acknowledged => {}
+                    // None too: acknowledged here or on another device.
+                    reset => signed_in.reset_notice = reset,
                 }
             }
             (ApiReply::Session(Err(error)), Session::Checking) => {

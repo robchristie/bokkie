@@ -342,6 +342,17 @@ fn a_member_is_told_an_admin_reset_their_password_until_they_acknowledge_it() {
     fixture.reply(ApiReply::Session(Ok(reset.clone())));
     assert!(!fixture.shows(notice));
 
+    // Acknowledged on another device, a session check clears it here.
+    let mut fixture = Fixture::new();
+    fixture.sent.set_now(Timestamp(NOW));
+    fixture.signed_in_and_live_as(reset.clone(), 10);
+    assert!(fixture.shows(notice));
+    fixture.frame(bokkie_protocol::events::ServerFrame::Reset { after: Seq(10) });
+    assert!(fixture.sent().contains(&ApiRequest::CheckSession));
+    fixture.reply(ApiReply::Session(Ok(session(member()))));
+    assert!(!fixture.shows(notice));
+    assert_eq!(fixture.fact("reset_notice"), false.into());
+
     // Reloading the page before acknowledging tells them again.
     let mut fixture = Fixture::new();
     fixture.sent.set_now(Timestamp(NOW));
