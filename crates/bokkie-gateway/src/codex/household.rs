@@ -151,6 +151,8 @@ pub fn unix_now() -> i64 {
 /// A device-code sign-in of the household app server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Login {
+    /// The serial number of the household app server it runs on.
+    pub runtime: u64,
     pub login_id: String,
     pub verification_url: String,
     pub user_code: String,
@@ -189,6 +191,15 @@ impl Login {
         };
         // Bounded: Codex's message is shown to admins as it is.
         self.error = Some(error.chars().take(300).collect());
+    }
+
+    /// The household app server with this serial number stopped. A sign-in
+    /// pending on it has failed; one on another app server is unaffected.
+    pub fn app_server_stopped(&mut self, runtime: u64) {
+        if self.state == LoginState::Pending && self.runtime == runtime {
+            self.state = LoginState::Failed;
+            self.error = Some("The household's app server stopped".into());
+        }
     }
 
     /// Marks a pending sign-in expired once its code's time has passed.
@@ -253,6 +264,7 @@ mod tests {
     #[test]
     fn a_login_ends_once() {
         let mut login = Login {
+            runtime: 1,
             login_id: "l".into(),
             verification_url: "https://example.test/device".into(),
             user_code: "ABCD".into(),
@@ -276,5 +288,33 @@ mod tests {
         );
         login.expire(Timestamp(1000));
         assert_eq!(login.state, LoginState::Expired);
+    }
+
+    #[test]
+    fn only_its_own_app_server_stopping_fails_a_sign_in() {
+        let pending = Login {
+            runtime: 2,
+            login_id: "l".into(),
+            verification_url: "https://example.test/device".into(),
+            user_code: "ABCD".into(),
+            state: LoginState::Pending,
+            expires_at: Timestamp(1000),
+            error: None,
+        };
+        // An earlier app server's watcher finishing late changes nothing.
+        let mut login = pending.clone();
+        login.app_server_stopped(1);
+        assert_eq!(login, pending);
+        login.app_server_stopped(2);
+        assert_eq!(login.state, LoginState::Failed);
+        assert_eq!(
+            login.error.as_deref(),
+            Some("The household's app server stopped")
+        );
+        // A sign-in that already ended stays as it ended.
+        let mut completed = pending.clone();
+        completed.completed(true, None);
+        completed.app_server_stopped(2);
+        assert_eq!(completed.state, LoginState::Completed);
     }
 }

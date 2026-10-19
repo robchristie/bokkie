@@ -65,22 +65,38 @@ impl Fixture {
         let _ = self.io();
     }
 
-    /// Signed in as Ada with her Tutor listed, and the socket live after
-    /// event `latest`. The first live reloads the list.
+    /// Signed in as Ada, an admin, with her Tutor listed, and the socket
+    /// live after event `latest`.
     pub(super) fn signed_in_and_live(&mut self, latest: u64) {
+        self.signed_in_and_live_as(session(user()), latest);
+    }
+
+    /// Signed in with the Tutor listed, and the socket live after event
+    /// `latest`. The first live reloads the list, the meter, the account and
+    /// the household's status; the account comes back unchanged, and the
+    /// household's status and the meter stay out for the test to answer.
+    pub(super) fn signed_in_and_live_as(&mut self, session: SessionResponse, latest: u64) {
         let _ = self.sent();
-        self.sign_in();
+        self.sign_in_with(session.clone());
         self.socket_started();
         self.reply(ApiReply::Bots(Ok(tutor_list(BotStatus::Idle, latest))));
-        // The sign-in's meter request fails; the first live asks again, and
-        // that request stays out for the test to answer.
+        // The sign-in's meter request fails; the first live asks again.
         self.reply(ApiReply::Usage(Err(CommandError::unreachable())));
         assert!(self.sent().is_empty());
         self.frame(ServerFrame::Live {
             latest: Seq(latest),
         });
-        assert_eq!(self.sent(), [ApiRequest::ListBots, ApiRequest::LoadUsage]);
+        assert_eq!(
+            self.sent(),
+            [
+                ApiRequest::ListBots,
+                ApiRequest::LoadUsage,
+                ApiRequest::CheckSession,
+                ApiRequest::CodexAccount
+            ]
+        );
         self.reply(ApiReply::Bots(Ok(tutor_list(BotStatus::Idle, latest))));
+        self.reply(ApiReply::Session(Ok(session)));
         assert_eq!(self.fact("connection"), "live".into());
         assert_eq!(self.fact("bots"), "loaded".into());
     }
@@ -570,9 +586,15 @@ fn reset_reloads_the_list_and_the_open_conversation() {
     fixture.frame(ServerFrame::Reset { after: Seq(6_000) });
     let mut sent = fixture.sent();
     sent.sort_by_key(|request| format!("{request:?}"));
+    // The account and the household's status are asked again too.
     assert_eq!(
         sent,
-        [ApiRequest::ListBots, ApiRequest::LoadMessages(TUTOR)]
+        [
+            ApiRequest::CheckSession,
+            ApiRequest::CodexAccount,
+            ApiRequest::ListBots,
+            ApiRequest::LoadMessages(TUTOR)
+        ]
     );
     // Events after the reset are held for the snapshots loading.
     fixture.event(6_001, exchange()[0].clone());
@@ -603,7 +625,14 @@ fn a_reload_asked_for_while_a_load_is_in_flight_follows_it() {
     fixture.socket(Input::Opened);
     fixture.frame(ServerFrame::Reset { after: Seq(20) });
     // The meter's request from the first live is still out.
-    assert_eq!(fixture.sent(), [ApiRequest::ListBots]);
+    assert_eq!(
+        fixture.sent(),
+        [
+            ApiRequest::ListBots,
+            ApiRequest::CheckSession,
+            ApiRequest::CodexAccount
+        ]
+    );
     fixture.reply(ApiReply::Messages(
         TUTOR,
         Ok(MessagePage {
@@ -964,9 +993,15 @@ fn an_older_page_out_across_a_reset_or_back_is_dropped() {
     fixture.frame(ServerFrame::Reset { after: Seq(6_000) });
     let mut sent = fixture.sent();
     sent.sort_by_key(|request| format!("{request:?}"));
+    // The account and the household's status are asked again too.
     assert_eq!(
         sent,
-        [ApiRequest::ListBots, ApiRequest::LoadMessages(TUTOR)]
+        [
+            ApiRequest::CheckSession,
+            ApiRequest::CodexAccount,
+            ApiRequest::ListBots,
+            ApiRequest::LoadMessages(TUTOR)
+        ]
     );
     fixture.reply(ApiReply::Bots(Ok(tutor_list(BotStatus::Idle, 6_000))));
     fixture.reply(ApiReply::Messages(
@@ -1125,12 +1160,13 @@ fn the_message_that_was_oldest_stays_in_view_when_older_ones_arrive() {
 }
 
 impl Fixture {
-    /// The scroll area starts below the heading; message 100 sits at its
-    /// top, with message 99 and the rest of the page above it, out of view.
+    /// The scroll area starts below the Bot's controls; message 100 sits at
+    /// its top, with message 99 and the rest of the page above it, out of
+    /// view.
     fn assert_anchored(&self) {
         let anchor = self.harness.get_by_label("Newer message 100").rect();
         let above = self.harness.get_by_label("Older message 99").rect();
-        let heading = self.harness.get_by_label("Tutor").rect();
+        let heading = self.harness.get_by_label("Edit profile").rect();
         assert!(above.bottom() <= anchor.top(), "{above:?} above {anchor:?}");
         assert!(
             anchor.top() > heading.bottom(),

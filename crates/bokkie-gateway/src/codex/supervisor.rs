@@ -339,6 +339,8 @@ pub struct Supervisor {
     /// not since seen to complete a turn. Each is restarted once.
     recovering: std::sync::Mutex<HashSet<UserId>>,
     recoveries: AtomicU64,
+    /// The serial number the next app server gets.
+    serials: AtomicU64,
     latch: Arc<Latch>,
 }
 
@@ -375,6 +377,7 @@ impl Supervisor {
             login: Default::default(),
             recovering: Default::default(),
             recoveries: AtomicU64::new(0),
+            serials: AtomicU64::new(1),
             latch: Arc::default(),
         });
         (supervisor, receiver)
@@ -743,6 +746,7 @@ impl Supervisor {
                 verification_url,
             } => {
                 let login = Login {
+                    runtime: household.serial,
                     login_id,
                     verification_url,
                     user_code,
@@ -812,13 +816,13 @@ impl Supervisor {
         }
     }
 
-    fn household_exited(&self) {
-        if let Some(login) = lock(&self.login)
-            .as_mut()
-            .filter(|l| l.state == LoginState::Pending)
-        {
-            login.state = LoginState::Failed;
-            login.error = Some("The household's app server stopped".into());
+    /// The household app server with this serial number has closed, so a
+    /// sign-in still pending on it has failed. A sign-in started on a later
+    /// household app server is left alone: the closed one's watcher can
+    /// finish after its successor has started and taken a new sign-in.
+    pub fn household_exited(&self, runtime: u64) {
+        if let Some(login) = lock(&self.login).as_mut() {
+            login.app_server_stopped(runtime);
         }
     }
 
@@ -933,6 +937,7 @@ impl Supervisor {
         };
         let runtime = Arc::new(Runtime {
             owner,
+            serial: self.serials.fetch_add(1, Ordering::SeqCst),
             client,
             server: std::sync::Mutex::new(server),
             expected,
@@ -974,6 +979,8 @@ impl Sink {
 #[derive(Debug)]
 pub struct Runtime {
     pub owner: Owner,
+    /// Tells this app server apart from the owner's earlier and later ones.
+    pub serial: u64,
     client: Client,
     /// The child process, killed when the runtime stops or drops.
     server: std::sync::Mutex<Option<AppServer>>,
@@ -1201,6 +1208,7 @@ impl Drop for Runtime {
 /// answers every server request, and forwards a user's notifications.
 async fn watch(runtime: Arc<Runtime>, mut incoming: mpsc::UnboundedReceiver<Incoming>, sink: Sink) {
     let owner = runtime.owner;
+    let serial = runtime.serial;
     // Hold only a weak reference while waiting, so a stopped runtime drops.
     let weak = Arc::downgrade(&runtime);
     let client = runtime.client.clone();
@@ -1349,7 +1357,7 @@ async fn watch(runtime: Arc<Runtime>, mut incoming: mpsc::UnboundedReceiver<Inco
     if let Sink::Household(supervisor) = &sink
         && let Some(supervisor) = supervisor.upgrade()
     {
-        supervisor.household_exited();
+        supervisor.household_exited(serial);
     }
     sink.send(RuntimeEventKind::Exited);
 }

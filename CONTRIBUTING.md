@@ -109,20 +109,26 @@ cargo run -p bokkie-gateway -- serve
 
 Then open <http://localhost:8787/>, adding `?automation=1` for `stobie
 attach`. The client's facts say where it is: `screen`, `user`, `bots`,
-`bot_count`, `message` and `connection` (the event socket), and for the open
+`bot_count`, `show_hidden`, `message` and `connection` (the event socket);
+for the account `role`, `may_create_bots`, `may_edit_profiles`,
+`oversight` (the notice that an admin can read the member's Bots) and
+`reset_notice` (the notice that an admin reset the password); for the open
 conversation `bot`, `conversation`, `bot_status`, `bot_error`,
-`message_count`, `older` (`more`, `loading`, `failed`, or empty at the
-conversation's start), `reply`, `reply_chars` and `reply_state` (the latest
-Bot reply), `draft`, `sending`, `delivery`, `send_error`, `stopping` and
-`stop_note`; for the usage meter `usage`, `subscription_used`, `turns_today`
-and `limit` (the limit-reached banner); for the New Bot form `new_bot_name`,
-`creating` and `create_error`; and `chatgpt` and `chatgpt_login` for the
-ChatGPT sign-in, which never publishes its device code. Name a new Bot with
-`stobie set-text bokkie.bot-name`. Open a Bot with `stobie invoke
-bokkie.open-bot --value ID` and fill the message field with `stobie set-text
-bokkie.draft`. A conversation opens on its newest 50 messages; `stobie
-invoke bokkie.load-older` loads the 50 before them. Stobie offers no
-`set-text` on the password field, so type into it with the keyboard. Bots
+`bot_pinned`, `bot_hidden`, `updating`, `profile` (`editing` or `saving`),
+`profile_error`, `message_count`, `older` (`more`, `loading`, `failed`, or
+empty at the conversation's start), `reply`, `reply_chars` and
+`reply_state` (the latest Bot reply), `draft`, `sending`, `delivery`,
+`send_error`, `stopping` and `stop_note`; for the usage meter `usage`,
+`subscription_used`, `turns_today` and `limit` (the limit-reached banner);
+for the New Bot form `new_bot_name`, `creating` and `create_error`; and
+`chatgpt` (whether the household is signed in), `chatgpt_login` and
+`chatgpt_sign_out` for an admin's household sign-in screen, which never
+publishes its device code. Name a new Bot with `stobie set-text
+bokkie.bot-name`. Open a Bot with `stobie invoke bokkie.open-bot --value
+ID` and fill the message field with `stobie set-text bokkie.draft`. A
+conversation opens on its newest 50 messages; `stobie invoke
+bokkie.load-older` loads the 50 before them. Stobie offers no `set-text` on
+the password field, so type into it with the keyboard. Bots
 reply only while the household is signed in to ChatGPT (see
 [docs/gateway.md](docs/gateway.md#the-households-chatgpt-sign-in)). To
 watch a reply stream without a ChatGPT account, use the mocks as the

@@ -6,7 +6,10 @@
 //! only so that host tests can run.
 //!
 //! - [`app`] is the application: sign-in and sign-out, the Bot list, and
-//!   one Bot's conversation, kept current by the event socket.
+//!   one Bot's conversation, kept current by the event socket, with what
+//!   the account's role and permissions allow: an admin's household ChatGPT
+//!   sign-in, and a member's notices of oversight and of an admin's
+//!   password reset.
 //! - [`api`] describes each HTTP command and decodes its reply;
 //!   `browser` sends them with `fetch` and runs the event WebSocket.
 //!

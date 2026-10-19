@@ -1,7 +1,7 @@
 //! The application's presentation: plain stand-ins (settled decision 3), one
 //! screen at a time, each control on a row of its own.
 
-use bokkie_protocol::api::{Author, Bot, BotStatus, Delivery, Message, MessageState};
+use bokkie_protocol::api::{Author, Bot, BotStatus, Delivery, LoginState, Message, MessageState};
 use stobie_ui_egui::{
     ActionArgument, ActionEmphasis, ContentTextSpec, Frame, NativeTextControlKind,
     PresentationContext, PresentationScope, SemanticUiId, TextInteraction, TextOverflow, TextRole,
@@ -9,8 +9,9 @@ use stobie_ui_egui::{
 };
 
 use crate::app::{
-    APPLICATION_NAME, Account, App, BOT_NAME_ID, BokkieAction, BokkieIntent, DRAFT_ID, Login,
-    NewBot, Open, PASSWORD_ID, Session, SignInForm, SignedIn, USERNAME_ID,
+    APPLICATION_NAME, Account, App, BOT_NAME_ID, BokkieAction, BokkieIntent, DRAFT_ID, Household,
+    Login, NewBot, Open, PASSWORD_ID, PROFILE_DESCRIPTION_ID, PROFILE_LABEL_ID, PROFILE_NAME_ID,
+    ProfileEditor, Session, SignInForm, SignOut, SignedIn, USERNAME_ID,
 };
 use crate::socket::Link;
 
@@ -32,8 +33,8 @@ pub(crate) fn present(app: &App, ui: &mut egui::Ui, frame: &mut BokkieFrame<'_, 
                 p.status(ui, "status", "Checking your session…", false);
             }
             Session::SignedOut(form) => sign_in_ui(ui, &mut p, frame, form),
-            Session::SignedIn(signed_in) => match (&signed_in.login, &signed_in.open) {
-                (Some(login), _) => chatgpt_ui(ui, &mut p, frame, signed_in, login),
+            Session::SignedIn(signed_in) => match (&signed_in.household, &signed_in.open) {
+                (Some(household), _) => household_ui(ui, &mut p, frame, app, signed_in, household),
                 (None, Some(open)) => conversation_ui(ui, &mut p, frame, app, signed_in, open),
                 (None, None) => bots_ui(ui, &mut p, frame, app, signed_in),
             },
@@ -60,12 +61,39 @@ fn text_field(
     value: &str,
     password: bool,
 ) -> (String, egui::Response) {
+    field(ui, p, id, label, value, password, false)
+}
+
+/// A text field of several lines, such as a Bot's description.
+fn text_area(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    id: &'static str,
+    label: &str,
+    value: &str,
+) -> (String, egui::Response) {
+    field(ui, p, id, label, value, false, true)
+}
+
+fn field(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    id: &'static str,
+    label: &str,
+    value: &str,
+    password: bool,
+    multiline: bool,
+) -> (String, egui::Response) {
     let mut edited = value.to_owned();
     let caption = ui.label(label);
     let (field, ()) = p.native(ui, NativeTextControlKind::TextEdit, |ui| {
-        let edit = egui::TextEdit::singleline(&mut edited)
-            .password(password)
-            .desired_width(f32::INFINITY);
+        let edit = if multiline {
+            egui::TextEdit::multiline(&mut edited).desired_rows(4)
+        } else {
+            egui::TextEdit::singleline(&mut edited)
+        }
+        .password(password)
+        .desired_width(f32::INFINITY);
         // Name the field after its caption for assistive technology.
         (ui.add(edit).labelled_by(caption.id), ())
     });
@@ -116,12 +144,20 @@ fn sign_in_ui(
     }
 }
 
-/// A Bot's label and status, or its status alone for a Bot with no label.
+/// A Bot's label and status, or its status alone for a Bot with no label,
+/// and whether it is pinned or hidden.
 fn details(bot: &Bot) -> String {
-    match bot.label.as_str() {
+    let mut details = match bot.label.as_str() {
         "" => status_text(bot.status).to_owned(),
         label => format!("{label} · {}", status_text(bot.status)),
+    };
+    if bot.pinned {
+        details.push_str(" · Pinned");
     }
+    if bot.hidden {
+        details.push_str(" · Hidden");
+    }
+    details
 }
 
 fn status_text(status: BotStatus) -> &'static str {
@@ -162,6 +198,7 @@ fn bots_ui(
     } else if let Some(message) = &signed_in.message {
         p.status(ui, "status", message, true);
     }
+    notices_ui(ui, p, frame, app, signed_in);
     link_status(ui, p, signed_in.link);
     if signed_in.link == Link::Outdated {
         frame.action(ui, p, BokkieAction::ReloadPage, ActionEmphasis::Primary);
@@ -172,13 +209,24 @@ fn bots_ui(
     ui.separator();
     p.heading(ui, "bots-title", "Bots");
     frame.action(ui, p, BokkieAction::Refresh, ActionEmphasis::Normal);
+    frame.toggle(
+        ui,
+        p,
+        "show-hidden",
+        BokkieAction::ShowHidden,
+        signed_in.show_hidden,
+    );
     if let Some(message) = &signed_in.bots_error {
         p.status(ui, "bots-status", message, true);
     } else if !store.bots_loaded() {
         p.status(ui, "bots-status", "Loading Bots…", false);
         return;
     }
-    let bots = store.visible_bots();
+    let bots = if signed_in.show_hidden {
+        store.listed_bots()
+    } else {
+        store.visible_bots()
+    };
     // The list scrolls, so publish only what is visible.
     observe_visible_only(ui, |ui| {
         egui::ScrollArea::vertical()
@@ -192,9 +240,65 @@ fn bots_ui(
                 for bot in bots {
                     bot_row(ui, &mut rows, frame, bot);
                 }
-                new_bot_ui(ui, &mut rows, frame, &signed_in.new_bot);
+                if signed_in.may_create_bots() {
+                    new_bot_ui(ui, &mut rows, frame, &signed_in.new_bot);
+                } else {
+                    rows.content(
+                        ui,
+                        "no-new-bot",
+                        "An admin makes your Bots",
+                        line(TextRole::Secondary, 1),
+                    );
+                }
             });
     });
+}
+
+/// The notices a signed-in user sees on every screen: that an admin can
+/// read their Bots and conversations, the whole time oversight is on, and
+/// that an admin reset their password, until they acknowledge it.
+fn notices_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
+    signed_in: &SignedIn,
+) {
+    let now = app.now();
+    let mut timed = false;
+    if let Some(since) = signed_in.overseen() {
+        let text = match since {
+            Some(at) => {
+                timed = true;
+                format!(
+                    "Oversight is on: an admin can read all your Bots and conversations. It was switched on {}",
+                    crate::usage::ago(now, at)
+                )
+            }
+            None => "Oversight is on: an admin can read all your Bots and conversations".into(),
+        };
+        p.status(ui, "oversight", &text, true);
+    }
+    if let Some(at) = signed_in.reset_notice {
+        timed = true;
+        let text = format!(
+            "An admin reset your password {}",
+            crate::usage::ago(now, at)
+        );
+        p.status(ui, "reset-notice", &text, true);
+        frame.action(
+            ui,
+            p,
+            BokkieAction::AcknowledgeReset,
+            ActionEmphasis::Normal,
+        );
+        if signed_in.acknowledging {
+            p.status(ui, "reset-status", "Acknowledging…", false);
+        }
+    }
+    if timed {
+        frame.request_repaint_after("notice times", METER_REFRESH);
+    }
 }
 
 /// The New Bot form, after the list: a name only (settled decision 8).
@@ -222,14 +326,15 @@ fn new_bot_ui(
     }
 }
 
-/// Whether the user's own app server is signed in to ChatGPT, with the way
-/// to sign it in when it is not.
+/// Whether the household is signed in to ChatGPT. A member sees only
+/// that; an admin also sees as whom, and the way to the sign-in.
 fn account_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
     frame: &mut BokkieFrame<'_, '_>,
     signed_in: &SignedIn,
 ) {
+    let admin = signed_in.user.role == bokkie_protocol::api::Role::Admin;
     match &signed_in.account {
         Account::Checking => {
             p.content(
@@ -239,65 +344,95 @@ fn account_ui(
                 line(TextRole::Secondary, 1),
             );
         }
-        Account::SignedIn { plan } => {
-            let text = match plan {
-                Some(plan) => format!("ChatGPT: signed in ({plan})"),
-                None => "ChatGPT: signed in".into(),
+        Account::SignedIn { email, plan } => {
+            let text = if admin {
+                account_text(email.as_deref(), plan.as_deref())
+            } else {
+                "ChatGPT: signed in for the household".into()
             };
-            p.content(ui, "chatgpt", &text, line(TextRole::Secondary, 1));
+            p.content(ui, "chatgpt", &text, line(TextRole::Secondary, 2));
+        }
+        Account::SignedOut if admin => {
+            p.status(
+                ui,
+                "chatgpt",
+                "ChatGPT is signed out for the household, so no one's Bots can reply. Sign it in",
+                true,
+            );
         }
         Account::SignedOut => {
             p.status(
                 ui,
                 "chatgpt",
-                "ChatGPT is not signed in, so your Bots cannot reply",
+                "ChatGPT is signed out for the household, so your Bots cannot reply. Ask an admin to sign it in",
                 true,
             );
-            frame.action(ui, p, BokkieAction::ChatGptSignIn, ActionEmphasis::Normal);
         }
         Account::Failed(message) => {
             p.status(ui, "chatgpt", message, true);
-            frame.action(ui, p, BokkieAction::ChatGptSignIn, ActionEmphasis::Normal);
         }
+    }
+    if admin {
+        frame.action(ui, p, BokkieAction::Household, ActionEmphasis::Normal);
     }
 }
 
-/// The ChatGPT device-code sign-in (settled decision 8). The code is shown
-/// here and kept nowhere else.
-fn chatgpt_ui(
+/// "ChatGPT: signed in as ada@example.com (plus)", as an admin sees it.
+fn account_text(email: Option<&str>, plan: Option<&str>) -> String {
+    match (email, plan) {
+        (Some(email), Some(plan)) => format!("ChatGPT: signed in as {email} ({plan})"),
+        (Some(email), None) => format!("ChatGPT: signed in as {email}"),
+        (None, Some(plan)) => format!("ChatGPT: signed in ({plan})"),
+        (None, None) => "ChatGPT: signed in".into(),
+    }
+}
+
+/// The household's ChatGPT sign-in, for admins: sign in by device code,
+/// with the code's state and expiry, cancel, and sign out with its warning.
+/// The code is shown here and kept nowhere else.
+fn household_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
     frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
     signed_in: &SignedIn,
-    login: &Login,
+    household: &Household,
 ) {
     frame.action(ui, p, BokkieAction::Back, ActionEmphasis::Normal);
-    p.heading(ui, "title", "Sign in to ChatGPT");
+    p.heading(ui, "title", "ChatGPT for the household");
     p.content(
         ui,
         "about",
-        "Your Bots reply only once Bokkie's server is signed in to ChatGPT for you. Sign in once, with a code; the server keeps the sign-in for your Bots.",
+        "Every account's Bots reply through this one ChatGPT sign-in. Only admins sign it in or out.",
         line(TextRole::Secondary, 4),
     );
-    match login {
-        Login::Ready => match &signed_in.account {
-            Account::Checking => {
-                p.status(ui, "status", "Checking your ChatGPT sign-in…", false);
-            }
-            Account::SignedIn { .. } => {
-                p.status(ui, "status", "You are already signed in to ChatGPT", false);
-            }
-            Account::SignedOut | Account::Failed(_) => {
-                if let Account::Failed(message) = &signed_in.account {
-                    p.status(ui, "account-error", message, true);
-                }
-                frame.action(ui, p, BokkieAction::StartChatGpt, ActionEmphasis::Primary);
-            }
-        },
+    notices_ui(ui, p, frame, app, signed_in);
+    match &signed_in.account {
+        Account::Checking => p.status(ui, "account", "Checking the sign-in…", false),
+        Account::SignedIn { email, plan } => p.status(
+            ui,
+            "account",
+            &account_text(email.as_deref(), plan.as_deref()),
+            false,
+        ),
+        Account::SignedOut => p.status(
+            ui,
+            "account",
+            "Signed out: no one's Bots can reply until an admin signs in",
+            true,
+        ),
+        Account::Failed(message) => p.status(ui, "account", message, true),
+    };
+    match &household.login {
+        Login::Idle => {}
         Login::Starting => {
             p.status(ui, "status", "Asking for a code…", false);
         }
-        Login::Waiting { code, error, .. } => {
+        Login::Waiting { code, .. } | Login::Cancelling { code } => {
+            let (cancelling, error) = match &household.login {
+                Login::Waiting { error, .. } => (false, error.as_ref()),
+                _ => (true, None),
+            };
             p.content(
                 ui,
                 "step-1",
@@ -310,32 +445,118 @@ fn chatgpt_ui(
             });
             p.content(ui, "step-2", "2. Enter this code:", line(TextRole::Body, 1));
             p.heading(ui, "code", &code.0.user_code);
-            p.status(ui, "status", "Waiting for you to finish signing in…", false);
+            let now = app.now();
+            let expiry = if now >= code.0.expires_at {
+                "The code is about to expire".to_owned()
+            } else {
+                format!(
+                    "The code expires {}",
+                    crate::usage::resets_in(now, code.0.expires_at)
+                )
+            };
+            p.content(ui, "expiry", &expiry, line(TextRole::Secondary, 1));
+            if cancelling {
+                p.status(ui, "status", "Cancelling…", false);
+            } else {
+                p.status(ui, "status", "Waiting for you to finish signing in…", false);
+            }
             if let Some(error) = error {
                 p.status(ui, "poll-error", error, true);
             }
             p.content(
                 ui,
                 "keep-open",
-                "Keep this page open: the code is shown only here. If it has expired, start again.",
-                line(TextRole::Secondary, 3),
+                "Keep this page open: the code is shown only here.",
+                line(TextRole::Secondary, 2),
             );
-            frame.action(ui, p, BokkieAction::StartChatGpt, ActionEmphasis::Normal);
+            frame.action(ui, p, BokkieAction::CancelChatGpt, ActionEmphasis::Normal);
+            frame.request_repaint_after("code expiry", METER_REFRESH);
         }
-        Login::Done => {
-            let text = match &signed_in.account {
-                Account::SignedIn { plan: Some(plan) } => {
-                    format!("Signed in to ChatGPT ({plan}). Your Bots can reply")
-                }
-                _ => "Signed in to ChatGPT. Your Bots can reply".into(),
+        Login::Ended { state, error } => {
+            let (text, problem) = match state {
+                LoginState::Completed => (
+                    "Signed in to ChatGPT. Every account's Bots can reply".to_owned(),
+                    false,
+                ),
+                LoginState::Expired => (
+                    "The code expired before the sign-in finished. Get a new code to try again"
+                        .to_owned(),
+                    true,
+                ),
+                LoginState::Cancelled => ("The sign-in was cancelled".to_owned(), false),
+                LoginState::Failed | LoginState::Pending => (
+                    match error {
+                        Some(error) => format!("The sign-in failed: {error}"),
+                        None => "The sign-in failed".to_owned(),
+                    },
+                    true,
+                ),
             };
-            p.status(ui, "status", &text, false);
+            p.status(ui, "status", &text, problem);
         }
         Login::Failed(message) => {
             p.status(ui, "status", message, true);
-            frame.action(ui, p, BokkieAction::StartChatGpt, ActionEmphasis::Primary);
         }
-    };
+    }
+    let waiting = matches!(
+        household.login,
+        Login::Starting | Login::Waiting { .. } | Login::Cancelling { .. }
+    );
+    let signed_out = matches!(signed_in.account, Account::SignedOut | Account::Failed(_));
+    if waiting || signed_out {
+        let emphasis = if waiting {
+            ActionEmphasis::Normal
+        } else {
+            ActionEmphasis::Primary
+        };
+        frame.action(ui, p, BokkieAction::StartChatGpt, emphasis);
+    }
+    if matches!(signed_in.account, Account::SignedIn { .. }) && !waiting {
+        sign_out_ui(ui, p, frame, &household.sign_out);
+    }
+}
+
+/// Signing the household out, which signs out every account's Bots, so it
+/// asks first.
+fn sign_out_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    sign_out: &SignOut,
+) {
+    ui.separator();
+    match sign_out {
+        SignOut::Idle | SignOut::Failed(_) => {
+            p.content(
+                ui,
+                "sign-out-about",
+                "Signing out signs out every account's Bots at once, until an admin signs in again.",
+                line(TextRole::Secondary, 3),
+            );
+            frame.action(ui, p, BokkieAction::SignOutChatGpt, ActionEmphasis::Normal);
+            if let SignOut::Failed(message) = sign_out {
+                p.status(ui, "sign-out-status", message, true);
+            }
+        }
+        SignOut::Confirming => {
+            p.status(
+                ui,
+                "sign-out-warning",
+                "Sign out everyone? No account's Bots can reply until an admin signs in again.",
+                true,
+            );
+            frame.action(
+                ui,
+                p,
+                BokkieAction::ConfirmSignOutChatGpt,
+                ActionEmphasis::Primary,
+            );
+            frame.action(ui, p, BokkieAction::KeepChatGpt, ActionEmphasis::Normal);
+        }
+        SignOut::Busy => {
+            p.status(ui, "sign-out-status", "Signing out…", false);
+        }
+    }
 }
 
 fn bot_row(
@@ -397,6 +618,10 @@ fn conversation_ui(
     if let Some(bot) = bot {
         p.content(ui, "details", &details(bot), line(TextRole::Secondary, 1));
     }
+    notices_ui(ui, p, frame, app, signed_in);
+    if let Some(bot) = bot {
+        bot_controls_ui(ui, p, frame, signed_in, open, bot);
+    }
     link_status(ui, p, signed_in.link);
     if signed_in.link == Link::Outdated {
         frame.action(ui, p, BokkieAction::ReloadPage, ActionEmphasis::Primary);
@@ -413,6 +638,71 @@ fn conversation_ui(
     messages_ui(ui, frame, app, open, name);
     ui.separator();
     composer_ui(ui, p, frame, app, open);
+}
+
+/// Pin and hide, which every user can, and the profile, which needs the
+/// permission: its control is not shown without it.
+fn bot_controls_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    signed_in: &SignedIn,
+    open: &Open,
+    bot: &Bot,
+) {
+    if let Some(editor) = &open.editor {
+        profile_ui(ui, p, frame, editor);
+        return;
+    }
+    // Short controls share a row, to leave the conversation its room.
+    ui.horizontal(|ui| {
+        frame.toggle(ui, p, "pin", BokkieAction::Pin, bot.pinned);
+        frame.toggle(ui, p, "hide", BokkieAction::Hide, bot.hidden);
+        if signed_in.may_edit_profiles() {
+            frame.action(ui, p, BokkieAction::EditProfile, ActionEmphasis::Normal);
+        }
+    });
+    if open.updating {
+        p.status(ui, "update-status", "Saving…", false);
+    } else if let Some(error) = &open.update_error {
+        p.status(ui, "update-status", error, true);
+    }
+}
+
+/// The Bot's profile, being edited: its name, label and description.
+fn profile_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    editor: &ProfileEditor,
+) {
+    ui.add_enabled_ui(!editor.busy, |ui| {
+        let (name, _) = text_field(ui, p, PROFILE_NAME_ID, "Bot name", &editor.name, false);
+        if name != editor.name {
+            frame.emit(BokkieIntent::EditProfileName(name));
+        }
+        let (label, _) = text_field(ui, p, PROFILE_LABEL_ID, "Label", &editor.label, false);
+        if label != editor.label {
+            frame.emit(BokkieIntent::EditProfileLabel(label));
+        }
+        let (description, _) = text_area(
+            ui,
+            p,
+            PROFILE_DESCRIPTION_ID,
+            "Description",
+            &editor.description,
+        );
+        if description != editor.description {
+            frame.emit(BokkieIntent::EditProfileDescription(description));
+        }
+    });
+    frame.action(ui, p, BokkieAction::SaveProfile, ActionEmphasis::Primary);
+    frame.action(ui, p, BokkieAction::CancelProfile, ActionEmphasis::Normal);
+    if editor.busy {
+        p.status(ui, "profile-status", "Saving…", false);
+    } else if let Some(error) = &editor.error {
+        p.status(ui, "profile-status", error, true);
+    }
 }
 
 /// The limit-reached banner: a plain error line.

@@ -7,7 +7,8 @@
 
 use bokkie_protocol::api::{
     Bot, BotList, CodexAccount, CreateBotRequest, DeviceCodeLogin, LoginRequest, MessagePage,
-    SendMessageRequest, SendMessageResponse, SessionResponse, StopResponse, Usage,
+    SendMessageRequest, SendMessageResponse, SessionResponse, StopResponse, UpdateBotRequest,
+    Usage,
 };
 use bokkie_protocol::{API_PREFIX, BotId, MessageId, Timestamp};
 
@@ -38,11 +39,25 @@ pub enum ApiRequest {
     LoadUsage,
     /// `POST /api/v1/bots`: create a Bot.
     CreateBot(CreateBotRequest),
-    /// `GET /api/v1/codex/account`: whether the user's own app server is
-    /// signed in to ChatGPT.
+    /// `PATCH /api/v1/bots/{id}`: change a Bot's profile, pin or
+    /// visibility.
+    UpdateBot(BotId, UpdateBotRequest),
+    /// `DELETE /api/v1/session/password-reset`: the user has read that an
+    /// admin reset their password.
+    AcknowledgeReset,
+    /// `GET /api/v1/codex/account`: whether the household is signed in to
+    /// ChatGPT, and for an admin, as whom.
     CodexAccount,
-    /// `POST /api/v1/codex/login`: start a device-code sign-in.
+    /// `POST /api/v1/codex/login`: start a device-code sign-in of the
+    /// household (admins only).
     CodexLogin,
+    /// `GET /api/v1/codex/login`: where the latest sign-in stands.
+    CodexLoginStatus,
+    /// `DELETE /api/v1/codex/login`: cancel the pending sign-in.
+    CancelCodexLogin,
+    /// `POST /api/v1/codex/logout`: sign the household out, which signs out
+    /// every account's Bots.
+    CodexLogout,
 }
 
 // The password must never reach a log line.
@@ -65,8 +80,17 @@ impl std::fmt::Debug for ApiRequest {
             Self::StopBot(bot) => f.debug_tuple("StopBot").field(bot).finish(),
             Self::LoadUsage => f.write_str("LoadUsage"),
             Self::CreateBot(bot) => f.debug_tuple("CreateBot").field(bot).finish(),
+            Self::UpdateBot(bot, changes) => f
+                .debug_tuple("UpdateBot")
+                .field(bot)
+                .field(changes)
+                .finish(),
+            Self::AcknowledgeReset => f.write_str("AcknowledgeReset"),
             Self::CodexAccount => f.write_str("CodexAccount"),
             Self::CodexLogin => f.write_str("CodexLogin"),
+            Self::CodexLoginStatus => f.write_str("CodexLoginStatus"),
+            Self::CancelCodexLogin => f.write_str("CancelCodexLogin"),
+            Self::CodexLogout => f.write_str("CodexLogout"),
         }
     }
 }
@@ -76,6 +100,7 @@ impl std::fmt::Debug for ApiRequest {
 pub enum Method {
     Get,
     Post,
+    Patch,
     Delete,
 }
 
@@ -84,6 +109,7 @@ impl Method {
         match self {
             Self::Get => "GET",
             Self::Post => "POST",
+            Self::Patch => "PATCH",
             Self::Delete => "DELETE",
         }
     }
@@ -103,8 +129,16 @@ pub enum ApiReply {
     Stopped(BotId, Result<StopResponse, CommandError>),
     Usage(Result<Usage, CommandError>),
     Created(Result<Bot, CommandError>),
+    BotUpdated(BotId, Result<Bot, CommandError>),
+    Acknowledged(Result<(), CommandError>),
     Account(Result<CodexAccount, CommandError>),
+    /// A sign-in just started.
     Login(Result<DeviceCode, CommandError>),
+    /// Where the latest sign-in stands.
+    LoginStatus(Result<DeviceCode, CommandError>),
+    /// The sign-in as cancelling left it.
+    LoginCancelled(Result<DeviceCode, CommandError>),
+    HouseholdSignedOut(Result<(), CommandError>),
 }
 
 /// A device-code sign-in as the gateway started it. The code is shown on
@@ -118,6 +152,9 @@ impl std::fmt::Debug for DeviceCode {
         f.debug_struct("DeviceCode")
             .field("verification_url", &self.0.verification_url)
             .field("user_code", &"<redacted>")
+            .field("state", &self.0.state)
+            .field("expires_at", &self.0.expires_at)
+            .field("error", &self.0.error)
             .finish()
     }
 }
@@ -130,13 +167,16 @@ impl ApiRequest {
             | Self::LoadMessages(_)
             | Self::LoadOlder(..)
             | Self::LoadUsage
-            | Self::CodexAccount => Method::Get,
+            | Self::CodexAccount
+            | Self::CodexLoginStatus => Method::Get,
             Self::SignIn(_)
             | Self::SendMessage(..)
             | Self::StopBot(_)
             | Self::CreateBot(_)
-            | Self::CodexLogin => Method::Post,
-            Self::SignOut => Method::Delete,
+            | Self::CodexLogin
+            | Self::CodexLogout => Method::Post,
+            Self::UpdateBot(..) => Method::Patch,
+            Self::SignOut | Self::AcknowledgeReset | Self::CancelCodexLogin => Method::Delete,
         }
     }
 
@@ -145,8 +185,13 @@ impl ApiRequest {
         let route = match self {
             Self::CheckSession | Self::SignIn(_) | Self::SignOut => "/session".into(),
             Self::ListBots | Self::CreateBot(_) => "/bots".into(),
+            Self::AcknowledgeReset => "/session/password-reset".into(),
+            Self::UpdateBot(bot, _) => format!("/bots/{bot}"),
             Self::CodexAccount => "/codex/account".into(),
-            Self::CodexLogin => "/codex/login".into(),
+            Self::CodexLogin | Self::CodexLoginStatus | Self::CancelCodexLogin => {
+                "/codex/login".into()
+            }
+            Self::CodexLogout => "/codex/logout".into(),
             Self::LoadMessages(bot) | Self::SendMessage(bot, _) => format!("/bots/{bot}/messages"),
             Self::LoadOlder(bot, before) => format!("/bots/{bot}/messages?before={before}"),
             Self::StopBot(bot) => format!("/bots/{bot}/stop"),
@@ -161,6 +206,7 @@ impl ApiRequest {
             Self::SignIn(login) => Some(json(login)),
             Self::SendMessage(_, message) => Some(json(message)),
             Self::CreateBot(bot) => Some(json(bot)),
+            Self::UpdateBot(_, changes) => Some(json(changes)),
             _ => None,
         }
     }
@@ -182,8 +228,15 @@ impl ApiRequest {
             Self::StopBot(bot) => ApiReply::Stopped(*bot, wire::decode_response(status, body)),
             Self::LoadUsage => ApiReply::Usage(wire::decode_response(status, body)),
             Self::CreateBot(_) => ApiReply::Created(wire::decode_response(status, body)),
+            Self::UpdateBot(bot, _) => {
+                ApiReply::BotUpdated(*bot, wire::decode_response(status, body))
+            }
+            Self::AcknowledgeReset => ApiReply::Acknowledged(wire::decode_empty(status, body)),
             Self::CodexAccount => ApiReply::Account(wire::decode_response(status, body)),
             Self::CodexLogin => ApiReply::Login(wire::decode_response(status, body)),
+            Self::CodexLoginStatus => ApiReply::LoginStatus(wire::decode_response(status, body)),
+            Self::CancelCodexLogin => ApiReply::LoginCancelled(wire::decode_response(status, body)),
+            Self::CodexLogout => ApiReply::HouseholdSignedOut(wire::decode_empty(status, body)),
         }
     }
 
@@ -201,8 +254,13 @@ impl ApiRequest {
             Self::StopBot(bot) => ApiReply::Stopped(*bot, Err(error)),
             Self::LoadUsage => ApiReply::Usage(Err(error)),
             Self::CreateBot(_) => ApiReply::Created(Err(error)),
+            Self::UpdateBot(bot, _) => ApiReply::BotUpdated(*bot, Err(error)),
+            Self::AcknowledgeReset => ApiReply::Acknowledged(Err(error)),
             Self::CodexAccount => ApiReply::Account(Err(error)),
             Self::CodexLogin => ApiReply::Login(Err(error)),
+            Self::CodexLoginStatus => ApiReply::LoginStatus(Err(error)),
+            Self::CancelCodexLogin => ApiReply::LoginCancelled(Err(error)),
+            Self::CodexLogout => ApiReply::HouseholdSignedOut(Err(error)),
         }
     }
 }
@@ -333,6 +391,17 @@ mod tests {
             }),
             ApiRequest::CodexAccount,
             ApiRequest::CodexLogin,
+            ApiRequest::UpdateBot(
+                BotId(3),
+                UpdateBotRequest {
+                    pinned: Some(true),
+                    ..Default::default()
+                },
+            ),
+            ApiRequest::AcknowledgeReset,
+            ApiRequest::CodexLoginStatus,
+            ApiRequest::CancelCodexLogin,
+            ApiRequest::CodexLogout,
         ]
         .iter()
         .map(|request| (request.method().as_str(), request.path()))
@@ -352,7 +421,24 @@ mod tests {
                 ("POST", "/api/v1/bots".to_owned()),
                 ("GET", "/api/v1/codex/account".to_owned()),
                 ("POST", "/api/v1/codex/login".to_owned()),
+                ("PATCH", "/api/v1/bots/3".to_owned()),
+                ("DELETE", "/api/v1/session/password-reset".to_owned()),
+                ("GET", "/api/v1/codex/login".to_owned()),
+                ("DELETE", "/api/v1/codex/login".to_owned()),
+                ("POST", "/api/v1/codex/logout".to_owned()),
             ]
+        );
+        assert_eq!(
+            ApiRequest::UpdateBot(
+                BotId(3),
+                UpdateBotRequest {
+                    hidden: Some(false),
+                    ..Default::default()
+                }
+            )
+            .body()
+            .as_deref(),
+            Some(r#"{"hidden":false}"#)
         );
         assert_eq!(
             ApiRequest::SendMessage(
@@ -396,6 +482,16 @@ mod tests {
         let logged = format!("{reply:?}");
         assert!(!logged.contains("WXYZ-1234"), "{logged}");
         assert!(logged.contains("https://auth.example/device"));
+        // Its status and cancellation carry the code too, and keep it out.
+        for request in [ApiRequest::CodexLoginStatus, ApiRequest::CancelCodexLogin] {
+            let reply = request.decode(
+                200,
+                r#"{"verification_url":"https://auth.example/device","user_code":"WXYZ-1234","state":"expired","expires_at":1800000900000}"#,
+            );
+            let logged = format!("{reply:?}");
+            assert!(!logged.contains("WXYZ-1234"), "{logged}");
+            assert!(logged.contains("Expired"), "{logged}");
+        }
     }
 
     #[test]

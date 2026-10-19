@@ -1,5 +1,8 @@
 //! The application: sign-in and sign-out, the signed-in user's Bot list, and
-//! one Bot's conversation at a time, kept current by the event socket.
+//! one Bot's conversation at a time, kept current by the event socket. An
+//! admin also has the household's ChatGPT sign-in; a member sees only
+//! whether it is signed in, what their permissions allow, and the notices
+//! that an admin can read their conversations or reset their password.
 //!
 //! State changes only in `apply` and `perform`. Commands go out through an
 //! [`Api`], and their replies come back as [`BokkieIntent::Reply`]; the event
@@ -10,9 +13,11 @@
 use std::collections::BTreeSet;
 
 use bokkie_protocol::api::{
-    Author, BotStatus, CreateBotRequest, Delivery, LoginRequest, Message, MessageState,
-    SendMessageRequest, User,
+    Author, Bot, BotStatus, CodexAccount, CreateBotRequest, Delivery, ErrorCode, LoginRequest,
+    LoginState, Message, MessageState, Role, SendMessageRequest, SessionResponse, UpdateBotRequest,
+    User,
 };
+use bokkie_protocol::events::Event;
 use bokkie_protocol::{BotId, MessageId, Timestamp};
 use serde::Serialize;
 use stobie_ui_egui::{
@@ -36,6 +41,12 @@ pub const PASSWORD_ID: &str = "bokkie.password";
 pub const DRAFT_ID: &str = "bokkie.draft";
 /// The New Bot name field's stable ID.
 pub const BOT_NAME_ID: &str = "bokkie.bot-name";
+/// The profile editor's name field's stable ID.
+pub const PROFILE_NAME_ID: &str = "bokkie.profile-name";
+/// The profile editor's label field's stable ID.
+pub const PROFILE_LABEL_ID: &str = "bokkie.profile-label";
+/// The profile editor's description field's stable ID.
+pub const PROFILE_DESCRIPTION_ID: &str = "bokkie.profile-description";
 
 /// The largest Bot ID the Open action accepts: the largest integer a JSON
 /// number carries exactly.
@@ -85,17 +96,76 @@ pub enum BokkieAction {
     )]
     CreateBot,
     #[action(
-        label = "Sign in to ChatGPT",
-        description = "Open the ChatGPT sign-in for your own Bots",
-        id = "bokkie.chatgpt-sign-in"
+        label = "Show hidden Bots",
+        description = "Show the Bots you have hidden in the list too, or hide them again"
     )]
-    ChatGptSignIn,
+    ShowHidden,
     #[action(
-        label = "Start",
-        description = "Start a ChatGPT sign-in with a device code, or get a new code",
+        label = "Pin Bot",
+        description = "Pin the open Bot to the top of the list, or unpin it",
+        id = "bokkie.pin"
+    )]
+    Pin,
+    #[action(
+        label = "Hide Bot",
+        description = "Hide the open Bot from the list, or show it again",
+        id = "bokkie.hide"
+    )]
+    Hide,
+    #[action(
+        label = "Edit profile",
+        description = "Change the open Bot's name, label and description"
+    )]
+    EditProfile,
+    #[action(label = "Save profile", description = "Save the Bot's profile")]
+    SaveProfile,
+    #[action(
+        label = "Cancel editing",
+        description = "Close the profile without saving it"
+    )]
+    CancelProfile,
+    #[action(
+        label = "Acknowledge",
+        description = "Dismiss the notice that an admin reset your password",
+        id = "bokkie.acknowledge-reset"
+    )]
+    AcknowledgeReset,
+    #[action(
+        label = "ChatGPT sign-in",
+        description = "Open the household's ChatGPT sign-in, which every account's Bots use",
+        id = "bokkie.household"
+    )]
+    Household,
+    #[action(
+        label = "Get a code",
+        description = "Start signing the household in to ChatGPT with a device code, or get a new code",
         id = "bokkie.start-chatgpt"
     )]
     StartChatGpt,
+    #[action(
+        label = "Cancel sign-in",
+        description = "Cancel the household's pending ChatGPT sign-in",
+        id = "bokkie.cancel-chatgpt"
+    )]
+    CancelChatGpt,
+    #[action(
+        label = "Sign out of ChatGPT",
+        description = "Ask to sign the household out of ChatGPT, which signs out every account's Bots",
+        id = "bokkie.sign-out-chatgpt"
+    )]
+    SignOutChatGpt,
+    #[action(
+        label = "Sign out everyone",
+        description = "Sign the household out of ChatGPT: no account's Bots can reply until an admin signs in again",
+        id = "bokkie.confirm-sign-out-chatgpt"
+    )]
+    ConfirmSignOutChatGpt,
+    #[action(
+        label = "Keep signed in",
+        description = "Leave the household signed in to ChatGPT",
+        id = "bokkie.keep-chatgpt"
+    )]
+    KeepChatGpt,
     #[action(label = "Stop", description = "Stop the Bot's reply in progress")]
     Stop,
     #[action(
@@ -111,6 +181,9 @@ pub enum BokkieIntent {
     EditPassword(String),
     EditDraft(String),
     EditBotName(String),
+    EditProfileName(String),
+    EditProfileLabel(String),
+    EditProfileDescription(String),
     /// A command's reply, with the generation it was sent in.
     Reply {
         generation: Generation,
@@ -131,6 +204,14 @@ impl std::fmt::Debug for BokkieIntent {
             Self::EditPassword(_) => f.write_str("EditPassword(<redacted>)"),
             Self::EditDraft(draft) => f.debug_tuple("EditDraft").field(draft).finish(),
             Self::EditBotName(name) => f.debug_tuple("EditBotName").field(name).finish(),
+            Self::EditProfileName(name) => f.debug_tuple("EditProfileName").field(name).finish(),
+            Self::EditProfileLabel(label) => {
+                f.debug_tuple("EditProfileLabel").field(label).finish()
+            }
+            Self::EditProfileDescription(description) => f
+                .debug_tuple("EditProfileDescription")
+                .field(description)
+                .finish(),
             Self::Reply { generation, reply } => f
                 .debug_struct("Reply")
                 .field("generation", generation)
@@ -169,7 +250,17 @@ pub(crate) struct SignInForm {
 
 #[derive(Debug)]
 pub(crate) struct SignedIn {
+    /// The account as the gateway last said, by sign-in, a session check or
+    /// `account_updated`.
     pub(crate) user: User,
+    /// When an admin reset this account's password, until the user
+    /// acknowledges it.
+    pub(crate) reset_notice: Option<Timestamp>,
+    /// The acknowledgement is under way.
+    pub(crate) acknowledging: bool,
+    /// The reset this session acknowledged, which a session check that
+    /// predates the acknowledgement must not bring back.
+    acknowledged: Option<Timestamp>,
     /// Why the Bot list last failed to load, until it loads.
     pub(crate) bots_error: Option<String>,
     /// A sign-out is under way.
@@ -181,10 +272,48 @@ pub(crate) struct SignedIn {
     /// The conversation shown, if any; otherwise the Bot list is.
     pub(crate) open: Option<Open>,
     pub(crate) new_bot: NewBot,
-    /// Whether the user's own app server is signed in to ChatGPT.
+    /// Whether the list shows hidden Bots too.
+    pub(crate) show_hidden: bool,
+    /// Whether the household is signed in to ChatGPT.
     pub(crate) account: Account,
-    /// The ChatGPT sign-in screen, when shown.
-    pub(crate) login: Option<Login>,
+    /// The household's ChatGPT sign-in screen, when an admin has it open.
+    pub(crate) household: Option<Household>,
+}
+
+impl SignedIn {
+    fn is_admin(&self) -> bool {
+        self.user.role == Role::Admin
+    }
+
+    /// Whether the user may create Bots. Admins always may.
+    pub(crate) fn may_create_bots(&self) -> bool {
+        self.is_admin() || self.user.permissions.may_create_bots
+    }
+
+    /// Whether the user may change their Bots' profiles. Admins always may.
+    pub(crate) fn may_edit_profiles(&self) -> bool {
+        self.is_admin() || self.user.permissions.may_edit_bot_profiles
+    }
+
+    /// Since when an admin can read this member's Bots and conversations,
+    /// if oversight is on. It never applies to an admin.
+    pub(crate) fn overseen(&self) -> Option<Option<Timestamp>> {
+        (self.user.role == Role::Member && self.user.oversight)
+            .then_some(self.user.oversight_changed_at)
+    }
+
+    /// Take the account as it now is, and drop what it no longer allows.
+    fn account_changed(&mut self, user: User) {
+        self.user = user;
+        if !self.may_edit_profiles()
+            && let Some(open) = &mut self.open
+        {
+            open.editor = None;
+        }
+        if !self.is_admin() {
+            self.household = None;
+        }
+    }
 }
 
 /// The New Bot form: a name only.
@@ -197,24 +326,35 @@ pub(crate) struct NewBot {
     pub(crate) error: Option<String>,
 }
 
-/// The user's ChatGPT account, as `GET /codex/account` last said.
+/// The household's ChatGPT sign-in, as `GET /codex/account` last said. A
+/// member is told only whether it is signed in; an admin also as whom.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Account {
     Checking,
-    SignedIn { plan: Option<String> },
+    SignedIn {
+        email: Option<String>,
+        plan: Option<String>,
+    },
     SignedOut,
     Failed(String),
 }
 
-/// The ChatGPT device-code sign-in screen.
+/// The household's ChatGPT sign-in screen, for admins.
+#[derive(Debug)]
+pub(crate) struct Household {
+    pub(crate) login: Login,
+    pub(crate) sign_out: SignOut,
+}
+
+/// A device-code sign-in of the household, as this screen knows it.
 #[derive(Debug)]
 pub(crate) enum Login {
-    /// Explained, not started.
-    Ready,
+    /// None started from this screen.
+    Idle,
     /// `POST /codex/login` is under way.
     Starting,
-    /// The code is on screen and the account is polled until signed in.
-    /// The code lives here only, and goes when the screen does.
+    /// The code is on screen and its state is polled until it ends. The
+    /// code lives here only, and goes when the screen does.
     Waiting {
         code: crate::api::DeviceCode,
         next_poll: Timestamp,
@@ -222,12 +362,43 @@ pub(crate) enum Login {
         /// Why the last poll failed, while polling goes on.
         error: Option<String>,
     },
-    Done,
+    /// `DELETE /codex/login` is under way.
+    Cancelling { code: crate::api::DeviceCode },
+    /// The sign-in ended: completed, expired, failed or cancelled.
+    Ended {
+        state: LoginState,
+        error: Option<String>,
+    },
+    /// Starting or following the sign-in failed.
     Failed(String),
 }
 
-/// How often the account is checked while a device code is on screen.
+/// Signing the household out, which signs out every account's Bots.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SignOut {
+    Idle,
+    /// The warning is on screen, awaiting confirmation.
+    Confirming,
+    /// `POST /codex/logout` is under way.
+    Busy,
+    Failed(String),
+}
+
+/// How often a pending sign-in's state is checked while its code is on
+/// screen.
 pub const LOGIN_POLL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The open Bot's profile, being edited.
+#[derive(Debug, Default)]
+pub(crate) struct ProfileEditor {
+    pub(crate) name: String,
+    pub(crate) label: String,
+    pub(crate) description: String,
+    /// A save is under way.
+    pub(crate) busy: bool,
+    /// Why the last save failed.
+    pub(crate) error: Option<String>,
+}
 
 /// One Bot's conversation, open on screen.
 #[derive(Debug)]
@@ -252,6 +423,12 @@ pub(crate) struct Open {
     /// arrived, which the view keeps in place, with the number of that page
     /// among all pages loaded, so the view moves once for each.
     pub(crate) anchor: Option<(u64, MessageId)>,
+    /// The profile editor, when open.
+    pub(crate) editor: Option<ProfileEditor>,
+    /// A pin or hide is under way.
+    pub(crate) updating: bool,
+    /// Why the last pin or hide failed.
+    pub(crate) update_error: Option<String>,
 }
 
 impl Open {
@@ -267,6 +444,9 @@ impl Open {
             stop_note: None,
             older_error: None,
             anchor: None,
+            editor: None,
+            updating: false,
+            update_error: None,
         }
     }
 }
@@ -288,6 +468,9 @@ pub struct App {
     usage_in_flight: bool,
     /// Load the meter again once the request in flight answers.
     usage_again: bool,
+    /// An `account_updated` event arrived since the session was last
+    /// checked over HTTP, so the account that check returns may be older.
+    account_event_seen: bool,
     /// Pages of older messages added since the application started.
     older_pages: u64,
     make_api: Option<ApiFactory>,
@@ -314,6 +497,7 @@ impl App {
             again: BTreeSet::new(),
             usage_in_flight: false,
             usage_again: false,
+            account_event_seen: false,
             older_pages: 0,
             make_api: Some(make_api),
             api: None,
@@ -327,7 +511,7 @@ impl App {
             Session::SignedOut(form) if form.busy => "signing_in",
             Session::SignedOut(_) => "signed_out",
             Session::SignedIn(signed_in) if signed_in.signing_out => "signing_out",
-            Session::SignedIn(signed_in) if signed_in.login.is_some() => "chatgpt",
+            Session::SignedIn(signed_in) if signed_in.household.is_some() => "household",
             Session::SignedIn(signed_in) if signed_in.open.is_some() => "conversation",
             Session::SignedIn(_) => "signed_in",
         }
@@ -402,9 +586,9 @@ impl App {
         self.generation
     }
 
-    pub(crate) fn login(&self) -> Option<&Login> {
+    pub(crate) fn household(&self) -> Option<&Household> {
         match &self.session {
-            Session::SignedIn(signed_in) => signed_in.login.as_ref(),
+            Session::SignedIn(signed_in) => signed_in.household.as_ref(),
             _ => None,
         }
     }
@@ -446,6 +630,7 @@ impl App {
         self.again.clear();
         self.usage_in_flight = false;
         self.usage_again = false;
+        self.account_event_seen = false;
     }
 
     fn signed_out(&mut self, message: Option<String>) {
@@ -467,18 +652,22 @@ impl App {
         });
     }
 
-    fn signed_in(&mut self, user: User) {
+    fn signed_in(&mut self, session: SessionResponse) {
         self.next_generation();
         self.session = Session::SignedIn(Box::new(SignedIn {
-            user,
+            user: session.user,
+            reset_notice: session.password_reset_by_admin,
+            acknowledging: false,
+            acknowledged: None,
             bots_error: None,
             signing_out: false,
             message: None,
             link: Link::Stopped,
             open: None,
             new_bot: NewBot::default(),
+            show_hidden: false,
             account: Account::Checking,
-            login: None,
+            household: None,
         }));
         // The list shows at once. Once the socket is live it is loaded again,
         // so that no event can fall between the list and the socket.
@@ -540,8 +729,18 @@ impl App {
             all.insert(Snapshot::Messages(bot));
         }
         self.load_all(all);
-        // The meter may have missed events too.
+        // The meter and the account may have missed events too, and the
+        // household's sign-in announces no events at all.
         self.load_usage();
+        self.check_session();
+        self.send(ApiRequest::CodexAccount);
+    }
+
+    /// Ask for the session's account again. An `account_updated` event that
+    /// arrives before the answer is at least as new, so it wins.
+    fn check_session(&mut self) {
+        self.account_event_seen = false;
+        self.send(ApiRequest::CheckSession);
     }
 
     /// A load answered. Returns whether to load it again at once.
@@ -557,7 +756,27 @@ impl App {
 
     fn reply(&mut self, reply: ApiReply) -> bool {
         match (reply, &mut self.session) {
-            (ApiReply::Session(Ok(session)), Session::Checking) => self.signed_in(session.user),
+            (ApiReply::Session(Ok(session)), Session::Checking) => self.signed_in(session),
+            // A session check while signed in: the account as it now is,
+            // unless an event has said something newer meanwhile, and
+            // whether an admin's reset is still to be acknowledged.
+            (ApiReply::Session(Ok(session)), Session::SignedIn(signed_in)) => {
+                if session.user.id != signed_in.user.id {
+                    // Another account signed in on this browser.
+                    self.session_ended();
+                    return true;
+                }
+                if !self.account_event_seen {
+                    signed_in.account_changed(session.user);
+                }
+                match session.password_reset_by_admin {
+                    _ if signed_in.acknowledging => {}
+                    // Acknowledged here after this check was read.
+                    Some(at) if Some(at) == signed_in.acknowledged => {}
+                    // None too: acknowledged here or on another device.
+                    reset => signed_in.reset_notice = reset,
+                }
+            }
             (ApiReply::Session(Err(error)), Session::Checking) => {
                 // 401 is the ordinary signed-out answer; anything else is
                 // worth saying.
@@ -569,7 +788,7 @@ impl App {
                 self.session_ended()
             }
             (ApiReply::SignedIn(result), Session::SignedOut(form)) if form.busy => match result {
-                Ok(session) => self.signed_in(session.user),
+                Ok(session) => self.signed_in(session),
                 Err(error) => {
                     form.busy = false;
                     form.message = Some(error.message);
@@ -704,8 +923,15 @@ impl App {
                         let _ = self.store.clear_error(bot);
                     }
                     Err(error) if error.is_unauthenticated() => self.session_ended(),
-                    // The draft stays, to send again.
-                    Err(error) => open.send_error = Some(error.message),
+                    // The draft stays, to send again. Refused for want of
+                    // ChatGPT, the household's status may be news too.
+                    Err(error) => {
+                        let unavailable = error.code == ErrorCode::Unavailable;
+                        open.send_error = Some(error.message);
+                        if unavailable {
+                            self.send(ApiRequest::CodexAccount);
+                        }
+                    }
                 }
             }
             (ApiReply::Stopped(bot, result), Session::SignedIn(_)) => {
@@ -735,13 +961,53 @@ impl App {
                     Err(error) => form.error = Some(error.message),
                 }
             }
-            (ApiReply::Account(result), Session::SignedIn(_)) => {
-                let now = self.now();
-                let Session::SignedIn(signed_in) = &mut self.session else {
+            (ApiReply::BotUpdated(bot, result), Session::SignedIn(signed_in)) => {
+                let Some(open) = signed_in.open.as_mut().filter(|open| open.bot == bot) else {
                     return false;
                 };
-                let account = match result {
-                    Ok(account) if account.signed_in => Account::SignedIn { plan: account.plan },
+                // The Bot itself arrives as `bot_updated`.
+                if let Some(editor) = open.editor.as_mut().filter(|editor| editor.busy) {
+                    editor.busy = false;
+                    match result {
+                        Ok(_) => open.editor = None,
+                        Err(error) if error.is_unauthenticated() => self.session_ended(),
+                        // The edits stay, to correct.
+                        Err(error) => editor.error = Some(error.message),
+                    }
+                } else if open.updating {
+                    open.updating = false;
+                    match result {
+                        Ok(_) => {}
+                        Err(error) if error.is_unauthenticated() => self.session_ended(),
+                        Err(error) => open.update_error = Some(error.message),
+                    }
+                } else {
+                    return false;
+                }
+            }
+            (ApiReply::Acknowledged(result), Session::SignedIn(signed_in))
+                if signed_in.acknowledging =>
+            {
+                signed_in.acknowledging = false;
+                match result {
+                    Ok(()) => signed_in.acknowledged = signed_in.reset_notice.take(),
+                    Err(error) if error.is_unauthenticated() => self.session_ended(),
+                    // The notice stays, to acknowledge again.
+                    Err(error) => signed_in.message = Some(error.message),
+                }
+            }
+            (ApiReply::Account(result), Session::SignedIn(signed_in)) => {
+                let admin = signed_in.is_admin();
+                signed_in.account = match result {
+                    Ok(CodexAccount {
+                        signed_in: true,
+                        email,
+                        plan,
+                    }) => Account::SignedIn {
+                        // A member is never told as whom, whatever arrives.
+                        email: email.filter(|_| admin),
+                        plan: plan.filter(|_| admin),
+                    },
                     Ok(_) => Account::SignedOut,
                     Err(error) if error.is_unauthenticated() => {
                         self.session_ended();
@@ -749,51 +1015,123 @@ impl App {
                     }
                     Err(error) => Account::Failed(error.message),
                 };
-                if let Some(Login::Waiting {
-                    next_poll,
-                    polling,
-                    error,
-                    ..
-                }) = &mut signed_in.login
-                {
-                    *polling = false;
-                    *next_poll = Timestamp(now.0 + LOGIN_POLL.as_millis() as i64);
-                    *error = match &account {
-                        Account::Failed(message) => Some(message.clone()),
-                        _ => None,
-                    };
-                }
-                if matches!(account, Account::SignedIn { .. }) && signed_in.login.is_some() {
-                    // The code has served its purpose: it goes.
-                    signed_in.login = Some(Login::Done);
-                }
-                // A failed poll does not unsay what the screen knows.
-                if !(matches!(account, Account::Failed(_))
-                    && matches!(signed_in.login, Some(Login::Waiting { .. })))
-                {
-                    signed_in.account = account;
-                }
             }
             (ApiReply::Login(result), Session::SignedIn(signed_in))
-                if matches!(signed_in.login, Some(Login::Starting)) =>
+                if signed_in
+                    .household
+                    .as_ref()
+                    .is_some_and(|household| matches!(household.login, Login::Starting)) =>
             {
-                let now = self.now();
-                let Session::SignedIn(signed_in) = &mut self.session else {
-                    return false;
-                };
-                signed_in.login = Some(match result {
-                    Ok(code) => Login::Waiting {
-                        code,
-                        next_poll: Timestamp(now.0 + LOGIN_POLL.as_millis() as i64),
-                        polling: false,
-                        error: None,
-                    },
+                let next_poll = self.next_poll();
+                let login = match result {
+                    Ok(code) => following(code, next_poll),
                     Err(error) if error.is_unauthenticated() => {
                         self.session_ended();
                         return true;
                     }
                     Err(error) => Login::Failed(error.message),
-                });
+                };
+                self.login_moved(login);
+            }
+            (ApiReply::LoginStatus(result), Session::SignedIn(signed_in))
+                if signed_in.household.as_ref().is_some_and(|household| {
+                    matches!(household.login, Login::Waiting { polling: true, .. })
+                }) =>
+            {
+                let next_poll = self.next_poll();
+                let Session::SignedIn(signed_in) = &mut self.session else {
+                    return false;
+                };
+                let Some(household) = signed_in.household.as_mut() else {
+                    return false;
+                };
+                let login = match result {
+                    Ok(code) => following(code, next_poll),
+                    Err(error) if error.is_unauthenticated() => {
+                        self.session_ended();
+                        return true;
+                    }
+                    // The gateway restarted and lost the sign-in, along with
+                    // Codex's own pending login.
+                    Err(error) if error.code == ErrorCode::NotFound => Login::Failed(
+                        "Bokkie's server no longer knows this sign-in. Get a new code".into(),
+                    ),
+                    // A failed poll does not unsay the code; polling goes on.
+                    Err(failure) => {
+                        if let Login::Waiting {
+                            next_poll: next,
+                            polling,
+                            error,
+                            ..
+                        } = &mut household.login
+                        {
+                            *polling = false;
+                            *next = next_poll;
+                            *error = Some(failure.message);
+                        }
+                        return true;
+                    }
+                };
+                self.login_moved(login);
+            }
+            (ApiReply::LoginCancelled(result), Session::SignedIn(signed_in))
+                if signed_in.household.as_ref().is_some_and(|household| {
+                    matches!(household.login, Login::Cancelling { .. })
+                }) =>
+            {
+                let next_poll = self.next_poll();
+                let Session::SignedIn(signed_in) = &mut self.session else {
+                    return false;
+                };
+                let Some(household) = signed_in.household.as_mut() else {
+                    return false;
+                };
+                let login = match result {
+                    Ok(code) => following(code, next_poll),
+                    Err(error) if error.is_unauthenticated() => {
+                        self.session_ended();
+                        return true;
+                    }
+                    Err(error) if error.code == ErrorCode::NotFound => Login::Ended {
+                        state: LoginState::Cancelled,
+                        error: None,
+                    },
+                    // Not cancelled: the code stays, with why.
+                    Err(failure) => {
+                        let Login::Cancelling { code } =
+                            std::mem::replace(&mut household.login, Login::Idle)
+                        else {
+                            return false;
+                        };
+                        Login::Waiting {
+                            code,
+                            next_poll,
+                            polling: false,
+                            error: Some(failure.message),
+                        }
+                    }
+                };
+                self.login_moved(login);
+            }
+            (ApiReply::HouseholdSignedOut(result), Session::SignedIn(signed_in))
+                if signed_in
+                    .household
+                    .as_ref()
+                    .is_some_and(|household| household.sign_out == SignOut::Busy) =>
+            {
+                let Some(household) = signed_in.household.as_mut() else {
+                    return false;
+                };
+                match result {
+                    Ok(()) => {
+                        household.sign_out = SignOut::Idle;
+                        household.login = Login::Idle;
+                        signed_in.account = Account::SignedOut;
+                        self.send(ApiRequest::CodexAccount);
+                    }
+                    Err(error) if error.is_unauthenticated() => self.session_ended(),
+                    Err(error) => household.sign_out = SignOut::Failed(error.message),
+                }
             }
             (ApiReply::Usage(result), Session::SignedIn(_)) if self.usage_in_flight => {
                 self.usage_in_flight = false;
@@ -819,22 +1157,68 @@ impl App {
         true
     }
 
+    /// Change one field of the profile being edited, unless it is saving.
+    fn edit_profile(&mut self, field: fn(&mut ProfileEditor) -> &mut String, text: String) -> bool {
+        match self.open_mut().and_then(|open| open.editor.as_mut()) {
+            Some(editor) if !editor.busy => {
+                *field(editor) = text;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The time the next poll of a pending sign-in is due.
+    fn next_poll(&self) -> Timestamp {
+        Timestamp(self.now().0 + LOGIN_POLL.as_millis() as i64)
+    }
+
+    /// The household's sign-in moved on. Once it completes, the household
+    /// is signed in, and the account says as whom.
+    fn login_moved(&mut self, login: Login) {
+        let Session::SignedIn(signed_in) = &mut self.session else {
+            return;
+        };
+        let completed = matches!(
+            login,
+            Login::Ended {
+                state: LoginState::Completed,
+                ..
+            }
+        );
+        if let Some(household) = &mut signed_in.household {
+            household.login = login;
+        }
+        if completed {
+            signed_in.account = Account::Checking;
+            self.send(ApiRequest::CodexAccount);
+        }
+    }
+
     fn socket(&mut self, update: SocketUpdate) -> bool {
         let Session::SignedIn(signed_in) = &mut self.session else {
             return false;
         };
         match update {
             SocketUpdate::Event(envelope) => {
+                let mut changed = false;
+                if let Event::AccountUpdated { user } = &envelope.event
+                    && user.id == signed_in.user.id
+                {
+                    self.account_event_seen = true;
+                    changed = signed_in.user != *user;
+                    signed_in.account_changed(user.clone());
+                }
                 let applied = self.store.apply(&envelope);
                 self.load_all(applied.reload);
-                applied.changed
+                changed || applied.changed
             }
             SocketUpdate::Reload => {
                 self.reload_everything();
                 true
             }
             SocketUpdate::CheckSession => {
-                self.send(ApiRequest::CheckSession);
+                self.check_session();
                 false
             }
             SocketUpdate::SignedOut => {
@@ -928,6 +1312,18 @@ impl App {
         self.api.as_ref().map_or(Timestamp(0), |api| api.now())
     }
 
+    /// The open Bot, if the user may change it now: not while a change to it
+    /// is under way.
+    fn can_update(&self) -> Result<&Bot, &'static str> {
+        let Some(open) = self.open() else {
+            return Err("No conversation is open");
+        };
+        if open.updating || open.editor.as_ref().is_some_and(|editor| editor.busy) {
+            return Err("Saving the Bot");
+        }
+        self.store.bot(open.bot).ok_or("Loading the Bot")
+    }
+
     fn can_send(&self) -> Result<(), &'static str> {
         let Some(open) = self.open() else {
             return Err("No conversation is open");
@@ -993,12 +1389,12 @@ impl Application for App {
                 Some("Loading the Bots")
             }
             (BokkieAction::Refresh, _) => None,
-            (BokkieAction::OpenBot, _) if self.login().is_some() => {
+            (BokkieAction::OpenBot, _) if self.household().is_some() => {
                 Some("Leave the ChatGPT sign-in first")
             }
             (BokkieAction::OpenBot, _) if !self.store.bots_loaded() => Some("Loading the Bots"),
             (BokkieAction::OpenBot, _) => None,
-            (BokkieAction::Back, _) if self.open().is_none() && self.login().is_none() => {
+            (BokkieAction::Back, _) if self.open().is_none() && self.household().is_none() => {
                 Some("Already on the list of Bots")
             }
             (BokkieAction::Back, _) => None,
@@ -1012,7 +1408,9 @@ impl Application for App {
                 _ => None,
             },
             (BokkieAction::CreateBot, _) => signed_in.and_then(|signed_in| {
-                if signed_in.new_bot.busy {
+                if !signed_in.may_create_bots() {
+                    Some("Only an admin can make your Bots")
+                } else if signed_in.new_bot.busy {
                     Some("Creating the Bot")
                 } else if signed_in.new_bot.name.trim().is_empty() {
                     Some("Enter a name")
@@ -1020,29 +1418,68 @@ impl Application for App {
                     None
                 }
             }),
-            (BokkieAction::ChatGptSignIn, _) => signed_in.and_then(|signed_in| {
-                if signed_in.open.is_some() || signed_in.login.is_some() {
+            (BokkieAction::ShowHidden, _) => match signed_in {
+                Some(signed_in) if signed_in.open.is_some() || signed_in.household.is_some() => {
                     Some("Return to the list of Bots first")
-                } else if matches!(signed_in.account, Account::SignedIn { .. }) {
-                    Some("Already signed in to ChatGPT")
+                }
+                _ => None,
+            },
+            (BokkieAction::Pin | BokkieAction::Hide, _) => self.can_update().err(),
+            (BokkieAction::EditProfile, _) => match (signed_in, self.can_update()) {
+                (Some(signed_in), _) if !signed_in.may_edit_profiles() => {
+                    Some("Only an admin can change your Bots' profiles")
+                }
+                (_, Err(reason)) => Some(reason),
+                _ if self.open().is_some_and(|open| open.editor.is_some()) => {
+                    Some("Already editing")
+                }
+                _ => None,
+            },
+            (BokkieAction::SaveProfile, _) => match self.open().and_then(|o| o.editor.as_ref()) {
+                None => Some("No profile is being edited"),
+                Some(editor) if editor.busy => Some("Saving the profile"),
+                Some(editor) if editor.name.trim().is_empty() => Some("Enter a name"),
+                Some(_) if signed_in.is_some_and(|s| !s.may_edit_profiles()) => {
+                    Some("Only an admin can change your Bots' profiles")
+                }
+                Some(_) => None,
+            },
+            (BokkieAction::CancelProfile, _) => match self.open().and_then(|o| o.editor.as_ref()) {
+                None => Some("No profile is being edited"),
+                Some(editor) if editor.busy => Some("Saving the profile"),
+                Some(_) => None,
+            },
+            (BokkieAction::AcknowledgeReset, _) => signed_in.and_then(|signed_in| {
+                if signed_in.reset_notice.is_none() {
+                    Some("Nothing to acknowledge")
+                } else if signed_in.acknowledging {
+                    Some("Acknowledging")
                 } else {
                     None
                 }
             }),
-            (BokkieAction::StartChatGpt, _) => {
-                signed_in.and_then(|signed_in| match (&signed_in.login, &signed_in.account) {
-                    (None, _) => Some("Open the ChatGPT sign-in first"),
-                    (_, Account::SignedIn { .. }) => Some("Already signed in to ChatGPT"),
-                    (Some(Login::Ready | Login::Failed(_)), Account::Checking) => {
-                        Some("Checking your ChatGPT sign-in")
-                    }
-                    // While a code is shown, starting again replaces it, as
-                    // when it has expired.
-                    (Some(Login::Ready | Login::Failed(_) | Login::Waiting { .. }), _) => None,
-                    (Some(Login::Starting), _) => Some("Starting"),
-                    (Some(Login::Done), _) => Some("Already signed in to ChatGPT"),
-                })
-            }
+            (BokkieAction::Household, _) => signed_in.and_then(|signed_in| {
+                if !signed_in.is_admin() {
+                    Some("Only an admin signs the household in to ChatGPT or out")
+                } else if signed_in.open.is_some() || signed_in.household.is_some() {
+                    Some("Return to the list of Bots first")
+                } else {
+                    None
+                }
+            }),
+            (
+                BokkieAction::StartChatGpt
+                | BokkieAction::CancelChatGpt
+                | BokkieAction::SignOutChatGpt
+                | BokkieAction::ConfirmSignOutChatGpt
+                | BokkieAction::KeepChatGpt,
+                _,
+            ) => match signed_in.and_then(|s| s.household.as_ref().map(|h| (s, h))) {
+                None => Some("Open the ChatGPT sign-in first"),
+                Some((signed_in, household)) => {
+                    household_availability(target.action, &signed_in.account, household)
+                }
+            },
             (BokkieAction::Send, _) => self.can_send().err(),
             (BokkieAction::Stop, _) => self.can_stop().err(),
         };
@@ -1058,15 +1495,18 @@ impl Application for App {
         self.send(ApiRequest::CheckSession);
     }
 
-    /// Poll the ChatGPT account while a device code is on screen.
+    /// Poll the household's sign-in while its device code is on screen.
     fn prepare(&mut self, pass: &mut PassContext<'_>, _: &mut ()) {
         let now = self.now();
         let Session::SignedIn(signed_in) = &mut self.session else {
             return;
         };
-        let Some(Login::Waiting {
-            next_poll, polling, ..
-        }) = &mut signed_in.login
+        let Some(Household {
+            login: Login::Waiting {
+                next_poll, polling, ..
+            },
+            ..
+        }) = &mut signed_in.household
         else {
             return;
         };
@@ -1075,7 +1515,7 @@ impl Application for App {
         }
         if now >= *next_poll {
             *polling = true;
-            self.send(ApiRequest::CodexAccount);
+            self.send(ApiRequest::CodexLoginStatus);
         } else {
             let wait = u64::try_from(next_poll.0 - now.0).unwrap_or(0);
             pass.request_repaint_after(
@@ -1119,6 +1559,11 @@ impl Application for App {
                 }
                 _ => false,
             },
+            BokkieIntent::EditProfileName(text) => self.edit_profile(|e| &mut e.name, text),
+            BokkieIntent::EditProfileLabel(text) => self.edit_profile(|e| &mut e.label, text),
+            BokkieIntent::EditProfileDescription(text) => {
+                self.edit_profile(|e| &mut e.description, text)
+            }
             BokkieIntent::Reply { generation, reply } => {
                 generation == self.generation && self.reply(reply)
             }
@@ -1146,16 +1591,21 @@ impl Application for App {
                 self.send(ApiRequest::SignOut);
             }
             // On the list, the list; in a conversation, that conversation.
+            // The household's sign-in announces no events, so the list's
+            // Refresh asks after it too.
             (BokkieAction::Refresh, Session::SignedIn(signed_in)) => match &signed_in.open {
                 Some(open) => {
                     let bot = open.bot;
                     self.load(Snapshot::Messages(bot));
                 }
-                None => self.load(Snapshot::Bots),
+                None => {
+                    self.load(Snapshot::Bots);
+                    self.send(ApiRequest::CodexAccount);
+                }
             },
             (BokkieAction::Back, Session::SignedIn(signed_in)) => {
                 // Leaving the ChatGPT sign-in drops its code with it.
-                if signed_in.login.take().is_some() {
+                if signed_in.household.take().is_some() {
                     return Ok(true);
                 }
                 let Some(open) = signed_in.open.take() else {
@@ -1183,15 +1633,125 @@ impl Application for App {
                 };
                 self.send(ApiRequest::CreateBot(request));
             }
-            (BokkieAction::ChatGptSignIn, Session::SignedIn(signed_in)) => {
-                signed_in.login = Some(Login::Ready);
+            (BokkieAction::ShowHidden, Session::SignedIn(signed_in)) => {
+                signed_in.show_hidden = !signed_in.show_hidden;
+            }
+            (BokkieAction::Pin | BokkieAction::Hide, Session::SignedIn(signed_in)) => {
+                let Some(open) = &mut signed_in.open else {
+                    return Ok(false);
+                };
+                let Some(bot) = self.store.bot(open.bot) else {
+                    return Ok(false);
+                };
+                let changes = if target.action == BokkieAction::Pin {
+                    UpdateBotRequest {
+                        pinned: Some(!bot.pinned),
+                        ..Default::default()
+                    }
+                } else {
+                    UpdateBotRequest {
+                        hidden: Some(!bot.hidden),
+                        ..Default::default()
+                    }
+                };
+                open.updating = true;
+                open.update_error = None;
+                let bot = open.bot;
+                self.send(ApiRequest::UpdateBot(bot, changes));
+            }
+            (BokkieAction::EditProfile, Session::SignedIn(signed_in)) => {
+                let Some(open) = &mut signed_in.open else {
+                    return Ok(false);
+                };
+                let Some(bot) = self.store.bot(open.bot) else {
+                    return Ok(false);
+                };
+                open.editor = Some(ProfileEditor {
+                    name: bot.name.clone(),
+                    label: bot.label.clone(),
+                    description: bot.description.clone(),
+                    ..ProfileEditor::default()
+                });
+            }
+            (BokkieAction::SaveProfile, Session::SignedIn(signed_in)) => {
+                let Some(open) = &mut signed_in.open else {
+                    return Ok(false);
+                };
+                let (Some(editor), Some(bot)) = (&mut open.editor, self.store.bot(open.bot)) else {
+                    return Ok(false);
+                };
+                // Only what changed, so an unchanged field is never sent.
+                let changed =
+                    |edited: &str, held: &str| (edited != held).then(|| edited.to_owned());
+                let name = editor.name.trim();
+                let changes = UpdateBotRequest {
+                    name: changed(name, &bot.name),
+                    label: changed(editor.label.trim(), &bot.label),
+                    description: changed(&editor.description, &bot.description),
+                    ..Default::default()
+                };
+                if changes == UpdateBotRequest::default() {
+                    open.editor = None;
+                    return Ok(true);
+                }
+                editor.busy = true;
+                editor.error = None;
+                let bot = open.bot;
+                self.send(ApiRequest::UpdateBot(bot, changes));
+            }
+            (BokkieAction::CancelProfile, Session::SignedIn(signed_in)) => {
+                if let Some(open) = &mut signed_in.open {
+                    open.editor = None;
+                }
+            }
+            (BokkieAction::AcknowledgeReset, Session::SignedIn(signed_in)) => {
+                signed_in.acknowledging = true;
+                signed_in.message = None;
+                self.send(ApiRequest::AcknowledgeReset);
+            }
+            (BokkieAction::Household, Session::SignedIn(signed_in)) => {
+                signed_in.household = Some(Household {
+                    login: Login::Idle,
+                    sign_out: SignOut::Idle,
+                });
                 // Ask again: it may have changed since sign-in.
                 signed_in.account = Account::Checking;
                 self.send(ApiRequest::CodexAccount);
             }
             (BokkieAction::StartChatGpt, Session::SignedIn(signed_in)) => {
-                signed_in.login = Some(Login::Starting);
+                if let Some(household) = &mut signed_in.household {
+                    household.login = Login::Starting;
+                    household.sign_out = SignOut::Idle;
+                }
                 self.send(ApiRequest::CodexLogin);
+            }
+            (BokkieAction::CancelChatGpt, Session::SignedIn(signed_in)) => {
+                let Some(household) = &mut signed_in.household else {
+                    return Ok(false);
+                };
+                let Login::Waiting { code, .. } =
+                    std::mem::replace(&mut household.login, Login::Idle)
+                else {
+                    return Ok(false);
+                };
+                household.login = Login::Cancelling { code };
+                self.send(ApiRequest::CancelCodexLogin);
+            }
+            (BokkieAction::SignOutChatGpt, Session::SignedIn(signed_in)) => {
+                if let Some(household) = &mut signed_in.household {
+                    household.sign_out = SignOut::Confirming;
+                }
+            }
+            (BokkieAction::KeepChatGpt, Session::SignedIn(signed_in)) => {
+                if let Some(household) = &mut signed_in.household {
+                    household.sign_out = SignOut::Idle;
+                }
+            }
+            (BokkieAction::ConfirmSignOutChatGpt, Session::SignedIn(signed_in)) => {
+                if let Some(household) = &mut signed_in.household {
+                    household.sign_out = SignOut::Busy;
+                }
+                self.send(ApiRequest::CodexLogout);
             }
             (BokkieAction::Send, Session::SignedIn(signed_in)) => {
                 let Some(open) = &mut signed_in.open else {
@@ -1342,6 +1902,52 @@ impl Application for App {
             ),
         );
         observation.fact(
+            "role",
+            match signed_in.map(|s| s.user.role) {
+                None => "",
+                Some(Role::Admin) => "admin",
+                Some(Role::Member) => "member",
+            },
+        );
+        observation.fact(
+            "may_create_bots",
+            signed_in.is_some_and(|s| s.may_create_bots()),
+        );
+        observation.fact(
+            "may_edit_profiles",
+            signed_in.is_some_and(|s| s.may_edit_profiles()),
+        );
+        observation.fact(
+            "oversight",
+            signed_in.is_some_and(|s| s.overseen().is_some()),
+        );
+        observation.fact(
+            "reset_notice",
+            signed_in.is_some_and(|s| s.reset_notice.is_some()),
+        );
+        observation.fact("show_hidden", signed_in.is_some_and(|s| s.show_hidden));
+        observation.fact("bot_pinned", bot.is_some_and(|bot| bot.pinned));
+        observation.fact("bot_hidden", bot.is_some_and(|bot| bot.hidden));
+        observation.fact("updating", open.is_some_and(|open| open.updating));
+        let editor = open.and_then(|open| open.editor.as_ref());
+        observation.fact(
+            "profile",
+            match editor {
+                None => "",
+                Some(editor) if editor.busy => "saving",
+                Some(_) => "editing",
+            },
+        );
+        observation.fact(
+            "profile_error",
+            bounded(
+                editor
+                    .and_then(|editor| editor.error.as_deref())
+                    .or(open.and_then(|open| open.update_error.as_deref()))
+                    .unwrap_or(""),
+            ),
+        );
+        observation.fact(
             "chatgpt",
             match signed_in.map(|s| &s.account) {
                 None => "",
@@ -1351,16 +1957,33 @@ impl Application for App {
                 Some(Account::Failed(_)) => "failed",
             },
         );
+        let household = signed_in.and_then(|s| s.household.as_ref());
         // Never the code itself.
         observation.fact(
             "chatgpt_login",
-            match signed_in.and_then(|s| s.login.as_ref()) {
+            match household.map(|h| &h.login) {
                 None => "",
-                Some(Login::Ready) => "ready",
+                Some(Login::Idle) => "idle",
                 Some(Login::Starting) => "starting",
                 Some(Login::Waiting { .. }) => "waiting",
-                Some(Login::Done) => "done",
+                Some(Login::Cancelling { .. }) => "cancelling",
+                Some(Login::Ended { state, .. }) => match state {
+                    LoginState::Pending => "waiting",
+                    LoginState::Completed => "completed",
+                    LoginState::Expired => "expired",
+                    LoginState::Failed => "failed",
+                    LoginState::Cancelled => "cancelled",
+                },
                 Some(Login::Failed(_)) => "failed",
+            },
+        );
+        observation.fact(
+            "chatgpt_sign_out",
+            match household.map(|h| &h.sign_out) {
+                None | Some(SignOut::Idle) => "",
+                Some(SignOut::Confirming) => "confirming",
+                Some(SignOut::Busy) => "signing_out",
+                Some(SignOut::Failed(_)) => "failed",
             },
         );
         let usage = self.store.usage();
@@ -1410,5 +2033,68 @@ fn state_name(state: MessageState) -> &'static str {
         MessageState::Complete => "complete",
         MessageState::Interrupted => "interrupted",
         MessageState::Failed => "failed",
+    }
+}
+
+/// What a sign-in's state from the gateway leaves on screen: its code while
+/// pending, otherwise how it ended.
+fn following(code: crate::api::DeviceCode, next_poll: Timestamp) -> Login {
+    match code.0.state {
+        LoginState::Pending => Login::Waiting {
+            code,
+            next_poll,
+            polling: false,
+            error: None,
+        },
+        state => Login::Ended {
+            state,
+            error: code.0.error,
+        },
+    }
+}
+
+/// Why a control of the household's ChatGPT sign-in is unavailable, if it
+/// is. Signing in and signing out never overlap.
+fn household_availability(
+    action: BokkieAction,
+    account: &Account,
+    household: &Household,
+) -> Option<&'static str> {
+    let waiting = matches!(
+        household.login,
+        Login::Starting | Login::Waiting { .. } | Login::Cancelling { .. }
+    );
+    match action {
+        BokkieAction::StartChatGpt => match (&household.login, account) {
+            (Login::Starting, _) => Some("Asking for a code"),
+            (Login::Cancelling { .. }, _) => Some("Cancelling the sign-in"),
+            // While a code is shown, a new one replaces it, as when it has
+            // expired.
+            (Login::Waiting { .. }, _) => None,
+            (_, Account::Checking) => Some("Checking the household's sign-in"),
+            (_, Account::SignedIn { .. }) => Some("The household is signed in to ChatGPT"),
+            _ if household.sign_out == SignOut::Busy => Some("Signing out"),
+            _ => None,
+        },
+        BokkieAction::CancelChatGpt => match household.login {
+            Login::Waiting { .. } => None,
+            Login::Cancelling { .. } => Some("Cancelling the sign-in"),
+            _ => Some("No sign-in is waiting"),
+        },
+        BokkieAction::SignOutChatGpt => match (account, &household.sign_out) {
+            (Account::SignedIn { .. }, SignOut::Idle | SignOut::Failed(_)) if !waiting => None,
+            (Account::SignedIn { .. }, SignOut::Confirming) => Some("Confirm or keep signed in"),
+            (Account::SignedIn { .. }, SignOut::Busy) => Some("Signing out"),
+            (Account::SignedIn { .. }, _) => Some("A sign-in is under way"),
+            _ => Some("The household is not signed in to ChatGPT"),
+        },
+        BokkieAction::ConfirmSignOutChatGpt | BokkieAction::KeepChatGpt => {
+            match household.sign_out {
+                SignOut::Confirming => None,
+                SignOut::Busy => Some("Signing out"),
+                _ => Some("Sign out of ChatGPT first"),
+            }
+        }
+        _ => None,
     }
 }

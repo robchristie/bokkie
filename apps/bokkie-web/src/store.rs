@@ -170,7 +170,16 @@ impl Store {
     /// The Bots the conversation list shows, in the gateway's order: pinned
     /// first, then by most recent activity.
     pub fn visible_bots(&self) -> Vec<&Bot> {
-        let mut bots: Vec<&Bot> = self.bots.values().filter(|bot| !bot.hidden).collect();
+        self.sorted(|bot| !bot.hidden)
+    }
+
+    /// Every Bot, hidden ones included, in the same order.
+    pub fn listed_bots(&self) -> Vec<&Bot> {
+        self.sorted(|_| true)
+    }
+
+    fn sorted(&self, keep: impl Fn(&Bot) -> bool) -> Vec<&Bot> {
+        let mut bots: Vec<&Bot> = self.bots.values().filter(|bot| keep(bot)).collect();
         bots.sort_by(|a, b| {
             let activity = |bot: &Bot| bot.last_message.as_ref().map_or(bot.updated_at, |m| m.at);
             b.pinned
@@ -530,7 +539,7 @@ impl Store {
                 self.errors.insert(*bot_id, message.clone());
                 Applied::changed(changed)
             }
-            // The client does not show account state yet.
+            // The application keeps the account itself.
             Event::UsageUpdated { .. } | Event::AccountUpdated { .. } => Applied::default(),
         }
     }
