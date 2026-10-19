@@ -590,18 +590,10 @@ try {
   await member.setText('bokkie.display-name', 'Smoke Member');
   const memberPassword = `member ${randomUUID()}`;
   await memberPage.bringToFront();
+  // Enter in the password field joins, after every key typed before it, so
+  // the account gets the whole password.
   await typeInto('Password', memberPassword, memberPage);
-  // Typed keys reach the application on its next pass: join once it has
-  // them all.
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await member.action('bokkie.accept-invitation');
-      break;
-    } catch (error) {
-      if (attempt >= 100 || !/at least 10 characters/.test(error.message)) throw error;
-      await wait(50);
-    }
-  }
+  await memberPage.keyboard.press('Enter');
   const joined = await member.until('the member signed in and live', facts => facts.user === 'member'
     && facts.connection === 'live' && facts.bots === 'loaded' && facts.chatgpt === 'signed_in', 30000);
   assert.equal(joined.role, 'member');
