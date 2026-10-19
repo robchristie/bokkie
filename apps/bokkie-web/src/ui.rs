@@ -13,7 +13,6 @@ use crate::app::{
     NewBot, Open, PASSWORD_ID, Session, SignInForm, SignedIn, USERNAME_ID,
 };
 use crate::socket::Link;
-use crate::store::Store;
 
 type BokkieFrame<'a, 'b> = Frame<'a, BokkieAction, BokkieIntent>;
 
@@ -411,7 +410,7 @@ fn conversation_ui(
         p.status(ui, "bot-error", error, true);
     }
     ui.separator();
-    messages_ui(ui, frame, store, open, name);
+    messages_ui(ui, frame, app, open, name);
     ui.separator();
     composer_ui(ui, p, frame, app, open);
 }
@@ -469,10 +468,11 @@ fn meter_ui(
 fn messages_ui(
     ui: &mut egui::Ui,
     frame: &mut BokkieFrame<'_, '_>,
-    store: &Store,
+    app: &App,
     open: &Open,
     bot_name: &str,
 ) {
+    let store = app.store();
     let height = (ui.available_height() - COMPOSER_HEIGHT).max(80.0);
     observe_visible_only(ui, |ui| {
         egui::ScrollArea::vertical()
@@ -501,22 +501,41 @@ fn messages_ui(
                         line(TextRole::Secondary, 1),
                     );
                 }
-                if conversation.older().is_some() {
-                    p.content(
-                        ui,
-                        "older",
-                        "Older messages are not shown",
-                        line(TextRole::Caption, 1),
-                    );
+                let older = app.older_state();
+                if !older.is_empty() {
+                    frame.action(ui, &mut p, BokkieAction::LoadOlder, ActionEmphasis::Normal);
                 }
+                if older == "loading" {
+                    p.status(ui, "older-status", "Loading older messages…", false);
+                } else if let Some(error) = &open.older_error {
+                    p.status(ui, "older-status", error, true);
+                }
+                // Once a page of older messages arrives above it, the message
+                // that was oldest moves back to the top of the view, once.
+                let anchored = egui::Id::new("bokkie.older-anchor");
+                let scroll_to = open
+                    .anchor
+                    .filter(|(page, _)| ui.data(|data| data.get_temp(anchored)) != Some(*page));
                 for message in conversation.messages() {
-                    message_ui(ui, &mut p, message, bot_name);
+                    let byline = message_ui(ui, &mut p, message, bot_name);
+                    if let Some((page, anchor)) = scroll_to
+                        && anchor == message.id
+                    {
+                        byline.scroll_to_me(Some(egui::Align::TOP));
+                        ui.data_mut(|data| data.insert_temp(anchored, page));
+                    }
                 }
             });
     });
 }
 
-fn message_ui(ui: &mut egui::Ui, p: &mut PresentationContext, message: &Message, bot_name: &str) {
+/// One message. Returns its byline's response.
+fn message_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    message: &Message,
+    bot_name: &str,
+) -> egui::Response {
     let key = message.id.0;
     let author = match message.author {
         Author::User => "You",
@@ -528,7 +547,7 @@ fn message_ui(ui: &mut egui::Ui, p: &mut PresentationContext, message: &Message,
         MessageState::Interrupted => format!("{author} · stopped"),
         MessageState::Failed => format!("{author} · failed"),
     };
-    p.content(ui, ("author", key), &byline, line(TextRole::Caption, 1));
+    let byline = p.content(ui, ("author", key), &byline, line(TextRole::Caption, 1));
     let text = if message.text.is_empty() && message.state == MessageState::Streaming {
         "…"
     } else {
@@ -543,6 +562,7 @@ fn message_ui(ui: &mut egui::Ui, p: &mut PresentationContext, message: &Message,
         |ui| ui.add(egui::Label::new(text).wrap()),
     );
     ui.add_space(6.0);
+    byline
 }
 
 fn composer_ui(

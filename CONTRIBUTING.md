@@ -106,22 +106,24 @@ cargo run -p bokkie-gateway -- bootstrap-admin synthetic "Synthetic Admin"  # pa
 cargo run -p bokkie-gateway -- serve
 ```
 
-Then open <http://localhost:8787/>, adding `?automation=1` for
-`stobie attach`. The client's facts say where it is: `screen`, `user`,
-`bots`, `bot_count`, `message` and `connection` (the event socket), and for
-the open conversation `bot`, `conversation`, `bot_status`, `bot_error`,
-`message_count`, `reply`, `reply_chars` and `reply_state` (the latest Bot
-reply), `draft`, `sending`, `delivery`, `send_error`, `stopping` and
-`stop_note`; for the usage meter `usage`, `subscription_used`,
-`turns_today` and `limit` (the limit-reached banner); for the New Bot form
-`new_bot_name`, `creating` and `create_error`; and `chatgpt` and
-`chatgpt_login` for the ChatGPT sign-in, which never publishes its device
-code. Name a new Bot with `stobie set-text bokkie.bot-name`. Open a Bot with
-`stobie invoke bokkie.open-bot --value ID` and fill the message field with
-`stobie set-text bokkie.draft`. Stobie offers no `set-text` on the password
-field, so type into it with the keyboard. To watch a reply stream without a
-ChatGPT sign-in, point the app server at the mock model, as the browser
-smoke does.
+Then open <http://localhost:8787/>, adding `?automation=1` for `stobie
+attach`. The client's facts say where it is: `screen`, `user`, `bots`,
+`bot_count`, `message` and `connection` (the event socket), and for the open
+conversation `bot`, `conversation`, `bot_status`, `bot_error`,
+`message_count`, `older` (`more`, `loading`, `failed`, or empty at the
+conversation's start), `reply`, `reply_chars` and `reply_state` (the latest
+Bot reply), `draft`, `sending`, `delivery`, `send_error`, `stopping` and
+`stop_note`; for the usage meter `usage`, `subscription_used`, `turns_today`
+and `limit` (the limit-reached banner); for the New Bot form `new_bot_name`,
+`creating` and `create_error`; and `chatgpt` and `chatgpt_login` for the
+ChatGPT sign-in, which never publishes its device code. Name a new Bot with
+`stobie set-text bokkie.bot-name`. Open a Bot with `stobie invoke
+bokkie.open-bot --value ID` and fill the message field with `stobie set-text
+bokkie.draft`. A conversation opens on its newest 50 messages; `stobie
+invoke bokkie.load-older` loads the 50 before them. Stobie offers no
+`set-text` on the password field, so type into it with the keyboard. To
+watch a reply stream without a ChatGPT sign-in, point the app server at the
+mock model, as the browser smoke does.
 
 ### Browser smoke
 
@@ -136,6 +138,8 @@ checks:
 - a second reply is stopped;
 - a connection dropped mid-reply, and refused while several pieces arrive,
   catches up with exactly the stored text;
+- a conversation longer than one page opens on its newest 50 messages, and
+  loading the older ones while a reply streams leaves both whole;
 - the subscription meter and the limit-reached banner show;
 - the manifest has no errors and the page is installable, the service
   worker controls the page, and nothing from `/api/` is in Cache Storage;

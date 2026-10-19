@@ -504,3 +504,298 @@ fn a_late_usage_reply_still_fills_subscription_windows_no_event_has_shown() {
     let _ = store.apply(&at(2, Event::UsageUpdated { usage: usage(true) }));
     assert!(!store.load_usage(usage(false)));
 }
+
+fn complete(id: i64, text: &str) -> Message {
+    message(id, Author::User, text, MessageState::Complete)
+}
+
+fn older_page(seq: u64, messages: Vec<Message>, older: Option<i64>) -> MessagePage {
+    MessagePage {
+        messages,
+        older: older.map(MessageId),
+        seq: Seq(seq),
+    }
+}
+
+/// A store with Bot 1's newest page, messages 10 to 12, loaded at `seq`,
+/// with older messages before 10.
+fn open_with_history(seq: u64, newest: Message) -> Store {
+    let mut store = open(seq, vec![]);
+    assert!(store.request(Snapshot::Messages(BOT)));
+    let _ = store.load_messages(
+        BOT,
+        older_page(
+            seq,
+            vec![complete(10, "Ten"), complete(11, "Eleven"), newest],
+            Some(10),
+        ),
+    );
+    store
+}
+
+fn ids(store: &Store) -> Vec<i64> {
+    store
+        .conversation(BOT)
+        .unwrap()
+        .messages()
+        .map(|message| message.id.0)
+        .collect()
+}
+
+#[test]
+fn older_pages_prepend_and_move_the_cursor_to_the_start() {
+    let mut store = open_with_history(5, complete(12, "Twelve"));
+    assert_eq!(store.request_older(BOT), Some(MessageId(10)));
+    assert!(store.is_loading(Snapshot::Older(BOT)));
+    let applied = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(5, vec![complete(8, "Eight"), complete(9, "Nine")], Some(8)),
+    );
+    assert!(applied.changed && applied.reload.is_empty());
+    assert_eq!(ids(&store), [8, 9, 10, 11, 12]);
+    assert_eq!(store.conversation(BOT).unwrap().older(), Some(MessageId(8)));
+    assert!(!store.is_loading(Snapshot::Older(BOT)) && store.held.is_empty());
+    // The next page reaches the start.
+    assert_eq!(store.request_older(BOT), Some(MessageId(8)));
+    let applied = store.load_older(
+        BOT,
+        MessageId(8),
+        older_page(5, vec![complete(7, "Seven")], None),
+    );
+    assert!(applied.changed);
+    assert_eq!(ids(&store), [7, 8, 9, 10, 11, 12]);
+    assert_eq!(store.conversation(BOT).unwrap().older(), None);
+    // Nothing is older: nothing loads or is held.
+    assert_eq!(store.request_older(BOT), None);
+    assert!(!store.is_loading(Snapshot::Older(BOT)));
+    let _ = store.apply(&status(6, 1, BotStatus::Working));
+    assert!(store.held.is_empty());
+}
+
+#[test]
+fn an_older_page_arriving_during_a_stream_leaves_the_stream_whole() {
+    let mut store = open_with_history(5, reply(12, "A frac"));
+    assert_eq!(store.request_older(BOT), Some(MessageId(10)));
+    // The reply streams on while the page loads, and still applies at once.
+    assert!(store.apply(&delta(6, 12, 6, "tion ")).changed);
+    assert_eq!(text(&store, 12), "A fraction ");
+    // The page was read after event 6; its copy of nothing newer matters.
+    let applied = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(6, vec![complete(8, "Eight"), complete(9, "Nine")], Some(8)),
+    );
+    assert!(applied.changed && applied.reload.is_empty());
+    assert_eq!(ids(&store), [8, 9, 10, 11, 12]);
+    assert_eq!(text(&store, 12), "A fraction ");
+    // The stream goes on with no repeat or gap, and completes.
+    assert!(!store.apply(&delta(6, 12, 6, "tion ")).changed);
+    assert!(store.apply(&delta(7, 12, 11, "is a part.")).changed);
+    assert_eq!(text(&store, 12), "A fraction is a part.");
+    let mut done = reply(12, "A fraction is a part.");
+    done.state = MessageState::Complete;
+    let _ = store.apply(&completed(8, done.clone()));
+    assert_eq!(
+        store.conversation(BOT).unwrap().message(MessageId(12)),
+        Some(&done)
+    );
+    assert_eq!(
+        store.bot(BOT).unwrap().last_message.as_ref().unwrap().text,
+        "A fraction is a part."
+    );
+}
+
+#[test]
+fn events_held_while_an_older_page_loads_replay_onto_its_messages() {
+    let mut store = open_with_history(5, complete(12, "Twelve"));
+    assert_eq!(store.request_older(BOT), Some(MessageId(10)));
+    // Message 9, older than the newest page, is still streaming. The page
+    // reflects event 7 but not 8 or 9.
+    let _ = store.apply(&delta(7, 9, 0, "Still "));
+    let _ = store.apply(&delta(8, 9, 6, "going"));
+    let _ = store.apply(&delta(9, 9, 11, ", done"));
+    let applied = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(7, vec![complete(8, "Eight"), reply(9, "Still ")], Some(8)),
+    );
+    assert!(applied.changed && applied.reload.is_empty());
+    assert_eq!(text(&store, 9), "Still going, done");
+    // A completion held for an added message replaces it.
+    let mut store = open_with_history(5, complete(12, "Twelve"));
+    assert_eq!(store.request_older(BOT), Some(MessageId(10)));
+    let mut finished = reply(9, "Finished");
+    finished.state = MessageState::Interrupted;
+    let _ = store.apply(&completed(8, finished.clone()));
+    let _ = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(7, vec![reply(9, "Fin")], Some(8)),
+    );
+    assert_eq!(
+        store.conversation(BOT).unwrap().message(MessageId(9)),
+        Some(&finished)
+    );
+}
+
+#[test]
+fn an_older_page_that_cannot_account_for_a_held_delta_loads_again() {
+    let mut store = open_with_history(5, complete(12, "Twelve"));
+    assert_eq!(store.request_older(BOT), Some(MessageId(10)));
+    // Text from offset 20 of message 9, which the page holds only 6 of.
+    let _ = store.apply(&delta(8, 9, 20, "late"));
+    let applied = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(7, vec![complete(8, "Eight"), reply(9, "Still ")], Some(8)),
+    );
+    assert_eq!(applied.reload, BTreeSet::from([Snapshot::Older(BOT)]));
+    assert_eq!(ids(&store), [10, 11, 12], "nothing partial is added");
+    assert!(store.is_loading(Snapshot::Older(BOT)));
+    assert_eq!(
+        store.request_older(BOT),
+        Some(MessageId(10)),
+        "the same page again"
+    );
+}
+
+#[test]
+fn an_older_page_that_outlives_the_held_events_loads_again() {
+    let mut store = open_with_history(5, complete(12, "Twelve"));
+    assert_eq!(store.request_older(BOT), Some(MessageId(10)));
+    for seq in 6..=(MAX_HELD as u64 + 6) {
+        let _ = store.apply(&status(seq, 1, BotStatus::Working));
+    }
+    let applied = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(6, vec![complete(9, "Nine")], Some(9)),
+    );
+    assert_eq!(applied.reload, BTreeSet::from([Snapshot::Older(BOT)]));
+    assert_eq!(ids(&store), [10, 11, 12]);
+}
+
+#[test]
+fn an_older_page_for_a_copy_reloaded_since_is_dropped() {
+    let mut store = open_with_history(5, complete(12, "Twelve"));
+    assert_eq!(store.request_older(BOT), Some(MessageId(10)));
+    // A reset reloads the newest page while the older page is out.
+    let reload = store.reload_all();
+    assert!(reload.contains(&Snapshot::Messages(BOT)));
+    let _ = store.load_bots(bots(20, vec![bot(1, "Ada")]));
+    let _ = store.load_messages(
+        BOT,
+        older_page(
+            20,
+            vec![
+                complete(10, "Ten"),
+                complete(11, "Eleven"),
+                complete(12, "Twelve"),
+            ],
+            Some(10),
+        ),
+    );
+    // Its cursor is the same, but it was asked for an earlier copy.
+    let applied = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(5, vec![complete(9, "Nine")], Some(9)),
+    );
+    assert_eq!(applied, Applied::default());
+    assert_eq!(ids(&store), [10, 11, 12]);
+    assert_eq!(
+        store.conversation(BOT).unwrap().older(),
+        Some(MessageId(10))
+    );
+    assert!(!store.is_loading(Snapshot::Older(BOT)) && store.held.is_empty());
+    // A page for a cursor that has since moved changes nothing either.
+    assert_eq!(store.request_older(BOT), Some(MessageId(10)));
+    let _ = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(20, vec![complete(9, "Nine")], Some(9)),
+    );
+    let applied = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(20, vec![complete(8, "Eight")], None),
+    );
+    assert_eq!(applied, Applied::default());
+    assert_eq!(ids(&store), [9, 10, 11, 12]);
+    // Nor does a page for a closed conversation.
+    assert_eq!(store.request_older(BOT), Some(MessageId(9)));
+    store.close_conversation(BOT);
+    assert!(!store.is_loading(Snapshot::Older(BOT)));
+    let applied = store.load_older(
+        BOT,
+        MessageId(9),
+        older_page(20, vec![complete(8, "Eight")], None),
+    );
+    assert_eq!(applied, Applied::default());
+    assert!(store.conversation(BOT).is_none());
+}
+
+#[test]
+fn an_older_page_keeps_the_copies_the_conversation_already_holds() {
+    let mut store = open_with_history(5, complete(12, "Twelve"));
+    // A completion for an old message the newest page did not hold adds it.
+    let mut finished = reply(9, "Finished in full");
+    finished.state = MessageState::Complete;
+    let _ = store.apply(&completed(6, finished.clone()));
+    assert_eq!(store.request_older(BOT), Some(MessageId(10)));
+    // The page repeats it from before its completion, and repeats message
+    // 10, which is not before its cursor.
+    let applied = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(
+            5,
+            vec![
+                complete(8, "Eight"),
+                reply(9, "Fini"),
+                complete(10, "Stale ten"),
+            ],
+            Some(8),
+        ),
+    );
+    assert!(applied.changed);
+    assert_eq!(ids(&store), [8, 9, 10, 11, 12]);
+    assert_eq!(
+        store.conversation(BOT).unwrap().message(MessageId(9)),
+        Some(&finished)
+    );
+    assert_eq!(text(&store, 10), "Ten");
+    // A page of nothing new still moves the cursor on; a repeat of it
+    // changes nothing.
+    assert_eq!(store.request_older(BOT), Some(MessageId(8)));
+    let applied = store.load_older(BOT, MessageId(8), older_page(6, vec![], None));
+    assert!(applied.changed);
+    assert_eq!(store.conversation(BOT).unwrap().older(), None);
+    let applied = store.load_older(BOT, MessageId(8), older_page(6, vec![], None));
+    assert_eq!(applied, Applied::default());
+}
+
+#[test]
+fn a_failed_older_page_stops_holding_events_and_can_be_asked_for_again() {
+    let mut store = open_with_history(5, complete(12, "Twelve"));
+    assert_eq!(store.request_older(BOT), Some(MessageId(10)));
+    let _ = store.apply(&status(6, 1, BotStatus::Working));
+    store.load_failed(Snapshot::Older(BOT));
+    assert!(store.held.is_empty() && !store.is_loading(Snapshot::Older(BOT)));
+    // The failed request's late page is not taken for the next one.
+    let applied = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(5, vec![complete(9, "Nine")], None),
+    );
+    assert_eq!(applied, Applied::default());
+    assert_eq!(store.request_older(BOT), Some(MessageId(10)));
+    let applied = store.load_older(
+        BOT,
+        MessageId(10),
+        older_page(6, vec![complete(9, "Nine")], None),
+    );
+    assert!(applied.changed);
+    assert_eq!(ids(&store), [9, 10, 11, 12]);
+}

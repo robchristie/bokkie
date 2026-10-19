@@ -18,6 +18,15 @@
 //! conversation to be reloaded rather than guessing. [`Event::MessageCompleted`]
 //! replaces whatever was assembled.
 //!
+//! Older messages load a page at a time ([`Snapshot::Older`]), from the
+//! conversation's `older` cursor. Events are held while that page loads too.
+//! The page adds only messages the conversation does not hold, since those
+//! it holds are already kept current, and the held events after the page's
+//! own `seq` are replayed onto the messages it adds. A page requested for a
+//! copy of the conversation that has since been reloaded, or whose cursor
+//! has moved, is dropped. Reloading a conversation's newest page starts it
+//! afresh, without the older pages loaded before.
+//!
 //! The store expects events in log order with no duplicates, as
 //! [`Connection`](crate::connection::Connection) delivers them. A repeated
 //! event changes nothing, but an old event applied after newer ones, such as
@@ -47,6 +56,9 @@ pub enum Snapshot {
     Bots,
     /// `GET /api/v1/bots/{id}/messages`.
     Messages(BotId),
+    /// `GET /api/v1/bots/{id}/messages?before=`: the page before the oldest
+    /// message the conversation holds.
+    Older(BotId),
 }
 
 /// What applying a snapshot or an event did.
@@ -86,6 +98,8 @@ pub struct Conversation {
     seq: Seq,
     messages: BTreeMap<MessageId, Message>,
     older: Option<MessageId>,
+    /// The cursor of the older page requested for this copy, until it loads.
+    requested_older: Option<MessageId>,
 }
 
 impl Conversation {
@@ -245,14 +259,39 @@ impl Store {
     pub fn load_failed(&mut self, snapshot: Snapshot) {
         self.loading.remove(&snapshot);
         self.stale.remove(&snapshot);
+        if let Snapshot::Older(bot) = snapshot
+            && let Some(conversation) = self.conversations.get_mut(&bot)
+        {
+            conversation.requested_older = None;
+        }
         self.settle();
+    }
+
+    /// Mark the page before a conversation's oldest message as loading, and
+    /// return its `before` cursor. Returns `None`, loading nothing, when the
+    /// conversation is not loaded or already starts at its first message.
+    pub fn request_older(&mut self, bot: BotId) -> Option<MessageId> {
+        let snapshot = Snapshot::Older(bot);
+        let cursor = self.conversations.get_mut(&bot).and_then(|conversation| {
+            conversation.requested_older = conversation.older;
+            conversation.older
+        });
+        match cursor {
+            Some(_) => {
+                self.loading.insert(snapshot);
+            }
+            None => self.load_failed(snapshot),
+        }
+        cursor
     }
 
     /// Stop keeping a conversation. Events for it are then ignored.
     pub fn close_conversation(&mut self, bot: BotId) {
         self.conversations.remove(&bot);
-        self.loading.remove(&Snapshot::Messages(bot));
-        self.stale.remove(&Snapshot::Messages(bot));
+        for snapshot in [Snapshot::Messages(bot), Snapshot::Older(bot)] {
+            self.loading.remove(&snapshot);
+            self.stale.remove(&snapshot);
+        }
         self.settle();
     }
 
@@ -292,6 +331,7 @@ impl Store {
                     .map(|message| (message.id, message))
                     .collect(),
                 older: page.older,
+                requested_older: None,
             },
         );
         let snapshot = Snapshot::Messages(bot);
@@ -303,6 +343,68 @@ impl Store {
             self.held.push(envelope);
         }
         applied.merge(self.reload_if_stale(snapshot));
+        self.settle();
+        self.finish(applied)
+    }
+
+    /// Add a page of older messages, requested with `before`, to the copy of
+    /// the conversation it was requested for, and replay onto them the held
+    /// events that followed the page. A page for a copy reloaded since, or
+    /// for a cursor that has moved, changes nothing. A page that missed held
+    /// events, or that cannot account for a delta, is loaded again.
+    pub fn load_older(&mut self, bot: BotId, before: MessageId, page: MessagePage) -> Applied {
+        let snapshot = Snapshot::Older(bot);
+        self.loading.remove(&snapshot);
+        let stale = self.stale.remove(&snapshot);
+        let applied = match self.conversations.get_mut(&bot) {
+            Some(conversation)
+                if conversation.requested_older == Some(before)
+                    && conversation.older == Some(before) =>
+            {
+                conversation.requested_older = None;
+                let mut earlier: BTreeMap<MessageId, Message> = page
+                    .messages
+                    .into_iter()
+                    .filter(|message| {
+                        message.bot_id == bot
+                            && message.id < before
+                            && !conversation.messages.contains_key(&message.id)
+                    })
+                    .map(|message| (message.id, message))
+                    .collect();
+                let mut complete = !stale;
+                for envelope in self.held.iter().filter(|envelope| envelope.seq > page.seq) {
+                    match &envelope.event {
+                        Event::MessageDelta {
+                            message_id,
+                            offset,
+                            delta,
+                            ..
+                        } => {
+                            if let Some(message) = earlier.get_mut(message_id) {
+                                complete &= append_delta(message, *offset, delta).is_some();
+                            }
+                        }
+                        Event::MessageCompleted { message }
+                            if earlier.contains_key(&message.id) =>
+                        {
+                            earlier.insert(message.id, message.clone());
+                        }
+                        _ => {}
+                    }
+                }
+                if complete {
+                    let changed = !earlier.is_empty() || conversation.older != page.older;
+                    conversation.messages.extend(earlier);
+                    conversation.older = page.older;
+                    Applied::changed(changed)
+                } else {
+                    Applied::reload(snapshot)
+                }
+            }
+            // Reloaded, closed or moved on since the page was requested.
+            _ => Applied::default(),
+        };
         self.settle();
         self.finish(applied)
     }
@@ -480,17 +582,10 @@ impl Store {
                 let Some(message) = conversation.messages.get_mut(message_id) else {
                     return Applied::reload(Snapshot::Messages(bot));
                 };
-                if message.state != MessageState::Streaming {
-                    return Applied::default();
+                match append_delta(message, *offset, delta) {
+                    Some(changed) => Applied::changed(changed),
+                    None => Applied::reload(Snapshot::Messages(bot)),
                 }
-                let held = message.text.chars().count() as u64;
-                if *offset > held {
-                    return Applied::reload(Snapshot::Messages(bot));
-                }
-                let known = usize::try_from(held - offset).unwrap_or(usize::MAX);
-                let new: String = delta.chars().skip(known).collect();
-                message.text.push_str(&new);
-                Applied::changed(!new.is_empty())
             }
             Event::MessageCompleted { message } => {
                 let changed = conversation.messages.get(&message.id) != Some(message);
@@ -500,6 +595,24 @@ impl Store {
             _ => Applied::default(),
         }
     }
+}
+
+/// Add the part of a delta that a streaming message does not hold yet.
+/// Returns whether the text grew, or `None` when the delta starts beyond the
+/// text held, so the copy is incomplete. A message no longer streaming
+/// takes no deltas.
+fn append_delta(message: &mut Message, offset: u64, delta: &str) -> Option<bool> {
+    if message.state != MessageState::Streaming {
+        return Some(false);
+    }
+    let held = message.text.chars().count() as u64;
+    if offset > held {
+        return None;
+    }
+    let known = usize::try_from(held - offset).unwrap_or(usize::MAX);
+    let new: String = delta.chars().skip(known).collect();
+    message.text.push_str(&new);
+    Some(!new.is_empty())
 }
 
 /// The conversation an event changes, if it changes one.

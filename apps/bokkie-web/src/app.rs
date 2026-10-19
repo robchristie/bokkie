@@ -13,7 +13,7 @@ use bokkie_protocol::api::{
     Author, BotStatus, CreateBotRequest, Delivery, LoginRequest, Message, MessageState,
     SendMessageRequest, User,
 };
-use bokkie_protocol::{BotId, Timestamp};
+use bokkie_protocol::{BotId, MessageId, Timestamp};
 use serde::Serialize;
 use stobie_ui_egui::{
     Action, ActionArgument, ActionKey, ActionTarget, Application, ApplicationIdentity,
@@ -69,6 +69,11 @@ pub enum BokkieAction {
     OpenBot,
     #[action(label = "Back", description = "Return to the list of Bots")]
     Back,
+    #[action(
+        label = "Load older",
+        description = "Load the conversation's earlier messages, a page at a time"
+    )]
+    LoadOlder,
     #[action(
         label = "Send",
         description = "Send the message to the Bot; while it replies, the message steers the reply"
@@ -241,6 +246,12 @@ pub(crate) struct Open {
     pub(crate) stopping: bool,
     /// What the last stop found, when it is worth saying.
     pub(crate) stop_note: Option<String>,
+    /// Why the last page of older messages failed to load.
+    pub(crate) older_error: Option<String>,
+    /// The message that was oldest before the last page of older messages
+    /// arrived, which the view keeps in place, with the number of that page
+    /// among all pages loaded, so the view moves once for each.
+    pub(crate) anchor: Option<(u64, MessageId)>,
 }
 
 impl Open {
@@ -254,6 +265,8 @@ impl Open {
             send_error: None,
             stopping: false,
             stop_note: None,
+            older_error: None,
+            anchor: None,
         }
     }
 }
@@ -275,6 +288,8 @@ pub struct App {
     usage_in_flight: bool,
     /// Load the meter again once the request in flight answers.
     usage_again: bool,
+    /// Pages of older messages added since the application started.
+    older_pages: u64,
     make_api: Option<ApiFactory>,
     api: Option<Box<dyn Api>>,
 }
@@ -299,6 +314,7 @@ impl App {
             again: BTreeSet::new(),
             usage_in_flight: false,
             usage_again: false,
+            older_pages: 0,
             make_api: Some(make_api),
             api: None,
         }
@@ -489,16 +505,25 @@ impl App {
     /// Load a snapshot over HTTP. The store holds any event that arrives
     /// meanwhile. A snapshot already loading is loaded again once that load
     /// answers, because it may predate whatever asked for it now.
+    ///
+    /// Older messages load one page at a time, from where the conversation
+    /// starts when the page is requested.
     fn load(&mut self, snapshot: Snapshot) {
+        let request = match snapshot {
+            Snapshot::Bots => ApiRequest::ListBots,
+            Snapshot::Messages(bot) => ApiRequest::LoadMessages(bot),
+            Snapshot::Older(_) if self.in_flight.contains(&snapshot) => return,
+            Snapshot::Older(bot) => match self.store.request_older(bot) {
+                Some(before) => ApiRequest::LoadOlder(bot, before),
+                None => return,
+            },
+        };
         let _ = self.store.request(snapshot);
         if !self.in_flight.insert(snapshot) {
             self.again.insert(snapshot);
             return;
         }
-        self.send(match snapshot {
-            Snapshot::Bots => ApiRequest::ListBots,
-            Snapshot::Messages(bot) => ApiRequest::LoadMessages(bot),
-        });
+        self.send(request);
     }
 
     fn load_all(&mut self, snapshots: impl IntoIterator<Item = Snapshot>) {
@@ -622,6 +647,42 @@ impl App {
                 }
                 if again {
                     self.load(snapshot);
+                }
+            }
+            (ApiReply::Older(bot, before, result), Session::SignedIn(_))
+                if self.in_flight.contains(&Snapshot::Older(bot)) =>
+            {
+                let snapshot = Snapshot::Older(bot);
+                self.in_flight.remove(&snapshot);
+                if self.open_bot() != Some(bot) {
+                    // Closed meanwhile; the store has already let it go.
+                    return false;
+                }
+                match result {
+                    Ok(page) => {
+                        let applied = self.store.load_older(bot, before, page);
+                        if applied.changed {
+                            self.older_pages += 1;
+                        }
+                        let pages = self.older_pages;
+                        if let Some(open) = self.open_mut() {
+                            open.older_error = None;
+                            if applied.changed {
+                                open.anchor = Some((pages, before));
+                            }
+                        }
+                        self.load_all(applied.reload);
+                    }
+                    Err(error) if error.is_unauthenticated() => {
+                        self.session_ended();
+                        return true;
+                    }
+                    Err(error) => {
+                        if let Some(open) = self.open_mut() {
+                            open.older_error = Some(error.message);
+                        }
+                        self.store.load_failed(snapshot);
+                    }
                 }
             }
             (ApiReply::Sent(bot, result), Session::SignedIn(_)) => {
@@ -813,6 +874,28 @@ impl App {
         Ok(true)
     }
 
+    /// The `older` fact, and whether the Load older control shows: `more`
+    /// while earlier messages remain to load, `loading` while a page loads,
+    /// `failed` after a page failed, and empty at the conversation's start.
+    pub(crate) fn older_state(&self) -> &'static str {
+        let Some(open) = self.open() else {
+            return "";
+        };
+        if self.in_flight.contains(&Snapshot::Older(open.bot)) {
+            "loading"
+        } else if self
+            .store
+            .conversation(open.bot)
+            .is_none_or(|conversation| conversation.older().is_none())
+        {
+            ""
+        } else if open.older_error.is_some() {
+            "failed"
+        } else {
+            "more"
+        }
+    }
+
     fn can_stop(&self) -> Result<(), &'static str> {
         let Some(open) = self.open() else {
             return Err("No conversation is open");
@@ -917,6 +1000,15 @@ impl Application for App {
                 Some("Already on the list of Bots")
             }
             (BokkieAction::Back, _) => None,
+            (BokkieAction::LoadOlder, _) => match (self.open_bot(), self.older_state()) {
+                (None, _) => Some("No conversation is open"),
+                (_, "loading") => Some("Loading older messages"),
+                (Some(bot), "") if self.store.conversation(bot).is_none() => {
+                    Some("Loading the conversation")
+                }
+                (_, "") => Some("No older messages"),
+                _ => None,
+            },
             (BokkieAction::CreateBot, _) => signed_in.and_then(|signed_in| {
                 if signed_in.new_bot.busy {
                     Some("Creating the Bot")
@@ -1069,6 +1161,14 @@ impl Application for App {
                 };
                 self.store.close_conversation(open.bot);
             }
+            (BokkieAction::LoadOlder, Session::SignedIn(signed_in)) => {
+                let Some(open) = &mut signed_in.open else {
+                    return Ok(false);
+                };
+                open.older_error = None;
+                let bot = open.bot;
+                self.load(Snapshot::Older(bot));
+            }
             (BokkieAction::CreateBot, Session::SignedIn(signed_in)) => {
                 let form = &mut signed_in.new_bot;
                 form.busy = true;
@@ -1193,6 +1293,7 @@ impl Application for App {
             "message_count",
             conversation.map_or(0, |conversation| conversation.messages().count()),
         );
+        observation.fact("older", self.older_state());
         let reply = self.latest_reply();
         observation.fact("reply", bounded(reply.map_or("", |reply| &reply.text)));
         observation.fact(

@@ -407,6 +407,56 @@ try {
     delta_frames_after_drop: replayed, connections_dropped: link.dropped,
   });
 
+  // Load older: a conversation longer than the newest page of 50 messages.
+  // Its first 26 exchanges are sent over the API, each with a short reply.
+  await controlRequest('reply', { pieces: ['Noted.'], piece_delay_ms: 0 });
+  const diary = (await api('POST', '/bots', { name: 'Diary', label: 'Keeps notes', description: 'Note what is said.' }, cookie)).body;
+  assert(Number.isInteger(diary?.id), 'the Diary was created');
+  const settled = async () => {
+    for (let attempt = 0; ; attempt++) {
+      assert(attempt < 1200, 'the Diary settled');
+      const [{ body: state }, { body: latest }] = await Promise.all([
+        api('GET', `/bots/${diary.id}`, undefined, cookie),
+        api('GET', `/bots/${diary.id}/messages?limit=1`, undefined, cookie),
+      ]);
+      const last = latest.messages.at(-1);
+      if (state.status === 'idle' && last?.author === 'bot' && last.state === 'complete') return;
+      await wait(25);
+    }
+  };
+  const SEEDED = 26;
+  for (let n = 1; n <= SEEDED; n++) {
+    const { body: sent } = await api('POST', `/bots/${diary.id}/messages`, { text: `Note ${n}` }, cookie);
+    assert.equal(sent?.delivery, 'new_turn', `note ${n} started a turn`);
+    await settled();
+  }
+  await app.action('bokkie.back');
+  await app.until('the list with the Diary', facts => facts.screen === 'signed_in' && facts.bot_count === 2);
+  await app.action('bokkie.open-bot', diary.id);
+  const newest = await app.until('the Diary\'s newest page', facts => facts.conversation === 'loaded' && facts.bot === diary.id);
+  assert.equal(newest.message_count, 50, 'the newest page of 50');
+  assert.equal(newest.older, 'more', 'older messages to load');
+  // A reply streams while the older page loads, and both come out whole.
+  await controlRequest('reply', { pieces: PIECES, piece_delay_ms: PIECE_MS });
+  await send('One last note');
+  await app.until('the Diary replying', facts => facts.reply_state === 'streaming' && facts.reply_chars > 0, 60000);
+  await app.action('bokkie.load-older');
+  const loaded = await app.until('the older page', facts => facts.older === '' && facts.message_count === SEEDED * 2 + 2, 30000);
+  assert.equal(loaded.reply_state, 'streaming', 'the older page arrived during the reply');
+  const finished = await app.until('the Diary\'s reply to complete', facts => facts.reply_state === 'complete' && facts.bot_status === 'idle', 60000);
+  assert.equal(finished.reply, REPLY, 'the reply lost or repeated nothing');
+  const { body: stored } = await api('GET', `/bots/${diary.id}/messages?limit=200`, undefined, cookie);
+  assert.equal(stored.older, null);
+  assert.equal(finished.message_count, stored.messages.length, 'the page holds the whole stored conversation');
+  step('older messages loaded during a reply', {
+    newest_page: newest.message_count, after_load: loaded.message_count, chars_when_loaded: loaded.reply_chars,
+    stored: stored.messages.length,
+  });
+  await app.action('bokkie.back');
+  await app.until('the list again', facts => facts.screen === 'signed_in');
+  await app.action('bokkie.open-bot', bot.id);
+  await app.until('the Planner again', facts => facts.conversation === 'loaded' && facts.bot === bot.id);
+
   // The subscription meter, then the limit-reached banner, from windows the
   // mock reports in its response headers.
   const resetsAt = Math.floor(Date.now() / 1000) + 3 * 3600;
