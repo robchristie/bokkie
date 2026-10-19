@@ -108,6 +108,9 @@ pub struct Behaviour {
     pub finish_before_answer: bool,
     /// Whether `turn/steer` fails, as it does once the turn has ended.
     pub steer_fails: bool,
+    /// Whether `thread/start` waits for a permit from
+    /// [`FakeCodex::thread_starts`] before it answers.
+    pub hold_thread_starts: bool,
     /// Whether `turn/start` answers with an error, starting nothing.
     pub reject_turns: bool,
     /// Whether the app server starts a turn and then exits before
@@ -145,6 +148,7 @@ impl Default for Behaviour {
             finish_turns: true,
             finish_before_answer: false,
             steer_fails: false,
+            hold_thread_starts: false,
             reject_turns: false,
             hang_up_on_turn: false,
             hang_turns: false,
@@ -167,13 +171,26 @@ impl Default for Behaviour {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct FakeCodex {
     pub behaviour: Arc<Mutex<Behaviour>>,
     /// Each app server's outgoing line channel, to inject messages.
     outlets: Arc<Mutex<HashMap<Owner, mpsc::UnboundedSender<Value>>>>,
     /// How many app servers each owner has had.
     pub starts: Arc<Mutex<HashMap<Owner, usize>>>,
+    /// Permits for held `thread/start` requests to answer, one each.
+    pub thread_starts: Arc<tokio::sync::Semaphore>,
+}
+
+impl Default for FakeCodex {
+    fn default() -> Self {
+        Self {
+            behaviour: Default::default(),
+            outlets: Default::default(),
+            starts: Default::default(),
+            thread_starts: Arc::new(tokio::sync::Semaphore::new(0)),
+        }
+    }
 }
 
 impl FakeCodex {
@@ -327,7 +344,7 @@ impl FakeCodex {
                 json!({"data": models, "nextCursor": null})
             }
             "thread/start" => {
-                let id = self.with(|b| {
+                let thread = self.with(|b| {
                     b.next_id += 1;
                     let user = match context.owner {
                         Owner::User(user) => user.to_string(),
@@ -335,7 +352,18 @@ impl FakeCodex {
                     };
                     format!("thr-{user}-{}", b.next_id)
                 });
-                self.session(&id, &params)
+                let session = self.session(&thread, &params);
+                if self.with(|b| b.hold_thread_starts) {
+                    let (gate, out) = (self.thread_starts.clone(), out.clone());
+                    tokio::spawn(async move {
+                        if let Ok(permit) = gate.acquire().await {
+                            permit.forget();
+                        }
+                        let _ = out.send(json!({"id": id, "result": session}));
+                    });
+                    return;
+                }
+                session
             }
             "thread/resume" => {
                 let id = params["threadId"].as_str().unwrap().to_owned();

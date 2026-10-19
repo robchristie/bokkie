@@ -48,6 +48,12 @@ pub struct BotRow {
 }
 
 impl BotRow {
+    /// Whether `thread_id` is the Bot's current thread, rather than one a
+    /// fresh thread replaced.
+    pub fn is_current(&self, thread_id: &str) -> bool {
+        self.thread_id.as_deref() == Some(thread_id)
+    }
+
     /// The Bot as its owner sees it.
     pub fn to_api(&self, working: bool, last_message: Option<MessagePreview>) -> Bot {
         Bot {
@@ -276,17 +282,22 @@ pub async fn bot(db: impl SqliteExecutor<'_>, user: UserId, bot: BotId) -> Resul
     Ok(row.as_ref().map(bot_from))
 }
 
-/// The user's Bot on a Codex thread, if any.
+/// The user's Bot that a Codex thread belongs to, if any: the thread is
+/// the Bot's current one or one a fresh thread replaced
+/// ([`BotRow::is_current`] tells them apart). A replaced thread can still
+/// report the end of its last turn.
 pub async fn bot_by_thread(
     db: impl SqliteExecutor<'_>,
     user: UserId,
     thread_id: &str,
 ) -> Result<Option<BotRow>> {
     let row = sqlx::query(&format!(
-        "SELECT {BOT_COLUMNS} FROM bots WHERE thread_id = ? AND user_id = ?"
+        "SELECT {BOT_COLUMNS} FROM bots
+         WHERE user_id = ?1
+           AND id = (SELECT bot_id FROM bot_threads WHERE user_id = ?1 AND thread_id = ?2)"
     ))
-    .bind(thread_id)
     .bind(user.0)
+    .bind(thread_id)
     .fetch_optional(db)
     .await?;
     Ok(row.as_ref().map(bot_from))
@@ -372,7 +383,8 @@ pub async fn update_bot(
 }
 
 /// Records the Bot's first thread, with the profile revision and grants it
-/// started with.
+/// started with. The thread joins the Bot's threads in the same statement
+/// (a trigger), as with [`replace_thread`].
 pub async fn set_thread(
     db: impl SqliteExecutor<'_>,
     user: UserId,
@@ -555,22 +567,26 @@ pub async fn insert_message(
 }
 
 /// Up to `limit` of the Bot's latest text messages before `before`,
-/// oldest first. Markers are left out.
+/// oldest first, leaving out `except` if given. Markers are left out.
 pub async fn recent_text(
     db: impl SqliteExecutor<'_>,
     user: UserId,
     bot: BotId,
     before: MessageId,
+    except: Option<MessageId>,
     limit: u32,
 ) -> Result<Vec<Message>> {
     let rows = sqlx::query(&format!(
         "SELECT {MESSAGE_COLUMNS} FROM messages
          WHERE bot_id = ? AND user_id = ? AND id < ? AND kind = 'text'
+           AND (? IS NULL OR id != ?)
          ORDER BY id DESC LIMIT ?"
     ))
     .bind(bot.0)
     .bind(user.0)
     .bind(before.0)
+    .bind(except.map(|m| m.0))
+    .bind(except.map(|m| m.0))
     .bind(i64::from(limit))
     .fetch_all(db)
     .await?;
@@ -639,19 +655,23 @@ pub async fn finish_message(
     Ok(row.as_ref().map(message_from))
 }
 
-/// The user's replies still streaming, for one Bot or for every Bot.
+/// The user's replies still streaming: of every Bot, of one Bot, or of
+/// one Bot's turn.
 pub async fn streaming_messages(
     db: impl SqliteExecutor<'_>,
     user: UserId,
     bot: Option<BotId>,
+    turn: Option<&str>,
 ) -> Result<Vec<MessageId>> {
     let rows = sqlx::query(
         "SELECT id FROM messages WHERE user_id = ? AND state = 'streaming'
-           AND (? IS NULL OR bot_id = ?)",
+           AND (? IS NULL OR bot_id = ?) AND (? IS NULL OR turn_id = ?)",
     )
     .bind(user.0)
     .bind(bot.map(|b| b.0))
     .bind(bot.map(|b| b.0))
+    .bind(turn)
+    .bind(turn)
     .fetch_all(db)
     .await?;
     Ok(rows.iter().map(|r| MessageId(r.get("id"))).collect())

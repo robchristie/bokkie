@@ -6,7 +6,7 @@
 //! The model is offered exactly the tools of the Bot's grants; a grant
 //! change starts a fresh thread at the next turn, carrying the conversation
 //! over; and a tool call reaches the broker, which answers it from the
-//! calling Bot's own notes.
+//! calling Bot's own notes or seen items.
 
 mod common;
 
@@ -206,5 +206,77 @@ async fn grants_set_the_tools_and_notes_work_end_to_end() {
     assert!(last_text.contains("You can only talk in this conversation."));
     assert!(last_text.contains("What do you know?"));
     assert!(!last_text.contains("likes apricots"));
+    live.assert_nothing_left_the_machine();
+}
+
+#[tokio::test]
+async fn seen_items_work_end_to_end_beside_notes() {
+    let Some(live) = Live::start(&["Done."]).await else {
+        return;
+    };
+    let mock = &live.model;
+    let gateway = Gateway::live(&live).await;
+    gateway.route().await;
+    let rob = gateway.admin("rob").await;
+    let bot = gateway
+        .send(Call::post("/api/v1/bots").cookie(&rob).json(&json!({
+            "name": "Scout", "label": "Research", "description": "Find papers."})))
+        .await;
+    let bot = bot.body["id"].as_i64().unwrap();
+    let granted = gateway
+        .send(
+            Call::new(axum::http::Method::PATCH, &format!("/api/v1/bots/{bot}"))
+                .cookie(&rob)
+                .json(&json!({"grants": ["seen", "notes"]})),
+        )
+        .await;
+    assert_eq!(granted.status, 200, "{:?}", granted.body);
+
+    // The Bot marks what it showed...
+    mock.call_tool_next(
+        "seen_mark",
+        json!({"items": [{"id": "https://arxiv.org/abs/2401.12345v2", "title": "A paper"}]}),
+    );
+    exchange(&gateway, &rob, bot, "Show me something.", 1).await;
+    let first = request(mock, 0);
+    assert_eq!(
+        MockModel::tools_in(&first),
+        names(&[
+            "notes_append",
+            "notes_read",
+            "notes_replace",
+            "request_user_input",
+            "seen_check",
+            "seen_mark",
+        ])
+    );
+    assert!(first.to_string().contains("seen_check and seen_mark"));
+    let marked = tool_output(&request(mock, 1));
+    assert!(
+        marked.contains("Marked 1 item as shown: arxiv:2401.12345."),
+        "{marked}"
+    );
+
+    // ...and later finds it seen, under any of its ids, beside a new one.
+    mock.call_tool_next(
+        "seen_check",
+        json!({"items": ["arXiv:2401.12345", "2401.54321"]}),
+    );
+    exchange(&gateway, &rob, bot, "Anything new?", 2).await;
+    let checked = tool_output(&request(mock, 3));
+    assert!(checked.contains("A paper"), "{checked}");
+    assert!(checked.contains("arxiv:2401.54321"), "{checked}");
+
+    let calls = gateway
+        .send(Call::get(&format!("/api/v1/bots/{bot}/tool-calls")).cookie(&rob))
+        .await;
+    assert_eq!(calls.body["calls"][0]["tool"], "seen_check");
+    assert_eq!(calls.body["calls"][0]["summary"], "2 items");
+    assert_eq!(calls.body["calls"][1]["tool"], "seen_mark");
+    assert_eq!(
+        calls.body["calls"][1]["summary"],
+        "1 item: arxiv:2401.12345"
+    );
+    assert_eq!(calls.body["calls"][1]["outcome"], "ok");
     live.assert_nothing_left_the_machine();
 }

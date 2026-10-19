@@ -366,15 +366,16 @@ The gateway refuses to serve an app server or thread unless these all hold:
 
 `tests/live_codex.rs` proves the result against the real pinned app server
 with a mock model and a synthetic household sign-in: a thread offers
-exactly the tools of its grants, for no grants and for `notes`, plus
-`request_user_input`, which the gateway answers with an error. Its control
+exactly the tools of its grants, for no grants, `notes`, `seen`, and
+`notes` with `seen`, plus `request_user_input`, which the gateway answers
+with an error. Its control
 test shows that the same capture sees `apply_patch`, `exec_command` and
 `spawn_agent` without the gateway's configuration. Other live tests show
 that a thread runs with every Bubblewrap broken, and that one user's app
 server cannot load another user's thread. `tests/live_tools.rs` drives the
 whole gateway: a grant change starts a fresh thread with the new tools,
 and a tool call the mock model makes reaches the broker and is answered
-from the calling Bot's notes.
+from the calling Bot's notes or seen items.
 
 These results hold for the pinned release: the tool flags, the catalog
 fields and the static catalog are all Codex 0.163.0 behaviour. Moving the
@@ -401,6 +402,14 @@ long-lived Codex thread in that user's app server.
   interrupts the running turn (`turn/interrupt`).
 - After an app server restart, the next message resumes the thread
   (`thread/resume`), which passes the per-thread checks again.
+- A thread that a fresh thread replaced (see
+  [Grants and tools](#grants-and-tools)) still belongs to its Bot. When a
+  message meant to steer a turn arrives just as that turn ends, and the
+  Bot's grants changed meanwhile, the message starts a fresh thread; the
+  old turn's last token report and its end can then arrive after the fresh
+  thread took over. They still reach the Bot: the tokens count, and the end
+  finishes only that turn's replies, leaving the fresh turn running. A
+  replaced thread never starts another turn.
 - Replies stream into the database as they arrive. Deltas are coalesced and
   written at most every 100 ms. A reply ends `complete`, `interrupted` or
   `failed`. Replies cut off by an app server exit or a gateway restart are
@@ -418,9 +427,9 @@ long-lived Codex thread in that user's app server.
 
 Each Bot holds a set of grants from the catalogue `notes`, `seen`,
 `notify`, `web.search` and `web.fetch`, carried as `grants` on the Bot (in
-`GET /api/v1/bots` and `bot_updated` events). Today only `notes` has tools;
-the gateway refuses to grant the others (`invalid_request`) until their
-tools exist.
+`GET /api/v1/bots` and `bot_updated` events). Today `notes` and `seen` have
+tools; the gateway refuses to grant the others (`invalid_request`) until
+their tools exist.
 
 - **Setting them.** `PATCH /api/v1/bots/{id}` with `grants` replaces the
   Bot's set, which commits with a `bot_updated` event. An admin may grant
@@ -437,15 +446,19 @@ tools exist.
   for example, and that thread's first turn carries the Bot's notes (when
   it holds `notes`) and its latest 20 messages, about 8,000 characters at
   most, as a `bokkie-earlier-conversation` context fragment marked
-  untrusted, which Codex 0.163.0 gives the model as a user message. A
-  message sent while a turn runs still steers that turn on its thread.
+  untrusted, which Codex 0.163.0 gives the model as a user message. The
+  message that starts the turn is its input and is never carried over too.
+  A message sent while a turn runs still steers that turn on its thread.
+  A message that starts a turn has its turn counted before a fresh thread
+  starts, so a message refused for want of a turn leaves no marker.
 - **The broker.** The app server asks for a tool with `item/tool/call`.
   Its read loop checks the thread's grants and hands the call to the
   broker, which runs it in its own task. The broker finds the Bot by the
   calling thread, in the app server's own user's Bots, never from the
   call's arguments; a call from a thread with no Bot is answered with an
-  error. If the Bot lost the grant since its thread started, the call is
-  refused with an error. Otherwise the tool runs within its deadline (10
+  error, and only the gateway's own log records it, by its tool's name cut
+  to 64 characters, since no Bot's owner could read it. If the Bot lost
+  the grant since its thread started, the call is refused with an error. Otherwise the tool runs within its deadline (10
   seconds for the notes tools), and the answer, or an error if the
   deadline passes, goes back to the app server. A call that nobody serves,
   because the gateway is shutting down, is answered with an error, since
@@ -456,16 +469,47 @@ tools exist.
   the instructions tell the model the notes are its own working memory,
   not instructions. The owner reads them with `GET /api/v1/bots/{id}/notes`
   (`text` and `updated_at`) and clears them with `DELETE`.
+- **Seen items.** `seen` brings `seen_check` and `seen_mark`, a per-Bot
+  record of the items the Bot showed its owner, so that it does not show
+  them again. `seen_check` takes up to 50 arXiv ids, DOIs or links and
+  answers, as JSON, each one's canonical id and whether it was seen, with
+  the title it was shown under, its link and how many days ago. `seen_mark`
+  takes up to 50 items, each an id with a title and an optional link, and
+  records them as shown now; if any is invalid, none is marked. An item is
+  kept 365 days from when it was last shown, and a Bot keeps at most 10,000,
+  the oldest going first. Items are stored by canonical id:
+  - an arXiv id, such as `arXiv:2401.12345v2`, `2401.12345` or
+    `hep-th/9901001`, becomes `arxiv:<id>` without its version. So do
+    arXiv's links (`/abs/`, `/pdf/` and `/html/` on `arxiv.org`), arXiv's
+    DOIs (`10.48550/arXiv.<id>`) and Hugging Face paper pages
+    (`huggingface.co/papers/<id>`), so one paper found in several places
+    is one item;
+  - a DOI, such as `10.1000/xyz`, `doi:10.1000/xyz` or a `doi.org` link,
+    becomes `doi:<doi>` in lower case, since DOIs ignore case;
+  - any other http or https link becomes `https://<host><path>?<query>`:
+    parsed as a browser would, with the host in lower case and without a
+    leading `www.`, a trailing dot or a default port, http and https alike,
+    no user name, password or fragment, the `utm_` and other tracking
+    parameters (`fbclid`, `gclid` and the like) removed, the other
+    parameters sorted, and no `/` after the path. A link without a scheme
+    is read as https when its host has a dot.
 - **The tool-call log.** Every call the broker resolves to a Bot is
-  recorded with its user, Bot, thread, turn and call ids, the tool, a
-  bounded summary of its arguments (for the notes tools, the size of the
-  text, never the text), the outcome (`ok`, `failed`, `refused` or
-  `timed_out`) and how long it took. The owner reads a Bot's calls, newest
-  first, with `GET /api/v1/bots/{id}/tool-calls?before=&limit=`. The minute
-  pass deletes entries older than 90 days.
+  recorded, refused ones included, with its user, Bot, thread, turn and
+  call ids, the tool, a bounded summary of its arguments (for the notes
+  tools, the size of the text, never the text; for `seen_check`, how many
+  items; for `seen_mark`, how many and their canonical ids), the outcome
+  (`ok`, `failed`, `refused` or `timed_out`) and how long it took. The
+  owner reads a Bot's calls, newest first, with
+  `GET /api/v1/bots/{id}/tool-calls?before=&limit=`. A call the app
+  server's read loop refuses, because its thread was not granted the tool,
+  never reaches the broker: it is a violation (see
+  [The capability rule](#the-capability-rule)), recorded as the Bot's
+  refusal. The minute pass deletes entries older than 90 days, and seen
+  items last shown more than 365 days ago.
 
 Every query names the signed-in user, or for the broker the app server's
-user: another user's Bot's grants, notes and tool calls read as not found.
+user: another user's Bot's grants, notes, seen items and tool calls read as
+not found.
 
 ## The event WebSocket
 
@@ -547,6 +591,8 @@ limits, and when a window rolls over.
   sends until it is ready.
 - Codex sends sparse rate-limit updates; the gateway merges the values each
   one carries, and reads the windows afresh once a known reset time passes.
+  Each thread's total is measured from its own last report, so a fresh
+  thread counts from zero and a replaced thread's late report still counts.
   A thread total that falls is taken as a new baseline. Totals include
   cached input, so a long conversation uses a token allowance faster than
   its visible length suggests.

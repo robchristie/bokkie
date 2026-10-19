@@ -1,6 +1,7 @@
 # Phase 2 end-to-end check: the gateway and a real Codex app server in the
-# qualified image, under Docker's default confinement. Chat-only threads
-# need no Bubblewrap, so no relaxed seccomp or AppArmor profile is used.
+# qualified image, under Docker's default confinement. Threads that run no
+# command need no Bubblewrap, so no relaxed seccomp or AppArmor profile is
+# used.
 # The project name is bokkie-e2e (set by run.sh); never use `bokkie`.
 # No ports are published and there is no Traefik route.
 services:

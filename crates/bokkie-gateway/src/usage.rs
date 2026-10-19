@@ -59,23 +59,29 @@ pub async fn release_turn(db: impl SqliteExecutor<'_>, user: UserId, turn: i64) 
     Ok(())
 }
 
-/// Records a thread's reported token total, storing its growth since the
-/// last report. A total lower than the last one becomes the new baseline.
-/// It reads and then writes, so `conn` must be in a write transaction, such
-/// as an event batch.
+/// Records the token total reported for one of the Bot's threads, storing
+/// its growth since that thread's last report. Each thread has its own
+/// baseline, so a fresh thread counts from zero and a replaced thread's
+/// late report is measured against its own last one. A total lower than the
+/// last one becomes the new baseline. It reads and then writes, so `conn`
+/// must be in a write transaction, such as an event batch.
 pub async fn record_tokens(
     conn: &mut SqliteConnection,
     now: Timestamp,
     user: UserId,
     bot: BotId,
+    thread_id: &str,
     thread_total: u64,
 ) -> Result<u64> {
-    let reported: Option<i64> =
-        sqlx::query_scalar("SELECT tokens_reported FROM bots WHERE id = ? AND user_id = ?")
-            .bind(bot.0)
-            .bind(user.0)
-            .fetch_optional(&mut *conn)
-            .await?;
+    let reported: Option<i64> = sqlx::query_scalar(
+        "SELECT tokens_reported FROM bot_threads
+         WHERE user_id = ? AND thread_id = ? AND bot_id = ?",
+    )
+    .bind(user.0)
+    .bind(thread_id)
+    .bind(bot.0)
+    .fetch_optional(&mut *conn)
+    .await?;
     let Some(reported) = reported else {
         return Err(Failure::not_found());
     };
@@ -83,10 +89,10 @@ pub async fn record_tokens(
     // A total that fell is a new baseline, not new usage: counting it all
     // could lock a user out for a whole thread's history.
     let growth = (total - reported).max(0);
-    sqlx::query("UPDATE bots SET tokens_reported = ? WHERE id = ? AND user_id = ?")
+    sqlx::query("UPDATE bot_threads SET tokens_reported = ? WHERE user_id = ? AND thread_id = ?")
         .bind(total)
-        .bind(bot.0)
         .bind(user.0)
+        .bind(thread_id)
         .execute(&mut *conn)
         .await?;
     if growth > 0 {
