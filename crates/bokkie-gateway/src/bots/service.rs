@@ -23,7 +23,7 @@ use bokkie_codex::protocol::{
 };
 use bokkie_protocol::api::{
     Allowance, Author, Delivery, ErrorCode, Grant, Message, MessageKind, MessageState, RunState,
-    SendMessageResponse, Usage,
+    RunTrigger, SendMessageResponse, Usage,
 };
 use bokkie_protocol::events::Event;
 use bokkie_protocol::{BotId, MessageId, RoutineRunId, Timestamp, UserId};
@@ -290,6 +290,9 @@ pub enum RoutineStart {
     SignedOut,
     /// The run cannot start, for this reason, safe to show.
     Failed(String),
+    /// The run is due on the routine's schedule, but the routine is now
+    /// paused.
+    Paused,
     /// The run is no longer waiting: another attempt started it, or it
     /// ended.
     NotWaiting,
@@ -732,9 +735,11 @@ impl Conversations {
     /// routine's prompt, begun in the conversation by the run's marker,
     /// through the same core as a user's message. It never steers: a Bot
     /// that is mid-turn, or whose send lock is held, is
-    /// [`RoutineStart::Busy`]. The run must still be waiting; it is marked
-    /// running, with its turn, before the Bot's lock is released, so that
-    /// no other attempt starts it again.
+    /// [`RoutineStart::Busy`]. The run must still be waiting, and a
+    /// scheduled run's routine must not be paused, both read under the
+    /// Bot's lock, which pausing a routine takes too. The run is marked
+    /// running, with its turn, before the Bot's lock is released, so that no
+    /// other attempt starts it again.
     pub async fn start_routine(
         &self,
         owner: &Account,
@@ -765,10 +770,20 @@ impl Conversations {
         about: String,
     ) -> Result<RoutineStart> {
         let user = owner.user.id;
-        match routines::store::run(&self.db, user, run).await? {
-            Some(row) if row.state == RunState::Waiting => {}
+        let trigger = match routines::store::run(&self.db, user, run).await? {
+            Some(row) if row.state == RunState::Waiting => row.trigger,
             _ => return Ok(RoutineStart::NotWaiting),
+        };
+        // The routine as it is now: a pause that came first holds its
+        // scheduled runs back. A manual run is asked for while paused.
+        let Some(routine) = routines::store::routine_of_user(&self.db, user, routine.id).await?
+        else {
+            return Ok(RoutineStart::NotWaiting);
+        };
+        if routine.paused && trigger == RunTrigger::Schedule {
+            return Ok(RoutineStart::Paused);
         }
+        let routine = &routine;
         let Some(bot) = store::bot(&self.db, user, routine.bot).await? else {
             return Ok(RoutineStart::Failed("The Bot no longer exists".into()));
         };
@@ -859,6 +874,9 @@ impl Conversations {
         .await?
         {
             routines::emit_run(&mut batch, &running).await?;
+            // Calls the model made before the run was running are its too.
+            tools::audit::attribute_to_run(&mut *batch, user, bot.id, &thread_id, &turn_id, run)
+                .await?;
         }
         if let Some(status) = self.turn_end(user, &turn_id) {
             routines::end_turn(&mut batch, self.clock.now(), user, &turn_id, status, false).await?;
@@ -1371,7 +1389,8 @@ impl Conversations {
                         .await?;
                         self.commit(batch).await;
                         if ended {
-                            self.idle.notify_waiters();
+                            // Kept for the scheduler if it is mid-pass.
+                            self.idle.notify_one();
                         }
                     }
                 }

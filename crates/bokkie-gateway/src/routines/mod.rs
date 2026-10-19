@@ -18,12 +18,20 @@
 //!   waits while the household's ChatGPT sign-in is unavailable until
 //!   [`MISFIRE_WINDOW_MS`] after it was due, and then is `missed`. A
 //!   refused allowance or Bot makes it `failed`. A disabled account's runs
-//!   are `missed`.
+//!   are `missed`. Pausing a routine skips its waiting run, and a
+//!   scheduled run of a paused routine never starts. An attempt to start a
+//!   run ends it only while it is still waiting ([`end_waiting`]): a run
+//!   another attempt started ends with its turn.
 //! - **Ended.** The router ends a running run with its turn
 //!   ([`end_turn`]): `succeeded`, `failed` or `interrupted`. The pass
 //!   interrupts a turn that runs past [`RUN_DEADLINE_MS`]. An app server
 //!   that stops fails the user's running runs, and so does a gateway
 //!   restart ([`Routines::recover`]).
+//!
+//! The pass itself only reads and writes the database. Each start, and each
+//! deadline's interrupt, runs in a task of its own that holds its run (one
+//! task per run at a time), so a user's slow app server holds up no other
+//! user's runs, and no later pass.
 //!
 //! Every change to a run goes out as [`Event::RoutineRunUpdated`] through
 //! [`emit_run`], the one place a run's end is announced, so later work can
@@ -33,6 +41,8 @@
 pub mod schedule;
 pub mod store;
 
+use std::collections::HashSet;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,7 +51,7 @@ use bokkie_protocol::api::{
     CreateRoutineRequest, Routine, RoutineRun, RunState, RunTrigger, UpdateRoutineRequest,
 };
 use bokkie_protocol::events::Event;
-use bokkie_protocol::{BotId, RoutineId, Timestamp, UserId};
+use bokkie_protocol::{BotId, RoutineId, RoutineRunId, Timestamp, UserId};
 use sqlx::SqlitePool;
 
 use self::store::{NewRoutine, NewRun, RoutineRow, RunRow, Waiting};
@@ -78,6 +88,7 @@ pub mod reasons {
     pub const OUT_OF_TOKENS: &str = "Your token allowance ran out, so the run was stopped";
     pub const TURN_FAILED: &str = "The Bot's turn failed";
     pub const RESTARTED: &str = "Bokkie restarted during the run";
+    pub const PAUSED: &str = "The routine was paused before the run started";
 }
 
 /// Announces a run as it now is, with the messages it added to the
@@ -106,7 +117,37 @@ pub async fn end_run(
     else {
         return Ok(None);
     };
-    emit_run(batch, &ended).await?;
+    announce_end(batch, now, &ended, state).await?;
+    Ok(Some(ended))
+}
+
+/// Ends a run in `state` as [`end_run`] does, but only if it is still
+/// waiting: a run that started in the meantime is left to end with its
+/// turn. Returns the run if it was waiting.
+pub async fn end_waiting(
+    batch: &mut Batch,
+    now: Timestamp,
+    run: &RunRow,
+    state: RunState,
+    reason: Option<&str>,
+) -> Result<Option<RunRow>> {
+    let Some(ended) =
+        store::finish_waiting(&mut **batch, now, run.user, run.id, state, reason).await?
+    else {
+        return Ok(None);
+    };
+    announce_end(batch, now, &ended, state).await?;
+    Ok(Some(ended))
+}
+
+/// Announces a run that just ended in `state`, and counts its outcome.
+async fn announce_end(
+    batch: &mut Batch,
+    now: Timestamp,
+    ended: &RunRow,
+    state: RunState,
+) -> Result<()> {
+    emit_run(batch, ended).await?;
     let failed = match state {
         RunState::Failed => Some(true),
         RunState::Interrupted if ended.deadline_passed_at.is_some() => Some(true),
@@ -114,7 +155,7 @@ pub async fn end_run(
         _ => None,
     };
     if let Some(failed) = failed
-        && let Some(routine) = store::count_outcome(batch, now, &ended, failed).await?
+        && let Some(routine) = store::count_outcome(batch, now, ended, failed).await?
     {
         batch
             .emit(Event::RoutineUpdated {
@@ -122,7 +163,7 @@ pub async fn end_run(
             })
             .await?;
     }
-    Ok(Some(ended))
+    Ok(())
 }
 
 /// Ends the run of one of the user's turns that ended with `status`, if a
@@ -179,14 +220,58 @@ pub async fn end_running(
 }
 
 /// The routine service: routines through the API, and the scheduler.
-#[derive(Debug)]
+/// Clones share the scheduler's state.
+#[derive(Debug, Clone)]
 pub struct Routines {
     db: SqlitePool,
     clock: Clock,
     events: Arc<EventLog>,
     conversations: Arc<Conversations>,
     /// Woken by "run now", so the scheduler starts the run at once.
-    wake: tokio::sync::Notify,
+    wake: Arc<tokio::sync::Notify>,
+    tasks: Arc<Tasks>,
+}
+
+/// The runs the scheduler's tasks hold: at most one task per run.
+#[derive(Debug, Default)]
+struct Tasks {
+    runs: std::sync::Mutex<HashSet<RoutineRunId>>,
+    /// Woken whenever a task lets its run go.
+    released: tokio::sync::Notify,
+}
+
+impl Tasks {
+    fn runs(&self) -> std::sync::MutexGuard<'_, HashSet<RoutineRunId>> {
+        self.runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Waits until `holding` is false of the runs held.
+    async fn until_not(&self, holding: impl Fn(&HashSet<RoutineRunId>) -> bool) {
+        loop {
+            let released = self.released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            if !holding(&self.runs()) {
+                return;
+            }
+            released.await;
+        }
+    }
+}
+
+/// A task's hold on its run, let go however the task ends.
+struct Claim {
+    tasks: Arc<Tasks>,
+    run: RoutineRunId,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        self.tasks.runs().remove(&self.run);
+        self.tasks.released.notify_waiters();
+    }
 }
 
 impl Routines {
@@ -202,6 +287,7 @@ impl Routines {
             events,
             conversations,
             wake: Default::default(),
+            tasks: Default::default(),
         }
     }
 
@@ -280,6 +366,13 @@ impl Routines {
         if let Some(schedule) = &request.schedule {
             schedule::check(schedule)?;
         }
+        // Pausing waits for any start of a run of the Bot, which holds the
+        // Bot's lock, so that a run starts either before the pause or not
+        // at all.
+        let _starts = match request.paused {
+            Some(true) => Some(self.conversations.lock_bot(user, bot).await),
+            _ => None,
+        };
         let now = self.clock.now();
         let mut batch = self.events.begin(user).await?;
         let account = own_account(&mut batch, user).await?;
@@ -318,6 +411,20 @@ impl Routines {
                 routine: routine.clone(),
             })
             .await?;
+        // A pause skips the run that waits to start.
+        if routine.paused
+            && !was_paused
+            && let Some(waiting) = store::active_run(&mut *batch, user, id).await?
+        {
+            end_waiting(
+                &mut batch,
+                now,
+                &waiting,
+                RunState::Skipped,
+                Some(reasons::PAUSED),
+            )
+            .await?;
+        }
         batch.commit().await?;
         tracing::info!(user = %user, bot = %bot, routine = %id, paused = routine.paused, "updated a routine");
         Ok(routine)
@@ -364,7 +471,10 @@ impl Routines {
             return self.to_api(&run).await;
         };
         if run.state == RunState::Waiting {
-            self.try_start(&run, now).await?;
+            // In a task of its own, as the scheduler starts it, so that it
+            // starts once, and whole however this request ends.
+            self.spawn_start(&run, now);
+            self.tasks.until_not(|runs| runs.contains(&run.id)).await;
             self.wake.notify_one();
         }
         let run = store::run(&self.db, user, run.id)
@@ -452,42 +562,66 @@ impl Routines {
     }
 
     /// One pass of the scheduler at `now`: queues the runs of due routines,
-    /// starts waiting runs that can start, and interrupts runs past their
-    /// deadline.
+    /// and sets off starting the waiting runs and enforcing the running
+    /// runs' deadlines, each in a task of its own that holds its run. It
+    /// waits on no app server; a run whose task from an earlier pass is
+    /// still going is left to that task.
     pub async fn pass(&self, now: Timestamp) -> Result<()> {
         for routine in store::due(&self.db, now).await? {
             if let Err(failure) = self.fall_due(&routine, now).await {
                 tracing::error!(user = %routine.user, routine = %routine.id, message = %failure.message, "queuing a routine's run failed");
             }
         }
-        // Each waiting run starts in its own task, so that one user's slow
-        // app server holds up nobody else's.
-        let mut starts = tokio::task::JoinSet::new();
         for run in store::active_runs(&self.db, RunState::Waiting).await? {
-            let routines = self.clone_parts();
-            starts.spawn(async move {
-                if let Err(failure) = routines.try_start(&run, now).await {
-                    tracing::error!(user = %run.user, run = %run.id, message = %failure.message, "starting a routine's run failed");
-                }
-            });
+            self.spawn_start(&run, now);
         }
-        while starts.join_next().await.is_some() {}
         for run in store::active_runs(&self.db, RunState::Running).await? {
-            if let Err(failure) = self.enforce_deadline(&run, now).await {
-                tracing::error!(user = %run.user, run = %run.id, message = %failure.message, "stopping a routine's run failed");
-            }
+            let this = self.clone();
+            let held = run.clone();
+            self.spawn_holding(&run, "stopping a routine's run", async move {
+                this.enforce_deadline(&held, now).await
+            });
         }
         Ok(())
     }
 
-    /// A copy of the service for a task.
-    fn clone_parts(&self) -> Self {
-        Self::new(
-            self.db.clone(),
-            self.clock.clone(),
-            self.events.clone(),
-            self.conversations.clone(),
-        )
+    /// Waits until every task the scheduler set off has finished, such as
+    /// a pass's starts.
+    pub async fn settle(&self) {
+        self.tasks.until_not(|runs| !runs.is_empty()).await;
+    }
+
+    /// Sets off starting a waiting run, unless a task holds it already.
+    fn spawn_start(&self, run: &RunRow, now: Timestamp) {
+        let this = self.clone();
+        let held = run.clone();
+        self.spawn_holding(run, "starting a routine's run", async move {
+            this.try_start(&held, now).await
+        });
+    }
+
+    /// Runs `work` in a task that holds `run` until it finishes, unless
+    /// another task holds it already.
+    fn spawn_holding(
+        &self,
+        run: &RunRow,
+        doing: &'static str,
+        work: impl Future<Output = Result<()>> + Send + 'static,
+    ) {
+        if !self.tasks.runs().insert(run.id) {
+            return;
+        }
+        let claim = Claim {
+            tasks: self.tasks.clone(),
+            run: run.id,
+        };
+        let (user, id) = (run.user, run.id);
+        tokio::spawn(async move {
+            let _claim = claim;
+            if let Err(failure) = work.await {
+                tracing::error!(user = %user, run = %id, message = %failure.message, "{doing} failed");
+            }
+        });
     }
 
     /// Queues the run of a routine that fell due, and schedules its next.
@@ -584,15 +718,17 @@ impl Routines {
         Ok(Some(run))
     }
 
-    /// Tries to start a waiting run.
-    async fn try_start(&self, run: &RunRow, now: Timestamp) -> Result<()> {
+    /// Tries to start a waiting run, as the scheduler's tasks do. `run` may
+    /// be out of date: an attempt that does not start it ends it only if it
+    /// is still waiting.
+    pub async fn try_start(&self, run: &RunRow, now: Timestamp) -> Result<()> {
         let user = run.user;
         let Some(account) = accounts::account(&self.db, user).await? else {
             return Ok(());
         };
         if account.user.disabled {
             return self
-                .end(run, now, RunState::Missed, Some(reasons::DISABLED))
+                .end_unstarted(run, now, RunState::Missed, Some(reasons::DISABLED))
                 .await;
         }
         let Some(routine) = store::routine_of_user(&self.db, user, run.routine).await? else {
@@ -635,9 +771,13 @@ impl Routines {
                 Ok(())
             }
             RoutineStart::NotWaiting => Ok(()),
+            RoutineStart::Paused => {
+                self.end_unstarted(run, now, RunState::Skipped, Some(reasons::PAUSED))
+                    .await
+            }
             RoutineStart::Busy => {
                 if now.0 - run.queued_at.0 >= BUSY_WAIT_MS {
-                    self.end(run, now, RunState::Skipped, Some(reasons::BUSY))
+                    self.end_unstarted(run, now, RunState::Skipped, Some(reasons::BUSY))
                         .await
                 } else {
                     self.wait(run, Waiting::Busy, reasons::WAITING_BUSY).await
@@ -645,7 +785,7 @@ impl Routines {
             }
             RoutineStart::SignedOut => {
                 if now.0 - run.scheduled_for.0 > MISFIRE_WINDOW_MS {
-                    self.end(run, now, RunState::Missed, Some(reasons::SIGNED_OUT))
+                    self.end_unstarted(run, now, RunState::Missed, Some(reasons::SIGNED_OUT))
                         .await
                 } else {
                     self.wait(run, Waiting::SignedOut, reasons::WAITING_SIGNED_OUT)
@@ -654,7 +794,8 @@ impl Routines {
             }
             RoutineStart::Failed(reason) => {
                 tracing::info!(user = %user, run = %run.id, %reason, "a routine's run failed to start");
-                self.end(run, now, RunState::Failed, Some(&reason)).await
+                self.end_unstarted(run, now, RunState::Failed, Some(&reason))
+                    .await
             }
         }
     }
@@ -695,6 +836,20 @@ impl Routines {
             return Ok(());
         };
         end_run(&mut batch, now, &current, state, reason).await?;
+        batch.commit().await?;
+        Ok(())
+    }
+
+    /// Ends a run that an attempt did not start, if it is still waiting.
+    async fn end_unstarted(
+        &self,
+        run: &RunRow,
+        now: Timestamp,
+        state: RunState,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        let mut batch = self.events.begin(run.user).await?;
+        end_waiting(&mut batch, now, run, state, reason).await?;
         batch.commit().await?;
         Ok(())
     }

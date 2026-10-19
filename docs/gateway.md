@@ -547,7 +547,7 @@ from it.
   | --- | --- |
   | `GET /api/v1/routines` | Lists every routine of the user's, by id, with the `seq` it reflects |
   | `GET`, `POST /api/v1/bots/{id}/routines` | Lists the Bot's routines, or creates one: `name` (1 to 60 characters, one line, unique on the Bot whatever its case), `prompt` (1 to 8,000 characters), `schedule`, `push` (`every_run`, the default, or `notify_only`) and `paused`. A user has at most 20 routines (`conflict` beyond) |
-  | `GET`, `PATCH`, `DELETE /api/v1/bots/{id}/routines/{routine}` | Reads, changes or deletes one. A new schedule, or resuming a paused routine, schedules it from now, so times missed while paused do not run; resuming also clears its failures. Deleting it deletes its runs; the conversation keeps its markers |
+  | `GET`, `PATCH`, `DELETE /api/v1/bots/{id}/routines/{routine}` | Reads, changes or deletes one. Pausing it waits for a turn of the Bot that is starting, then skips its run that waits to start; one already running carries on. A new schedule, or resuming a paused routine, schedules it from now, so times missed while paused do not run; resuming also clears its failures. Deleting it deletes its runs; the conversation keeps its markers |
   | `POST /api/v1/bots/{id}/routines/{routine}/run` | "Run now": a `manual` run, queued and started exactly as a scheduled one, paused or not. Answers with the run as it then is |
   | `GET /api/v1/bots/{id}/routines/{routine}/runs?before=&limit=` | The routine's run history, newest first |
 
@@ -557,7 +557,9 @@ from it.
   stored for notifications, which are not built yet.
 - **The scheduler.** Every 10 seconds, and as soon as a Bot's turn ends,
   the gateway queues a run of each routine whose time has come and starts
-  the runs that can start. A run records its routine, its trigger
+  the runs that can start. Each start, and each interrupt of a run past its
+  deadline, goes on by itself, one at a time per run, so one user's slow
+  app server holds up no other run. A run records its routine, its trigger
   (`schedule` or `manual`), when it was due (`scheduled_for`) and when its
   turn started and ended, its state and why, the messages it added to the
   conversation and the tokens its turn used. Each change arrives as
@@ -570,8 +572,10 @@ from it.
     late; times missed longer ago are recorded as one missed run;
   - `skipped`: the routine's previous run was still running (one run per
     routine at a time; a time that falls due while its previous run still
-    waits is coalesced into it), or the Bot was mid-turn for 30 minutes. A
-    run never steers a turn: it waits for the Bot to be idle;
+    waits is coalesced into it), the Bot was mid-turn for 30 minutes, or
+    the routine was paused before the run started. A run never steers a
+    turn: it waits for the Bot to be idle. A run starts while its routine
+    is paused only when it was run by hand;
   - `failed` before it starts: the user's allowance was used up, or the
     Bot was refused or its runtime unavailable.
 - **A run's turn.** The conversation gets a marker message (kind `marker`,
@@ -584,7 +588,8 @@ from it.
   allowances like any other. It is interrupted after 15 minutes, and ended
   a minute later if the app server never confirms it. A user's message
   while it runs steers it, as any message to a working Bot does. A tool it
-  calls is logged with the run (`routine_run_id` on the Bot's tool calls).
+  calls is logged with the run (`routine_run_id` on the Bot's tool calls),
+  including a call the model made before the run was recorded running.
 - **Failures.** A run that fails, or is interrupted for running too long,
   adds one to its routine's `failures`; a run that succeeds clears them.
   Three in a row pause the routine. Missed and skipped runs, and a turn
