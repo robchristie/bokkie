@@ -14,6 +14,8 @@ base64 = "0.22"
 bokkie-codex = { path = "../bokkie-codex" }
 bokkie-protocol = { path = "../bokkie-protocol" }
 getrandom = "0.3"
+# Time zones from the system's tzdata (`/usr/share/zoneinfo`).
+jiff = { version = "0.2.38", default-features = false, features = ["std", "tz-fat", "tzdb-zoneinfo"] }
 percent-encoding = "2"
 serde.workspace = true
 serde_json.workspace = true

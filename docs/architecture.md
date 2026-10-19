@@ -46,8 +46,8 @@ These crates appear as each phase needs them:
 ### Data ownership
 
 - **Bokkie's SQLite** is the source of truth for accounts, Bot profiles,
-  conversation-to-thread mapping, Bot-to-Bot routing, the client event log and
-  usage accounting.
+  conversation-to-thread mapping, Bot-to-Bot routing, routines and their
+  run history, the client event log and usage accounting.
 - **Codex's rollout files and state database**, kept under each user's
   `CODEX_HOME`, are the source of truth for what the model saw.
 - Bokkie keeps its own projection of each conversation for the UI. That way
@@ -71,6 +71,15 @@ These crates appear as each phase needs them:
   calling thread and turn, needs no extra process, and survives
   `thread/resume`. Every one runs in the gateway, brokered off the app
   server's read loop.
+- **Routines.** A Bot can own routines: prompts the gateway runs on a
+  structured schedule (daily, weekdays, chosen days, or every few hours, at
+  a local time) in its owner's time zone, since the app server has no
+  scheduler. A run is a new turn in the Bot's own thread, with its grants,
+  behind a compact marker in the conversation, so follow-ups work. It
+  never steers a running turn, runs one at a time per routine, counts
+  against the owner's allowances and is interrupted after 15 minutes;
+  runs missed while the gateway was down run once, late, within six hours.
+  [docs/gateway.md](gateway.md#routines) describes the rules.
 - Approvals arrive as app-server server-to-client requests:
   `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`
   and `item/permissions/requestApproval`. They are shown only to the owning

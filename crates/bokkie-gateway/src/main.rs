@@ -39,6 +39,14 @@ async fn main() -> ExitCode {
 
 async fn serve() -> Result<(), String> {
     let config = Config::from_env()?;
+    // Routines are scheduled in their owners' time zones, which come from
+    // the system's tzdata. Without it, every zone would read as unknown.
+    let default_zone = bokkie_protocol::api::DEFAULT_TIME_ZONE;
+    if bokkie_gateway::routines::schedule::zone(default_zone).is_none() {
+        return Err(format!(
+            "the system's time-zone database has no {default_zone}; install tzdata"
+        ));
+    }
     let pool = db::open(&config.database_path())
         .await
         .map_err(|e| format!("database: {e}"))?;
@@ -56,12 +64,19 @@ async fn serve() -> Result<(), String> {
             .map_err(|e| format!("loading sign-in limits: {e}"))?,
     );
     state.conversations.recover().await.map_err(|f| f.message)?;
+    state.routines.recover().await.map_err(|f| f.message)?;
     tokio::spawn(state.conversations.clone().run(events));
     tokio::spawn(
         state
             .conversations
             .clone()
             .run_rollovers(bokkie_gateway::bots::service::ROLLOVER_INTERVAL),
+    );
+    tokio::spawn(
+        state
+            .routines
+            .clone()
+            .run(bokkie_gateway::routines::PASS_INTERVAL),
     );
     tracing::info!(listen = %state.config.listen, origin = state.config.origin.as_str(), "serving");
     if let Some(root) = &state.config.web_root {

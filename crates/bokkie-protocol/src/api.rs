@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::events::Seq;
-use crate::{BotId, MessageId, Timestamp, UserId};
+use crate::{BotId, MessageId, RoutineId, RoutineRunId, Timestamp, UserId};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -128,6 +128,28 @@ pub struct User {
     /// When oversight last changed, if it ever has.
     #[serde(default)]
     pub oversight_changed_at: Option<Timestamp>,
+    /// The IANA time zone the account's routines are scheduled in, such as
+    /// `Australia/Adelaide`. Its owner sets it with
+    /// `PUT /api/v1/session/time-zone`.
+    #[serde(default = "default_time_zone")]
+    pub time_zone: String,
+}
+
+/// The time zone of an account that has not chosen one.
+pub const DEFAULT_TIME_ZONE: &str = "Australia/Adelaide";
+
+fn default_time_zone() -> String {
+    DEFAULT_TIME_ZONE.into()
+}
+
+/// `PUT /api/v1/session/time-zone`: the signed-in user's time zone, an IANA
+/// name the gateway knows, such as `Europe/London`. The user's routines
+/// are rescheduled in it at once. Answers with [`SessionResponse`]; the
+/// user's other clients hear of it as
+/// [`Event::AccountUpdated`](crate::events::Event::AccountUpdated).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetTimeZoneRequest {
+    pub time_zone: String,
 }
 
 /// `POST /api/v1/session`: sign in with a password. Success sets the session
@@ -546,6 +568,19 @@ pub struct Message {
     pub updated_at: Timestamp,
     #[serde(default)]
     pub kind: MessageKind,
+    /// For the marker that begins a routine's run: the routine, the run,
+    /// and the prompt the Bot was given, for a client to show folded away.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine: Option<MessageRoutine>,
+}
+
+/// What a routine run's marker in the conversation carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageRoutine {
+    pub routine_id: RoutineId,
+    pub run_id: RoutineRunId,
+    /// The routine's prompt as the run gave it to the Bot.
+    pub prompt: String,
 }
 
 /// `GET /api/v1/bots/{id}/messages?before={message_id}&limit={n}`, newest
@@ -582,6 +617,269 @@ pub enum Delivery {
 pub struct SendMessageResponse {
     pub message: Message,
     pub delivery: Delivery,
+}
+
+// ---------------------------------------------------------------------------
+// Routines
+
+/// A day of the week.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Weekday {
+    Mon,
+    Tue,
+    Wed,
+    Thu,
+    Fri,
+    Sat,
+    Sun,
+}
+
+impl Weekday {
+    /// Monday to Sunday.
+    pub const ALL: [Self; 7] = [
+        Self::Mon,
+        Self::Tue,
+        Self::Wed,
+        Self::Thu,
+        Self::Fri,
+        Self::Sat,
+        Self::Sun,
+    ];
+}
+
+/// A local time of day, `"HH:MM"` on the wire in 24-hour time, such as
+/// `"07:00"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TimeOfDay {
+    hour: u8,
+    minute: u8,
+}
+
+impl TimeOfDay {
+    /// The time, if `hour` is 0 to 23 and `minute` 0 to 59.
+    pub fn new(hour: u8, minute: u8) -> Option<Self> {
+        (hour < 24 && minute < 60).then_some(Self { hour, minute })
+    }
+
+    pub fn hour(self) -> u8 {
+        self.hour
+    }
+
+    pub fn minute(self) -> u8 {
+        self.minute
+    }
+}
+
+impl std::fmt::Display for TimeOfDay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02}:{:02}", self.hour, self.minute)
+    }
+}
+
+impl std::str::FromStr for TimeOfDay {
+    type Err = String;
+
+    /// Reads `"HH:MM"`, two digits each.
+    fn from_str(text: &str) -> Result<Self, String> {
+        let invalid = || format!("{text:?} is not a time of day such as \"07:00\"");
+        let (hour, minute) = text.split_once(':').ok_or_else(invalid)?;
+        let digits = |part: &str| {
+            (part.len() == 2 && part.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| part.parse::<u8>().ok())
+                .flatten()
+        };
+        match (digits(hour), digits(minute)) {
+            (Some(hour), Some(minute)) => Self::new(hour, minute).ok_or_else(invalid),
+            _ => Err(invalid()),
+        }
+    }
+}
+
+impl Serialize for TimeOfDay {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for TimeOfDay {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// When a routine runs, in its owner's time zone ([`User::time_zone`]).
+/// A local time that does not exist on a day the clocks go forward runs at
+/// the first valid instant after it; one that happens twice when they go
+/// back runs once, the first time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "repeat", rename_all = "snake_case")]
+pub enum Schedule {
+    /// Every day at `at`.
+    Daily { at: TimeOfDay },
+    /// Monday to Friday at `at`.
+    Weekdays { at: TimeOfDay },
+    /// On the chosen days at `at`. At least one day.
+    Days { days: Vec<Weekday>, at: TimeOfDay },
+    /// Every `every` hours through the day, at `at` and the local times a
+    /// multiple of `every` hours from it. `every` divides a day: 1, 2, 3,
+    /// 4, 6, 8 or 12.
+    Hours { every: u8, at: TimeOfDay },
+}
+
+impl Schedule {
+    /// The intervals, in hours, that [`Schedule::Hours`] allows.
+    pub const EVERY_HOURS: [u8; 7] = [1, 2, 3, 4, 6, 8, 12];
+}
+
+/// When a routine's run notifies its owner.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutinePush {
+    /// Every finished run notifies.
+    #[default]
+    EveryRun,
+    /// Only a run in which the Bot calls `notify`.
+    NotifyOnly,
+}
+
+/// A routine: a prompt one of the user's Bots runs on a schedule, in the
+/// Bot's own conversation, with the Bot's grants.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Routine {
+    pub id: RoutineId,
+    pub bot_id: BotId,
+    /// A short name, shown on the run's marker, such as "Morning digest".
+    pub name: String,
+    /// What the Bot is asked each run.
+    pub prompt: String,
+    pub schedule: Schedule,
+    pub push: RoutinePush,
+    /// A paused routine does not run on its schedule. Three failed runs in
+    /// a row pause it.
+    pub paused: bool,
+    /// Failed runs in a row since the last one that succeeded or the
+    /// routine was resumed. A paused routine with three paused itself.
+    pub failures: u32,
+    /// When the routine next runs; `None` while paused.
+    pub next_run_at: Option<Timestamp>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+/// `GET /api/v1/bots/{id}/routines`, or every routine of the user's at
+/// `GET /api/v1/routines`, ordered by id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutineList {
+    pub routines: Vec<Routine>,
+    /// The list reflects every event up to and including this one.
+    pub seq: Seq,
+}
+
+/// `POST /api/v1/bots/{id}/routines`. A user has at most 20 routines, and
+/// a Bot's routines have different names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateRoutineRequest {
+    pub name: String,
+    pub prompt: String,
+    pub schedule: Schedule,
+    #[serde(default)]
+    pub push: RoutinePush,
+    /// Created paused, when set.
+    #[serde(default)]
+    pub paused: bool,
+}
+
+/// `PATCH /api/v1/bots/{id}/routines/{routine}`. `None` leaves a field
+/// alone. Resuming a paused routine clears its failures and schedules it
+/// from now, so the runs it missed while paused do not run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateRoutineRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<Schedule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push: Option<RoutinePush>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<bool>,
+}
+
+/// What started a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunTrigger {
+    /// The routine's schedule.
+    Schedule,
+    /// "Run now": `POST /api/v1/bots/{id}/routines/{routine}/run`, which
+    /// takes the same path as a scheduled run.
+    Manual,
+}
+
+/// Where a run is. A run waits, then runs, then ends in one of the other
+/// states, its outcome; or it ends without running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    /// Queued until the Bot is idle and ChatGPT is signed in.
+    Waiting,
+    /// The Bot's turn is running.
+    Running,
+    /// The turn completed.
+    Succeeded,
+    /// The run could not start, or its turn failed. `reason` says why.
+    Failed,
+    /// The run was due while it could not run, and too long ago to run
+    /// late. `reason` says why.
+    Missed,
+    /// The run did not happen: the routine's previous run was still going,
+    /// or the Bot stayed busy. `reason` says which.
+    Skipped,
+    /// The turn was stopped: it ran too long, or its owner stopped it.
+    Interrupted,
+}
+
+impl RunState {
+    /// Whether the run has ended.
+    pub fn is_finished(self) -> bool {
+        !matches!(self, Self::Waiting | Self::Running)
+    }
+}
+
+/// One run of a routine, kept 90 days.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutineRun {
+    pub id: RoutineRunId,
+    pub routine_id: RoutineId,
+    pub bot_id: BotId,
+    pub trigger: RunTrigger,
+    /// When the schedule said it should run; for a manual run, when it was
+    /// asked for.
+    pub scheduled_for: Timestamp,
+    /// When its turn started.
+    pub started_at: Option<Timestamp>,
+    pub finished_at: Option<Timestamp>,
+    pub state: RunState,
+    /// Why it failed, was missed, skipped or interrupted, or what a
+    /// waiting run waits for. Safe to show.
+    pub reason: Option<String>,
+    /// The messages it added to the Bot's conversation: its marker, then
+    /// the Bot's replies.
+    pub messages: Vec<MessageId>,
+    /// The tokens its turn used, when Codex reported them.
+    pub tokens: Option<u64>,
+}
+
+/// `GET /api/v1/bots/{id}/routines/{routine}/runs?before={id}&limit={n}`:
+/// the routine's runs, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutineRunPage {
+    pub runs: Vec<RoutineRun>,
+    /// Pass as `before` to fetch older runs; `None` at the end.
+    pub older: Option<RoutineRunId>,
 }
 
 /// `POST /api/v1/bots/{id}/stop`: interrupt the running turn, if any.
@@ -630,6 +928,9 @@ pub struct ToolCall {
     pub outcome: ToolCallOutcome,
     pub duration_ms: u64,
     pub at: Timestamp,
+    /// The routine run whose turn made the call, if a routine's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine_run_id: Option<RoutineRunId>,
 }
 
 /// `GET /api/v1/bots/{id}/tool-calls?before={id}&limit={n}`: the Bot's

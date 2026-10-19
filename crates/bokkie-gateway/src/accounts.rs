@@ -52,7 +52,7 @@ fn role_from(name: &str) -> Role {
 
 const ACCOUNT_COLUMNS: &str = "id, username, display_name, role, disabled, created_at, \
      daily_turns, weekly_tokens, may_create_bots, may_edit_bot_profiles, oversight, \
-     oversight_changed_at, password_reset_by_admin_at";
+     oversight_changed_at, password_reset_by_admin_at, time_zone";
 
 fn account_from(row: &sqlx::sqlite::SqliteRow) -> Account {
     let role = role_from(row.get::<&str, _>("role"));
@@ -75,6 +75,7 @@ fn account_from(row: &sqlx::sqlite::SqliteRow) -> Account {
             oversight_changed_at: row
                 .get::<Option<i64>, _>("oversight_changed_at")
                 .map(Timestamp),
+            time_zone: row.get("time_zone"),
         },
         limits: Limits {
             daily_turns: row.get::<Option<i64>, _>("daily_turns").map(|v| v as u32),
@@ -216,6 +217,25 @@ pub async fn account(db: impl sqlx::SqliteExecutor<'_>, user: UserId) -> Result<
         .fetch_optional(db)
         .await?;
     Ok(row.as_ref().map(account_from))
+}
+
+/// Sets the user's own time zone, already checked, inside the caller's
+/// write transaction. Returns the account as it now is.
+pub async fn set_time_zone(
+    conn: &mut sqlx::SqliteConnection,
+    now: Timestamp,
+    user: UserId,
+    time_zone: &str,
+) -> Result<Account> {
+    sqlx::query("UPDATE users SET time_zone = ?, updated_at = ? WHERE id = ?")
+        .bind(time_zone)
+        .bind(now.0)
+        .bind(user.0)
+        .execute(&mut *conn)
+        .await?;
+    account(&mut *conn, user)
+        .await?
+        .ok_or_else(Failure::not_found)
 }
 
 /// Every account, for an admin.

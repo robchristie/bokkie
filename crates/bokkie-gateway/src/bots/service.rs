@@ -22,11 +22,11 @@ use bokkie_codex::protocol::{
     AdditionalContextEntry, AdditionalContextKind, ServerNotification, ThreadItem, TurnStatus,
 };
 use bokkie_protocol::api::{
-    Allowance, Author, Delivery, ErrorCode, Grant, Message, MessageKind, MessageState,
+    Allowance, Author, Delivery, ErrorCode, Grant, Message, MessageKind, MessageState, RunState,
     SendMessageResponse, Usage,
 };
 use bokkie_protocol::events::Event;
-use bokkie_protocol::{BotId, MessageId, Timestamp, UserId};
+use bokkie_protocol::{BotId, MessageId, RoutineRunId, Timestamp, UserId};
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 
@@ -37,6 +37,7 @@ use crate::codex::{CodexError, Runtime, RuntimeEvent, RuntimeEventKind, Supervis
 use crate::error::{Failure, Result};
 use crate::events::{Batch, EventLog};
 use crate::grants::GrantSet;
+use crate::routines::{self, store::RoutineRow};
 use crate::tools::{self, Broker};
 use crate::usage::{self, SubscriptionCache};
 
@@ -57,6 +58,10 @@ pub const PROFILE_CONTEXT: &str = "bokkie-profile";
 /// The key of the context fragment that carries the conversation into a
 /// fresh thread after the Bot's grants changed.
 pub const CARRYOVER_CONTEXT: &str = "bokkie-earlier-conversation";
+
+/// The key of the context fragment that tells the model a turn is a
+/// routine's run.
+pub const ROUTINE_CONTEXT: &str = "bokkie-routine";
 
 /// How many of the latest messages a fresh thread carries over.
 pub const CARRYOVER_MESSAGES: u32 = 20;
@@ -247,6 +252,49 @@ fn carryover_context(text: String) -> BTreeMap<String, AdditionalContextEntry> {
     .into()
 }
 
+/// The fragment that says what routine run a turn is. The gateway wrote
+/// it, so it is an application fragment.
+fn routine_context(text: String) -> BTreeMap<String, AdditionalContextEntry> {
+    [(
+        ROUTINE_CONTEXT.to_owned(),
+        AdditionalContextEntry {
+            kind: AdditionalContextKind::Application,
+            value: text,
+        },
+    )]
+    .into()
+}
+
+/// A new turn for [`Conversations::begin_turn`].
+struct NewTurn<'a> {
+    /// The thread prepared for it.
+    thread_id: String,
+    /// The turn counted for it.
+    reserved: i64,
+    /// The message that begins it in the conversation.
+    begun_by: MessageId,
+    /// What the model is given.
+    input: &'a str,
+    /// Context to add to the turn.
+    context: Option<BTreeMap<String, AdditionalContextEntry>>,
+}
+
+/// How an attempt to start a routine's run went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RoutineStart {
+    /// The turn started, and the run is running.
+    Started { turn_id: String },
+    /// The Bot is mid-turn, or a message to it is being sent: try later.
+    Busy,
+    /// The household's ChatGPT sign-in is unavailable: try later.
+    SignedOut,
+    /// The run cannot start, for this reason, safe to show.
+    Failed(String),
+    /// The run is no longer waiting: another attempt started it, or it
+    /// ended.
+    NotWaiting,
+}
+
 /// Both fragments, when there are any.
 fn merged(
     a: Option<BTreeMap<String, AdditionalContextEntry>>,
@@ -295,6 +343,9 @@ struct Live {
     /// Turns interrupted because the user's token allowance ran out, by the
     /// user and Codex turn id, until they end.
     token_stops: std::collections::HashSet<(UserId, String)>,
+    /// How recently finished turns ended, by their user, so that a routine
+    /// run whose turn ended before it was recorded as running ends too.
+    ended: std::collections::VecDeque<(UserId, String, TurnStatus)>,
 }
 
 impl Live {
@@ -305,6 +356,13 @@ impl Live {
             self.finished.pop_front();
         }
         self.finished.push_back(turn_id.to_owned());
+    }
+
+    fn ended(&mut self, user: UserId, turn_id: &str, status: TurnStatus) {
+        if self.ended.len() == Self::FINISHED_KEPT {
+            self.ended.pop_front();
+        }
+        self.ended.push_back((user, turn_id.to_owned(), status));
     }
 }
 
@@ -323,6 +381,9 @@ pub struct Conversations {
     live: std::sync::Mutex<Live>,
     /// Serialises the sends to each Bot.
     sends: std::sync::Mutex<HashMap<(UserId, BotId), SendLock>>,
+    /// Woken when a Bot's turn ends, so that a routine run waiting for it
+    /// can start.
+    pub idle: tokio::sync::Notify,
 }
 
 fn limit_reached() -> Failure {
@@ -360,6 +421,7 @@ impl Conversations {
             subscription: Default::default(),
             live: Default::default(),
             sends: Default::default(),
+            idle: Default::default(),
         }
     }
 
@@ -562,10 +624,55 @@ impl Conversations {
                 turn
             }
         };
+        self.begin_turn(
+            &runtime,
+            owner,
+            &bot,
+            NewTurn {
+                thread_id,
+                reserved,
+                begun_by: message.id,
+                input: &text,
+                context: None,
+            },
+        )
+        .await?;
+        Ok(SendMessageResponse {
+            message,
+            delivery: Delivery::NewTurn,
+        })
+    }
+
+    /// Starts a new turn of the Bot, the core of every turn a user's
+    /// message or a routine starts. The caller holds the Bot's send lock,
+    /// found it idle, counted the turn, prepared its thread
+    /// ([`Conversations::prepare_thread`]) and stored the message that
+    /// begins the turn. The turn carries any changed profile, the
+    /// carry-over of a fresh thread and `context`. A failure takes the
+    /// counted turn back unless Codex may have started it. Returns the
+    /// Codex turn id.
+    async fn begin_turn(
+        &self,
+        runtime: &Runtime,
+        owner: &Account,
+        bot: &BotRow,
+        turn: NewTurn<'_>,
+    ) -> Result<String> {
+        let user = owner.user.id;
+        let NewTurn {
+            thread_id,
+            reserved,
+            begun_by,
+            input,
+            context: extra,
+        } = turn;
+        let profile = (bot.profile_sent_revision < bot.profile_revision)
+            .then(|| context(profile_update(bot)));
         // The thread may be fresh: re-read the Bot for its carry-over, which
-        // leaves out this message: the turn carries it as its input. A
-        // failure here takes the counted turn back: none started.
-        let carried = match self.pending_carryover(owner, bot_id, message.id).await {
+        // leaves out the message that begins this turn: the turn carries
+        // its input. A failure here takes the counted turn back: none
+        // started.
+        let carried = match self.pending_carryover(owner, bot.id, begun_by).await {
             Ok(carried) => carried,
             Err(failure) => {
                 self.release_turn(user, reserved).await;
@@ -573,12 +680,15 @@ impl Conversations {
             }
         };
         let context = merged(
-            profile,
-            carried
-                .as_ref()
-                .map(|(_, text)| carryover_context(text.clone())),
+            merged(
+                profile,
+                carried
+                    .as_ref()
+                    .map(|(_, text)| carryover_context(text.clone())),
+            ),
+            extra,
         );
-        let turn = match runtime.start_turn(&thread_id, &text, context).await {
+        let turn = match runtime.start_turn(&thread_id, input, context).await {
             Ok(turn) => turn,
             Err(error) => {
                 // Only a turn Codex certainly did not start is taken back.
@@ -586,7 +696,7 @@ impl Conversations {
                     self.release_turn(user, reserved).await;
                 }
                 return Err(self
-                    .refusing::<()>(user, &bot, Err(error))
+                    .refusing::<()>(user, bot, Err(error))
                     .await
                     .unwrap_err());
             }
@@ -607,7 +717,7 @@ impl Conversations {
                         ActiveTurn {
                             user,
                             thread_id,
-                            turn_id: turn.id,
+                            turn_id: turn.id.clone(),
                         },
                     )
                     .is_none()
@@ -615,10 +725,170 @@ impl Conversations {
         if started {
             self.status(user, bot.id).await;
         }
-        Ok(SendMessageResponse {
-            message,
-            delivery: Delivery::NewTurn,
-        })
+        Ok(turn.id)
+    }
+
+    /// Starts a routine's run: a new turn of its Bot whose input is the
+    /// routine's prompt, begun in the conversation by the run's marker,
+    /// through the same core as a user's message. It never steers: a Bot
+    /// that is mid-turn, or whose send lock is held, is
+    /// [`RoutineStart::Busy`]. The run must still be waiting; it is marked
+    /// running, with its turn, before the Bot's lock is released, so that
+    /// no other attempt starts it again.
+    pub async fn start_routine(
+        &self,
+        owner: &Account,
+        routine: &RoutineRow,
+        run: RoutineRunId,
+        marker: &str,
+        about: String,
+    ) -> RoutineStart {
+        let user = owner.user.id;
+        let Ok(_sending) = self.send_lock(user, routine.bot).try_lock_owned() else {
+            return RoutineStart::Busy;
+        };
+        match self
+            .start_routine_locked(owner, routine, run, marker, about)
+            .await
+        {
+            Ok(start) => start,
+            Err(failure) => RoutineStart::Failed(failure.message),
+        }
+    }
+
+    async fn start_routine_locked(
+        &self,
+        owner: &Account,
+        routine: &RoutineRow,
+        run: RoutineRunId,
+        marker: &str,
+        about: String,
+    ) -> Result<RoutineStart> {
+        let user = owner.user.id;
+        match routines::store::run(&self.db, user, run).await? {
+            Some(row) if row.state == RunState::Waiting => {}
+            _ => return Ok(RoutineStart::NotWaiting),
+        }
+        let Some(bot) = store::bot(&self.db, user, routine.bot).await? else {
+            return Ok(RoutineStart::Failed("The Bot no longer exists".into()));
+        };
+        if bot.refused_reason.is_some() {
+            return Ok(RoutineStart::Failed(
+                unavailable(CodexError::Refused(crate::codex::guard::Refusal::new(
+                    "refused",
+                )))
+                .message,
+            ));
+        }
+        if self.live().turns.contains_key(&bot.id) {
+            return Ok(RoutineStart::Busy);
+        }
+        let allowance = self.allowance(user).await?;
+        if tokens_used_up(&allowance) || allowance.exhausted {
+            return Ok(RoutineStart::Failed(limit_reached().message));
+        }
+        let runtime = match self.supervisor.runtime(user).await {
+            Ok(runtime) => runtime,
+            Err(CodexError::SignedOut(_)) => return Ok(RoutineStart::SignedOut),
+            Err(error) => return Ok(RoutineStart::Failed(unavailable(error).message)),
+        };
+        let Some(reserved) = self.reserve_turn(user, bot.id).await? else {
+            return Ok(RoutineStart::Failed(limit_reached().message));
+        };
+        let begun = async {
+            let thread_id = self.prepare_thread(&runtime, owner, &bot).await?;
+            let bot = store::bot(&self.db, user, routine.bot)
+                .await?
+                .ok_or_else(Failure::not_found)?;
+            let mut batch = self.events.begin(user).await?;
+            let marker = store::insert_message(
+                &mut *batch,
+                self.clock.now(),
+                user,
+                NewMessage {
+                    bot: bot.id,
+                    author: Author::Bot,
+                    text: marker,
+                    state: MessageState::Complete,
+                    turn: None,
+                    kind: MessageKind::Marker,
+                    routine: Some((routine.id, run, &routine.prompt)),
+                },
+            )
+            .await?;
+            batch
+                .emit(Event::MessageCreated {
+                    message: marker.clone(),
+                })
+                .await?;
+            batch.commit().await?;
+            Ok::<_, Failure>((thread_id, bot, marker))
+        };
+        let (thread_id, bot, marker) = match begun.await {
+            Ok(begun) => begun,
+            Err(failure) => {
+                self.release_turn(user, reserved).await;
+                return Err(failure);
+            }
+        };
+        let turn_id = self
+            .begin_turn(
+                &runtime,
+                owner,
+                &bot,
+                NewTurn {
+                    thread_id: thread_id.clone(),
+                    reserved,
+                    begun_by: marker.id,
+                    input: &routine.prompt,
+                    context: Some(routine_context(about)),
+                },
+            )
+            .await?;
+        // The run is running from here; if its turn already ended, so
+        // does the run.
+        let mut batch = self.events.begin(user).await?;
+        if let Some(running) = routines::store::set_running(
+            &mut *batch,
+            self.clock.now(),
+            user,
+            run,
+            &thread_id,
+            &turn_id,
+        )
+        .await?
+        {
+            routines::emit_run(&mut batch, &running).await?;
+        }
+        if let Some(status) = self.turn_end(user, &turn_id) {
+            routines::end_turn(&mut batch, self.clock.now(), user, &turn_id, status, false).await?;
+        }
+        batch.commit().await?;
+        Ok(RoutineStart::Started { turn_id })
+    }
+
+    /// How a turn of the user's that recently finished ended, if it did.
+    fn turn_end(&self, user: UserId, turn_id: &str) -> Option<TurnStatus> {
+        self.live()
+            .ended
+            .iter()
+            .find(|(owner, turn, _)| *owner == user && turn == turn_id)
+            .map(|(_, _, status)| *status)
+    }
+
+    /// Interrupts one of the user's turns, if their app server runs.
+    /// Returns whether Codex accepted it.
+    pub async fn interrupt(&self, user: UserId, thread_id: &str, turn_id: &str) -> bool {
+        let Some(runtime) = self.supervisor.running(user).await else {
+            return false;
+        };
+        match runtime.interrupt_turn(thread_id, turn_id).await {
+            Ok(_) => true,
+            Err(error) => {
+                tracing::info!(user = %user, %error, "the turn was not interrupted");
+                false
+            }
+        }
     }
 
     /// Makes sure `thread_id`, the Bot's thread, passed its checks on this
@@ -694,6 +964,7 @@ impl Conversations {
                         state: MessageState::Complete,
                         turn: None,
                         kind: MessageKind::Marker,
+                        routine: None,
                     },
                 )
                 .await?;
@@ -789,6 +1060,7 @@ impl Conversations {
                 state: MessageState::Complete,
                 turn: None,
                 kind: MessageKind::Text,
+                routine: None,
             },
         )
         .await?;
@@ -898,6 +1170,7 @@ impl Conversations {
         usage::prune(&mut tx, now).await?;
         tools::audit::prune(&mut tx, now).await?;
         tools::seen::prune(&mut tx, now).await?;
+        routines::store::prune(&mut tx, now).await?;
         tx.commit().await?;
         Ok(users)
     }
@@ -1043,6 +1316,7 @@ impl Conversations {
                         let (ended, stopped_for_tokens) = {
                             let mut live = self.live();
                             live.finished(&done.turn.id);
+                            live.ended(user, &done.turn.id, done.turn.status);
                             let stopped_for_tokens =
                                 live.token_stops.remove(&(user, done.turn.id.clone()));
                             let current = live
@@ -1085,7 +1359,20 @@ impl Conversations {
                         if ended {
                             self.emit_status(&mut batch, bot.id).await?;
                         }
+                        // A routine's run ends with its turn.
+                        routines::end_turn(
+                            &mut batch,
+                            self.clock.now(),
+                            user,
+                            &done.turn.id,
+                            done.turn.status,
+                            stopped_for_tokens,
+                        )
+                        .await?;
                         self.commit(batch).await;
+                        if ended {
+                            self.idle.notify_waiters();
+                        }
                     }
                 }
                 ServerNotification::ThreadTokenUsageUpdated(update) => {
@@ -1095,12 +1382,13 @@ impl Conversations {
                         let total =
                             u64::try_from(update.token_usage.total.total_tokens).unwrap_or(0);
                         let mut batch = self.events.begin(user).await?;
-                        usage::record_tokens(
+                        usage::record_turn_tokens(
                             &mut batch,
                             self.clock.now(),
                             user,
                             bot.id,
                             &update.thread_id,
+                            Some(&update.turn_id),
                             total,
                         )
                         .await?;
@@ -1152,6 +1440,18 @@ impl Conversations {
                     store::set_refused(&mut *batch, self.clock.now(), user, bot.id, &reason)
                         .await?;
                     self.emit_status(&mut batch, bot.id).await?;
+                    routines::end_running(
+                        &mut batch,
+                        self.clock.now(),
+                        user,
+                        Some(bot.id),
+                        RunState::Failed,
+                        &unavailable(CodexError::Refused(crate::codex::guard::Refusal::new(
+                            "refused",
+                        )))
+                        .message,
+                    )
+                    .await?;
                     self.commit(batch).await;
                 }
             }
@@ -1180,6 +1480,15 @@ impl Conversations {
                 for bot in stopped {
                     self.emit_status(&mut batch, bot).await?;
                 }
+                routines::end_running(
+                    &mut batch,
+                    self.clock.now(),
+                    user,
+                    None,
+                    RunState::Failed,
+                    "The Bots' runtime stopped during the run",
+                )
+                .await?;
                 self.commit(batch).await;
             }
         }
@@ -1217,6 +1526,7 @@ impl Conversations {
                 state: MessageState::Streaming,
                 turn: Some((turn_id, item_id)),
                 kind: MessageKind::Text,
+                routine: None,
             },
         )
         .await?;
@@ -1468,6 +1778,7 @@ mod tests {
             created_at: Timestamp(id),
             updated_at: Timestamp(id),
             kind: MessageKind::Text,
+            routine: None,
         }
     }
 

@@ -6,9 +6,9 @@
 //! [`Batch`](crate::events::Batch) alike.
 
 use bokkie_protocol::api::{
-    Author, Bot, BotStatus, Message, MessageKind, MessagePreview, MessageState,
+    Author, Bot, BotStatus, Message, MessageKind, MessagePreview, MessageRoutine, MessageState,
 };
-use bokkie_protocol::{BotId, MessageId, Timestamp, UserId};
+use bokkie_protocol::{BotId, MessageId, RoutineId, RoutineRunId, Timestamp, UserId};
 use sqlx::Row;
 use sqlx::sqlite::SqliteExecutor;
 
@@ -153,7 +153,8 @@ fn kind_from(name: &str) -> MessageKind {
     }
 }
 
-const MESSAGE_COLUMNS: &str = "id, bot_id, author, text, state, created_at, updated_at, kind";
+const MESSAGE_COLUMNS: &str = "id, bot_id, author, text, state, created_at, updated_at, kind, \
+     routine_id, routine_run_id, detail";
 
 fn message_from(row: &sqlx::sqlite::SqliteRow) -> Message {
     Message {
@@ -165,6 +166,18 @@ fn message_from(row: &sqlx::sqlite::SqliteRow) -> Message {
         created_at: Timestamp(row.get("created_at")),
         updated_at: Timestamp(row.get("updated_at")),
         kind: kind_from(row.get::<&str, _>("kind")),
+        routine: match (
+            row.get::<Option<i64>, _>("routine_id"),
+            row.get::<Option<i64>, _>("routine_run_id"),
+            row.get::<Option<String>, _>("detail"),
+        ) {
+            (Some(routine), Some(run), Some(prompt)) => Some(MessageRoutine {
+                routine_id: RoutineId(routine),
+                run_id: RoutineRunId(run),
+                prompt,
+            }),
+            _ => None,
+        },
     }
 }
 
@@ -527,6 +540,8 @@ pub struct NewMessage<'a> {
     /// For Bot replies: the Codex turn and item.
     pub turn: Option<(&'a str, &'a str)>,
     pub kind: MessageKind,
+    /// For a routine run's marker: the routine, the run and its prompt.
+    pub routine: Option<(RoutineId, RoutineRunId, &'a str)>,
 }
 
 pub async fn insert_message(
@@ -542,11 +557,12 @@ pub async fn insert_message(
         state,
         turn,
         kind,
+        routine,
     } = new;
     let row = sqlx::query(&format!(
         "INSERT INTO messages (bot_id, user_id, author, text, state, turn_id, item_id,
-                               created_at, updated_at, kind)
-         SELECT id, user_id, ?, ?, ?, ?, ?, ?, ?, ? FROM bots WHERE id = ? AND user_id = ?
+                               created_at, updated_at, kind, routine_id, routine_run_id, detail)
+         SELECT id, user_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM bots WHERE id = ? AND user_id = ?
          RETURNING {MESSAGE_COLUMNS}"
     ))
     .bind(author_name(author))
@@ -557,6 +573,9 @@ pub async fn insert_message(
     .bind(now.0)
     .bind(now.0)
     .bind(kind_name(kind))
+    .bind(routine.map(|r| r.0.0))
+    .bind(routine.map(|r| r.1.0))
+    .bind(routine.map(|r| r.2))
     .bind(bot.0)
     .bind(user.0)
     .fetch_optional(db)

@@ -25,6 +25,7 @@ fn overseen(on: bool) -> User {
     User {
         oversight: on,
         oversight_changed_at: Some(Timestamp(NOW - 3 * HOUR)),
+        time_zone: "Australia/Adelaide".into(),
         ..member()
     }
 }

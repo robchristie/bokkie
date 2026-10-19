@@ -3,7 +3,7 @@
 
 use bokkie_protocol::api::*;
 use bokkie_protocol::events::*;
-use bokkie_protocol::{BotId, MessageId, Timestamp, UserId};
+use bokkie_protocol::{BotId, MessageId, RoutineId, RoutineRunId, Timestamp, UserId};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -50,6 +50,7 @@ fn message() -> Message {
         created_at: Timestamp(3_000),
         updated_at: Timestamp(3_500),
         kind: MessageKind::Text,
+        routine: None,
     }
 }
 
@@ -99,6 +100,7 @@ fn user() -> User {
         permissions: Permissions::default(),
         oversight: false,
         oversight_changed_at: None,
+        time_zone: "Australia/Adelaide".into(),
     }
 }
 
@@ -108,6 +110,7 @@ fn user_json() -> Value {
         "disabled": false, "created_at": 10,
         "permissions": {"may_create_bots": true, "may_edit_bot_profiles": true},
         "oversight": false, "oversight_changed_at": null,
+        "time_zone": "Australia/Adelaide",
     })
 }
 
@@ -145,7 +148,7 @@ fn account_types() {
                 "id": 2, "username": "amy", "display_name": "Amy", "role": "member",
                 "disabled": false, "created_at": 10,
                 "permissions": {"may_create_bots": false, "may_edit_bot_profiles": true},
-                "oversight": true, "oversight_changed_at": 20,
+                "oversight": true, "oversight_changed_at": 20, "time_zone": "Australia/Adelaide",
             },
             "password_reset_by_admin": 30,
         }),
@@ -322,6 +325,7 @@ fn bot_types() {
     assert_eq!(serde_json::from_value::<Message>(old).unwrap(), message());
     let marker = Message {
         kind: MessageKind::Marker,
+        routine: None,
         ..message()
     };
     assert_eq!(serde_json::to_value(&marker).unwrap()["kind"], "marker");
@@ -368,6 +372,7 @@ fn notes_and_tool_calls() {
                 outcome: ToolCallOutcome::TimedOut,
                 duration_ms: 30_000,
                 at: Timestamp(9),
+                routine_run_id: None,
             }],
             older: Some(3),
         },
@@ -383,6 +388,211 @@ fn notes_and_tool_calls() {
     ] {
         pin(&outcome, json!(name));
     }
+}
+
+#[test]
+fn an_account_from_before_time_zones_has_the_default() {
+    let mut old = user_json();
+    old.as_object_mut().unwrap().remove("time_zone");
+    let decoded: User = serde_json::from_value(old).unwrap();
+    assert_eq!(decoded.time_zone, DEFAULT_TIME_ZONE);
+    assert_eq!(DEFAULT_TIME_ZONE, "Australia/Adelaide");
+    pin(
+        &SetTimeZoneRequest {
+            time_zone: "Europe/London".into(),
+        },
+        json!({"time_zone": "Europe/London"}),
+    );
+}
+
+#[test]
+fn times_of_day_are_hours_and_minutes() {
+    let seven = TimeOfDay::new(7, 0).unwrap();
+    pin(&seven, json!("07:00"));
+    pin(&TimeOfDay::new(23, 59).unwrap(), json!("23:59"));
+    assert_eq!((seven.hour(), seven.minute()), (7, 0));
+    assert_eq!(TimeOfDay::new(24, 0), None);
+    assert_eq!(TimeOfDay::new(0, 60), None);
+    for bad in [
+        "7:00", "07:0", "24:00", "07:60", "0700", "07:00:00", "+7:00", "aa:bb", "",
+    ] {
+        assert!(
+            serde_json::from_value::<TimeOfDay>(json!(bad)).is_err(),
+            "{bad}"
+        );
+    }
+}
+
+fn routine() -> Routine {
+    Routine {
+        id: RoutineId(4),
+        bot_id: BotId(7),
+        name: "Morning digest".into(),
+        prompt: "What is new?".into(),
+        schedule: Schedule::Daily {
+            at: TimeOfDay::new(7, 0).unwrap(),
+        },
+        push: RoutinePush::EveryRun,
+        paused: false,
+        failures: 0,
+        next_run_at: Some(Timestamp(5_000)),
+        created_at: Timestamp(1_000),
+        updated_at: Timestamp(2_000),
+    }
+}
+
+fn run() -> RoutineRun {
+    RoutineRun {
+        id: RoutineRunId(9),
+        routine_id: RoutineId(4),
+        bot_id: BotId(7),
+        trigger: RunTrigger::Manual,
+        scheduled_for: Timestamp(5_000),
+        started_at: Some(Timestamp(5_100)),
+        finished_at: Some(Timestamp(6_000)),
+        state: RunState::Succeeded,
+        reason: None,
+        messages: vec![MessageId(42), MessageId(43)],
+        tokens: Some(120),
+    }
+}
+
+#[test]
+fn routine_types() {
+    let seven = TimeOfDay::new(7, 0).unwrap();
+    pin(
+        &Schedule::Daily { at: seven },
+        json!({"repeat": "daily", "at": "07:00"}),
+    );
+    pin(
+        &Schedule::Weekdays { at: seven },
+        json!({"repeat": "weekdays", "at": "07:00"}),
+    );
+    pin(
+        &Schedule::Days {
+            days: vec![Weekday::Mon, Weekday::Sun],
+            at: seven,
+        },
+        json!({"repeat": "days", "days": ["mon", "sun"], "at": "07:00"}),
+    );
+    pin(
+        &Schedule::Hours {
+            every: 4,
+            at: seven,
+        },
+        json!({"repeat": "hours", "every": 4, "at": "07:00"}),
+    );
+    assert_eq!(Schedule::EVERY_HOURS, [1, 2, 3, 4, 6, 8, 12]);
+    pin(
+        &routine(),
+        json!({"id": 4, "bot_id": 7, "name": "Morning digest", "prompt": "What is new?",
+               "schedule": {"repeat": "daily", "at": "07:00"}, "push": "every_run",
+               "paused": false, "failures": 0, "next_run_at": 5000, "created_at": 1000,
+               "updated_at": 2000}),
+    );
+    pin(
+        &RoutineList {
+            routines: vec![],
+            seq: Seq(3),
+        },
+        json!({"routines": [], "seq": 3}),
+    );
+    // Push and paused are optional when creating.
+    let create: CreateRoutineRequest = serde_json::from_value(json!({
+        "name": "Digest", "prompt": "Go", "schedule": {"repeat": "weekdays", "at": "06:30"}}))
+    .unwrap();
+    assert_eq!(create.push, RoutinePush::EveryRun);
+    assert!(!create.paused);
+    pin(
+        &CreateRoutineRequest {
+            name: "Digest".into(),
+            prompt: "Go".into(),
+            schedule: Schedule::Weekdays { at: seven },
+            push: RoutinePush::NotifyOnly,
+            paused: true,
+        },
+        json!({"name": "Digest", "prompt": "Go", "schedule": {"repeat": "weekdays", "at": "07:00"},
+               "push": "notify_only", "paused": true}),
+    );
+    pin(&UpdateRoutineRequest::default(), json!({}));
+    pin(
+        &UpdateRoutineRequest {
+            paused: Some(true),
+            ..Default::default()
+        },
+        json!({"paused": true}),
+    );
+    pin(
+        &run(),
+        json!({"id": 9, "routine_id": 4, "bot_id": 7, "trigger": "manual",
+               "scheduled_for": 5000, "started_at": 5100, "finished_at": 6000,
+               "state": "succeeded", "reason": null, "messages": [42, 43], "tokens": 120}),
+    );
+    pin(
+        &RoutineRunPage {
+            runs: vec![],
+            older: Some(RoutineRunId(9)),
+        },
+        json!({"runs": [], "older": 9}),
+    );
+    for (state, name, finished) in [
+        (RunState::Waiting, "waiting", false),
+        (RunState::Running, "running", false),
+        (RunState::Succeeded, "succeeded", true),
+        (RunState::Failed, "failed", true),
+        (RunState::Missed, "missed", true),
+        (RunState::Skipped, "skipped", true),
+        (RunState::Interrupted, "interrupted", true),
+    ] {
+        pin(&state, json!(name));
+        assert_eq!(state.is_finished(), finished, "{name}");
+    }
+    pin(&RunTrigger::Schedule, json!("schedule"));
+    // A routine run's marker carries its routine, run and prompt.
+    let marker = Message {
+        kind: MessageKind::Marker,
+        routine: Some(MessageRoutine {
+            routine_id: RoutineId(4),
+            run_id: RoutineRunId(9),
+            prompt: "What is new?".into(),
+        }),
+        ..message()
+    };
+    let encoded = serde_json::to_value(&marker).unwrap();
+    assert_eq!(
+        encoded["routine"],
+        json!({"routine_id": 4, "run_id": 9, "prompt": "What is new?"})
+    );
+    pin(&marker, encoded);
+    assert!(
+        serde_json::to_value(message())
+            .unwrap()
+            .get("routine")
+            .is_none()
+    );
+}
+
+#[test]
+fn routine_events_are_tagged_by_type() {
+    pin(
+        &Event::RoutineCreated { routine: routine() },
+        json!({"type": "routine_created", "routine": serde_json::to_value(routine()).unwrap()}),
+    );
+    pin(
+        &Event::RoutineUpdated { routine: routine() },
+        json!({"type": "routine_updated", "routine": serde_json::to_value(routine()).unwrap()}),
+    );
+    pin(
+        &Event::RoutineDeleted {
+            bot_id: BotId(7),
+            routine_id: RoutineId(4),
+        },
+        json!({"type": "routine_deleted", "bot_id": 7, "routine_id": 4}),
+    );
+    pin(
+        &Event::RoutineRunUpdated { run: run() },
+        json!({"type": "routine_run_updated", "run": serde_json::to_value(run()).unwrap()}),
+    );
 }
 
 #[test]

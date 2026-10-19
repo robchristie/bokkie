@@ -99,6 +99,7 @@ fn message(id: MessageId, author: Author, text: &str, state: MessageState) -> Me
         created_at: Timestamp(1_800_000_000_100),
         updated_at: Timestamp(1_800_000_000_200),
         kind: MessageKind::Text,
+        routine: None,
     }
 }
 

@@ -166,6 +166,7 @@ fn user() -> User {
         permissions: Default::default(),
         oversight: false,
         oversight_changed_at: None,
+        time_zone: "Australia/Adelaide".into(),
     }
 }
 

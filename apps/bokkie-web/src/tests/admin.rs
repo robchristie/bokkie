@@ -100,6 +100,7 @@ fn read_message(id: i64, author: Author, text: &str) -> Message {
         created_at: Timestamp(3_000 + id),
         updated_at: Timestamp(3_000 + id),
         kind: MessageKind::Text,
+        routine: None,
     }
 }
 

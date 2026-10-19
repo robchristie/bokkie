@@ -854,6 +854,7 @@ async fn existing_threads_keep_their_bots_and_token_totals_after_the_migration()
             state: bokkie_protocol::api::MessageState::Complete,
             turn: None,
             kind: bokkie_protocol::api::MessageKind::Marker,
+            routine: None,
         },
     )
     .await

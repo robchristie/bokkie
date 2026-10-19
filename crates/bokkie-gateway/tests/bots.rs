@@ -335,6 +335,7 @@ async fn conversations_page_backwards() {
                 state: bokkie_protocol::api::MessageState::Complete,
                 turn: None,
                 kind: bokkie_protocol::api::MessageKind::Text,
+                routine: None,
             },
         )
         .await

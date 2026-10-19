@@ -62,3 +62,11 @@ id_type!(
     /// A message in a Bot's conversation.
     MessageId
 );
+id_type!(
+    /// One of a Bot's routines: a prompt the Bot runs on a schedule.
+    RoutineId
+);
+id_type!(
+    /// One run of a routine, scheduled or started by hand.
+    RoutineRunId
+);

@@ -8,6 +8,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bokkie_protocol::api::{
     AcceptInvitationRequest, ChangePasswordRequest, LoginRequest, SessionList, SessionResponse,
+    SetTimeZoneRequest,
 };
 
 use crate::AppState;
@@ -100,6 +101,20 @@ pub async fn current(signed_in: SignedIn, headers: HeaderMap) -> Response {
         Some(token) => signed_in_response(&token, body),
         None => Json(body).into_response(),
     }
+}
+
+/// `PUT /api/v1/session/time-zone`: the signed-in user's time zone, in
+/// which their routines are rescheduled at once.
+pub async fn set_time_zone(
+    State(state): State<AppState>,
+    signed_in: SignedIn,
+    Body(request): Body<SetTimeZoneRequest>,
+) -> Result<Json<SessionResponse>> {
+    let account = state
+        .routines
+        .set_time_zone(signed_in.id(), &request.time_zone)
+        .await?;
+    Ok(Json(session_response(account)))
 }
 
 /// `DELETE /api/v1/session`: sign out.

@@ -25,6 +25,7 @@ pub mod error;
 pub mod events;
 pub mod grants;
 pub mod routes;
+pub mod routines;
 pub mod secrets;
 pub mod tools;
 pub mod usage;
@@ -44,6 +45,7 @@ use crate::clock::Clock;
 use crate::codex::Supervisor;
 use crate::config::Config;
 use crate::events::EventLog;
+use crate::routines::Routines;
 
 /// State shared by every request.
 #[derive(Debug, Clone)]
@@ -56,6 +58,7 @@ pub struct AppState {
     pub hashing: Arc<Semaphore>,
     pub supervisor: Arc<Supervisor>,
     pub conversations: Arc<Conversations>,
+    pub routines: Arc<Routines>,
     pub events: Arc<EventLog>,
     /// How often an open event socket rechecks its session.
     pub session_check: std::time::Duration,
@@ -86,8 +89,15 @@ impl AppState {
             supervisor.clone(),
             events.clone(),
         ));
+        let routines = Arc::new(Routines::new(
+            db.clone(),
+            clock.clone(),
+            events.clone(),
+            conversations.clone(),
+        ));
         Self {
             conversations,
+            routines,
             events,
             session_check: std::time::Duration::from_secs(30),
             config: Arc::new(config),
@@ -102,7 +112,7 @@ impl AppState {
 
 /// The gateway's routes, behind the request guard.
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, admin, bots, codex, events, usage};
+    use routes::{accounts, admin, bots, codex, events, routines, usage};
     let api = Router::new()
         .route("/version", get(version))
         .route(
@@ -112,6 +122,7 @@ pub fn router(state: AppState) -> Router {
                 .delete(accounts::logout),
         )
         .route("/session/password", put(accounts::change_password))
+        .route("/session/time-zone", put(accounts::set_time_zone))
         .route(
             "/session/password-reset",
             delete(accounts::acknowledge_password_reset),
@@ -128,6 +139,19 @@ pub fn router(state: AppState) -> Router {
             get(bots::notes).delete(bots::clear_notes),
         )
         .route("/bots/{id}/tool-calls", get(bots::tool_calls))
+        .route("/routines", get(routines::list_all))
+        .route(
+            "/bots/{id}/routines",
+            get(routines::list).post(routines::create),
+        )
+        .route(
+            "/bots/{id}/routines/{routine}",
+            get(routines::get)
+                .patch(routines::update)
+                .delete(routines::delete),
+        )
+        .route("/bots/{id}/routines/{routine}/run", post(routines::run_now))
+        .route("/bots/{id}/routines/{routine}/runs", get(routines::runs))
         .route("/events", get(events::events))
         .route("/usage", get(usage::usage))
         .route("/admin/users/{id}/usage", get(usage::admin_usage))
