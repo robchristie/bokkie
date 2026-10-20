@@ -968,7 +968,9 @@ fn marker_ui(
     let key = message.id.0;
     let time = crate::times::message_time(shown.local, message.created_at);
     let title = match (&message.routine, &message.notification) {
-        (Some(_), _) => format!("Routine run: {} · {time}", message.text),
+        // The gateway's text already says when the run was due, in the
+        // user's zone, so a second time would repeat it.
+        (Some(_), _) => format!("Routine run: {}", message.text),
         (None, Some(notification)) => {
             let kind = match notification.kind {
                 NotificationKind::Result => "Result",

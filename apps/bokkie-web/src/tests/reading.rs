@@ -106,6 +106,8 @@ fn marker(id: i64, title: &str) -> Message {
     }
 }
 
+/// A routine run's marker, titled as the gateway titles it: the routine's
+/// name and when the run was due, in the user's zone.
 fn routine_run(id: i64, title: &str, prompt: &str) -> Message {
     Message {
         routine: Some(MessageRoutine {
@@ -231,13 +233,18 @@ fn a_routine_runs_marker_folds_away_its_prompt() {
     let prompt = "Ask me three questions on fractions.";
     fixture.open_tutor(
         vec![
-            routine_run(1, "Morning quiz", prompt),
+            routine_run(1, "Morning quiz · 7:00", prompt),
             marker(2, "Capabilities changed"),
-            routine_run(3, "Evening quiz", "Ask me about decimals."),
+            routine_run(
+                3,
+                "Evening quiz · 19:00 · test run",
+                "Ask me about decimals.",
+            ),
         ],
         7,
     );
-    assert!(fixture.shows("Routine run: Morning quiz · 9:30 AM"));
+    // The gateway's title says when the run was due; no second time.
+    assert!(fixture.shows("Routine run: Morning quiz · 7:00"));
     assert!(!fixture.shows(prompt));
     // Each run's control is its own.
     let snapshot = fixture.host().ui_snapshot();
@@ -252,19 +259,28 @@ fn a_routine_runs_marker_folds_away_its_prompt() {
             .map(|node| (node.name.as_str(), node.argument.clone()))
             .collect::<Vec<_>>(),
         [
-            ("Show prompt Morning quiz", Some(serde_json::json!(1))),
-            ("Show prompt Evening quiz", Some(serde_json::json!(3))),
+            (
+                "Show prompt Morning quiz · 7:00",
+                Some(serde_json::json!(1))
+            ),
+            (
+                "Show prompt Evening quiz · 19:00 · test run",
+                Some(serde_json::json!(3))
+            ),
         ]
     );
     assert_eq!(
-        fixture.node("Show prompt Morning quiz").checked,
+        fixture.node("Show prompt Morning quiz · 7:00").checked,
         Some(false)
     );
 
-    fixture.click("Show prompt Morning quiz");
+    fixture.click("Show prompt Morning quiz · 7:00");
     assert!(fixture.shows(prompt));
     assert!(!fixture.shows("Ask me about decimals."));
-    assert_eq!(fixture.node("Show prompt Morning quiz").checked, Some(true));
+    assert_eq!(
+        fixture.node("Show prompt Morning quiz · 7:00").checked,
+        Some(true)
+    );
 
     // An agent folds it again through the marker's own control.
     let bindings = fixture.discover(BokkieAction::ShowPrompt);
