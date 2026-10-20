@@ -12,7 +12,9 @@
 //! the Bot's notes and its latest messages as context.
 //!
 //! A message sent while the Bot is mid-turn steers that turn. "Stop" maps to
-//! `turn/interrupt`.
+//! `turn/interrupt`. Codex can take a steered message into a turn as the
+//! turn ends without asking the model again: the gateway then starts a
+//! turn of its own for it ([`Conversations::answer_owed`]).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -324,6 +326,25 @@ pub enum RoutineStart {
     NotWaiting,
 }
 
+/// The prefix of the client id a steered message carries to Codex.
+const STEER_CLIENT_ID: &str = "bokkie-message-";
+
+/// The client id a steered message carries to Codex, which the
+/// `userMessage` item that records it in the turn carries back.
+fn steer_client_id(message: MessageId) -> String {
+    format!("{STEER_CLIENT_ID}{message}")
+}
+
+/// The message a `userMessage` item's client id names, if the gateway
+/// steered it.
+fn steered_message(client_id: &str) -> Option<MessageId> {
+    client_id
+        .strip_prefix(STEER_CLIENT_ID)?
+        .parse()
+        .ok()
+        .map(MessageId)
+}
+
 /// Both fragments, when there are any.
 fn merged(
     a: Option<BTreeMap<String, AdditionalContextEntry>>,
@@ -378,6 +399,14 @@ struct Live {
     /// When recent web searches started, by their user, thread and item id,
     /// for their duration in the tool-call log.
     searches: std::collections::VecDeque<(UserId, String, String, std::time::Instant)>,
+    /// Steered messages that Codex took into a running turn and the model
+    /// has not yet begun a reply after, by the user and Codex turn id, in
+    /// order, until the turn ends.
+    steered: HashMap<(UserId, String), Vec<MessageId>>,
+    /// Each Bot's steered messages that their turn ended without
+    /// answering, in order, until the Bot's next turn starts. They count as
+    /// the Bot working, so that no routine's run starts first.
+    owed: HashMap<BotId, Vec<MessageId>>,
 }
 
 impl Live {
@@ -407,6 +436,12 @@ impl Live {
             item_id.to_owned(),
             std::time::Instant::now(),
         ));
+    }
+
+    /// The model began a reply in the turn: the messages steered into it so
+    /// far are answered.
+    fn replying(&mut self, user: UserId, turn_id: &str) {
+        self.steered.remove(&(user, turn_id.to_owned()));
     }
 
     /// How long ago the search started, if its start was seen.
@@ -511,8 +546,11 @@ impl Conversations {
         self.broker.fetcher()
     }
 
+    /// Whether the Bot is mid-turn, or about to start a turn for steered
+    /// messages its last turn did not answer.
     pub fn is_working(&self, bot: BotId) -> bool {
-        self.live().turns.contains_key(&bot)
+        let live = self.live();
+        live.turns.contains_key(&bot) || live.owed.contains_key(&bot)
     }
 
     fn send_lock(&self, user: UserId, bot: BotId) -> SendLock {
@@ -640,7 +678,13 @@ impl Conversations {
         // Steer the running turn, if there is one.
         if let Some(active) = active {
             match runtime
-                .steer_turn(&thread_id, &active.turn_id, &text, profile.clone())
+                .steer_turn(
+                    &thread_id,
+                    &active.turn_id,
+                    &text,
+                    &steer_client_id(message.id),
+                    profile.clone(),
+                )
                 .await
             {
                 Ok(_) => {
@@ -770,6 +814,10 @@ impl Conversations {
         // first announces that the Bot is working.
         let started = {
             let mut live = self.live();
+            // The thread holds any steered message the Bot's last turn left
+            // unanswered, or this turn's carry-over does: this turn answers
+            // it.
+            live.owed.remove(&bot.id);
             !live.finished.contains(&turn.id)
                 && live
                     .turns
@@ -853,7 +901,7 @@ impl Conversations {
                 .message,
             ));
         }
-        if self.live().turns.contains_key(&bot.id) {
+        if self.is_working(bot.id) {
             return Ok(RoutineStart::Busy);
         }
         let allowance = self.allowance(user).await?;
@@ -945,6 +993,113 @@ impl Conversations {
         }
         batch.commit().await?;
         Ok(RoutineStart::Started { turn_id })
+    }
+
+    /// Starts a turn for the Bot's steered messages that their turn ended
+    /// without answering, then wakes the scheduler if the Bot is idle.
+    /// Codex 0.163.0 can accept a `turn/steer` as the turn ends, record the
+    /// message in the thread and end the turn without asking the model
+    /// again. The new turn is a user's turn, begun by the latest of them,
+    /// under the rules of any new turn: the Bot's send lock, the turn
+    /// counted, a thread with the Bot's grants, its profile and any
+    /// carry-over. With no turn left, the messages stay without a reply,
+    /// as a steer that missed its turn does. It runs once per turn that
+    /// left messages owed, and a turn of the Bot that starts first answers
+    /// them instead.
+    async fn answer_owed(self: Arc<Self>, user: UserId, bot_id: BotId) {
+        let working = match self.start_owed(user, bot_id).await {
+            Ok(working) => working,
+            Err(failure) => {
+                tracing::warn!(user = %user, bot = %bot_id, message = %failure.message, "answering a steered message failed");
+                self.emit(
+                    user,
+                    Event::BotError {
+                        bot_id,
+                        message: failure.message,
+                    },
+                )
+                .await;
+                self.is_working(bot_id)
+            }
+        };
+        if !working {
+            self.status(user, bot_id).await;
+            self.idle.notify_one();
+        }
+    }
+
+    /// The core of [`Conversations::answer_owed`]. Returns whether the Bot
+    /// is now mid-turn.
+    async fn start_owed(&self, user: UserId, bot_id: BotId) -> Result<bool> {
+        let lock = self.send_lock(user, bot_id);
+        let _sending = lock.lock().await;
+        let owed = {
+            let mut live = self.live();
+            let owed = live.owed.remove(&bot_id);
+            if live.turns.contains_key(&bot_id) {
+                // A turn that started meanwhile carries them.
+                return Ok(true);
+            }
+            owed
+        };
+        let Some(&latest) = owed.as_ref().and_then(|owed| owed.last()) else {
+            return Ok(false);
+        };
+        let Some(owner) = crate::accounts::account(&self.db, user).await? else {
+            return Ok(false);
+        };
+        let Some(bot) = store::bot(&self.db, user, bot_id).await? else {
+            return Ok(false);
+        };
+        // Only the user's own message to this Bot.
+        let Some(message) = store::message(&self.db, user, latest)
+            .await?
+            .filter(|m| m.bot_id == bot.id && m.author == Author::User)
+        else {
+            return Ok(false);
+        };
+        if owner.user.disabled || bot.refused_reason.is_some() {
+            return Ok(false);
+        }
+        tracing::info!(user = %user, bot = %bot.id, "a steered message was not answered; starting a turn for it");
+        let allowance = self.allowance(user).await?;
+        if tokens_used_up(&allowance) || allowance.exhausted {
+            return Err(limit_reached());
+        }
+        let runtime = self.supervisor.runtime(user).await.map_err(unavailable)?;
+        let reserved = self
+            .reserve_turn(user, bot.id)
+            .await?
+            .ok_or_else(limit_reached)?;
+        let prepared = async {
+            let thread_id = self.prepare_thread(&runtime, &owner, &bot).await?;
+            let bot = store::bot(&self.db, user, bot_id)
+                .await?
+                .ok_or_else(Failure::not_found)?;
+            Ok::<_, Failure>((thread_id, bot))
+        };
+        let (thread_id, bot) = match prepared.await {
+            Ok(prepared) => prepared,
+            Err(failure) => {
+                self.release_turn(user, reserved).await;
+                return Err(failure);
+            }
+        };
+        self.begin_turn(
+            &runtime,
+            &owner,
+            &bot,
+            NewTurn {
+                thread_id,
+                reserved,
+                begun_by: message.id,
+                input: &message.text,
+                context: None,
+            },
+        )
+        .await?;
+        // The turn may have ended already.
+        Ok(self.is_working(bot_id))
     }
 
     /// How a turn of the user's that recently finished ended, if it did.
@@ -1318,7 +1473,7 @@ impl Conversations {
 
     /// Handles one event from a user's app server. Every lookup is scoped to
     /// that user, so one user's app server cannot touch another's Bots.
-    pub async fn handle(&self, event: RuntimeEvent) -> Result<()> {
+    pub async fn handle(self: &Arc<Self>, event: RuntimeEvent) -> Result<()> {
         let user = event.user;
         match event.kind {
             RuntimeEventKind::Notification(notification) => match notification {
@@ -1347,6 +1502,19 @@ impl Conversations {
                     }
                 }
                 ServerNotification::ItemStarted(item) => match &item.item {
+                    // A message the gateway steered, taken into the turn.
+                    ThreadItem::UserMessage {
+                        client_id: Some(client_id),
+                        ..
+                    } => {
+                        if let Some(message) = steered_message(client_id) {
+                            self.live()
+                                .steered
+                                .entry((user, item.turn_id.clone()))
+                                .or_default()
+                                .push(message);
+                        }
+                    }
                     ThreadItem::AgentMessage { id, text } => {
                         self.reply(user, &item.thread_id, &item.turn_id, id, text)
                             .await?;
@@ -1402,12 +1570,25 @@ impl Conversations {
                 ServerNotification::TurnCompleted(done) => {
                     if let Some(bot) = store::bot_by_thread(&self.db, user, &done.thread_id).await?
                     {
-                        let (ended, stopped_for_tokens) = {
+                        let (ended, stopped_for_tokens, owing) = {
                             let mut live = self.live();
                             live.finished(&done.turn.id);
                             live.ended(user, &done.turn.id, done.turn.status);
                             let stopped_for_tokens =
                                 live.token_stops.remove(&(user, done.turn.id.clone()));
+                            // Messages steered in after the model's last
+                            // reply began. Codex can take one in as the turn
+                            // ends without asking the model again. A turn
+                            // that was stopped or failed is not followed up.
+                            let unanswered = live
+                                .steered
+                                .remove(&(user, done.turn.id.clone()))
+                                .unwrap_or_default();
+                            let owing =
+                                done.turn.status == TurnStatus::Completed && !unanswered.is_empty();
+                            if owing {
+                                live.owed.entry(bot.id).or_default().extend(unanswered);
+                            }
                             let current = live
                                 .turns
                                 .get(&bot.id)
@@ -1415,7 +1596,7 @@ impl Conversations {
                             if current {
                                 live.turns.remove(&bot.id);
                             }
-                            (current, stopped_for_tokens)
+                            (current, stopped_for_tokens, owing)
                         };
                         let state = match done.turn.status {
                             TurnStatus::Completed | TurnStatus::InProgress => {
@@ -1459,7 +1640,12 @@ impl Conversations {
                         )
                         .await?;
                         self.commit(batch).await;
-                        if ended {
+                        if owing {
+                            // The Bot stays working until a turn answers
+                            // them; the scheduler is woken after that.
+                            let this = self.clone();
+                            tokio::spawn(async move { this.answer_owed(user, bot.id).await });
+                        } else if ended {
                             // Kept for the scheduler if it is mid-pass.
                             self.idle.notify_one();
                         }
@@ -1520,7 +1706,9 @@ impl Conversations {
                 if let Some(bot) = store::bot_by_thread(&self.db, user, &thread_id).await? {
                     {
                         let mut live = self.live();
+                        live.owed.remove(&bot.id);
                         if let Some(turn) = live.turns.remove(&bot.id) {
+                            live.steered.remove(&(user, turn.turn_id.clone()));
                             live.token_stops.remove(&(user, turn.turn_id));
                         }
                     }
@@ -1583,6 +1771,7 @@ impl Conversations {
                 let stopped: Vec<BotId> = {
                     let mut live = self.live();
                     live.token_stops.retain(|(owner, _)| *owner != user);
+                    live.steered.retain(|(owner, _), _| *owner != user);
                     bots.iter()
                         .filter(|bot| live.turns.remove(bot).is_some())
                         .copied()
@@ -1618,6 +1807,9 @@ impl Conversations {
         item_id: &str,
         text: &str,
     ) -> Result<Option<Message>> {
+        // Whatever was steered into the turn so far, the model is
+        // answering.
+        self.live().replying(user, turn_id);
         let Some(bot) = store::bot_by_thread(&self.db, user, thread_id).await? else {
             return Ok(None);
         };

@@ -343,6 +343,7 @@ async fn turn_steer_names_the_expected_turn() {
                     input: vec![UserInput::Text {
                         text: "also".into(),
                     }],
+                    client_user_message_id: Some("m-1".into()),
                     additional_context: None,
                 })
                 .await
@@ -351,6 +352,7 @@ async fn turn_steer_names_the_expected_turn() {
     let request = server.read().await;
     assert_eq!(request["method"], "turn/steer");
     assert_eq!(request["params"]["expectedTurnId"], "u");
+    assert_eq!(request["params"]["clientUserMessageId"], "m-1");
     server
         .write(json!({"id": request["id"], "result": {"turnId": "u"}}))
         .await;

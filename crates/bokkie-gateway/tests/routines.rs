@@ -1594,3 +1594,79 @@ async fn the_scheduler_loop_passes_when_a_bot_turns_idle() {
     .expect("the run starts");
     assert!(idle < started, "the run started while the Bot was working");
 }
+
+/// A message steered into a routine's run, which its turn left
+/// unanswered, gets a turn of its own: a user's turn, after the run ended
+/// as its turn did, and before a waiting run takes the idle Bot.
+#[tokio::test]
+async fn a_message_steered_in_as_a_runs_turn_ends_is_answered_before_a_waiting_run() {
+    use common::fake_codex::SteerEnding;
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await["id"]
+        .as_i64()
+        .unwrap();
+    let later = daily(&gateway, &rob, chef, "Later", "19:05").await["id"]
+        .as_i64()
+        .unwrap();
+    set_clock(&gateway, 30 * MINUTE_MS);
+    pass(&gateway).await;
+    wait_run(&gateway, &rob, chef, digest, |r| r["state"] == "running").await;
+    gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{chef}/messages"), |b| {
+            b["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["author"] == "bot" && m["text"] == "Hello there")
+        })
+        .await;
+    set_clock(&gateway, 35 * MINUTE_MS);
+    pass(&gateway).await;
+    let waiting = wait_run(&gateway, &rob, chef, later, |r| r["state"] == "waiting").await;
+    assert_eq!(waiting["reason"], "Waiting for the Bot to finish its turn");
+    // The loop passes whenever a Bot turns idle; its tick is an hour away.
+    let scheduler = tokio::spawn(
+        gateway
+            .state
+            .routines
+            .clone()
+            .run(Duration::from_secs(3600)),
+    );
+    gateway.fake.with(|b| {
+        b.finish_turns = true;
+        b.steer_ends_turn = Some(SteerEnding::Unanswered);
+    });
+    let steered = gateway
+        .send(
+            Call::post(&format!("/api/v1/bots/{chef}/messages"))
+                .cookie(&rob)
+                .json(&json!({"text": "and also"})),
+        )
+        .await;
+    assert_eq!(steered.body["delivery"], "steered");
+    let run = wait_run(&gateway, &rob, chef, digest, |r| r["state"] == "succeeded").await;
+    assert_eq!(run["reason"], Value::Null);
+    wait_run(&gateway, &rob, chef, later, |r| r["state"] == "succeeded").await;
+    scheduler.abort();
+    let starts = turn_starts(&gateway);
+    assert_eq!(starts.len(), 3);
+    assert_eq!(starts[0]["input"][0]["text"], "Run Digest.");
+    // The message's turn is the user's, not the run's.
+    assert_eq!(starts[1]["input"][0]["text"], "and also");
+    assert_eq!(starts[1]["additionalContext"].get("bokkie-routine"), None);
+    assert_eq!(starts[2]["input"][0]["text"], "Run Later.");
+    let replies: Vec<_> = messages(&gateway, &rob, chef)
+        .await
+        .into_iter()
+        .filter(|m| m["kind"] != "marker")
+        .map(|m| (m["author"].clone(), m["text"].clone()))
+        .collect();
+    assert!(
+        replies
+            .windows(2)
+            .any(|w| w[0] == (json!("user"), json!("and also")) && w[1].0 == "bot"),
+        "{replies:?}"
+    );
+}

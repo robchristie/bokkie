@@ -526,6 +526,7 @@ fn thread_and_turn_params_conform() {
             input: vec![UserInput::Text {
                 text: "also this".into(),
             }],
+            client_user_message_id: Some("bokkie-message-7".into()),
             additional_context: Some(
                 [(
                     "bokkie-profile".to_owned(),
@@ -629,6 +630,10 @@ fn every_thread_item_variant_decodes() {
             item != ThreadItem::Unknown,
             "{value}"
         );
+        // A user message keeps the client's id for it, when it has one.
+        if let ThreadItem::UserMessage { client_id, .. } = &item {
+            assert_eq!(client_id.as_deref(), value["clientId"].as_str(), "{value}");
+        }
     }
 }
 

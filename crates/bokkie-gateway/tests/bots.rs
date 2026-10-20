@@ -3,7 +3,7 @@
 mod common;
 
 use axum::http::{Method, StatusCode};
-use bokkie_protocol::UserId;
+use bokkie_protocol::{BotId, UserId};
 use common::{Call, Gateway};
 use serde_json::{Value, json};
 
@@ -529,6 +529,282 @@ async fn a_steer_that_misses_its_turn_starts_a_new_one_with_the_profile() {
     assert_eq!(turns.len(), 2);
     // The profile was already delivered by the steer.
     assert!(turns[1].params.get("additionalContext").is_none());
+}
+
+/// The texts of the conversation, each with its author.
+fn said(body: &Value) -> Vec<(String, String)> {
+    messages(body)
+        .into_iter()
+        .map(|m| {
+            (
+                m["author"].as_str().unwrap().to_owned(),
+                m["text"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+fn pairs(expected: &[(&str, &str)]) -> Vec<(String, String)> {
+    expected
+        .iter()
+        .map(|(a, t)| ((*a).to_owned(), (*t).to_owned()))
+        .collect()
+}
+
+/// A Bot mid-turn, whose reply has begun, and whose next turns finish on
+/// their own.
+async fn mid_reply(gateway: &Gateway, cookie: &str, bot: i64) {
+    gateway.fake.with(|b| b.finish_turns = false);
+    say(gateway, cookie, bot, "Start").await;
+    gateway
+        .wait_for(cookie, &format!("/api/v1/bots/{bot}/messages"), |b| {
+            last_bot_reply(b).is_some_and(|m| m["text"] == "Hello there")
+        })
+        .await;
+    gateway.fake.with(|b| b.finish_turns = true);
+}
+
+/// Codex can accept a steer as the turn ends, record the message in the
+/// thread and end the turn without asking the model again. The message
+/// then gets a turn of its own: on the same thread, counted, with the
+/// message as its input.
+#[tokio::test]
+async fn a_message_steered_in_as_its_turn_ends_gets_a_turn_of_its_own() {
+    use common::fake_codex::SteerEnding;
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    mid_reply(&gateway, &rob, chef).await;
+    gateway
+        .fake
+        .with(|b| b.steer_ends_turn = Some(SteerEnding::Unanswered));
+    let steered = say(&gateway, &rob, chef, "Also bread").await;
+    assert_eq!(steered.body["delivery"], "steered");
+    let page = gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{chef}/messages"), |b| {
+            messages(b).len() == 4 && messages(b)[3]["state"] == "complete"
+        })
+        .await;
+    assert_eq!(
+        said(&page),
+        pairs(&[
+            ("user", "Start"),
+            ("bot", "Hello there"),
+            ("user", "Also bread"),
+            ("bot", "Hello there"),
+        ])
+    );
+    wait_status(&gateway, &rob, chef, "idle").await;
+    let turns = gateway.fake.received("turn/start");
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[1].params["threadId"], turns[0].params["threadId"]);
+    assert_eq!(turns[1].params["input"][0]["text"], "Also bread");
+    assert_eq!(gateway.fake.received("thread/start").len(), 1);
+    let usage = gateway.send(Call::get("/api/v1/usage").cookie(&rob)).await;
+    assert_eq!(usage.body["allowance"]["turns_today"], 2);
+    // The Bot never showed idle between the turns: its first idle status
+    // comes after the second turn's reply began. Status events can arrive
+    // a moment after the status reads idle, so wait for one.
+    use bokkie_protocol::api::BotStatus;
+    use bokkie_protocol::events::{Event, Seq};
+    let answer = messages(&page)[3]["id"].as_i64().unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let (began, idle) = loop {
+        let log = gateway
+            .state
+            .events
+            .since(UserId(1), Seq::ZERO, 10_000)
+            .await
+            .unwrap();
+        let began = log.iter().position(
+            |e| matches!(&e.event, Event::MessageCreated { message } if message.id.0 == answer),
+        );
+        let idle = log.iter().position(|e| {
+            matches!(
+                e.event,
+                Event::BotStatusChanged {
+                    status: BotStatus::Idle,
+                    ..
+                }
+            )
+        });
+        if let (Some(began), Some(idle)) = (began, idle) {
+            break (began, idle);
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no idle status");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    assert!(began < idle, "idle between the turns");
+    // The gateway knows the message by the client id it steered it with.
+    let steer = &gateway.fake.received("turn/steer")[0];
+    let message = steered.body["message"]["id"].as_i64().unwrap();
+    assert_eq!(
+        steer.params["clientUserMessageId"],
+        format!("bokkie-message-{message}")
+    );
+}
+
+/// A steered message that the model answers within its turn gets no
+/// other turn.
+#[tokio::test]
+async fn a_message_steered_in_and_answered_starts_no_other_turn() {
+    use common::fake_codex::SteerEnding;
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    mid_reply(&gateway, &rob, chef).await;
+    gateway
+        .fake
+        .with(|b| b.steer_ends_turn = Some(SteerEnding::Answered));
+    say(&gateway, &rob, chef, "Also bread").await;
+    wait_status(&gateway, &rob, chef, "idle").await;
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}/messages")).cookie(&rob))
+        .await;
+    assert_eq!(
+        said(&page.body),
+        pairs(&[
+            ("user", "Start"),
+            ("bot", "Hello there"),
+            ("user", "Also bread"),
+            ("bot", "Hello there"),
+        ])
+    );
+    // Give a follow-up turn the time to start, if one wrongly would.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(gateway.fake.received("turn/start").len(), 1);
+}
+
+/// Two messages steered into a turn that ends without answering them get
+/// one turn, begun by the latest: the thread holds both.
+#[tokio::test]
+async fn two_messages_steered_in_as_their_turn_ends_get_one_turn() {
+    use common::fake_codex::SteerEnding;
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    mid_reply(&gateway, &rob, chef).await;
+    assert_eq!(
+        say(&gateway, &rob, chef, "Also bread").await.body["delivery"],
+        "steered"
+    );
+    assert_eq!(
+        say(&gateway, &rob, chef, "And cake").await.body["delivery"],
+        "steered"
+    );
+    gateway
+        .fake
+        .end_steered_turn(UserId(1), SteerEnding::Unanswered);
+    let page = gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{chef}/messages"), |b| {
+            messages(b).len() == 5 && messages(b)[4]["state"] == "complete"
+        })
+        .await;
+    assert_eq!(
+        said(&page),
+        pairs(&[
+            ("user", "Start"),
+            ("bot", "Hello there"),
+            ("user", "Also bread"),
+            ("user", "And cake"),
+            ("bot", "Hello there"),
+        ])
+    );
+    wait_status(&gateway, &rob, chef, "idle").await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let turns = gateway.fake.received("turn/start");
+    assert_eq!(turns.len(), 2, "one turn for both");
+    assert_eq!(turns[1].params["input"][0]["text"], "And cake");
+}
+
+/// With no turn left in the user's allowance, the steered message stays
+/// without a reply, as a steer that missed its turn does, and the user is
+/// told why.
+#[tokio::test]
+async fn with_no_turn_left_a_message_steered_in_as_its_turn_ends_stays_unanswered() {
+    use bokkie_protocol::events::{Event, Seq};
+    use common::fake_codex::SteerEnding;
+    let (gateway, rob) = setup().await;
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    let limited = gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/admin/users/{amy_id}"))
+                .cookie(&rob)
+                .json(&json!({"limits": {"daily_turns": 1, "weekly_tokens": null}})),
+        )
+        .await;
+    assert_eq!(limited.status, StatusCode::OK);
+    let chef = create_bot(&gateway, &amy, "Chef").await;
+    mid_reply(&gateway, &amy, chef).await;
+    gateway
+        .fake
+        .with(|b| b.steer_ends_turn = Some(SteerEnding::Unanswered));
+    // Steering needs no turn left.
+    let steered = say(&gateway, &amy, chef, "Also bread").await;
+    assert_eq!(steered.body["delivery"], "steered");
+    let user = UserId(amy_id);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let told = loop {
+        let log = gateway
+            .state
+            .events
+            .since(user, Seq::ZERO, 10_000)
+            .await
+            .unwrap();
+        let told = log.into_iter().find_map(|e| match e.event {
+            Event::BotError { bot_id, message } if bot_id.0 == chef => Some(message),
+            _ => None,
+        });
+        if let Some(told) = told {
+            break told;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no error event");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    assert!(told.contains("used your allowance"), "{told}");
+    wait_status(&gateway, &amy, chef, "idle").await;
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}/messages")).cookie(&amy))
+        .await;
+    assert_eq!(
+        said(&page.body),
+        pairs(&[
+            ("user", "Start"),
+            ("bot", "Hello there"),
+            ("user", "Also bread"),
+        ])
+    );
+    assert_eq!(gateway.fake.received("turn/start").len(), 1);
+    let usage = gateway.send(Call::get("/api/v1/usage").cookie(&amy)).await;
+    assert_eq!(usage.body["allowance"]["turns_today"], 1);
+}
+
+/// A Bot owes a turn to a steered message its turn left unanswered: it
+/// stays working until that turn starts, which waits for the Bot's sends.
+#[tokio::test]
+async fn a_bot_owed_a_turn_stays_working_until_it_starts() {
+    use common::fake_codex::SteerEnding;
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    mid_reply(&gateway, &rob, chef).await;
+    // Hold the Bot's sends, as a message being sent does, while the turn
+    // ends with the steered message unanswered.
+    say(&gateway, &rob, chef, "Also bread").await;
+    let held = gateway
+        .state
+        .conversations
+        .lock_bot(UserId(1), BotId(chef))
+        .await;
+    gateway
+        .fake
+        .end_steered_turn(UserId(1), SteerEnding::Unanswered);
+    // The Bot stays working: the message is owed a turn.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let status = gateway
+        .send(Call::get(&format!("/api/v1/bots/{chef}")).cookie(&rob))
+        .await;
+    assert_eq!(status.body["status"], "working");
+    drop(held);
+    wait_status(&gateway, &rob, chef, "idle").await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(gateway.fake.received("turn/start").len(), 2);
 }
 
 #[tokio::test]

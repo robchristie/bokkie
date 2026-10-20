@@ -1240,12 +1240,15 @@ impl Runtime {
         Ok(timed(self.client.turn_start(&params)).await?.turn)
     }
 
-    /// Adds a message to the running turn of a served thread.
+    /// Adds a message to the running turn of a served thread. The
+    /// `userMessage` item that records it in the thread carries
+    /// `client_id`.
     pub async fn steer_turn(
         &self,
         thread_id: &str,
         turn_id: &str,
         text: &str,
+        client_id: &str,
         context: Option<Context>,
     ) -> Result<String, CodexError> {
         self.ensure_served(thread_id)?;
@@ -1253,6 +1256,7 @@ impl Runtime {
             thread_id: thread_id.into(),
             expected_turn_id: turn_id.into(),
             input: vec![UserInput::Text { text: text.into() }],
+            client_user_message_id: Some(client_id.into()),
             additional_context: context,
         }))
         .await?
