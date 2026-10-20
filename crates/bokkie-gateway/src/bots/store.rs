@@ -774,16 +774,16 @@ pub async fn activity(
     user: UserId,
     only: Option<BotId>,
 ) -> Result<std::collections::HashMap<BotId, Activity>> {
-    let rows = sqlx::query(
-        "SELECT b.id AS bot_id, r.message_id AS read_up_to,
-                (SELECT max(id) FROM messages WHERE bot_id = b.id AND author = 'bot') AS newest,
-                m.author, substr(m.text, 1, ?) AS text, m.updated_at
-         FROM bots b
-         LEFT JOIN read_markers r ON r.bot_id = b.id AND r.user_id = b.user_id
-         LEFT JOIN messages m
-           ON m.id = (SELECT max(id) FROM messages WHERE bot_id = b.id) AND m.user_id = b.user_id
-         WHERE b.user_id = ? AND (? IS NULL OR b.id = ?)",
-    )
+    let rows = sqlx::query(&format!(
+        "SELECT b.id AS bot_id, {UNREAD_COLUMNS},
+                    m.author, substr(m.text, 1, ?) AS text, m.updated_at
+             FROM bots b
+             {READ_MARKER_JOIN}
+             LEFT JOIN messages m
+               ON m.id = (SELECT max(id) FROM messages WHERE bot_id = b.id)
+              AND m.user_id = b.user_id
+             WHERE b.user_id = ? AND (? IS NULL OR b.id = ?)"
+    ))
     .bind(PREVIEW_CHARS as i64)
     .bind(user.0)
     .bind(only.map(|b| b.0))
@@ -814,6 +814,24 @@ pub async fn activity(
         .collect())
 }
 
+/// The columns [`is_unread`] reads, for a query over Bots `b` joined to
+/// their read markers `r` by [`READ_MARKER_JOIN`]: the user's read marker
+/// and the Bot's newest message of its own. Every unread state and count
+/// comes from these and [`is_unread`].
+const UNREAD_COLUMNS: &str = "r.message_id AS read_up_to,
+    (SELECT max(id) FROM messages WHERE bot_id = b.id AND author = 'bot') AS newest";
+
+/// Joins Bots `b` to their users' read markers `r`.
+const READ_MARKER_JOIN: &str =
+    "LEFT JOIN read_markers r ON r.bot_id = b.id AND r.user_id = b.user_id";
+
+/// How many of a list of Bots' unread flags are set: the count the app's
+/// badge shows.
+pub fn unread_count(unread: impl IntoIterator<Item = bool>) -> u32 {
+    let count = unread.into_iter().filter(|unread| *unread).count();
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
 /// Whether a Bot whose newest message of its own is `newest` is unread to
 /// a user who has seen its conversation up to `read_up_to`, by the rule of
 /// [`Message::is_unread`].
@@ -831,13 +849,9 @@ pub async fn read_state(
     user: UserId,
     bot: BotId,
 ) -> Result<Option<ReadState>> {
-    let row = sqlx::query(
-        "SELECT r.message_id AS read_up_to,
-                (SELECT max(id) FROM messages WHERE bot_id = b.id AND author = 'bot') AS newest
-         FROM bots b
-         LEFT JOIN read_markers r ON r.bot_id = b.id AND r.user_id = b.user_id
-         WHERE b.id = ? AND b.user_id = ?",
-    )
+    let row = sqlx::query(&format!(
+        "SELECT {UNREAD_COLUMNS} FROM bots b {READ_MARKER_JOIN} WHERE b.id = ? AND b.user_id = ?"
+    ))
     .bind(bot.0)
     .bind(user.0)
     .fetch_optional(db)
@@ -884,18 +898,18 @@ pub async fn mark_read(
 }
 
 /// How many of the user's Bots are unread, hidden ones too: the count the
-/// app's badge shows.
+/// app's badge shows, as the Bot list counts it.
 pub async fn unread_bots(db: impl SqliteExecutor<'_>, user: UserId) -> Result<u32> {
-    let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM bots b
-         LEFT JOIN read_markers r ON r.bot_id = b.id AND r.user_id = b.user_id
-         WHERE b.user_id = ?
-           AND EXISTS (SELECT 1 FROM messages m
-                       WHERE m.bot_id = b.id AND m.author = 'bot'
-                         AND (r.message_id IS NULL OR m.id > r.message_id))",
-    )
+    let rows = sqlx::query(&format!(
+        "SELECT {UNREAD_COLUMNS} FROM bots b {READ_MARKER_JOIN} WHERE b.user_id = ?"
+    ))
     .bind(user.0)
-    .fetch_one(db)
+    .fetch_all(db)
     .await?;
-    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+    Ok(unread_count(rows.iter().map(|r| {
+        is_unread(
+            r.get::<Option<i64>, _>("newest").map(MessageId),
+            r.get::<Option<i64>, _>("read_up_to").map(MessageId),
+        )
+    })))
 }

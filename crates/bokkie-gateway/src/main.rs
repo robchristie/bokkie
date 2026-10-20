@@ -63,8 +63,18 @@ async fn serve() -> Result<(), String> {
             .await
             .map_err(|e| format!("loading sign-in limits: {e}"))?,
     );
+    // The push key is made on first start and must load on every later
+    // one: a key that is unreadable or open to others stops the gateway.
+    state.push.key().map_err(|e| format!("push key: {e}"))?;
+    state.push.recover().await.map_err(|f| f.message)?;
     state.conversations.recover().await.map_err(|f| f.message)?;
     state.routines.recover().await.map_err(|f| f.message)?;
+    tokio::spawn(
+        state
+            .push
+            .clone()
+            .run(bokkie_gateway::push::SENDER_INTERVAL),
+    );
     tokio::spawn(state.conversations.clone().run(events));
     tokio::spawn(
         state

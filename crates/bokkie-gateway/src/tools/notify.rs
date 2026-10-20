@@ -3,9 +3,13 @@
 //!
 //! A call records a notification for the Bot's user, with the Bot, the
 //! routine run whose turn sent it (if a routine's) and its marker in the
-//! conversation, and adds that marker, all in one event batch. The
-//! tool-call log records the call with its kind and title. Notifications
-//! are kept [`RETENTION_MS`]; their markers stay with the conversation.
+//! conversation, adds that marker, and, outside a routine's run, queues
+//! its push ([`crate::push::notified`]), all in one event batch. In a
+//! run, the run's own push carries it when the run ends. The tool-call log
+//! records the call with its kind and title. A Bot may record at most
+//! [`PER_TURN`] notifications in a turn and its user [`PER_HOUR`] in an
+//! hour. Notifications are kept [`RETENTION_MS`]; their markers stay with
+//! the conversation.
 
 use bokkie_protocol::api::{
     Author, MessageKind, MessageState, NOTIFICATION_BODY_CHARS, NOTIFICATION_TITLE_CHARS,
@@ -20,7 +24,7 @@ use sqlx::sqlite::{SqliteConnection, SqliteExecutor};
 use super::audit::{self, ID_CHARS, bounded};
 use super::{Caller, Output};
 use crate::bots::store::{self, NewMessage, notification_kind_from, notification_kind_name};
-use crate::clock::DAY_MS;
+use crate::clock::{DAY_MS, HOUR_MS};
 use crate::error::{Failure, Result};
 use crate::events::EventLog;
 
@@ -30,13 +34,42 @@ pub const TOOL: &str = "notify";
 /// What the model is told the tool does.
 pub const DESCRIPTION: &str = "Notify your owner: use it when you have a result they should \
      see, or a question only they can answer, and not for routine chatter. It adds a marker \
-     to this conversation, and reaches their devices when they have notifications on. Give \
-     a one-line title of at most 80 characters, an optional body of at most 500, and the \
-     kind: result or question. Your reply in the conversation still carries the detail.";
+     to this conversation and is pushed to their devices that have notifications on, unless \
+     they have this conversation open; in a routine's run, the run's one push carries it \
+     when the run ends. Give a one-line title of at most 80 characters, an optional body of \
+     at most 500, and the kind: result or question. At most 3 a turn. Your reply in the \
+     conversation still carries the detail.";
 
 /// What the model is told after a notification is recorded.
 pub const ANSWER: &str = "Notification recorded. Your owner sees it in this conversation, \
-     and on their devices when they have notifications on.";
+     and it is pushed to their devices that have notifications on unless they have this \
+     conversation open (in a routine's run, when the run ends).";
+
+/// How many notifications a Bot may record in one turn.
+pub const PER_TURN: i64 = 3;
+/// How many notifications a user's Bots may record in an hour, together.
+pub const PER_HOUR: i64 = 30;
+
+/// Whether `c` is a character that changes how text around it is laid out
+/// rather than showing itself: line and paragraph separators, the
+/// bidirectional embeddings, overrides, isolates and marks, the byte order
+/// mark and interlinear annotation characters. Notification text refuses
+/// them. Joiners (U+200C, U+200D), which emoji and some scripts need, are
+/// allowed.
+pub fn is_layout_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}'
+            | '\u{200E}'
+            | '\u{200F}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+    )
+}
 
 /// How long notifications are kept.
 pub const RETENTION_MS: i64 = 90 * DAY_MS;
@@ -77,7 +110,8 @@ pub struct Request {
 /// Checks a call's arguments: a one-line title of 1 to
 /// [`NOTIFICATION_TITLE_CHARS`] characters with no control characters, a
 /// body of at most [`NOTIFICATION_BODY_CHARS`] with no control characters
-/// but line breaks and tabs, and a kind. Both are trimmed.
+/// but line breaks and tabs, neither with a layout control
+/// ([`is_layout_control`]), and a kind. Both are trimmed.
 pub fn parse(arguments: &Value) -> std::result::Result<Request, String> {
     let usage = || {
         "notify needs {\"title\": \"...\", \"body\": \"...\", \"kind\": \"result\" or \
@@ -103,6 +137,13 @@ pub fn parse(arguments: &Value) -> std::result::Result<Request, String> {
     }
     if title.chars().any(char::is_control) {
         return Err("The title must be one line, with no control characters.".into());
+    }
+    if title.chars().chain(body.chars()).any(is_layout_control) {
+        return Err(
+            "The title and body must not contain line or paragraph separators or \
+             bidirectional formatting characters."
+                .into(),
+        );
     }
     let length = body.chars().count();
     if length > NOTIFICATION_BODY_CHARS {
@@ -155,7 +196,7 @@ pub async fn serve(
     let request = parse(arguments)?;
     let (notification, marker) = record(caller, events, thread_id, turn_id, call_id, &request)
         .await
-        .map_err(internal)?;
+        .map_err(internal)??;
     tracing::info!(
         user = %caller.user,
         bot = %caller.bot,
@@ -167,7 +208,9 @@ pub async fn serve(
     Ok(ANSWER.into())
 }
 
-/// Records the notification and its marker together.
+/// Records the notification and its marker together, and queues its push
+/// when it is not a routine's run's, unless the turn or the hour already
+/// has as many as it may.
 async fn record(
     caller: &Caller,
     events: &EventLog,
@@ -175,12 +218,37 @@ async fn record(
     turn_id: &str,
     call_id: &str,
     request: &Request,
-) -> Result<(NotificationId, MessageId)> {
+) -> Result<std::result::Result<(NotificationId, MessageId), String>> {
     let now = caller.clock.now();
     let thread_id = bounded(thread_id, ID_CHARS);
     let turn_id = bounded(turn_id, ID_CHARS);
     let call_id = bounded(call_id, ID_CHARS);
     let mut batch = events.begin(caller.user).await?;
+    let (in_turn, in_hour): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM notifications
+                 WHERE user_id = ?1 AND bot_id = ?2 AND thread_id = ?3 AND turn_id = ?4),
+                (SELECT count(*) FROM notifications WHERE user_id = ?1 AND created_at > ?5)",
+    )
+    .bind(caller.user.0)
+    .bind(caller.bot.0)
+    .bind(&thread_id)
+    .bind(&turn_id)
+    .bind(now.0 - HOUR_MS)
+    .fetch_one(&mut *batch)
+    .await?;
+    if in_turn >= PER_TURN {
+        return Ok(Err(format!(
+            "You have sent {PER_TURN} notifications in this turn, the most a turn may: \
+             nothing was recorded. Put the rest in your reply."
+        )));
+    }
+    if in_hour >= PER_HOUR {
+        tracing::warn!(user = %caller.user, bot = %caller.bot, limit = PER_HOUR, "refused a notification: the user's hourly limit is reached");
+        return Ok(Err(format!(
+            "Your owner has had {PER_HOUR} notifications in the past hour, the most an hour \
+             may: nothing was recorded. Put it in your reply instead."
+        )));
+    }
     let marker = store::insert_message(
         &mut *batch,
         now,
@@ -197,7 +265,7 @@ async fn record(
         },
     )
     .await?;
-    let id: i64 = sqlx::query_scalar(
+    let (id, run): (i64, Option<i64>) = sqlx::query_as(
         "INSERT INTO notifications (user_id, bot_id, message_id, thread_id, turn_id, call_id,
                                     routine_run_id, kind, title, body, created_at)
          SELECT user_id, id, ?1, ?2, ?3, ?4,
@@ -207,7 +275,7 @@ async fn record(
                  ORDER BY r.id DESC LIMIT 1),
                 ?5, ?6, ?7, ?8
          FROM bots WHERE id = ?9 AND user_id = ?10
-         RETURNING id",
+         RETURNING id, routine_run_id",
     )
     .bind(marker.id.0)
     .bind(&thread_id)
@@ -225,8 +293,19 @@ async fn record(
     batch
         .emit(Event::MessageCreated { message: marker })
         .await?;
+    if run.is_none() {
+        crate::push::notified(
+            &mut batch,
+            now,
+            caller.user,
+            caller.bot,
+            NotificationId(id),
+            request,
+        )
+        .await?;
+    }
     batch.commit().await?;
-    Ok((NotificationId(id), marker_id))
+    Ok(Ok((NotificationId(id), marker_id)))
 }
 
 /// Gives the routine run whose turn this is the notifications already
@@ -339,6 +418,8 @@ mod tests {
         assert!(parse(&json!({"title": longest, "body": "", "kind": "result"})).is_ok());
         let body = "é".repeat(NOTIFICATION_BODY_CHARS);
         assert!(parse(&json!({"title": "x", "body": body, "kind": "result"})).is_ok());
+        // Joiners stay: emoji sequences and some scripts need them.
+        assert!(parse(&json!({"title": "Family 👨\u{200d}👩\u{200d}👧", "body": "می\u{200c}خواهم", "kind": "result"})).is_ok());
         for refused in [
             json!({"title": "", "body": "", "kind": "result"}),
             json!({"title": "   ", "body": "", "kind": "result"}),
@@ -347,6 +428,14 @@ mod tests {
             json!({"title": "bell\u{7}", "body": "", "kind": "result"}),
             json!({"title": "x", "body": "b".repeat(NOTIFICATION_BODY_CHARS + 1), "kind": "result"}),
             json!({"title": "x", "body": "escape\u{1b}[31m", "kind": "result"}),
+            json!({"title": "line\u{2028}separator", "body": "", "kind": "result"}),
+            json!({"title": "x", "body": "para\u{2029}graph", "kind": "result"}),
+            json!({"title": "evil\u{202e}txt.exe", "body": "", "kind": "result"}),
+            json!({"title": "x", "body": "isolate\u{2067}", "kind": "result"}),
+            json!({"title": "mark\u{200f}", "body": "", "kind": "result"}),
+            json!({"title": "x", "body": "arabic mark\u{061c}", "kind": "result"}),
+            json!({"title": "\u{feff}bom", "body": "", "kind": "result"}),
+            json!({"title": "x", "body": "annotation\u{fff9}", "kind": "result"}),
             json!({"title": "x", "body": "", "kind": "alert"}),
             json!({"title": "x", "body": ""}),
             json!({"title": 3, "body": "", "kind": "result"}),

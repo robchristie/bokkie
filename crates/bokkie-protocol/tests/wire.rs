@@ -1016,6 +1016,46 @@ fn unread_state_and_notifications() {
 }
 
 #[test]
+fn web_push() {
+    pin(
+        &PushKey {
+            public_key: "BPub".into(),
+            sending: true,
+        },
+        json!({"public_key": "BPub", "sending": true}),
+    );
+    pin(
+        &PushSubscriptionRequest {
+            endpoint: "https://push.example/abc".into(),
+            keys: PushSubscriptionKeys {
+                p256dh: "BKey".into(),
+                auth: "secret".into(),
+            },
+        },
+        json!({"endpoint": "https://push.example/abc",
+               "keys": {"p256dh": "BKey", "auth": "secret"}}),
+    );
+    // What `PushSubscription.toJSON()` gives decodes, its other fields
+    // ignored.
+    let browser: PushSubscriptionRequest = serde_json::from_value(json!({
+        "endpoint": "https://push.example/abc", "expirationTime": null,
+        "keys": {"p256dh": "BKey", "auth": "secret"},
+    }))
+    .unwrap();
+    assert_eq!(browser.keys.auth, "secret");
+    pin(
+        &PushSubscriptionState {
+            endpoint: Some("https://push.example/abc".into()),
+        },
+        json!({"endpoint": "https://push.example/abc"}),
+    );
+    pin(
+        &PushSubscriptionState { endpoint: None },
+        json!({"endpoint": null}),
+    );
+}
+
+#[test]
 fn a_bot_is_unread_while_it_wrote_after_the_read_marker() {
     let reply = message();
     assert!(reply.is_unread(None));

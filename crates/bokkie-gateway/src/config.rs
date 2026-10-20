@@ -28,6 +28,51 @@ pub struct Config {
     /// The production web package's application directory, served at the
     /// origin's root. `None` serves no static files.
     pub web_root: Option<WebRoot>,
+    /// The contact a push service may reach the operator at, named in
+    /// every Web Push request. Without it the gateway serves its push key
+    /// but sends no push.
+    pub push_contact: Option<PushContact>,
+}
+
+/// The operator's contact for push services: an `https:` URL or a
+/// `mailto:` address, of printable ASCII.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushContact(String);
+
+impl PushContact {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let value = value.trim();
+        let refuse = || {
+            format!(
+                "BOKKIE_PUSH_CONTACT {value:?} must be an https: URL, such as \
+                 https://bokkie.example.lan, or a mailto: address"
+            )
+        };
+        if value.len() > 256 || !value.bytes().all(|b| b.is_ascii_graphic()) {
+            return Err(refuse());
+        }
+        if let Some(address) = value.strip_prefix("mailto:") {
+            let (local, domain) = address.split_once('@').ok_or_else(refuse)?;
+            if local.is_empty() || !valid_host(&domain.to_ascii_lowercase()) || domain.contains('[')
+            {
+                return Err(refuse());
+            }
+        } else {
+            let url = url::Url::parse(value).map_err(|_| refuse())?;
+            if url.scheme() != "https"
+                || url.host_str().is_none_or(str::is_empty)
+                || !url.username().is_empty()
+                || url.password().is_some()
+            {
+                return Err(refuse());
+            }
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// An `https://host[:port]` or `http://host[:port]` origin, normalised to
@@ -117,7 +162,8 @@ impl Config {
     /// (comma-separated), `BOKKIE_TRUST_FORWARDED_FOR` (`1` to enable),
     /// `BOKKIE_CODEX_BIN` (default `/usr/local/bin/codex`) and
     /// `BOKKIE_WEB_ROOT` (unset by default), which must name a readable
-    /// directory holding `index.html`.
+    /// directory holding `index.html`, and `BOKKIE_PUSH_CONTACT` (unset by
+    /// default; see [`PushContact`]).
     pub fn from_env() -> Result<Self, String> {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
         let origin = var("BOKKIE_ORIGIN").ok_or("BOKKIE_ORIGIN is required")?;
@@ -143,6 +189,9 @@ impl Config {
                 .into(),
             web_root: var("BOKKIE_WEB_ROOT")
                 .map(|root| WebRoot::open(root.as_ref()))
+                .transpose()?,
+            push_contact: var("BOKKIE_PUSH_CONTACT")
+                .map(|contact| PushContact::parse(&contact))
                 .transpose()?,
         })
     }
@@ -241,6 +290,37 @@ mod tests {
         ] {
             assert!(PublicOrigin::parse(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_push_contact_is_an_https_url_or_a_mailto_address() {
+        for good in [
+            "https://bokkie-next.yutani.tech",
+            "https://bokkie.example.lan/contact",
+            "mailto:owner@example.org",
+        ] {
+            assert_eq!(PushContact::parse(good).unwrap().as_str(), good);
+        }
+        for bad in [
+            "",
+            "bokkie.example.lan",
+            "http://bokkie.example.lan",
+            "https://",
+            "https://user:pw@bokkie.example.lan",
+            "https://bokkie example.lan",
+            "https://bokkie.lan\r\nx: 1",
+            "https://bökkie.lan",
+            "mailto:",
+            "mailto:owner",
+            "mailto:@example.org",
+            "mailto:owner@",
+            "mailto:owner@exa mple.org",
+            "ftp://bokkie.example.lan",
+        ] {
+            assert!(PushContact::parse(bad).is_err(), "{bad:?}");
+        }
+        let long = format!("https://bokkie.lan/{}", "a".repeat(300));
+        assert!(PushContact::parse(&long).is_err());
     }
 
     #[test]

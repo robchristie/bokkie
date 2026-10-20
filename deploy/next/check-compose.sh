@@ -95,6 +95,8 @@ def problems(config):
     want(env.get("BOKKIE_ORIGIN") == f"https://{host}", "BOKKIE_ORIGIN is not https://<host>")
     want(env.get("BOKKIE_TRUST_FORWARDED_FOR") == "1", "BOKKIE_TRUST_FORWARDED_FOR is not 1")
     want(bool(env.get("BOKKIE_WEB_ROOT")), "BOKKIE_WEB_ROOT is not set")
+    want(env.get("BOKKIE_PUSH_CONTACT") == f"https://{host}",
+         "BOKKIE_PUSH_CONTACT is not https://<host>")
 
     labels = gateway.get("labels", {})
     want(labels.get("traefik.enable") == "true", "Traefik is not enabled")
@@ -142,6 +144,9 @@ mutations = {
         "traefik.http.routers.open.rule": f"Host(`{host}`)"}),
     "no middleware": lambda g: g["labels"].pop("traefik.http.routers.bokkie-next.middlewares"),
     "untrusted forwarded-for": lambda g: g["environment"].pop("BOKKIE_TRUST_FORWARDED_FOR"),
+    "no push contact": lambda g: g["environment"].pop("BOKKIE_PUSH_CONTACT"),
+    "another push contact": lambda g: g["environment"].update(
+        BOKKIE_PUSH_CONTACT="mailto:someone@example.com"),
 }
 for name, change in mutations.items():
     if not problems(weakened(change)):
