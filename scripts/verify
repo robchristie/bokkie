@@ -19,6 +19,13 @@ web_tools="$(scripts/fetch-stobie)"
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- --deny warnings
 cargo test --workspace --locked
+# The gateway's test seams (its `test-network` feature) are on only in its
+# own tests, never in a build of the gateway itself.
+gateway_features="$(cargo tree --locked -p bokkie-gateway -e normal,build --depth 0 -f '{f}')"
+if [[ "$gateway_features" == *test-network* ]]; then
+  echo "verify: the gateway's own build turns on its test-network feature" >&2
+  exit 1
+fi
 # The wire types and the web client's core run in the browser too.
 cargo build -p bokkie-protocol -p bokkie-web --target wasm32-unknown-unknown --locked
 # The web client's browser-only code, then its web root and a production

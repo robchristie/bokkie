@@ -5,6 +5,7 @@
 
 pub mod fake_codex;
 pub mod live;
+pub mod site;
 
 use axum::Router;
 use axum::body::Body;

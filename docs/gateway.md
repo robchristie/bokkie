@@ -366,8 +366,8 @@ The gateway refuses to serve an app server or thread unless these all hold:
 
 `tests/live_codex.rs` proves the result against the real pinned app server
 with a mock model and a synthetic household sign-in: a thread offers
-exactly the tools of its grants, for every combination of `notes`, `seen`
-and `web.search`, plus `request_user_input`, which the gateway answers
+exactly the tools of its grants, for every combination of `notes`, `seen`,
+`web.search` and `web.fetch`, plus `request_user_input`, which the gateway answers
 with an error, and Codex's web search only with `web.search`. Its control
 test shows that the same capture sees `apply_patch`, `exec_command` and
 `spawn_agent` without the gateway's configuration. Other live tests show
@@ -375,7 +375,8 @@ that a thread runs with every Bubblewrap broken, and that one user's app
 server cannot load another user's thread. `tests/live_tools.rs` drives the
 whole gateway: a grant change starts a fresh thread with the new tools,
 and a tool call the mock model makes reaches the broker and is answered
-from the calling Bot's notes or seen items.
+from the calling Bot's notes or seen items, or with a feed fetched from a
+local site (see [Web fetch](#web-fetch)).
 
 These results hold for the pinned release: the tool flags, the catalog
 fields and the static catalog are all Codex 0.163.0 behaviour. Moving the
@@ -465,9 +466,9 @@ long-lived Codex thread in that user's app server.
 
 Each Bot holds a set of grants from the catalogue `notes`, `seen`,
 `notify`, `web.search` and `web.fetch`, carried as `grants` on the Bot (in
-`GET /api/v1/bots` and `bot_updated` events). Today `notes` and `seen` have
-tools; the gateway refuses to grant the others (`invalid_request`) until
-their tools exist. `web.search` brings Codex's own web search
+`GET /api/v1/bots` and `bot_updated` events). Today `notes`, `seen` and
+`web.fetch` have tools; the gateway refuses to grant `notify`
+(`invalid_request`) until its tools exist. `web.search` brings Codex's own web search
 ([Web search](#web-search)), which its threads already turn on and
 describe in their instructions; it is refused until its path is settled.
 
@@ -499,7 +500,7 @@ describe in their instructions; it is refused until its path is settled.
   error, and only the gateway's own log records it, by its tool's name cut
   to 64 characters, since no Bot's owner could read it. If the Bot lost
   the grant since its thread started, the call is refused with an error. Otherwise the tool runs within its deadline (10
-  seconds for the notes tools), and the answer, or an error if the
+  seconds for the notes and seen tools, 30 for `web_fetch`), and the answer, or an error if the
   deadline passes, goes back to the app server. A call that nobody serves,
   because the gateway is shutting down, is answered with an error, since
   Codex itself would wait until the turn is interrupted.
@@ -537,7 +538,9 @@ describe in their instructions; it is refused until its path is settled.
   recorded, refused ones included, with its user, Bot, thread, turn and
   call ids, the tool, a bounded summary of its arguments (for the notes
   tools, the size of the text, never the text; for `seen_check`, how many
-  items; for `seen_mark`, how many and their canonical ids), the outcome
+  items; for `seen_mark`, how many and their canonical ids; for
+  `web_fetch`, the link, where its redirects led, and the status, type and
+  size, or why it failed), the outcome
   (`ok`, `failed`, `refused` or `timed_out`) and how long it took. The
   owner reads a Bot's calls, newest first, with
   `GET /api/v1/bots/{id}/tool-calls?before=&limit=`. A call the app
@@ -550,13 +553,100 @@ describe in their instructions; it is refused until its path is settled.
   recorded in the same log as `web_search`, with the item's id as its call
   id and its query or the page it opened as its summary (such as `search
   new RLHF papers` or `open https://example.org/a`), on one line and at
-  most 200 characters, outcome `ok` and how long it took. Searches stay
-  out of the conversation: the Bot's reply says what it found. The
-  gateway's own log never records a query.
+  most 200 characters, outcome `ok` and how long it took. A search on a
+  thread without `web.search` is a violation (see
+  [The capability rule](#the-capability-rule)); if the app server reports
+  it completed, it is recorded too, with outcome `refused`. Whether a thread held `web.search` is decided as the
+  app server reports the search, so a search handled after its app server
+  was replaced is still recorded as it was judged. Searches stay out of
+  the conversation: the Bot's reply says what it found. The gateway's own
+  log never records a query.
+- **Web fetch.** `web.fetch` brings `web_fetch`; see [Web fetch](#web-fetch).
 
 Every query names the signed-in user, or for the broker the app server's
 user: another user's Bot's grants, notes, seen items and tool calls read as
 not found.
+
+### Web fetch
+
+`web_fetch` reads one page or feed from the public web for a Bot granted
+`web.fetch`. The model gives a link, and the gateway fetches it:
+
+- **What it may ask for.** `GET` over `http` or `https`, on ports 80 and
+  443 only, with no user name or password in the link, at most 2,048
+  characters long.
+- **Where it may connect.** The gateway resolves the host itself and
+  refuses it unless every address the name resolves to is public: no
+  loopback, private (RFC 1918), link-local, shared address space
+  (100.64.0.0/10, which the tailnet uses), unique local, multicast,
+  unspecified, documentation, benchmarking or other reserved address, and
+  no 6to4 or Teredo address. An IPv6 address that carries an IPv4 one
+  (IPv4-mapped, or NAT64's 64:ff9b::/96) is judged by the IPv4 address. It
+  then connects to one of the checked addresses and no other, so a name
+  that answers differently a moment later cannot move the connection;
+  TLS and `Host` still use the name.
+  `crates/bokkie-gateway/src/http/address.rs` lists the ranges.
+- **Redirects.** At most five, each a new request that passes every rule
+  above again, its name resolved and checked again.
+- **What it sends.** No cookie, credential or header of the Bot's choosing:
+  only `Host`, a fixed `User-Agent` (`Bokkie/<version>`, naming the
+  project) and a fixed `Accept`. A cookie a site sets is never sent back.
+- **Bounds.** At most 2 MB of a response body is read, and the whole
+  fetch, redirects included, gets 30 seconds; past that it is answered
+  with an error and logged as `timed_out`.
+- **What comes back.** HTML as readable text, without scripts, styles,
+  navigation, footers or forms, with its links listed at the end; plain
+  text and JSON as they are, in their declared character set; RSS, Atom
+  and JSON Feed as each item's title, link, date and summary, for at most
+  200 items (generic XML is read only if it is such a feed). Any other
+  type, or none, is refused with an error naming the type, and so are
+  compressed content (the gateway asks for none) and any status but
+  success. Building a document tree from hostile HTML can take time that
+  grows with the square of its size, so the gateway converts at most
+  512 KB of a page's markup, after removing scripts, styles and comments,
+  parses it in pieces for at most two seconds, drops elements nested
+  deeper than 256, and says where it cut the page; conversions run off
+  the gateway's async workers, two at a time. The
+  answer, at most 40,000 characters, names the final URL and holds the
+  content inside an `<untrusted-web-content url="…">` block that the
+  content cannot close, after a line saying it is untrusted content from
+  the web, not instructions.
+- **Limits.** At most 60 fetches in one turn, and 500 per user in any 24
+  hours across all their Bots; a fetch beyond either is refused, and
+  refused fetches do not count. Each user's count is their own.
+- **The log.** Each fetch is recorded in the tool-call log as `web_fetch`
+  with its link, where its redirects led, and its status, type and size,
+  or why it failed (such as `refused, not a public address` or
+  `timed out`), and how long it took. The gateway's own log never records
+  a link.
+
+**The risk.** A Bot that reads the web can be steered by what it reads,
+and can leak what it is told through the links it fetches: a link is a
+message to whoever runs the host. The instructions of a `web.fetch` Bot
+tell it that fetched content is untrusted and that links leave the
+household, and the owner sees every link in the tool-call log, but
+nothing stops a Bot from putting what it knows into a link to any public
+host. Grant `web.fetch` only to Bots whose conversations hold nothing
+that must not leave the household. A per-Bot list of allowed hosts may
+come later.
+
+The gateway's outbound HTTP client (`crates/bokkie-gateway/src/http/`)
+makes each request: HTTP/1.1 over rustls on ring, trusting the system's
+certificate authorities (the image's ca-certificates). It follows no
+redirect itself, so every hop passes its checks.
+
+**Tests.** `tests/web_fetch.rs` fetches from a local site over HTTP and
+HTTPS. It reaches that site only through a test network, which resolves
+a few made-up names under `.example` to loopback, lets loopback through,
+maps ports 80 and 443 to the site's ports and trusts the site's own
+certificate authority; any other name does not resolve. The test network
+exists only when the gateway is built with its `test-network` feature,
+which only the gateway's own tests turn on, through a development
+dependency on itself; `scripts/verify` fails if a build of the gateway
+itself turns it on, so a production gateway always resolves through the
+system and connects only to public addresses. A test without the test
+network shows that loopback, private and tailnet addresses are refused
+before any connection.
 
 ## Routines
 

@@ -46,8 +46,10 @@ RUN . /tmp/codex-release.env \
     && rm /tmp/codex.tgz
 
 FROM ${DEBIAN_IMAGE}
-# Chat-only threads need no Bubblewrap (docs/gateway.md), so none is
-# installed. Codex needs the CA certificates to reach ChatGPT.
+# Threads run no command (docs/gateway.md, "The capability rule"), so no
+# Bubblewrap is installed. Codex needs the CA certificates to reach
+# ChatGPT, and the gateway trusts them for its own HTTPS requests, such as
+# a Bot's web_fetch.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates=20250419 \
     && rm -rf /var/lib/apt/lists/*
