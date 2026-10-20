@@ -24,7 +24,8 @@
 //! posts it to each push service through the gateway's [`HttpClient`] with
 //! the cached VAPID token ([`vapid`]), retrying with backoff on 429 and
 //! 5xx. A push service answering 404 or 410, or 403 with
-//! `VapidPkHashMismatch`, ends the subscription.
+//! `VapidPkHashMismatch`, ends the subscription; one answering 403 with
+//! `BadJwtToken` has its token replaced, once that token is an hour old.
 //!
 //! The payload is Stobie's declarative Web Push message, under
 //! [`PAYLOAD_BYTES`]: the title, the body, the Bot's conversation as
@@ -71,6 +72,9 @@ pub const RETENTION_MS: i64 = DAY_MS;
 pub const PAYLOAD_BYTES: usize = 3_000;
 /// The longest title, in characters.
 pub const TITLE_CHARS: usize = 80;
+/// A push's title when the Bot's name shows nothing, such as a name of
+/// formatting characters only.
+pub const FALLBACK_TITLE: &str = "Your Bot";
 /// The longest line taken from a reply, in characters.
 pub const LINE_CHARS: usize = 200;
 /// How long one request to a push service may take.
@@ -158,7 +162,7 @@ async fn bot_name(conn: &mut SqliteConnection, user: UserId, bot: BotId) -> Resu
 }
 
 async fn queue(batch: &mut Batch, now: Timestamp, push: NewPush<'_>) -> Result<()> {
-    let title = clean(push.title, TITLE_CHARS);
+    let title = shown(clean(push.title, TITLE_CHARS)).unwrap_or_else(|| FALLBACK_TITLE.into());
     let body = clean(push.body, usize::MAX);
     let done = sqlx::query(
         "INSERT INTO pushes (user_id, bot_id, cause, notification_id, routine_run_id, urgency,
@@ -216,7 +220,7 @@ pub async fn notified(
             notification: Some(notification),
             run: None,
             urgency: Urgency::of(request.kind),
-            title: &name,
+            title: &bot_title(&name),
             body: &notification_text(&request.title, &request.body),
         },
     )
@@ -274,18 +278,55 @@ async fn reply_line(conn: &mut SqliteConnection, run: &runs::RunRow) -> Result<O
 }
 
 /// The first line of Markdown text with words in it, without its block
-/// and emphasis markers, at most [`LINE_CHARS`].
+/// and emphasis markers, at most [`LINE_CHARS`]. A list item's bullet and
+/// a heading's `#`s are markers only when a space or the line's end
+/// follows them, as in Markdown, so "-5 °C" keeps its sign.
 pub fn first_line(text: &str) -> Option<String> {
     text.lines().find_map(|line| {
-        let line = line
-            .trim()
-            .trim_start_matches(['#', '>', '-', '*', '+'])
-            .replace("**", "")
-            .replace("__", "")
-            .replace('`', "");
+        let line = without_block_markers(line);
+        if thematic_break(line) {
+            return None;
+        }
+        let line = line.replace("**", "").replace("__", "").replace('`', "");
         let line = clean(line.trim(), LINE_CHARS);
         (!line.is_empty()).then_some(line)
     })
+}
+
+/// A line without the markers that open its blocks: block quotes (`>`),
+/// a heading's one to six `#`s and a list item's bullet (`-`, `*` or
+/// `+`), each of the last two only before a space or the line's end.
+fn without_block_markers(mut line: &str) -> &str {
+    let marker_ends = |rest: &str| rest.is_empty() || rest.starts_with([' ', '\t']);
+    loop {
+        line = line.trim_start();
+        if let Some(rest) = line.strip_prefix('>') {
+            line = rest;
+            continue;
+        }
+        let hashes = line.len() - line.trim_start_matches('#').len();
+        if (1..=6).contains(&hashes) && marker_ends(&line[hashes..]) {
+            line = &line[hashes..];
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix(['-', '*', '+'])
+            && marker_ends(rest)
+        {
+            line = rest;
+            continue;
+        }
+        return line;
+    }
+}
+
+/// Whether a line is a thematic break: three or more of one of `-`, `*`
+/// or `_`, with nothing else but spaces.
+fn thematic_break(line: &str) -> bool {
+    let mut marks = line.chars().filter(|c| !matches!(c, ' ' | '\t'));
+    let Some(mark) = marks.next() else {
+        return false;
+    };
+    matches!(mark, '-' | '*' | '_') && marks.clone().all(|c| c == mark) && marks.count() >= 2
 }
 
 /// A sentence, ending with a full stop unless it already ends a sentence.
@@ -327,7 +368,10 @@ pub async fn run_ended(
     let Some(routine) = runs::routine_of_user(&mut **batch, user, run.routine).await? else {
         return Ok(());
     };
-    let title = format!("{name} · {}", routine.name);
+    let title = match shown(clean(&routine.name, TITLE_CHARS)) {
+        Some(routine) => format!("{} · {routine}", bot_title(&name)),
+        None => bot_title(&name),
+    };
     let reason = run.reason.as_deref();
     // The notification the run's turn sent, unless it already went out
     // alone. A run that missed has no turn.
@@ -451,6 +495,46 @@ fn clean(text: &str, chars: usize) -> String {
     cut
 }
 
+/// The Bot's name as a push's title, or [`FALLBACK_TITLE`] when it shows
+/// nothing.
+fn bot_title(name: &str) -> String {
+    shown(clean(name, TITLE_CHARS)).unwrap_or_else(|| FALLBACK_TITLE.into())
+}
+
+/// `text`, unless it shows nothing: only white space and characters
+/// that are not drawn, such as joiners and variation selectors.
+fn shown(text: String) -> Option<String> {
+    text.chars()
+        .any(|c| !(c.is_whitespace() || not_drawn(c)))
+        .then_some(text)
+}
+
+/// Whether `c` is a default-ignorable code point (Unicode's
+/// `Default_Ignorable_Code_Point`): a character a renderer draws nothing
+/// for unless it has a glyph for it.
+fn not_drawn(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{115F}'..='\u{1160}'
+            | '\u{17B4}'..='\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF0}'..='\u{FFF8}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
+    )
+}
+
 // ---------------------------------------------------------------------------
 // The payload
 
@@ -546,6 +630,9 @@ enum Attempt {
     Gone(String),
     /// Refused, and not worth retrying.
     Refused(String),
+    /// Refused for the VAPID token: the push service will not take it
+    /// again.
+    BadToken(String),
     /// Worth retrying, after the push service's `Retry-After` if it gave
     /// one.
     Retry(Option<Duration>, String),
@@ -919,7 +1006,7 @@ impl Push {
                     }
                     return false;
                 }
-                Attempt::Refused(why) => {
+                Attempt::Refused(why) | Attempt::BadToken(why) => {
                     tracing::warn!(user = %user, %service, %why, "a push service refused a push");
                     return false;
                 }
@@ -948,11 +1035,8 @@ impl Push {
             Err(error) => return Attempt::Refused(error),
         };
         let audience = target.endpoint.origin().ascii_serialization();
-        let authorization = self
-            .tokens
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .authorization(&key, &audience, contact, self.clock.now());
+        let tokens = || self.tokens.lock().unwrap_or_else(PoisonError::into_inner);
+        let authorization = tokens().authorization(&key, &audience, contact, self.clock.now());
         let Ok(device) = p256::PublicKey::from_sec1_bytes(&target.p256dh) else {
             return Attempt::Gone("its stored key is not a P-256 key".into());
         };
@@ -964,7 +1048,7 @@ impl Push {
             Ok(body) => body,
             Err(error) => return Attempt::Refused(format!("encrypting failed: {error}")),
         };
-        let Ok(authorization) = HeaderValue::from_str(&authorization) else {
+        let Ok(header) = HeaderValue::from_str(&authorization) else {
             return Attempt::Refused("the VAPID header is not a header value".into());
         };
         let request = Request {
@@ -984,7 +1068,7 @@ impl Push {
                     CONTENT_TYPE,
                     HeaderValue::from_static("application/octet-stream"),
                 ),
-                (AUTHORIZATION, authorization),
+                (AUTHORIZATION, header),
             ],
             body: Bytes::from(body),
         };
@@ -999,7 +1083,15 @@ impl Push {
                 Attempt::Refused(error.to_string())
             }
             Ok(Err(error)) => Attempt::Retry(None, error.to_string()),
-            Ok(Ok(response)) => classify(&response),
+            Ok(Ok(response)) => match classify(&response) {
+                // Its next push to this service carries a new token, once
+                // this one is an hour old.
+                Attempt::BadToken(why) => {
+                    tokens().refused(&audience, &authorization);
+                    Attempt::Refused(why)
+                }
+                attempt => attempt,
+            },
         }
     }
 }
@@ -1013,6 +1105,9 @@ fn classify(response: &Response) -> Attempt {
         404 | 410 => Attempt::Gone(why),
         // The subscription was made for another key: it can never work.
         403 if why.contains("VapidPkHashMismatch") => Attempt::Gone(why),
+        // Apple's answer for a token it will not take, such as one it
+        // counts as expired.
+        403 if why.contains("BadJwtToken") => Attempt::BadToken(why),
         429 | 500..=599 => Attempt::Retry(retry_after(&response.headers), why),
         _ => Attempt::Refused(why),
     }
@@ -1112,6 +1207,28 @@ mod tests {
             Some("quotedevil")
         );
         assert_eq!(first_line("  \n---\n\nWords").as_deref(), Some("Words"));
+        assert_eq!(
+            first_line("* * *\n___\n> ***\n- ---\nWords").as_deref(),
+            Some("Words")
+        );
+        // A sign or a hash with no space after it is text, not a marker.
+        assert_eq!(
+            first_line("-5 °C overnight").as_deref(),
+            Some("-5 °C overnight")
+        );
+        assert_eq!(
+            first_line("+3 since Monday").as_deref(),
+            Some("+3 since Monday")
+        );
+        assert_eq!(
+            first_line("#1 on the list").as_deref(),
+            Some("#1 on the list")
+        );
+        assert_eq!(first_line("--verbose").as_deref(), Some("--verbose"));
+        assert_eq!(first_line("- -5 °C").as_deref(), Some("-5 °C"));
+        assert_eq!(first_line("> * ### Nested").as_deref(), Some("Nested"));
+        assert_eq!(first_line(">quoted").as_deref(), Some("quoted"));
+        assert_eq!(first_line("-\n#\n+ Item").as_deref(), Some("Item"));
         assert_eq!(first_line(" \n\t\n"), None);
         let long = first_line(&"w".repeat(1_000)).unwrap();
         assert_eq!(long.chars().count(), LINE_CHARS);
@@ -1123,6 +1240,18 @@ mod tests {
         assert_eq!(clean(" a\u{7}b\u{2028}c\u{202a}\n d ", 80), "abc\n d");
         assert_eq!(clean("abcdef", 4), "abc…");
         assert_eq!(sentence("Done"), "Done.");
+        assert_eq!(bot_title("Chef"), "Chef");
+        assert_eq!(bot_title(" \u{2067}Chef\u{2069} "), "Chef");
+        for name in [
+            "\u{202e}\u{2066}",
+            "\u{200d}",
+            "\u{feff}\u{fe0f}",
+            "\u{2060} \u{200b}",
+        ] {
+            assert_eq!(bot_title(name), FALLBACK_TITLE, "{name:?}");
+        }
+        // A joiner or selector in a name with letters stays.
+        assert_eq!(bot_title("🧑\u{200d}🍳"), "🧑\u{200d}🍳");
         assert_eq!(sentence("Done?"), "Done?");
     }
 
@@ -1149,9 +1278,13 @@ mod tests {
             Attempt::Gone(_)
         ));
         match answer(403, r#"{"reason":"BadJwtToken"}"#, None) {
-            Attempt::Refused(why) => assert_eq!(why, "403 BadJwtToken"),
-            _ => panic!("BadJwtToken is refused"),
+            Attempt::BadToken(why) => assert_eq!(why, "403 BadJwtToken"),
+            _ => panic!("BadJwtToken refuses the token"),
         }
+        assert!(matches!(
+            answer(403, r#"{"reason":"Forbidden"}"#, None),
+            Attempt::Refused(_)
+        ));
         assert!(matches!(answer(413, "", None), Attempt::Refused(_)));
         assert!(matches!(answer(400, "", None), Attempt::Refused(_)));
         match answer(429, "", Some("7")) {

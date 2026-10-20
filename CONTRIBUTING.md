@@ -274,11 +274,16 @@ same mocks in-process, and each fails if any app server asked the refusing
 proxy for anything. A device-code sign-in is never started against the real
 authority: the gateway's tests drive it with a fake app server.
 
-The gateway's own outbound requests, such as a Bot's `web_fetch`, never
-reach the internet in tests either. A test reaches a local site through
-the gateway's one test seam, a test network that resolves only the names
-the test gives it, may let loopback through and may trust a test
-certificate authority (`crates/bokkie-gateway/tests/common/site.rs`). It
+The gateway's own outbound requests, such as a Bot's `web_fetch` and its
+Web Push deliveries, never reach the internet in tests either. A test
+reaches a local site or push service through a test network that resolves
+only the names the test gives it, may let loopback through and may trust a
+test certificate authority: `crates/bokkie-gateway/tests/common/site.rs`
+serves sites, and `crates/bokkie-gateway/tests/common/push_service.rs` is
+a mock push service that checks each push's VAPID token and decrypts it
+with the keys of the device it was meant for. The gateway's other test
+seams are the scheduler's, `routines::seams`: counts of its passes and
+start attempts, and a hold on a start that finds its Bot busy. Every seam
 exists only with the gateway's `test-network` feature, which only the
 gateway's own tests turn on, through a development dependency on itself;
 `scripts/verify` fails if a build of the gateway itself turns it on.

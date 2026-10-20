@@ -12,8 +12,9 @@
 //! k=<public key>`, where the token is an ES256 JSON Web Token naming the
 //! push service's origin (`aud`), an expiry (`exp`) and the operator's
 //! contact (`sub`). Tokens are cached per push service and reused for
-//! [`TOKEN_REUSE_MS`], so the gateway never makes a new one for a service
-//! more than once an hour.
+//! [`TOKEN_REUSE_MS`]. A token the push service refused (Apple's `403`
+//! `BadJwtToken`) is replaced once it is [`TOKEN_RENEWAL_MS`] old, so the
+//! gateway never makes a new one for a service more than once an hour.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -34,9 +35,11 @@ use crate::clock::HOUR_MS;
 pub const FILE: &str = "vapid.pem";
 /// How far ahead a token expires: Apple accepts at most a day.
 pub const TOKEN_LIFETIME_MS: i64 = 12 * HOUR_MS;
-/// How long a token is reused before a new one is made. Apple asks for at
-/// most one new token an hour.
+/// How long a token is reused before a new one is made.
 pub const TOKEN_REUSE_MS: i64 = 6 * HOUR_MS;
+/// How long a token a push service refused is still reused before a new
+/// one is made: Apple asks for at most one new token an hour.
+pub const TOKEN_RENEWAL_MS: i64 = HOUR_MS;
 /// How many push services' tokens are cached at once.
 const CACHED_TOKENS: usize = 64;
 
@@ -189,13 +192,37 @@ pub fn dir(data_dir: &Path) -> PathBuf {
 /// Tokens made, by push service origin.
 #[derive(Debug, Default)]
 pub struct Tokens {
-    made: HashMap<String, (String, i64)>,
+    made: HashMap<String, Made>,
+}
+
+/// A token made for one push service.
+#[derive(Debug)]
+struct Made {
+    /// The `Authorization` header that carries it.
+    header: String,
+    /// When it was made.
+    at: i64,
+    /// Whether the push service refused it.
+    refused: bool,
+}
+
+impl Made {
+    /// Whether it may still be used at `now`: for [`TOKEN_REUSE_MS`], or
+    /// only [`TOKEN_RENEWAL_MS`] once refused. A clock that went back
+    /// makes a new one.
+    fn usable(&self, now: Timestamp) -> bool {
+        let reuse = if self.refused {
+            TOKEN_RENEWAL_MS
+        } else {
+            TOKEN_REUSE_MS
+        };
+        now.0 >= self.at && now.0 - self.at < reuse
+    }
 }
 
 impl Tokens {
     /// The `Authorization` header for a request to the push service at
-    /// `audience`: a cached token while it is younger than
-    /// [`TOKEN_REUSE_MS`], else a new one.
+    /// `audience`: the cached token while it is usable, else a new one.
     pub fn authorization(
         &mut self,
         key: &Key,
@@ -203,23 +230,38 @@ impl Tokens {
         contact: &str,
         now: Timestamp,
     ) -> String {
-        if let Some((header, made)) = self.made.get(audience)
-            && now.0 >= *made
-            && now.0 - made < TOKEN_REUSE_MS
+        if let Some(made) = self.made.get(audience)
+            && made.usable(now)
         {
-            return header.clone();
+            return made.header.clone();
         }
         if self.made.len() >= CACHED_TOKENS {
-            self.made
-                .retain(|_, (_, made)| now.0 >= *made && now.0 - *made < TOKEN_REUSE_MS);
+            self.made.retain(|_, made| made.usable(now));
             if self.made.len() >= CACHED_TOKENS {
                 self.made.clear();
             }
         }
         let header = key.authorization(&key.token(audience, contact, now));
-        self.made
-            .insert(audience.to_owned(), (header.clone(), now.0));
+        self.made.insert(
+            audience.to_owned(),
+            Made {
+                header: header.clone(),
+                at: now.0,
+                refused: false,
+            },
+        );
         header
+    }
+
+    /// Records that the push service at `audience` refused the token in
+    /// `header`, so that it is replaced once it is [`TOKEN_RENEWAL_MS`]
+    /// old. A refusal of a token already replaced changes nothing.
+    pub fn refused(&mut self, audience: &str, header: &str) {
+        if let Some(made) = self.made.get_mut(audience)
+            && made.header == header
+        {
+            made.refused = true;
+        }
     }
 }
 
@@ -318,6 +360,42 @@ mod tests {
         assert_ne!(
             tokens.authorization(&key, "https://a.example", contact, renewed),
             first
+        );
+    }
+
+    #[test]
+    fn a_refused_token_is_replaced_after_an_hour_not_sooner() {
+        let key = Key::generate().unwrap();
+        let mut tokens = Tokens::default();
+        let start = Timestamp(1_800_000_000_000);
+        let contact = "mailto:owner@example.org";
+        let at = |ms: i64| Timestamp(start.0 + ms);
+        let first = tokens.authorization(&key, "https://a.example", contact, start);
+        let other = tokens.authorization(&key, "https://b.example", contact, start);
+        tokens.refused("https://a.example", &first);
+        // Within the hour the refused token is still the one sent.
+        assert_eq!(
+            tokens.authorization(&key, "https://a.example", contact, at(TOKEN_RENEWAL_MS - 1)),
+            first
+        );
+        // Then a new one, which is reused as any other.
+        let renewed =
+            tokens.authorization(&key, "https://a.example", contact, at(TOKEN_RENEWAL_MS));
+        assert_ne!(renewed, first);
+        assert_eq!(
+            tokens.authorization(&key, "https://a.example", contact, at(2 * TOKEN_RENEWAL_MS)),
+            renewed
+        );
+        // Another push service's token is untouched.
+        assert_eq!(
+            tokens.authorization(&key, "https://b.example", contact, at(2 * TOKEN_RENEWAL_MS)),
+            other
+        );
+        // A late refusal of the replaced token does not end the new one.
+        tokens.refused("https://a.example", &first);
+        assert_eq!(
+            tokens.authorization(&key, "https://a.example", contact, at(3 * TOKEN_RENEWAL_MS)),
+            renewed
         );
     }
 }
