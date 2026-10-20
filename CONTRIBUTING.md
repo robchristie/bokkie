@@ -135,7 +135,15 @@ open account's ID), `account_role`, `account_may_create_bots`,
 `account_may_edit_profiles`, `account_oversight`, `account_disabled`,
 `account_daily_turns` (-1 for no limit), `account_saving`,
 `account_error`, `reset`, `member_bots`, `reading` (the Bot whose
-conversation is read under oversight) and `reading_count`. Name a new Bot with `stobie set-text
+conversation is read under oversight) and `reading_count`; `time_zone` and
+`time_zone_error` for the account's time zone; `marker` (the latest
+marker's text), `showing` and `showing_error` for a routine run brought into
+view; and for a Bot's settings (`screen` is `bot_settings`) `grants`,
+`notes`, `notes_chars`, `notes_clear`, `tool_calls`, `tool_calls_state`,
+`routines`, `routine_count`, `routine_form` (`new`, `editing` or
+`saving`), `routine_error`, `routine_delete`, `history` (the routine whose
+runs show), `runs`, and the newest run's `run`, `run_state` and
+`run_messages`. Name a new Bot with `stobie set-text
 bokkie.bot-name`. Open a Bot with `stobie invoke bokkie.open-bot --value
 ID` and fill the message field with `stobie set-text bokkie.draft`. Each
 row's control carries its row's ID, so `--value ID` acts through that
@@ -148,8 +156,17 @@ Markdown, whose links open a new tab; the user's messages read as written.
 The gateway's markers, such as a capability change, a routine's run or a
 notification, are compact lines, and `stobie invoke bokkie.show-prompt
 --value MESSAGE_ID` shows or folds away the prompt below a routine run's
-marker. Times show in the account's own time zone, in the browser's
-locale. Stobie offers no `set-text` on
+marker. `stobie invoke bokkie.bot-settings` opens the open Bot's
+settings: its grants (a member may grant only `notes`, `seen` and
+`notify`), its notes, its recent tool calls and its routines. Fill a
+routine's form with `stobie set-text` on `bokkie.routine-name`,
+`bokkie.routine-prompt`, `bokkie.routine-at` and `bokkie.routine-every`,
+and act on one routine with `bokkie.edit-routine`, `bokkie.pause-routine`,
+`bokkie.run-routine`, `bokkie.delete-routine` and `bokkie.routine-history`
+with `--value ROUTINE_ID`; `bokkie.show-run --value RUN_ID` closes the
+settings and brings that run's marker into view. The account's time zone
+is set below the Bot list, with `stobie set-text bokkie.time-zone`. Times
+show in the account's own time zone, in the browser's locale. Stobie offers no `set-text` on
 the password field, so type into it with the keyboard. Bots
 reply only while the household is signed in to ChatGPT (see
 [docs/gateway.md](docs/gateway.md#the-households-chatgpt-sign-in)). To
@@ -175,6 +192,8 @@ checks:
   the link presented as a link that opens a new tab;
 - a conversation longer than one page opens on its newest 50 messages, and
   loading the older ones while a reply streams leaves both whole;
+- a routine made in the Bot's settings and run now succeeds in its
+  history, and showing the run brings its marker and reply into view;
 - the subscription meter and the limit-reached banner show;
 - the admin invites a member from the accounts screen, with permissions,
   and the member joins with the code in a second browser context and sees

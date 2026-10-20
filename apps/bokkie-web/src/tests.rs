@@ -27,6 +27,7 @@ mod household;
 mod limits;
 mod member;
 mod reading;
+mod settings;
 mod stand_ins;
 
 struct Fixture {
