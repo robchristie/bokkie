@@ -26,7 +26,8 @@
 //!   the page is visible again, reload on `reset`, and stop when signed out;
 //! - [`socket`] drives that policy for a transport, which only performs its
 //!   I/O, and filters what reaches the application;
-//! - [`usage`] words the usage meter and the limit-reached banner.
+//! - [`usage`] words the usage meter and the limit-reached banner, and
+//!   `times` the local times shown, in the user's own zone.
 
 mod admin;
 pub mod api;
@@ -36,6 +37,7 @@ pub mod browser;
 pub mod connection;
 pub mod socket;
 pub mod store;
+mod times;
 mod ui;
 pub mod usage;
 pub mod wire;

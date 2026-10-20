@@ -26,6 +26,7 @@ mod conversation;
 mod household;
 mod limits;
 mod member;
+mod reading;
 mod stand_ins;
 
 struct Fixture {
@@ -94,6 +95,13 @@ impl Fixture {
 
     fn click(&mut self, label: &str) {
         self.harness.get_by_label(label).click();
+        self.harness.run();
+    }
+
+    /// Scroll the text or control `label` into view, as a person would.
+    /// Stobie presents a control only while some of it is in view.
+    fn reveal(&mut self, label: &str) {
+        self.harness.get_by_label(label).scroll_to_me();
         self.harness.run();
     }
 

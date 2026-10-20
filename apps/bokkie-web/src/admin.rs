@@ -804,6 +804,41 @@ impl App {
         Some(Ok(true))
     }
 
+    /// Whether the admin section lists the row an admin action with an ID
+    /// names: an account, an invitation, or a member's Bot that an admin
+    /// made (to edit) or that oversight lets an admin read.
+    pub(crate) fn admin_lists(&self, action: BokkieAction, id: i64) -> bool {
+        let Session::SignedIn(signed_in) = &self.session else {
+            return false;
+        };
+        let Some(admin) = &signed_in.admin else {
+            return false;
+        };
+        let member_bots = || {
+            admin
+                .account
+                .iter()
+                .flat_map(|screen| &screen.bots)
+                .flat_map(|list| list.bots.iter().map(move |bot| (list, bot)))
+                .filter(move |(_, bot)| bot.id.0 == id)
+        };
+        match action {
+            BokkieAction::OpenAccount => admin
+                .accounts
+                .iter()
+                .flatten()
+                .any(|account| account.user.id.0 == id),
+            BokkieAction::WithdrawInvitation => admin
+                .invitations
+                .iter()
+                .flatten()
+                .any(|invitation| invitation.id == id),
+            BokkieAction::EditMemberBot => member_bots().any(|(_, bot)| bot.made_by_admin),
+            BokkieAction::ReadConversation => member_bots().any(|(list, _)| list.oversight),
+            _ => false,
+        }
+    }
+
     /// Perform an admin action that names an account, an invitation or a
     /// Bot, or `None` for any other action.
     pub(crate) fn admin_perform_with(

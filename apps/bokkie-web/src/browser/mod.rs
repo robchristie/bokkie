@@ -70,6 +70,10 @@ impl Api for BrowserApi {
             .map_or(0.0, |clock| clock.time_origin() + clock.now());
         Timestamp(millis as i64)
     }
+
+    fn local_time(&self) -> stobie_ui_egui::local_time::LocalTime {
+        stobie_ui_egui::local_time::LocalTime::viewer()
+    }
 }
 
 async fn fetch(request: &ApiRequest) -> Result<(u16, String), JsValue> {

@@ -248,7 +248,8 @@ fn opening_a_bot_shows_its_conversation_and_back_returns_to_the_list() {
     for text in [
         "Tutor",
         "Maths help · Idle",
-        "You",
+        // The gateway's times, in the user's own zone.
+        "You · 9:30 AM",
         "Hi",
         "Kia ora! What shall we study?",
         "Load older",
@@ -304,7 +305,7 @@ fn a_reply_streams_in_and_settles_and_the_list_follows() {
     }
     assert_eq!(fixture.fact("bot_status"), "working".into());
     assert!(fixture.shows("Maths help · Working"));
-    assert!(fixture.shows("Tutor · replying…"));
+    assert!(fixture.shows("Tutor · 9:30 AM · replying…"));
     assert_eq!(fixture.fact("reply"), "A fraction ".into());
     assert_eq!(fixture.fact("reply_state"), "streaming".into());
     fixture.event(15, events[4].clone());
@@ -1167,12 +1168,10 @@ fn the_message_that_was_oldest_stays_in_view_when_older_ones_arrive() {
 impl Fixture {
     /// The scroll area starts below the Bot's controls; message 100 sits at
     /// its top, with message 99 and the rest of the page above it, out of
-    /// view.
+    /// view. Reading text wholly out of view presents nothing.
     fn assert_anchored(&self) {
         let anchor = self.harness.get_by_label("Newer message 100").rect();
-        let above = self.harness.get_by_label("Older message 99").rect();
         let heading = self.harness.get_by_label("Edit profile").rect();
-        assert!(above.bottom() <= anchor.top(), "{above:?} above {anchor:?}");
         assert!(
             anchor.top() > heading.bottom(),
             "{anchor:?} below {heading:?}"
@@ -1182,8 +1181,8 @@ impl Fixture {
             "the anchor is near the top of the view: {anchor:?}"
         );
         assert!(
-            above.bottom() < heading.bottom() + 60.0,
-            "the older page is above the view: {above:?}"
+            !self.shows("Older message 99"),
+            "the older page is above the view"
         );
     }
 }

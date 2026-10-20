@@ -159,6 +159,8 @@ impl Callbacks {
                         document.visibility_state() == VisibilityState::Visible
                     });
                 if visible {
+                    // The viewer's zone or locale may have changed meanwhile.
+                    let _ = inner.intents.send(BokkieIntent::Foreground);
                     inner.handle(Input::Visible);
                 }
             })),

@@ -87,8 +87,9 @@ fn stop_is_offered_only_while_a_reply_runs_and_the_reply_shows_as_stopped() {
         },
     );
     assert_eq!(fixture.fact("reply_state"), "interrupted".into());
-    assert!(fixture.shows("Tutor · stopped"));
-    assert!(fixture.shows("A fraction "));
+    assert!(fixture.shows("Tutor · 9:30 AM · stopped"));
+    // Markdown, which ends a paragraph at its last word.
+    assert!(fixture.shows("A fraction"));
     assert!(!fixture.enabled(BokkieAction::Stop));
     assert!(!fixture.shows("Stop"));
 }
