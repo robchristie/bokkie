@@ -1068,7 +1068,7 @@ pub const PUSH_ENDPOINT_BYTES: usize = 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushSubscriptionRequest {
     /// The push service's `https` URL for the device, at most
-    /// [`PUSH_ENDPOINT_BYTES`].
+    /// [`PUSH_ENDPOINT_BYTES`]. The gateway never sends it back.
     pub endpoint: String,
     pub keys: PushSubscriptionKeys,
 }
@@ -1082,12 +1082,13 @@ pub struct PushSubscriptionKeys {
     pub auth: String,
 }
 
-/// `GET` and `PUT /api/v1/push/subscription`: the current session's
-/// subscription, if it has one. `DELETE` removes it; signing out or
-/// revoking the session does too.
+/// `GET` and `PUT /api/v1/push/subscription`: whether the current session
+/// has a subscription. The endpoint itself is never sent back: anyone who
+/// holds it can address the device. `DELETE` removes the subscription;
+/// signing out or revoking the session does too.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushSubscriptionState {
-    pub endpoint: Option<String>,
+    pub subscribed: bool,
 }
 
 // ---------------------------------------------------------------------------

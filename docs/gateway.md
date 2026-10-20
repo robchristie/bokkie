@@ -813,8 +813,8 @@ through the same client as [Web fetch](#web-fetch).
   | Route | Does |
   | --- | --- |
   | `GET /api/v1/push/key` | The key a device subscribes with (`public_key`, an uncompressed P-256 point in base64url) and whether the gateway sends pushes (`sending`) |
-  | `GET /api/v1/push/subscription` | The current session's subscription's `endpoint`, or none |
-  | `PUT /api/v1/push/subscription` | Makes a subscription the current session's, replacing its earlier one: the browser's `PushSubscription.toJSON()`, `endpoint` and `keys` (`p256dh`, `auth`). The endpoint must be an `https` URL with a host name, no user name or fragment, and at most 1,024 bytes; `p256dh` an uncompressed P-256 point (65 bytes) and `auth` 16 bytes, both base64url. Anything else is `invalid_request`. Answers with the session's `endpoint` |
+  | `GET /api/v1/push/subscription` | Whether the current session has a subscription (`subscribed`) |
+  | `PUT /api/v1/push/subscription` | Makes a subscription the current session's, replacing its earlier one: the browser's `PushSubscription.toJSON()`, `endpoint` and `keys` (`p256dh`, `auth`). The endpoint must be an `https` URL with a host name, no user name or fragment, and at most 1,024 bytes; `p256dh` an uncompressed P-256 point (65 bytes) and `auth` 16 bytes, both base64url. Anything else is `invalid_request`. Answers `subscribed` |
   | `DELETE /api/v1/push/subscription` | Ends the current session's subscription, if any |
 
   An endpoint belongs to one session at a time: the session that sent it
@@ -824,8 +824,9 @@ through the same client as [Web fetch](#web-fetch).
   A push service's `404` or `410`, or Apple's `403` with
   `VapidPkHashMismatch` (a subscription made with another key), deletes
   the subscription it was for. Subscriptions of expired sessions go with
-  the minute pass. The gateway's log records a subscription's push
-  service host, never its endpoint or keys.
+  the minute pass. Anyone holding an endpoint can address the device, so
+  no answer carries one back, and the gateway's log records a
+  subscription's push service host, never its endpoint or keys.
 - **What pushes.** A push is queued in the same transaction as what caused
   it, for the Bot's user alone:
   - a `notify` outside a routine's run: titled with the Bot's name, its
@@ -838,7 +839,8 @@ through the same client as [Web fetch](#web-fetch).
     notification that went out alone before its run was recorded running
     is not sent again;
   - a failed or interrupted run, with why, and the run that paused its
-    routine, saying so; a run its user stopped does not push;
+    routine, saying so, after its turn's notification if it sent one; a
+    run its user stopped pushes only its turn's notification;
   - a missed run, with why, unless the account was disabled. A skipped
     run does not push.
 

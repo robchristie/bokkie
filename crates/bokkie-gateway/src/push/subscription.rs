@@ -99,18 +99,14 @@ pub async fn put(
     Ok(saved.rows_affected() == 1)
 }
 
-/// The session's subscription's endpoint, if it has one.
-pub async fn endpoint(
-    db: impl SqliteExecutor<'_>,
-    user: UserId,
-    session: i64,
-) -> Result<Option<String>> {
+/// Whether the session has a subscription.
+pub async fn exists(db: impl SqliteExecutor<'_>, user: UserId, session: i64) -> Result<bool> {
     Ok(sqlx::query_scalar(
-        "SELECT endpoint FROM push_subscriptions WHERE session_id = ? AND user_id = ?",
+        "SELECT EXISTS (SELECT 1 FROM push_subscriptions WHERE session_id = ? AND user_id = ?)",
     )
     .bind(session)
     .bind(user.0)
-    .fetch_optional(db)
+    .fetch_one(db)
     .await?)
 }
 

@@ -10,8 +10,9 @@
 //!   before a result, the newest first), or else, unless the routine pushes
 //!   only on `notify`, the first line of the run's reply. A run that failed
 //!   or was interrupted pushes that, or that the routine paused, when this
-//!   run paused it. A missed run pushes, except one missed because the
-//!   account is disabled. A skipped run does not.
+//!   run paused it, after its `notify` text if it sent one. A run its user
+//!   stopped pushes only its `notify` text. A missed run pushes, except one
+//!   missed because the account is disabled. A skipped run does not.
 //!
 //! The sender ([`Push::deliver_pending`]) settles each queued push in
 //! order, and drops it, with its reason, when the account is disabled, the
@@ -328,10 +329,12 @@ pub async fn run_ended(
     };
     let title = format!("{name} · {}", routine.name);
     let reason = run.reason.as_deref();
-    let (cause, urgency, body, notification) = match state {
-        RunState::Succeeded => match run_notification(&mut *batch, run).await? {
+    // The notification the run's turn sent, unless it already went out
+    // alone. A run that missed has no turn.
+    let carried = match state {
+        RunState::Missed => None,
+        _ => match run_notification(&mut *batch, run).await? {
             Some(notification) => {
-                // One that already went out alone is not sent again.
                 let sent: bool = sqlx::query_scalar(
                     "SELECT EXISTS (SELECT 1 FROM pushes WHERE user_id = ? AND notification_id = ?
                                       AND cause = 'notify' AND state <> 'merged')",
@@ -340,43 +343,68 @@ pub async fn run_ended(
                 .bind(notification.id.0)
                 .fetch_one(&mut **batch)
                 .await?;
-                if sent {
-                    return Ok(());
-                }
+                (!sent).then_some(notification)
+            }
+            None => None,
+        },
+    };
+    // A failure's text, after the notification's when the run sent one.
+    let with_carried = |cause: Cause, text: String| match &carried {
+        Some(notification) => (
+            cause,
+            Urgency::of(notification.kind),
+            format!(
+                "{}\n{text}",
+                notification_text(&notification.title, &notification.body)
+            ),
+            Some(notification.id),
+        ),
+        None => (cause, Urgency::Normal, text, None),
+    };
+    let (cause, urgency, body, notification) = match state {
+        RunState::Succeeded => match &carried {
+            Some(notification) => (
+                Cause::Run,
+                Urgency::of(notification.kind),
+                notification_text(&notification.title, &notification.body),
+                Some(notification.id),
+            ),
+            None if routine.push == RoutinePush::EveryRun
+                && run_notification(&mut *batch, run).await?.is_none() =>
+            {
                 (
                     Cause::Run,
-                    Urgency::of(notification.kind),
-                    notification_text(&notification.title, &notification.body),
-                    Some(notification.id),
+                    Urgency::Normal,
+                    reply_line(&mut *batch, run)
+                        .await?
+                        .unwrap_or_else(|| "Finished, with no reply.".into()),
+                    None,
                 )
             }
-            None if routine.push == RoutinePush::EveryRun => (
+            None => return Ok(()),
+        },
+        // Its owner stopped it themselves: only a notification it sent
+        // pushes.
+        RunState::Interrupted if reason == Some(reasons::STOPPED) => match &carried {
+            Some(notification) => (
                 Cause::Run,
-                Urgency::Normal,
-                reply_line(&mut *batch, run)
-                    .await?
-                    .unwrap_or_else(|| "Finished, with no reply.".into()),
-                None,
+                Urgency::of(notification.kind),
+                notification_text(&notification.title, &notification.body),
+                Some(notification.id),
             ),
             None => return Ok(()),
         },
-        // Its owner stopped it themselves.
-        RunState::Interrupted if reason == Some(reasons::STOPPED) => return Ok(()),
-        RunState::Failed | RunState::Interrupted if paused => (
+        RunState::Failed | RunState::Interrupted if paused => with_carried(
             Cause::Pause,
-            Urgency::Normal,
             format!(
                 "{} Paused after {} failed runs in a row.",
                 sentence(reason.unwrap_or("The run did not finish")),
                 routine.failures
             ),
-            None,
         ),
-        RunState::Failed | RunState::Interrupted => (
+        RunState::Failed | RunState::Interrupted => with_carried(
             Cause::Failure,
-            Urgency::Normal,
             sentence(reason.unwrap_or("The run did not finish")),
-            None,
         ),
         RunState::Missed if reason != Some(reasons::DISABLED) => (
             Cause::Miss,
@@ -803,13 +831,17 @@ impl Push {
             }
             Decision::Send(targets) => targets,
         };
-        sqlx::query(
+        let claimed = sqlx::query(
             "UPDATE pushes SET state = 'sending', sent_at = ? WHERE id = ? AND state = 'queued'",
         )
         .bind(now.0)
         .bind(push.id)
         .execute(&mut *tx)
         .await?;
+        // Another sender settled it first.
+        if claimed.rows_affected() == 0 {
+            return Ok(());
+        }
         let badge = crate::bots::store::unread_bots(&mut *tx, push.user).await?;
         tx.commit().await?;
         let payload = Arc::new(payload(

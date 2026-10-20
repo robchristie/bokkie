@@ -64,7 +64,8 @@ async fn subscribe(gateway: &Gateway, cookie: &str, subscription: &Value) -> com
 async fn subscribed(gateway: &Gateway, cookie: &str, device: &Device) {
     let reply = subscribe(gateway, cookie, &device.subscription()).await;
     assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
-    assert_eq!(reply.body["endpoint"], device.endpoint.as_str());
+    // The endpoint is never sent back.
+    assert_eq!(reply.body, json!({"subscribed": true}));
 }
 
 /// Another session of `username`, as a second device signs in.
@@ -83,6 +84,15 @@ async fn deliver(gateway: &Gateway) {
 /// Every push recorded, oldest first: its user, cause and state.
 async fn pushes(gateway: &Gateway) -> Vec<(i64, String, String)> {
     sqlx::query_as("SELECT user_id, cause, state FROM pushes ORDER BY id")
+        .fetch_all(&gateway.state.db)
+        .await
+        .unwrap()
+}
+
+/// The endpoints of a user's stored subscriptions, oldest first.
+async fn endpoints(gateway: &Gateway, user: i64) -> Vec<String> {
+    sqlx::query_scalar("SELECT endpoint FROM push_subscriptions WHERE user_id = ? ORDER BY id")
+        .bind(user)
         .fetch_all(&gateway.state.db)
         .await
         .unwrap()
@@ -262,31 +272,34 @@ async fn a_session_subscribes_refreshes_and_unsubscribes_its_device() {
                 .send(Call::get("/api/v1/push/subscription").cookie(&cookie))
                 .await;
             assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
-            reply.body["endpoint"].clone()
+            assert!(reply.body.get("endpoint").is_none(), "{:?}", reply.body);
+            reply.body["subscribed"].as_bool().unwrap()
         }
     };
-    assert_eq!(state(rob.clone()).await, Value::Null);
+    assert!(!state(rob.clone()).await);
 
     let phone = Device::new("phone");
     subscribed(&gateway, &rob, &phone).await;
-    assert_eq!(state(rob.clone()).await, phone.endpoint.as_str());
+    assert!(state(rob.clone()).await);
+    assert_eq!(endpoints(&gateway, 1).await, [phone.endpoint.as_str()]);
     // A refresh with new keys replaces the session's subscription.
     let refreshed = Device::new("phone-renewed");
     subscribed(&gateway, &rob, &refreshed).await;
-    assert_eq!(state(rob.clone()).await, refreshed.endpoint.as_str());
-    assert_eq!(subscriptions(&gateway, 1).await, 1);
+    assert!(state(rob.clone()).await);
+    assert_eq!(endpoints(&gateway, 1).await, [refreshed.endpoint.as_str()]);
 
     // An endpoint belongs to the session that sent it last.
     let laptop = sign_in(&gateway, "rob").await;
     subscribed(&gateway, &laptop, &refreshed).await;
-    assert_eq!(state(rob.clone()).await, Value::Null);
-    assert_eq!(state(laptop.clone()).await, refreshed.endpoint.as_str());
+    assert!(!state(rob.clone()).await);
+    assert!(state(laptop.clone()).await);
+    assert_eq!(endpoints(&gateway, 1).await, [refreshed.endpoint.as_str()]);
 
     let deleted = gateway
         .send(Call::new(Method::DELETE, "/api/v1/push/subscription").cookie(&laptop))
         .await;
     assert_eq!(deleted.status, StatusCode::NO_CONTENT);
-    assert_eq!(state(laptop.clone()).await, Value::Null);
+    assert!(!state(laptop.clone()).await);
     assert_eq!(subscriptions(&gateway, 1).await, 0);
     // Deleting again is fine.
     let again = gateway
@@ -1120,6 +1133,95 @@ async fn a_run_its_owner_stopped_does_not_push() {
     deliver(&gateway).await;
     assert!(service.received().is_empty());
     assert!(pushes(&gateway).await.is_empty());
+}
+
+/// Starts a run of `routine` whose turn stays open, and has its Bot
+/// notify in it. Returns the turn's thread and id.
+async fn run_that_notifies(
+    gateway: &Gateway,
+    cookie: &str,
+    bot: i64,
+    routine: i64,
+    call: i64,
+) -> (String, String) {
+    gateway.fake.with(|b| b.finish_turns = false);
+    let before = gateway.fake.with(|b| b.turns.len());
+    run_now(gateway, cookie, bot, routine).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let (thread, turn) = loop {
+        let found = gateway.fake.with(|b| b.turns.get(before).cloned());
+        if let Some(found) = found {
+            break found;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the run's turn starts"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    let (ok, text) = notify_in(
+        gateway,
+        1,
+        call,
+        &thread,
+        &turn,
+        json!({"title": "Need a decision", "body": "Lamb or fish?", "kind": "question"}),
+    )
+    .await;
+    assert!(ok, "{text}");
+    (thread, turn)
+}
+
+#[tokio::test]
+async fn a_run_that_notified_and_then_failed_or_was_stopped_still_pushes_its_notification() {
+    let (gateway, service, rob) = setup().await;
+    let phone = Device::new("phone");
+    subscribed(&gateway, &rob, &phone).await;
+    let chef = create_bot(&gateway, &rob, "Chef", json!(["notify"])).await;
+    let routine = digest(&gateway, &rob, chef, "notify_only").await;
+
+    // Its turn fails after the notification: the push says both.
+    let (thread, turn) = run_that_notifies(&gateway, &rob, chef, routine, 911).await;
+    gateway.fake.with(|b| b.finish_turns = true);
+    gateway.fake.inject(
+        UserId(1),
+        json!({"method": "turn/completed", "params": {"threadId": thread,
+            "turn": {"id": turn, "items": [], "status": "failed",
+                     "error": {"message": "boom"}}}}),
+    );
+    let run = ended(&gateway, &rob, chef, routine).await;
+    assert_eq!(run["state"], "failed");
+    deliver(&gateway).await;
+    let sent = bodies(&service, &phone);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].0, "Chef · Digest");
+    assert!(
+        sent[0].1.starts_with("Need a decision\nLamb or fish?\n"),
+        "{sent:?}"
+    );
+    assert!(sent[0].1.len() > "Need a decision\nLamb or fish?\n".len());
+    assert_eq!(service.sent_to(&phone)[0].header("urgency"), Some("high"));
+
+    // Its owner stops it after the notification: the notification alone.
+    service.clear();
+    run_that_notifies(&gateway, &rob, chef, routine, 912).await;
+    let stopped = gateway
+        .send(Call::post(&format!("/api/v1/bots/{chef}/stop")).cookie(&rob))
+        .await;
+    assert_eq!(stopped.body["stopped"], true);
+    gateway.fake.with(|b| b.finish_turns = true);
+    let run = ended(&gateway, &rob, chef, routine).await;
+    assert_eq!(run["state"], "interrupted");
+    deliver(&gateway).await;
+    assert_eq!(
+        bodies(&service, &phone),
+        vec![(
+            "Chef · Digest".into(),
+            "Need a decision\nLamb or fish?".into()
+        )]
+    );
+    let causes: Vec<String> = pushes(&gateway).await.into_iter().map(|p| p.1).collect();
+    assert_eq!(causes, ["failure", "run"]);
 }
 
 #[tokio::test]

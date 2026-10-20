@@ -22,13 +22,14 @@ pub async fn key(State(state): State<AppState>, _signed_in: SignedIn) -> Result<
     }))
 }
 
-/// `GET /api/v1/push/subscription`: the current session's subscription.
+/// `GET /api/v1/push/subscription`: whether the current session has a
+/// subscription. Its endpoint is never sent back.
 pub async fn subscription(
     State(state): State<AppState>,
     signed_in: SignedIn,
 ) -> Result<Json<PushSubscriptionState>> {
-    let endpoint = subscription::endpoint(&state.db, signed_in.id(), signed_in.session_id).await?;
-    Ok(Json(PushSubscriptionState { endpoint }))
+    let subscribed = subscription::exists(&state.db, signed_in.id(), signed_in.session_id).await?;
+    Ok(Json(PushSubscriptionState { subscribed }))
 }
 
 /// `PUT /api/v1/push/subscription`: makes a subscription the current
@@ -58,9 +59,7 @@ pub async fn subscribe(
         service = checked.endpoint.host_str().unwrap_or_default(),
         "a device subscribed to pushes"
     );
-    Ok(Json(PushSubscriptionState {
-        endpoint: Some(checked.endpoint.to_string()),
-    }))
+    Ok(Json(PushSubscriptionState { subscribed: true }))
 }
 
 /// `DELETE /api/v1/push/subscription`: ends the current session's

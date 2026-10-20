@@ -1044,14 +1044,12 @@ fn web_push() {
     .unwrap();
     assert_eq!(browser.keys.auth, "secret");
     pin(
-        &PushSubscriptionState {
-            endpoint: Some("https://push.example/abc".into()),
-        },
-        json!({"endpoint": "https://push.example/abc"}),
+        &PushSubscriptionState { subscribed: true },
+        json!({"subscribed": true}),
     );
     pin(
-        &PushSubscriptionState { endpoint: None },
-        json!({"endpoint": null}),
+        &PushSubscriptionState { subscribed: false },
+        json!({"subscribed": false}),
     );
 }
 
