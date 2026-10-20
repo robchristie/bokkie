@@ -159,7 +159,7 @@ impl Fixture {
     /// Grace's account open, with her allowance and Bots loaded.
     fn grace_open(&mut self, oversight: bool, bots: Vec<MemberBot>) {
         self.accounts_open_with(oversight);
-        self.click("Open Grace");
+        self.click("Open account Grace");
         assert_eq!(self.fact("screen"), "account".into());
         assert_eq!(
             self.sent(),
@@ -206,10 +206,10 @@ fn the_accounts_list_every_account_and_the_invitations() {
         "ada · Admin",
         "Grace",
         "grace · Member",
-        "Open Grace",
-        "Open Rosa",
+        "Open account Grace",
+        "Open account Rosa",
         "Member invitation for Tom, expires in 3 days",
-        "Withdraw invitation 4",
+        "Withdraw invitation for Tom",
     ] {
         assert!(fixture.shows(text), "{text}");
     }
@@ -310,7 +310,7 @@ fn an_invitation_carries_its_role_and_permissions_and_its_code_shows_once() {
 fn an_invitation_can_be_withdrawn() {
     let mut fixture = Fixture::new();
     fixture.accounts_open();
-    fixture.click("Withdraw invitation 4");
+    fixture.click("Withdraw invitation for Tom");
     assert_eq!(fixture.sent(), [ApiRequest::WithdrawInvitation(4)]);
     assert!(fixture.shows("Withdrawing…"));
     assert!(!fixture.enabled(BokkieAction::WithdrawInvitation));
@@ -484,7 +484,7 @@ fn a_members_password_is_reset_and_another_admins_is_refused() {
     // Another admin's account offers no reset, and says why.
     let mut fixture = Fixture::new();
     fixture.accounts_open();
-    fixture.click("Open Rosa");
+    fixture.click("Open account Rosa");
     // An admin's Bots are their own: only the allowance loads.
     assert_eq!(fixture.sent(), [ApiRequest::AccountUsage(ROSA)]);
     assert_eq!(fixture.fact("account_role"), "admin".into());
@@ -511,7 +511,7 @@ fn a_members_password_is_reset_and_another_admins_is_refused() {
     // An admin's own account resets, but cannot be disabled.
     let mut fixture = Fixture::new();
     fixture.accounts_open();
-    fixture.click("Open Ada");
+    fixture.click("Open account Ada");
     assert!(fixture.shows("New password"));
     assert!(!fixture.shows("Account disabled"));
     assert!(!fixture.enabled(BokkieAction::Disabled));
@@ -526,8 +526,9 @@ fn with_oversight_off_an_admin_sees_and_edits_only_the_bots_an_admin_made() {
         "With oversight off you see only the Bots an admin made for them, and no conversation."
     ));
     assert!(fixture.shows("Helps · Made by an admin"));
-    assert!(fixture.shows("Edit Coach"));
-    assert!(!fixture.shows("Read Coach"));
+    fixture.reveal("Make a Bot for them");
+    assert!(fixture.shows("Edit Bot Coach"));
+    assert!(!fixture.shows("Read conversation with Coach"));
     assert!(!fixture.enabled(BokkieAction::ReadConversation));
     // Edit sends only what changed.
     fixture.act_with(BokkieAction::EditMemberBot, 7);
@@ -595,7 +596,9 @@ fn with_oversight_on_an_admin_reads_a_conversation_and_can_send_nothing() {
     assert!(fixture.shows("Helps · Their own · Idle"));
     assert!(fixture.shows("Last words"));
     // Her own Bot cannot be edited; an admin-made one can.
-    assert!(!fixture.shows("Edit Diary") && fixture.shows("Edit Coach"));
+    fixture.reveal("Make a Bot for them");
+    assert!(!fixture.shows("Edit Bot Diary") && fixture.shows("Edit Bot Coach"));
+    assert!(fixture.shows("Read conversation with Diary"));
     fixture.act_with(BokkieAction::ReadConversation, 7);
     assert_eq!(fixture.fact("screen"), "overseen".into());
     assert_eq!(
@@ -623,7 +626,9 @@ fn with_oversight_on_an_admin_reads_a_conversation_and_can_send_nothing() {
         )
     );
     assert!(fixture.shows("Dear diary") && fixture.shows("Noted."));
-    assert!(fixture.shows("Grace") && fixture.shows("Diary"));
+    // Each by its author, at its time in the admin's own zone.
+    assert!(fixture.shows("Grace · 1 Jan 1970 at 9:30 AM"));
+    assert!(fixture.shows("Diary · 1 Jan 1970 at 9:30 AM"));
     // Nothing to send, steer or stop with.
     for control in ["Message", "Send", "Stop"] {
         assert!(!fixture.shows(control), "{control}");
@@ -682,7 +687,8 @@ fn with_oversight_on_an_admin_reads_a_conversation_and_can_send_nothing() {
     // Before the list is read again, it already shows only what an admin
     // may see without oversight.
     assert!(!fixture.shows("Diary") && !fixture.shows("Last words"));
-    assert!(fixture.shows("Coach") && !fixture.shows("Read Coach"));
+    fixture.reveal("Make a Bot for them");
+    assert!(fixture.shows("Edit Bot Coach") && !fixture.shows("Read conversation with Coach"));
     assert!(!fixture.enabled(BokkieAction::ReadConversation));
     assert_eq!(
         fixture.sent(),
@@ -698,7 +704,9 @@ fn with_oversight_on_an_admin_reads_a_conversation_and_can_send_nothing() {
             bots: vec![member_bot(8, "Coach", true, false)],
         }),
     ));
-    assert!(!fixture.shows("Read Coach") && !fixture.shows("Diary"));
+    fixture.reveal("Make a Bot for them");
+    assert!(fixture.shows("Edit Bot Coach"));
+    assert!(!fixture.shows("Read conversation with Coach") && !fixture.shows("Diary"));
 }
 
 #[test]
@@ -745,7 +753,7 @@ fn a_read_refused_because_oversight_went_off_elsewhere_closes_the_conversation()
             bots: Vec::new(),
         }),
     ));
-    assert!(!fixture.shows("Last words") && !fixture.shows("Read Diary"));
+    assert!(!fixture.shows("Last words") && !fixture.shows("Read conversation with Diary"));
 
     // Another failure keeps the conversation, with why.
     let mut fixture = Fixture::new();

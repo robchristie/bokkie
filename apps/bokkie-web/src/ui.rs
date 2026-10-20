@@ -1,11 +1,18 @@
 //! The application's presentation: plain stand-ins (settled decision 3), one
 //! screen at a time, each control on a row of its own.
 
-use bokkie_protocol::api::{Author, Bot, BotStatus, Delivery, LoginState, Message, MessageState};
+use std::collections::BTreeSet;
+
+use bokkie_protocol::MessageId;
+use bokkie_protocol::api::{
+    Author, Bot, BotStatus, Delivery, LoginState, Message, MessageKind, MessageState,
+    NotificationKind,
+};
+use stobie_ui_egui::local_time::LocalTime;
 use stobie_ui_egui::{
-    ActionArgument, ActionEmphasis, ContentTextSpec, Frame, NativeTextControlKind,
-    PresentationContext, PresentationScope, SemanticUiId, TextInteraction, TextOverflow, TextRole,
-    UiNode, UiRole, observe_visible_only,
+    ActionEmphasis, BoundAction, ContentTextSpec, Frame, LinkSpec, MarkdownSpec,
+    NativeTextControlKind, PresentationContext, PresentationScope, ReadingTextSpec, SemanticUiId,
+    TextInteraction, TextOverflow, TextRole, UiNode, UiRole, observe_visible_only,
 };
 
 use crate::app::{
@@ -24,6 +31,9 @@ const COMPOSER_HEIGHT: f32 = 230.0;
 
 /// How often a meter with reset times is shown again, so they stay true.
 pub(crate) const METER_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// What assistive technology says of every link in a Bot's reply.
+const OPENS_A_NEW_TAB: &str = "Opens in a new tab";
 
 pub(crate) fn present(app: &App, ui: &mut egui::Ui, frame: &mut BokkieFrame<'_, '_>) {
     egui::CentralPanel::default().show(ui, |ui| {
@@ -314,15 +324,15 @@ fn notices_ui(
     app: &App,
     signed_in: &SignedIn,
 ) {
-    let now = app.now();
+    let local = app.local_time();
     let mut timed = false;
     if let Some(since) = signed_in.overseen() {
         let text = match since {
             Some(at) => {
                 timed = true;
                 format!(
-                    "Oversight is on: an admin can read all your Bots and conversations. It was switched on {}",
-                    crate::usage::ago(now, at)
+                    "Oversight is on: an admin can read all your Bots and conversations. It has been on since {}",
+                    crate::times::day_at(&local, at)
                 )
             }
             None => "Oversight is on: an admin can read all your Bots and conversations".into(),
@@ -333,7 +343,7 @@ fn notices_ui(
         timed = true;
         let text = format!(
             "An admin reset your password {}",
-            crate::usage::ago(now, at)
+            crate::times::on_day_at(&local, at)
         );
         p.status(ui, "reset-notice", &text, true);
         frame.action(
@@ -347,7 +357,8 @@ fn notices_ui(
         }
     }
     if timed {
-        frame.request_repaint_after("notice times", METER_REFRESH);
+        // "today at 9:41 AM" becomes "yesterday at 9:41 AM" at midnight.
+        frame.request_repaint_after("notice days", crate::times::until_the_day_changes(&local));
     }
 }
 
@@ -489,10 +500,17 @@ fn household_ui(
                 "1. Open this page, on any device:",
                 line(TextRole::Body, 1),
             );
-            // In a new tab: this page holds the code and must stay open.
-            p.raw(ui, "link", "the device-code page as a link", |ui| {
-                ui.add(egui::Hyperlink::new(&code.0.verification_url).open_in_new_tab(true))
-            });
+            // In a new tab, as links open: this page holds the code and must
+            // stay open.
+            let url = &code.0.verification_url;
+            p.link(
+                ui,
+                "link",
+                LinkSpec {
+                    description: Some(OPENS_A_NEW_TAB),
+                    ..LinkSpec::new(url, url)
+                },
+            );
             p.content(ui, "step-2", "2. Enter this code:", line(TextRole::Body, 1));
             p.heading(ui, "code", &code.0.user_code);
             let now = app.now();
@@ -631,45 +649,14 @@ fn bot_row(
             line(TextRole::Caption, 2),
         );
     }
-    row_button(
+    // "Open Tutor" to assistive technology and agents.
+    frame.action(
         ui,
         p,
-        frame,
-        &format!("Open {}", bot.name),
-        "bokkie.open-bot",
-        BokkieAction::OpenBot,
-        key,
+        BoundAction::new(BokkieAction::OpenBot, key).with_subject(&bot.name),
+        ActionEmphasis::Normal,
     );
     ui.separator();
-}
-
-/// A control on one row of a list, such as Open on a Bot's row. A Stobie
-/// action has no per-row target, so the control triggers its action with
-/// the row's ID, and is observed as a button by hand.
-pub(crate) fn row_button(
-    ui: &mut egui::Ui,
-    p: &mut PresentationContext,
-    frame: &mut BokkieFrame<'_, '_>,
-    label: &str,
-    id_prefix: &str,
-    action: BokkieAction,
-    key: i64,
-) {
-    let (button, ()) = p.native(ui, NativeTextControlKind::Button, |ui| {
-        (ui.button(label), ())
-    });
-    let mut node = UiNode::container(
-        SemanticUiId::new(format!("{id_prefix}.{key}")),
-        Some(SemanticUiId::root()),
-        UiRole::Button,
-        button.rect.into(),
-    );
-    node.name = label.to_owned();
-    node.focused = button.has_focus();
-    p.observe_node(ui, node);
-    if button.clicked() {
-        frame.trigger_with(action, ActionArgument::Number(key as f64));
-    }
 }
 
 fn conversation_ui(
@@ -876,8 +863,20 @@ fn messages_ui(
                 let scroll_to = open
                     .anchor
                     .filter(|(page, _)| ui.data(|data| data.get_temp(anchored)) != Some(*page));
+                let local = app.local_time();
+                // Today's messages show their time alone until midnight.
+                frame.request_repaint_after(
+                    "message days",
+                    crate::times::until_the_day_changes(&local),
+                );
+                let shown = Shown {
+                    local: &local,
+                    user_name: "You",
+                    bot_name,
+                    prompts: Some(&open.prompts),
+                };
                 for message in conversation.messages() {
-                    let byline = message_ui(ui, &mut p, message, bot_name);
+                    let byline = message_by(ui, &mut p, frame, &shown, message);
                     if let Some((page, anchor)) = scroll_to
                         && anchor == message.id
                     {
@@ -889,52 +888,128 @@ fn messages_ui(
     });
 }
 
-/// One message. Returns its byline's response.
-pub(crate) fn message_ui(
-    ui: &mut egui::Ui,
-    p: &mut PresentationContext,
-    message: &Message,
-    bot_name: &str,
-) -> egui::Response {
-    message_by(ui, p, message, "You", bot_name)
+/// How messages are shown to whoever reads them.
+pub(crate) struct Shown<'a> {
+    pub(crate) local: &'a LocalTime,
+    /// The user's messages are by "You", or by the member an admin reads.
+    pub(crate) user_name: &'a str,
+    pub(crate) bot_name: &'a str,
+    /// The routine runs whose prompt is unfolded, or `None` where prompts
+    /// stay folded, as for an admin reading under oversight.
+    pub(crate) prompts: Option<&'a BTreeSet<MessageId>>,
 }
 
-/// One message, its author named for whoever reads it. Returns its byline's
+/// One message: the user's as reading text, the Bot's reply as Markdown,
+/// and a marker as a compact line of its own. Returns its first line's
 /// response.
 pub(crate) fn message_by(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    shown: &Shown<'_>,
     message: &Message,
-    user_name: &str,
-    bot_name: &str,
+) -> egui::Response {
+    let first = match message.kind {
+        MessageKind::Marker => marker_ui(ui, p, frame, shown, message),
+        MessageKind::Text => text_message_ui(ui, p, shown, message),
+    };
+    ui.add_space(6.0);
+    first
+}
+
+fn text_message_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    shown: &Shown<'_>,
+    message: &Message,
 ) -> egui::Response {
     let key = message.id.0;
     let author = match message.author {
-        Author::User => user_name,
-        Author::Bot => bot_name,
+        Author::User => shown.user_name,
+        Author::Bot => shown.bot_name,
     };
+    let time = crate::times::message_time(shown.local, message.created_at);
     let byline = match message.state {
-        MessageState::Streaming => format!("{author} · replying…"),
-        MessageState::Complete => author.to_owned(),
-        MessageState::Interrupted => format!("{author} · stopped"),
-        MessageState::Failed => format!("{author} · failed"),
+        MessageState::Streaming => format!("{author} · {time} · replying…"),
+        MessageState::Complete => format!("{author} · {time}"),
+        MessageState::Interrupted => format!("{author} · {time} · stopped"),
+        MessageState::Failed => format!("{author} · {time} · failed"),
     };
     let byline = p.content(ui, ("author", key), &byline, line(TextRole::Caption, 1));
-    let text = if message.text.is_empty() && message.state == MessageState::Streaming {
-        "…"
+    if message.text.is_empty() && message.state == MessageState::Streaming {
+        p.reading_text(ui, ("text", key), "…", ReadingTextSpec::default());
+    } else if message.author == Author::Bot {
+        // A reply that is still arriving is safe to show as it stands.
+        p.markdown(
+            ui,
+            ("text", key),
+            &message.text,
+            MarkdownSpec {
+                link_description: Some(OPENS_A_NEW_TAB),
+                ..MarkdownSpec::default()
+            },
+        );
     } else {
-        message.text.as_str()
-    };
-    // A reply can run past the eight lines Stobie's content recipe holds, so
-    // its text is a plain wrapped label.
-    p.raw(
-        ui,
-        ("text", key),
-        "message text longer than a content recipe's eight lines",
-        |ui| ui.add(egui::Label::new(text).wrap()),
-    );
-    ui.add_space(6.0);
+        p.reading_text(ui, ("text", key), &message.text, ReadingTextSpec::default());
+    }
     byline
+}
+
+/// A marker: a capability change, a routine's run with its prompt folded
+/// away, or a notification with its kind and body. None is the Bot
+/// speaking, so none has a byline.
+fn marker_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    shown: &Shown<'_>,
+    message: &Message,
+) -> egui::Response {
+    let key = message.id.0;
+    let time = crate::times::message_time(shown.local, message.created_at);
+    let title = match (&message.routine, &message.notification) {
+        // The gateway's text already says when the run was due, in the
+        // user's zone, so a second time would repeat it.
+        (Some(_), _) => format!("Routine run: {}", message.text),
+        (None, Some(notification)) => {
+            let kind = match notification.kind {
+                NotificationKind::Result => "Result",
+                NotificationKind::Question => "Question",
+            };
+            format!("{kind}: {} · {time}", message.text)
+        }
+        (None, None) => format!("{} · {time}", message.text),
+    };
+    let first = p.content(ui, ("marker", key), &title, line(TextRole::Caption, 3));
+    if let Some(notification) = &message.notification
+        && !notification.body.is_empty()
+    {
+        p.reading_text(
+            ui,
+            ("body", key),
+            &notification.body,
+            ReadingTextSpec::new(TextRole::Secondary),
+        );
+    }
+    if let (Some(routine), Some(prompts)) = (&message.routine, shown.prompts) {
+        let unfolded = prompts.contains(&message.id);
+        frame.toggle(
+            ui,
+            p,
+            "prompt",
+            BoundAction::new(BokkieAction::ShowPrompt, key).with_subject(&message.text),
+            unfolded,
+        );
+        if unfolded {
+            p.reading_text(
+                ui,
+                ("prompt", key),
+                &routine.prompt,
+                ReadingTextSpec::new(TextRole::Secondary),
+            );
+        }
+    }
+    first
 }
 
 fn composer_ui(

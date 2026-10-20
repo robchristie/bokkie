@@ -3,7 +3,7 @@ Third-party notices for Bokkie's web client
 
 The web client embeds the fonts below in its WebAssembly module. They come
 from its dependencies, unmodified: Stobie's user interface crate
-(stobie-ui-egui, Stobie revision 0851f82dec94431e4810f09d43699c2c8e342ba4)
+(stobie-ui-egui, Stobie revision b9aa3d2426731dde6068427d94484b64805cf30a)
 and egui's default fonts (epaint_default_fonts 0.36.2). Each font keeps its
 own licence, reproduced here verbatim from the file its source ships.
 

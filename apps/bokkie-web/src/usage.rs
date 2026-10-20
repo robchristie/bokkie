@@ -1,9 +1,9 @@
-//! The usage meter and the limit-reached banner, as text, and the client's
-//! other times.
+//! The usage meter and the limit-reached banner, as text, and how long
+//! until something expires or resets.
 //!
-//! Times are said relative to now ("in 2 h 10 min", "3 h ago"), so they
-//! need no time zone; the page shows them again each minute while they are
-//! on screen.
+//! Countdowns are said relative to now ("in 2 h 10 min"); the page shows
+//! them again each minute while they are on screen. Times that have passed
+//! are local times (`times`).
 
 use bokkie_protocol::Timestamp;
 use bokkie_protocol::api::{Allowance, RateLimitBucket, RateLimitWindow, Usage};
@@ -18,33 +18,8 @@ pub fn resets_in(now: Timestamp, at: Timestamp) -> String {
     }
     // Round up, so a reset never shows as sooner than it is.
     let minutes = (left + MINUTE - 1) / MINUTE;
-    let (days, hours, minutes) = (minutes / (24 * 60), minutes / 60 % 24, minutes % 60);
-    match (days, hours, minutes) {
-        (0, 0, m) => format!("in {m} min"),
-        (0, h, 0) => format!("in {h} h"),
-        (0, h, m) => format!("in {h} h {m} min"),
-        (1, 0, _) => "in 1 day".into(),
-        (1, h, _) => format!("in 1 day {h} h"),
-        (d, _, _) => format!("in {d} days"),
-    }
-}
-
-/// How long ago `at` was, as "3 h ago". A time from the future, as a clock
-/// slightly ahead of the browser's can give, is "just now".
-pub fn ago(now: Timestamp, at: Timestamp) -> String {
-    let past = now.0 - at.0;
-    if past < MINUTE {
-        return "just now".into();
-    }
-    // Round down, so a time never shows as longer ago than it is.
-    let minutes = past / MINUTE;
-    let (days, hours) = (minutes / (24 * 60), minutes / 60);
-    match (days, hours, minutes) {
-        (0, 0, m) => format!("{m} min ago"),
-        (0, h, _) => format!("{h} h ago"),
-        (1, _, _) => "1 day ago".into(),
-        (d, _, _) => format!("{d} days ago"),
-    }
+    let left = std::time::Duration::from_secs(minutes.unsigned_abs() * 60);
+    format!("in {}", stobie_ui_egui::local_time::format_duration(left))
 }
 
 /// A rate-limit window's length, as "5-hour" or "weekly".
@@ -207,20 +182,6 @@ mod tests {
         assert_eq!(resets_in(NOW, after(DAY + 3 * HOUR)), "in 1 day 3 h");
         assert_eq!(resets_in(NOW, after(DAY)), "in 1 day");
         assert_eq!(resets_in(NOW, after(5 * DAY)), "in 5 days");
-    }
-
-    #[test]
-    fn past_times_are_said_relative_to_now() {
-        let before = |millis: i64| Timestamp(NOW.0 - millis);
-        assert_eq!(ago(NOW, before(59_999)), "just now");
-        assert_eq!(ago(NOW, after(5 * MINUTE)), "just now", "a clock ahead");
-        assert_eq!(ago(NOW, before(MINUTE)), "1 min ago");
-        assert_eq!(ago(NOW, before(HOUR - 1)), "59 min ago");
-        assert_eq!(ago(NOW, before(HOUR)), "1 h ago");
-        assert_eq!(ago(NOW, before(DAY - 1)), "23 h ago");
-        assert_eq!(ago(NOW, before(DAY)), "1 day ago");
-        assert_eq!(ago(NOW, before(2 * DAY - 1)), "1 day ago");
-        assert_eq!(ago(NOW, before(9 * DAY)), "9 days ago");
     }
 
     #[test]

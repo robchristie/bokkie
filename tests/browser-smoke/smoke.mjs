@@ -17,6 +17,8 @@
 // - drops the connection mid-reply and refuses new ones while more than one
 //   piece arrives, then lets the client reconnect: the reply completes with
 //   nothing lost or repeated;
+// - shows a reply in Markdown, streamed with its link split across
+//   pieces, formatted, with the link a link that opens a new tab;
 // - shows the subscription meter and the limit-reached banner from windows
 //   the mock reports;
 // - has the admin invite a member, with permissions, from the accounts
@@ -164,9 +166,15 @@ class Automation {
     // and invocation, as when a reply arrives, is rejected as no longer
     // presented, or stale: discover it again once the view has settled.
     for (let attempt = 0; ; attempt++) {
-      const discovered = await this.request({ op: 'discover', selector, limit: 2 });
-      assert.equal(discovered.capabilities.length, 1, `one capability for ${JSON.stringify(selector)}`);
-      const operation = { op: 'invoke', selector, expected: discovered.capabilities[0].target };
+      // An action presented on each row has one binding per row, carrying
+      // the row's ID, besides its own: take the row's control for this
+      // value if it is presented, as a person would, and the action's own
+      // binding otherwise.
+      const discovered = await this.request({ op: 'discover', selector, limit: 64 });
+      const rows = discovered.capabilities.filter(binding => binding.argument !== undefined && binding.argument === value);
+      const chosen = rows.length > 0 ? rows : discovered.capabilities.filter(binding => binding.argument === undefined);
+      assert.equal(chosen.length, 1, `one binding for ${JSON.stringify(selector)} and ${JSON.stringify(value)}`);
+      const operation = { op: 'invoke', selector, expected: chosen[0].target };
       if (value !== undefined) operation.arguments = { value };
       let receipt;
       try {
@@ -191,6 +199,10 @@ class Automation {
     }
   }
   action(id, value) { return this.invoke({ capability: id }, value); }
+  async nodes(selector) {
+    const { nodes } = await this.request({ op: 'query', selector, limit: 64 });
+    return nodes.map(({ node }) => node);
+  }
   setText(id, text) { return this.invoke({ id, capability: 'stobie.set-text' }, text); }
 }
 
@@ -471,6 +483,25 @@ try {
     chars_at_drop: down.reply_chars, chars_when_live: back.reply_chars, pieces_caught_up: caughtUp,
     delta_frames_after_drop: replayed, connections_dropped: link.dropped,
   });
+
+  // A reply in Markdown, its link split across pieces, reads formatted:
+  // its link is a link, named by its text, that opens a new tab.
+  const MARKDOWN = ['Read **the ', 'notes** in [the ', 'guide](https://example.org/', 'guide).'];
+  await controlRequest('reply', { pieces: MARKDOWN, piece_delay_ms: 100 });
+  await send('Where are the notes?');
+  const formatted = await app.until('the Markdown reply', facts => facts.reply_state === 'complete'
+    && facts.bot_status === 'idle' && facts.reply === MARKDOWN.join(''), 60000);
+  const [guide, ...others] = await app.nodes({ role: 'link', name: 'the guide' });
+  assert(guide && others.length === 0, 'one link named by its text');
+  assert.equal(guide.value, 'https://example.org/guide', 'the link\'s URL');
+  assert.equal(guide.description, 'Opens in a new tab');
+  const ariaLink = page.getByRole('link', { name: 'the guide', exact: true });
+  assert.equal(await ariaLink.count(), 1, 'the accessibility layer presents the link');
+  assert.equal(await ariaLink.getAttribute('aria-description'), 'Opens in a new tab');
+  const readTexts = await pageTexts(page);
+  assert(readTexts.includes('Read the notes in the guide.'), `the reply reads formatted: ${JSON.stringify(readTexts)}`);
+  assert(!readTexts.some(text => text.includes('**') || text.includes('](')), 'no Markdown source on the page');
+  step('Markdown reply with a link', { reply: formatted.reply, link: guide.value });
 
   // Load older: a conversation longer than the newest page of 50 messages.
   // Its first 26 exchanges are sent over the API, each with a short reply.

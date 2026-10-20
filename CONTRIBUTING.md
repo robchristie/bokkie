@@ -137,9 +137,19 @@ open account's ID), `account_role`, `account_may_create_bots`,
 `account_error`, `reset`, `member_bots`, `reading` (the Bot whose
 conversation is read under oversight) and `reading_count`. Name a new Bot with `stobie set-text
 bokkie.bot-name`. Open a Bot with `stobie invoke bokkie.open-bot --value
-ID` and fill the message field with `stobie set-text bokkie.draft`. A
-conversation opens on its newest 50 messages; `stobie invoke
-bokkie.load-older` loads the 50 before them. Stobie offers no `set-text` on
+ID` and fill the message field with `stobie set-text bokkie.draft`. Each
+row's control carries its row's ID, so `--value ID` acts through that
+row's control, and an ID that no row lists is refused; the admin's
+`bokkie.open-account`, `bokkie.withdraw-invitation`,
+`bokkie.edit-member-bot` and `bokkie.read-conversation` work the same way.
+A conversation opens on its newest 50 messages; `stobie invoke
+bokkie.load-older` loads the 50 before them. The Bot's replies read as
+Markdown, whose links open a new tab; the user's messages read as written.
+The gateway's markers, such as a capability change, a routine's run or a
+notification, are compact lines, and `stobie invoke bokkie.show-prompt
+--value MESSAGE_ID` shows or folds away the prompt below a routine run's
+marker. Times show in the account's own time zone, in the browser's
+locale. Stobie offers no `set-text` on
 the password field, so type into it with the keyboard. Bots
 reply only while the household is signed in to ChatGPT (see
 [docs/gateway.md](docs/gateway.md#the-households-chatgpt-sign-in)). To
@@ -161,6 +171,8 @@ checks:
 - a second reply is stopped;
 - a connection dropped mid-reply, and refused while several pieces arrive,
   catches up with exactly the stored text;
+- a reply in Markdown, its link split across pieces, reads formatted, with
+  the link presented as a link that opens a new tab;
 - a conversation longer than one page opens on its newest 50 messages, and
   loading the older ones while a reply streams leaves both whole;
 - the subscription meter and the limit-reached banner show;

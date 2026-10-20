@@ -12,7 +12,8 @@ use super::*;
 const NOW: i64 = 1_800_000_000_000;
 const HOUR: i64 = 3_600_000;
 
-const OVERSIGHT: &str = "Oversight is on: an admin can read all your Bots and conversations. It was switched on 3 h ago";
+/// Three hours before `NOW`, on the user's clock in Adelaide.
+const OVERSIGHT: &str = "Oversight is on: an admin can read all your Bots and conversations. It has been on since today at 3:30 PM";
 
 fn with(permissions: Permissions) -> User {
     User {
@@ -249,12 +250,34 @@ fn the_oversight_notice_shows_the_whole_time_oversight_is_on() {
     again.oversight_changed_at = Some(Timestamp(NOW - 5 * 60_000));
     fixture.account_updated(12, again);
     assert!(fixture.shows(
-        "Oversight is on: an admin can read all your Bots and conversations. It was switched on 5 min ago"
+        "Oversight is on: an admin can read all your Bots and conversations. It has been on since today at 6:25 PM"
     ));
-    // The time stays true as it passes.
-    fixture.later(HOUR);
+    // The day stays true as midnight passes.
+    fixture.later(6 * HOUR);
     assert!(fixture.shows(
-        "Oversight is on: an admin can read all your Bots and conversations. It was switched on 1 h ago"
+        "Oversight is on: an admin can read all your Bots and conversations. It has been on since yesterday at 6:25 PM"
+    ));
+}
+
+#[test]
+fn times_are_in_the_users_own_zone_or_the_viewers_when_it_is_unknown() {
+    let mut fixture = Fixture::new();
+    // The viewer is in UTC (the recorder's), the user in Adelaide.
+    fixture.member_live(overseen(true));
+    assert!(fixture.shows(OVERSIGHT));
+    // A zone the platform does not know falls back to the viewer's.
+    let mut unknown = overseen(true);
+    unknown.time_zone = "Mars/Olympus_Mons".into();
+    fixture.account_updated(11, unknown);
+    assert!(fixture.shows(
+        "Oversight is on: an admin can read all your Bots and conversations. It has been on since today at 5:00 AM"
+    ));
+    // Back in a known zone, times follow it.
+    let mut perth = overseen(true);
+    perth.time_zone = "Australia/Perth".into();
+    fixture.account_updated(12, perth);
+    assert!(fixture.shows(
+        "Oversight is on: an admin can read all your Bots and conversations. It has been on since today at 1:00 PM"
     ));
 }
 
@@ -304,7 +327,7 @@ fn an_admin_never_sees_the_oversight_notice() {
 
 #[test]
 fn a_member_is_told_an_admin_reset_their_password_until_they_acknowledge_it() {
-    let notice = "An admin reset your password 2 h ago";
+    let notice = "An admin reset your password today at 4:30 PM";
     let mut fixture = Fixture::new();
     fixture.sent.set_now(Timestamp(NOW));
     let reset = SessionResponse {

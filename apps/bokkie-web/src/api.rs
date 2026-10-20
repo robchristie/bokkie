@@ -472,6 +472,11 @@ pub trait Api {
 
     /// The time now, for saying how long until a limit resets.
     fn now(&self) -> Timestamp;
+
+    /// The viewer's time zone and locale, read again each time it is
+    /// called. The application shows times in the user's own zone when it
+    /// knows it, in this locale.
+    fn local_time(&self) -> stobie_ui_egui::local_time::LocalTime;
 }
 
 /// What the application asked of the event socket, as a [`Recorder`] keeps
@@ -530,6 +535,17 @@ impl Api for Recorder {
 
     fn now(&self) -> Timestamp {
         Timestamp(self.now.get())
+    }
+
+    /// UTC in Australian English, so that tests show the user's own zone
+    /// wins over the viewer's.
+    fn local_time(&self) -> stobie_ui_egui::local_time::LocalTime {
+        use stobie_ui_egui::local_time::{Clock, LocalTime, TimeLocale, TimeZone};
+        LocalTime::new(
+            TimeZone::utc(),
+            TimeLocale::for_language_tag("en-AU"),
+            Clock::System,
+        )
     }
 }
 

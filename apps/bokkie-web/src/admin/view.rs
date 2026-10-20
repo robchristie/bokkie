@@ -3,7 +3,7 @@
 
 use bokkie_protocol::api::{AdminUser, InvitationSummary, MemberBot, Role};
 use stobie_ui_egui::{
-    ActionEmphasis, PresentationContext, PresentationScope, SemanticUiId, TextRole,
+    ActionEmphasis, BoundAction, PresentationContext, PresentationScope, SemanticUiId, TextRole,
     observe_visible_only,
 };
 
@@ -16,7 +16,7 @@ use crate::app::{
     ProfileEditor, SignedIn,
 };
 use crate::ui::{
-    BokkieFrame, line, message_by, row_button, status_text, submitted, text_area, text_field,
+    BokkieFrame, Shown, line, message_by, status_text, submitted, text_area, text_field,
 };
 
 pub(crate) fn present(
@@ -32,7 +32,7 @@ pub(crate) fn present(
     frame.action(ui, p, BokkieAction::Back, ActionEmphasis::Normal);
     match (&admin.account, signed_in.admin_account()) {
         (Some(screen), Some((account, _))) => match &screen.reading {
-            Some(reading) => reading_ui(ui, p, frame, account, screen, reading),
+            Some(reading) => reading_ui(ui, p, frame, app, account, screen, reading),
             None => account_ui(ui, p, frame, signed_in, account, screen),
         },
         // The account went from the list.
@@ -99,14 +99,13 @@ fn accounts_ui(
                         &account_details(account),
                         line(TextRole::Secondary, 1),
                     );
-                    row_button(
+                    // "Open account Ada" to assistive technology and agents.
+                    frame.action(
                         ui,
                         p,
-                        frame,
-                        &format!("Open {}", account.user.display_name),
-                        "bokkie.open-account",
-                        BokkieAction::OpenAccount,
-                        key,
+                        BoundAction::new(BokkieAction::OpenAccount, key)
+                            .with_subject(&account.user.display_name),
+                        ActionEmphasis::Normal,
                     );
                     ui.separator();
                 }
@@ -114,6 +113,15 @@ fn accounts_ui(
                 invite_ui(ui, p, frame, app, admin);
             });
     });
+}
+
+/// Whom an invitation is for, naming its Withdraw control: "for Bea", or
+/// "for anyone" with its ID, since several can be.
+fn invitation_subject(invitation: &InvitationSummary) -> String {
+    match invitation.display_name.as_deref() {
+        Some(name) => format!("for {name}"),
+        None => format!("{} for anyone", invitation.id),
+    }
 }
 
 fn invitation_text(invitation: &InvitationSummary, app: &App) -> String {
@@ -157,14 +165,12 @@ fn invitations_ui(
                     &invitation_text(invitation, app),
                     line(TextRole::Secondary, 2),
                 );
-                row_button(
+                frame.action(
                     ui,
                     p,
-                    frame,
-                    &format!("Withdraw invitation {key}"),
-                    "bokkie.withdraw-invitation",
-                    BokkieAction::WithdrawInvitation,
-                    key,
+                    BoundAction::new(BokkieAction::WithdrawInvitation, key)
+                        .with_subject(invitation_subject(invitation)),
+                    ActionEmphasis::Normal,
                 );
             }
         }
@@ -522,25 +528,21 @@ fn member_bots_ui(
                     }
                     _ => {
                         if bot.made_by_admin {
-                            row_button(
+                            frame.action(
                                 ui,
                                 p,
-                                frame,
-                                &format!("Edit {}", bot.name),
-                                "bokkie.edit-member-bot",
-                                BokkieAction::EditMemberBot,
-                                key,
+                                BoundAction::new(BokkieAction::EditMemberBot, key)
+                                    .with_subject(&bot.name),
+                                ActionEmphasis::Normal,
                             );
                         }
                         if list.oversight {
-                            row_button(
+                            frame.action(
                                 ui,
                                 p,
-                                frame,
-                                &format!("Read {}", bot.name),
-                                "bokkie.read-conversation",
-                                BokkieAction::ReadConversation,
-                                key,
+                                BoundAction::new(BokkieAction::ReadConversation, key)
+                                    .with_subject(format!("with {}", bot.name)),
+                                ActionEmphasis::Normal,
                             );
                         }
                     }
@@ -616,6 +618,7 @@ fn reading_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
     frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
     account: &AdminUser,
     screen: &AccountScreen,
     reading: &Reading,
@@ -665,8 +668,20 @@ fn reading_ui(
                         line(TextRole::Secondary, 1),
                     );
                 }
+                let local = app.local_time();
+                frame.request_repaint_after(
+                    "message days",
+                    crate::times::until_the_day_changes(&local),
+                );
+                // Prompts stay folded: reading is read-only.
+                let shown = Shown {
+                    local: &local,
+                    user_name: member,
+                    bot_name: name,
+                    prompts: None,
+                };
                 for message in reading.messages.values() {
-                    message_by(ui, p, message, member, name);
+                    message_by(ui, p, frame, &shown, message);
                 }
             });
     });

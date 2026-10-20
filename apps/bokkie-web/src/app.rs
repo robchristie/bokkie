@@ -20,6 +20,7 @@ use bokkie_protocol::api::{
 use bokkie_protocol::events::Event;
 use bokkie_protocol::{BotId, MessageId, Timestamp};
 use serde::Serialize;
+use stobie_ui_egui::local_time::{Clock, LocalTime, TimeLocale, TimeZone};
 use stobie_ui_egui::{
     Action, ActionArgument, ActionKey, ActionTarget, Application, ApplicationIdentity,
     Availability, Frame, IntentSender, Observation, PassContext, application_identity,
@@ -53,9 +54,9 @@ pub const PROFILE_LABEL_ID: &str = "bokkie.profile-label";
 /// The profile editor's description field's stable ID.
 pub const PROFILE_DESCRIPTION_ID: &str = "bokkie.profile-description";
 
-/// The largest Bot ID the Open action accepts: the largest integer a JSON
-/// number carries exactly.
-const MAX_BOT_ID: f64 = 9_007_199_254_740_991.0;
+/// The largest ID an action accepts, such as a Bot's or a message's: the
+/// largest integer a JSON number carries exactly.
+const MAX_ID: f64 = 9_007_199_254_740_991.0;
 
 /// Every user action, declared once. Buttons, shortcuts and agents share
 /// them; IDs are `bokkie.<kebab-case variant>`.
@@ -90,6 +91,15 @@ pub enum BokkieAction {
         description = "Load the conversation's earlier messages, a page at a time"
     )]
     LoadOlder,
+    #[action(
+        label = "Show prompt",
+        description = "Show the prompt a routine gave the Bot, below the marker of its run with this message ID, or fold it away again",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    ShowPrompt,
     #[action(
         label = "Send",
         description = "Send the message to the Bot; while it replies, the message steers the reply"
@@ -343,6 +353,9 @@ pub enum BokkieIntent {
         generation: Generation,
         update: SocketUpdate,
     },
+    /// The page is visible again, after the viewer may have changed their
+    /// time zone or locale.
+    Foreground,
 }
 
 // The password must never reach a log line.
@@ -380,6 +393,7 @@ impl std::fmt::Debug for BokkieIntent {
                 .field("generation", generation)
                 .field("update", update)
                 .finish(),
+            Self::Foreground => f.write_str("Foreground"),
         }
     }
 }
@@ -444,6 +458,9 @@ pub(crate) struct SignedIn {
     pub(crate) household: Option<Household>,
     /// The admin section, when an admin has it open.
     pub(crate) admin: Option<crate::admin::Admin>,
+    /// The user's own time zone, which times are shown in, or `None` when
+    /// it is not one the platform knows.
+    pub(crate) zone: Option<TimeZone>,
 }
 
 impl SignedIn {
@@ -470,6 +487,9 @@ impl SignedIn {
 
     /// Take the account as it now is, and drop what it no longer allows.
     fn account_changed(&mut self, user: User) {
+        if user.time_zone != self.user.time_zone {
+            self.zone = TimeZone::named(&user.time_zone).ok();
+        }
         self.user = user;
         if !self.may_edit_profiles()
             && let Some(open) = &mut self.open
@@ -596,6 +616,9 @@ pub(crate) struct Open {
     pub(crate) updating: bool,
     /// Why the last pin or hide failed.
     pub(crate) update_error: Option<String>,
+    /// The routine runs whose prompt is shown, by their marker's ID; every
+    /// other run's prompt is folded away.
+    pub(crate) prompts: BTreeSet<MessageId>,
 }
 
 impl Open {
@@ -614,6 +637,7 @@ impl Open {
             editor: None,
             updating: false,
             update_error: None,
+            prompts: BTreeSet::new(),
         }
     }
 }
@@ -642,6 +666,8 @@ pub struct App {
     older_pages: u64,
     make_api: Option<ApiFactory>,
     api: Option<Box<dyn Api>>,
+    /// The viewer's zone and locale, as the transport last read them.
+    viewer: Option<LocalTime>,
 }
 
 impl std::fmt::Debug for App {
@@ -668,6 +694,7 @@ impl App {
             older_pages: 0,
             make_api: Some(make_api),
             api: None,
+            viewer: None,
         }
     }
 
@@ -826,6 +853,7 @@ impl App {
     fn signed_in(&mut self, session: SessionResponse) {
         self.next_generation();
         self.session = Session::SignedIn(Box::new(SignedIn {
+            zone: TimeZone::named(&session.user.time_zone).ok(),
             user: session.user,
             reset_notice: session.password_reset_by_admin,
             acknowledging: false,
@@ -1516,6 +1544,23 @@ impl App {
         self.api.as_ref().map_or(Timestamp(0), |api| api.now())
     }
 
+    /// How times are shown now: in the user's own zone, or the viewer's
+    /// until it is known, in the viewer's locale, with the transport's
+    /// clock.
+    pub(crate) fn local_time(&self) -> LocalTime {
+        let viewer = self.viewer.clone().unwrap_or_else(|| {
+            LocalTime::new(TimeZone::utc(), TimeLocale::ENGLISH_US, Clock::System)
+        });
+        let local = match &self.session {
+            Session::SignedIn(signed_in) => match &signed_in.zone {
+                Some(zone) => viewer.with_zone(zone.clone()),
+                None => viewer,
+            },
+            _ => viewer,
+        };
+        local.with_clock(Clock::Fixed(crate::times::instant(self.now())))
+    }
+
     /// The open Bot, if the user may change it now: not while a change to it
     /// is under way.
     fn can_update(&self) -> Result<&Bot, &'static str> {
@@ -1629,6 +1674,10 @@ impl Application for App {
             }
             (BokkieAction::OpenBot, _) if !self.store.bots_loaded() => Some("Loading the Bots"),
             (BokkieAction::OpenBot, _) => None,
+            (BokkieAction::ShowPrompt, _) if self.open().is_none() => {
+                Some("No conversation is open")
+            }
+            (BokkieAction::ShowPrompt, _) => None,
             (BokkieAction::Back, _)
                 if self.open().is_none()
                     && self.household().is_none()
@@ -1736,10 +1785,50 @@ impl Application for App {
         })
     }
 
+    /// A row's action is available while its row is listed: a Bot in the
+    /// list, an account, an invitation, a member's Bot or a routine run's
+    /// marker. A click or an invocation for anything else is refused.
+    fn availability_with(
+        &self,
+        target: ActionTarget<BokkieAction>,
+        argument: &ActionArgument,
+    ) -> Availability {
+        let id = match argument {
+            ActionArgument::Number(id) if id.fract() == 0.0 && (1.0..=MAX_ID).contains(id) => {
+                Some(*id as i64)
+            }
+            _ => None,
+        };
+        let listed = match (target.action, id) {
+            (BokkieAction::OpenBot, Some(id)) => self.store.bot(BotId(id)).is_some(),
+            (BokkieAction::ShowPrompt, Some(id)) => self.open().is_some_and(|open| {
+                self.store
+                    .conversation(open.bot)
+                    .and_then(|conversation| conversation.message(MessageId(id)))
+                    .is_some_and(|message| message.routine.is_some())
+            }),
+            (
+                action @ (BokkieAction::OpenAccount
+                | BokkieAction::WithdrawInvitation
+                | BokkieAction::EditMemberBot
+                | BokkieAction::ReadConversation),
+                Some(id),
+            ) => self.admin_lists(action, id),
+            // An argument the action's contract refuses is refused there.
+            _ => true,
+        };
+        if listed {
+            self.availability(target)
+        } else {
+            Availability::Hidden
+        }
+    }
+
     fn started(&mut self, intents: IntentSender<BokkieIntent>) {
         if let Some(make_api) = self.make_api.take() {
             self.api = Some(make_api(intents));
         }
+        self.viewer = self.api.as_ref().map(|api| api.local_time());
         self.send(ApiRequest::CheckSession);
     }
 
@@ -1779,6 +1868,12 @@ impl Application for App {
 
     fn apply(&mut self, intent: BokkieIntent, _: &mut ()) -> Result<bool, String> {
         Ok(match intent {
+            BokkieIntent::Foreground => {
+                let viewer = self.api.as_ref().map(|api| api.local_time());
+                let changed = viewer != self.viewer;
+                self.viewer = viewer;
+                changed
+            }
             BokkieIntent::EditUsername(username) => match &mut self.session {
                 Session::SignedOut(form) if !form.busy => {
                     form.username = username;
@@ -2090,7 +2185,7 @@ impl Application for App {
                 | BokkieAction::EditMemberBot
                 | BokkieAction::ReadConversation),
                 ActionArgument::Number(id),
-            ) if id.fract() == 0.0 && (1.0..=MAX_BOT_ID).contains(&id) => self
+            ) if id.fract() == 0.0 && (1.0..=MAX_ID).contains(&id) => self
                 .admin_perform_with(action, id as i64)
                 .unwrap_or(Ok(false)),
             (
@@ -2104,12 +2199,25 @@ impl Application for App {
                 target.action.specification().label
             )),
             (BokkieAction::OpenBot, ActionArgument::Number(id))
-                if id.fract() == 0.0 && (1.0..=MAX_BOT_ID).contains(&id) =>
+                if id.fract() == 0.0 && (1.0..=MAX_ID).contains(&id) =>
             {
                 // Exact: the contract admits only integers in range.
                 self.open_conversation(BotId(id as i64))
             }
             (BokkieAction::OpenBot, _) => Err("Open needs a Bot ID".into()),
+            (BokkieAction::ShowPrompt, ActionArgument::Number(id))
+                if id.fract() == 0.0 && (1.0..=MAX_ID).contains(&id) =>
+            {
+                let id = MessageId(id as i64);
+                let Some(open) = self.open_mut() else {
+                    return Err("No conversation is open".into());
+                };
+                if !open.prompts.remove(&id) {
+                    open.prompts.insert(id);
+                }
+                Ok(true)
+            }
+            (BokkieAction::ShowPrompt, _) => Err("Show prompt needs a message ID".into()),
             (_, ActionArgument::None) => self.perform(target, state),
             (action, _) => Err(format!(
                 "{} takes no argument",
