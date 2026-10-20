@@ -634,6 +634,27 @@ async fn a_message_steered_in_as_its_turn_ends_gets_a_turn_of_its_own() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     };
     assert!(began < idle, "idle between the turns");
+    // And it showed idle once, as its last status: the second turn's end
+    // announces it, and nothing after.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let statuses: Vec<BotStatus> = gateway
+        .state
+        .events
+        .since(UserId(1), Seq::ZERO, 10_000)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.event {
+            Event::BotStatusChanged { status, .. } => Some(status),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        statuses.iter().filter(|s| **s == BotStatus::Idle).count(),
+        1,
+        "{statuses:?}"
+    );
+    assert_eq!(statuses.last(), Some(&BotStatus::Idle), "{statuses:?}");
     // The gateway knows the message by the client id it steered it with.
     let steer = &gateway.fake.received("turn/steer")[0];
     let message = steered.body["message"]["id"].as_i64().unwrap();
