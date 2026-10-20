@@ -601,26 +601,39 @@ async fn a_message_steered_in_as_its_turn_ends_gets_a_turn_of_its_own() {
     assert_eq!(gateway.fake.received("thread/start").len(), 1);
     let usage = gateway.send(Call::get("/api/v1/usage").cookie(&rob)).await;
     assert_eq!(usage.body["allowance"]["turns_today"], 2);
-    // The Bot never showed idle between the turns.
-    let log = gateway
-        .state
-        .events
-        .since(UserId(1), bokkie_protocol::events::Seq::ZERO, 10_000)
-        .await
-        .unwrap();
-    let idle = log
-        .iter()
-        .filter(|e| {
+    // The Bot never showed idle between the turns: its first idle status
+    // comes after the second turn's reply began. Status events can arrive
+    // a moment after the status reads idle, so wait for one.
+    use bokkie_protocol::api::BotStatus;
+    use bokkie_protocol::events::{Event, Seq};
+    let answer = messages(&page)[3]["id"].as_i64().unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let (began, idle) = loop {
+        let log = gateway
+            .state
+            .events
+            .since(UserId(1), Seq::ZERO, 10_000)
+            .await
+            .unwrap();
+        let began = log.iter().position(
+            |e| matches!(&e.event, Event::MessageCreated { message } if message.id.0 == answer),
+        );
+        let idle = log.iter().position(|e| {
             matches!(
                 e.event,
-                bokkie_protocol::events::Event::BotStatusChanged {
-                    status: bokkie_protocol::api::BotStatus::Idle,
+                Event::BotStatusChanged {
+                    status: BotStatus::Idle,
                     ..
                 }
             )
-        })
-        .count();
-    assert_eq!(idle, 1, "idle only once both turns ended");
+        });
+        if let (Some(began), Some(idle)) = (began, idle) {
+            break (began, idle);
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no idle status");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    assert!(began < idle, "idle between the turns");
     // The gateway knows the message by the client id it steered it with.
     let steer = &gateway.fake.received("turn/steer")[0];
     let message = steered.body["message"]["id"].as_i64().unwrap();
