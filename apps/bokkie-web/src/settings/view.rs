@@ -1,5 +1,6 @@
-//! A Bot's settings screen and the time zone section: plain stand-ins,
-//! short controls sharing a wrapped row and the rest on rows of their own.
+//! A Bot's settings, in the navigation's detail pane, and the time zone
+//! section: plain stand-ins, short controls sharing a wrapped row and the
+//! rest on rows of their own.
 
 use bokkie_protocol::api::{Grant, Role, Routine, RoutinePush, RoutineRun, RunTrigger, Weekday};
 use bokkie_protocol::api::{ToolCall, ToolCallOutcome};
@@ -32,10 +33,7 @@ pub(crate) fn present(
     let Some(settings) = &open.settings else {
         return;
     };
-    frame.action(ui, p, BokkieAction::Back, ActionEmphasis::Normal);
     let bot = app.store().bot(open.bot);
-    let name = bot.map_or("Bot", |bot| bot.name.as_str());
-    p.heading(ui, "title", &format!("{name} settings"));
     frame.action(ui, p, BokkieAction::Refresh, ActionEmphasis::Normal);
     let local = app.local_time();
     // Times said as today or yesterday stay true past midnight.

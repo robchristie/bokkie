@@ -197,7 +197,10 @@ fn a_profile_edit_sends_only_what_changed() {
 fn a_hidden_bot_leaves_the_list_until_hidden_bots_are_shown() {
     let mut fixture = Fixture::new();
     fixture.member_live(with(NEITHER));
-    fixture.click("Open Tutor");
+    // Opened as an agent opens it, with no control focused: Stobie's
+    // navigation would return focus on Back to an Open control clicked
+    // here, which the hidden Bot no longer shows.
+    fixture.perform_with(BokkieAction::OpenBot, TUTOR.0 as f64);
     let _ = fixture.sent();
     fixture.click("Hide Bot");
     assert_eq!(

@@ -605,6 +605,43 @@ try {
   assert(!readTexts.some(text => text.includes('**') || text.includes('](')), 'no Markdown source on the page');
   step('Markdown reply with a link', { reply: formatted.reply, link: guide.value });
 
+  // The navigation follows the page's width: one pane at a time on a
+  // phone, the list beside the conversation from 720 points, and the
+  // settings beside both from 1040. Nothing is lost or loaded again on the
+  // way, and each pane is a region named by its title.
+  const kept = await app.facts();
+  const resized = [];
+  for (const [width, layout, panes, regions] of [
+    [800, 'split', 'list,content', ['Bokkie', 'Planner']],
+    [1280, 'columns', 'list,content', ['Bokkie', 'Planner']],
+    [430, 'stack', 'content', ['Planner']],
+  ]) {
+    await page.setViewportSize({ width, height: 900 });
+    const laid = await app.until(`the ${layout} layout`, facts => facts.layout === layout && facts.panes === panes);
+    assert.equal(laid.bot, bot.id, `the Planner open at ${width}`);
+    assert.equal(laid.content, 'conversation');
+    assert.equal(laid.conversation, 'loaded');
+    assert.equal(laid.message_count, kept.message_count, `the conversation kept at ${width}`);
+    assert.deepEqual((await app.nodes({ role: 'pane' })).map(node => node.name), regions);
+    for (const name of regions) {
+      assert.equal(await page.getByRole('region', { name, exact: true }).count(), 1, `the ${name} region at ${width}`);
+    }
+    // Back is the phone's alone: beside the list there is nowhere to go back.
+    assert.equal((await app.nodes({ capability: 'bokkie.back' })).length, layout === 'stack' ? 1 : 0, `Back at ${width}`);
+    if (layout === 'columns') {
+      // The settings open beside the conversation, which stays in view.
+      await app.action('bokkie.bot-settings');
+      const detail = await app.until('the settings beside the conversation', facts => facts.detail === 'settings'
+        && facts.panes === 'list,content,detail' && facts.routines === 'loaded');
+      assert.equal(detail.viewing, bot.id, 'the conversation is still viewed');
+      assert.deepEqual((await app.nodes({ role: 'pane' })).map(node => node.name), ['Bokkie', 'Planner', 'Planner settings']);
+      await app.action('bokkie.bot-settings');
+      await app.until('the settings hidden', facts => facts.detail === '' && facts.panes === panes);
+    }
+    resized.push({ width, layout, panes });
+  }
+  step('navigation followed the page width', { layouts: resized });
+
   // A routine, made in the Bot's settings and run now: its run shows in its
   // history as it goes, and Show brings its marker and reply into view.
   const ROUTINE = 'Smoke check';
@@ -787,6 +824,8 @@ try {
   await controlRequest('reply', { pieces: ['Hello ', 'there.'], piece_delay_ms: 50 });
   await app.action('bokkie.back');
   await app.until('the list', facts => facts.screen === 'signed_in');
+  // The accounts are at the bottom of the list.
+  await app.scrollTo({ capability: 'bokkie.admin' });
   await app.action('bokkie.admin');
   await app.until('the accounts', facts => facts.screen === 'admin' && facts.accounts === 1);
   // A member who may create Bots but not edit their profiles.

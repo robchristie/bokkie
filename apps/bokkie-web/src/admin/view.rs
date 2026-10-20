@@ -1,10 +1,10 @@
-//! The admin section's screens: plain stand-ins, each control on a row of
-//! its own.
+//! The admin section's screens, in the navigation's content pane: plain
+//! stand-ins, each control on a row of its own.
 
 use bokkie_protocol::api::{AdminUser, InvitationSummary, MemberBot, Role};
 use stobie_ui_egui::{
-    ActionEmphasis, BoundAction, PresentationContext, PresentationScope, SemanticUiId, TextRole,
-    observe_visible_only,
+    ActionEmphasis, BoundAction, NavigationLayout, PresentationContext, PresentationScope,
+    SemanticUiId, TextRole, observe_visible_only,
 };
 
 use super::{
@@ -29,7 +29,11 @@ pub(crate) fn present(
     let Some(admin) = &signed_in.admin else {
         return;
     };
-    frame.action(ui, p, BokkieAction::Back, ActionEmphasis::Normal);
+    // The stack's header has Back; beside the list, the section keeps its
+    // own, to go back a level.
+    if app.layout() != NavigationLayout::Stack {
+        frame.action(ui, p, BokkieAction::Back, ActionEmphasis::Normal);
+    }
     match (&admin.account, signed_in.admin_account()) {
         (Some(screen), Some((account, _))) => match &screen.reading {
             Some(reading) => reading_ui(ui, p, frame, app, account, screen, reading),
@@ -37,11 +41,36 @@ pub(crate) fn present(
         },
         // The account went from the list.
         (Some(_), None) => {
-            p.heading(ui, "title", "Account");
             p.status(ui, "status", "This account is not on the list", true);
         }
         (None, _) => accounts_ui(ui, p, frame, app, admin),
     }
+}
+
+/// The title of the admin section's screen: the accounts, an account, or
+/// the member's Bot being read.
+pub(crate) fn title(signed_in: &SignedIn) -> String {
+    let Some(admin) = &signed_in.admin else {
+        return String::new();
+    };
+    match (&admin.account, signed_in.admin_account()) {
+        (Some(screen), Some((account, _))) => match &screen.reading {
+            Some(reading) => reading_name(screen, reading).to_owned(),
+            None => account.user.display_name.clone(),
+        },
+        (Some(_), None) => "Account".into(),
+        (None, _) => "Accounts".into(),
+    }
+}
+
+/// The name of the member's Bot being read.
+fn reading_name<'a>(screen: &'a AccountScreen, reading: &Reading) -> &'a str {
+    screen
+        .bots
+        .iter()
+        .flat_map(|list| &list.bots)
+        .find(|bot| bot.id == reading.bot)
+        .map_or("Bot", |bot| bot.name.as_str())
 }
 
 fn role_name(role: Role) -> &'static str {
@@ -71,7 +100,6 @@ fn accounts_ui(
     app: &App,
     admin: &Admin,
 ) {
-    p.heading(ui, "title", "Accounts");
     frame.action(ui, p, BokkieAction::Refresh, ActionEmphasis::Normal);
     observe_visible_only(ui, |ui| {
         egui::ScrollArea::vertical()
@@ -285,7 +313,6 @@ fn account_ui(
 ) {
     let user = &account.user;
     let me = user.id == signed_in.user.id;
-    p.heading(ui, "title", &user.display_name);
     p.content(
         ui,
         "details",
@@ -623,13 +650,7 @@ fn reading_ui(
     screen: &AccountScreen,
     reading: &Reading,
 ) {
-    let name = screen
-        .bots
-        .iter()
-        .flat_map(|list| &list.bots)
-        .find(|bot| bot.id == reading.bot)
-        .map_or("Bot", |bot| bot.name.as_str());
-    p.heading(ui, "title", name);
+    let name = reading_name(screen, reading);
     let member = &account.user.display_name;
     p.status(
         ui,

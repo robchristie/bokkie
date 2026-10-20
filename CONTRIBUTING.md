@@ -112,7 +112,22 @@ cargo run -p bokkie-gateway -- serve
 ```
 
 Then open <http://localhost:8787/>, adding `?automation=1` for `stobie
-attach`. The client's facts say where it is: `screen`, `user`, `bots`,
+attach`. Once signed in, the client is Stobie's navigation recipe: the Bot
+list is the list pane; the open conversation, the household's ChatGPT
+sign-in or the admin section is the content pane, one at a time; and the
+open Bot's settings are the detail pane. Below 720 points wide the panes
+stack, one at a time, with Back; from 720 the list stands beside the
+content, or beside the settings with Back to the conversation; from 1040
+the settings stand beside the conversation too. Beside the list the admin
+section keeps a Back of its own, to go back a level. Choosing the open Bot
+again keeps its conversation as it stands. Each pane is a region named by
+its title, and the conversation's pane carries the Bot as its domain
+reference (`bot`, with its ID). A resize changes only the layout. The facts `layout` (`stack`,
+`split` or `columns`, empty while signed out), `content` (`conversation`,
+`household`, `admin`, or empty), `detail` (`settings` or empty) and
+`panes` (those on screen, from the start of the line, comma-separated,
+among `list`, `content`, `detail` and `empty`) say how it stands. The
+client's other facts say where it is: `screen`, `user`, `bots`,
 `bot_count`, `show_hidden`, `message` and `connection` (the event socket);
 for the account `role`, `may_create_bots`, `may_edit_profiles`,
 `oversight` (the notice that an admin can read the member's Bots) and
@@ -164,8 +179,8 @@ Markdown, whose links open a new tab; the user's messages read as written.
 The gateway's markers, such as a capability change, a routine's run or a
 notification, are compact lines, and `stobie invoke bokkie.show-prompt
 --value MESSAGE_ID` shows or folds away the prompt below a routine run's
-marker. `stobie invoke bokkie.bot-settings` opens the open Bot's
-settings: its grants (a member may grant only `notes`, `seen` and
+marker. `stobie invoke bokkie.bot-settings`, the toggle in the
+conversation's header, shows or hides the open Bot's settings: its grants (a member may grant only `notes`, `seen` and
 `notify`), its notes, its recent tool calls and its routines. Fill a
 routine's form with `stobie set-text` on `bokkie.routine-name`,
 `bokkie.routine-prompt`, `bokkie.routine-at` and `bokkie.routine-every`,
@@ -173,7 +188,7 @@ and act on one routine with `bokkie.edit-routine`, `bokkie.pause-routine`,
 `bokkie.run-routine`, `bokkie.delete-routine` and `bokkie.routine-history`
 with `--value ROUTINE_ID`; `bokkie.show-run --value RUN_ID` closes the
 settings and brings that run's marker into view. The account's time zone
-is set below the Bot list, with `stobie set-text bokkie.time-zone`, and
+is set at the bottom of the Bot list, with `stobie set-text bokkie.time-zone`, and
 `stobie invoke bokkie.notifications`, below it, switches this device's
 notifications on or off. The switch subscribes through Stobie's Web Push
 bridge with the gateway's key and sends the subscription; each launch sends
@@ -207,6 +222,11 @@ checks:
   catches up with exactly the stored text;
 - a reply in Markdown, its link split across pieces, reads formatted, with
   the link presented as a link that opens a new tab;
+- resizing the page from a phone's width to a tablet's and a desktop's and
+  back moves between the stack, the split and the columns, with each pane
+  a named region, Back beside the conversation only in the stack and the
+  settings beside the conversation in the columns, and keeps the open
+  conversation as it was;
 - a conversation longer than one page opens on its newest 50 messages, and
   loading the older ones while a reply streams leaves both whole;
 - the notifications switch subscribes the device through a stand-in push

@@ -24,7 +24,8 @@ use stobie_ui_egui::local_time::{Clock, LocalTime, TimeLocale, TimeZone};
 use stobie_ui_egui::web_push::PushEvent;
 use stobie_ui_egui::{
     Action, ActionArgument, ActionKey, ActionTarget, Application, ApplicationIdentity,
-    Availability, Frame, IntentSender, Observation, PassContext, application_identity,
+    Availability, Frame, IntentSender, NavigationLayout, Observation, PassContext,
+    application_identity,
 };
 
 use crate::admin::Field;
@@ -85,7 +86,7 @@ pub enum BokkieAction {
         integer = true
     )]
     OpenBot,
-    #[action(label = "Back", description = "Return to the list of Bots")]
+    #[action(label = "Back", description = "Return to the previous level")]
     Back,
     #[action(
         label = "Load older",
@@ -323,7 +324,7 @@ pub enum BokkieAction {
     Stop,
     #[action(
         label = "Settings",
-        description = "Open the open Bot's settings: its grants, notes, tool calls and routines"
+        description = "Show or hide the open Bot's settings: its grants, notes, tool calls and routines"
     )]
     BotSettings,
     #[action(
@@ -905,6 +906,8 @@ pub struct App {
     pub(crate) device: crate::notifications::Device,
     /// The viewer's zone and locale, as the transport last read them.
     viewer: Option<LocalTime>,
+    /// The navigation's layout at the width of the last pass.
+    pub(crate) layout: NavigationLayout,
 }
 
 impl std::fmt::Debug for App {
@@ -934,6 +937,7 @@ impl App {
             api: None,
             device: crate::notifications::Device::default(),
             viewer: None,
+            layout: NavigationLayout::Stack,
         }
     }
 
@@ -1844,6 +1848,16 @@ impl App {
         if self.store.bot(bot).is_none() {
             return Err(format!("There is no Bot {bot}"));
         }
+        // The content pane holds one conversation, or another screen.
+        signed_in.household = None;
+        signed_in.admin = None;
+        // Choosing the open Bot again, from the list beside it, keeps its
+        // conversation as it stands and brings it into view: outside the
+        // columns the settings give way to it.
+        if signed_in.open.as_ref().is_some_and(|open| open.bot == bot) {
+            let shown = self.layout == NavigationLayout::Columns || self.close_settings();
+            return Ok(shown);
+        }
         if let Some(open) = signed_in.open.take() {
             self.store.close_conversation(open.bot);
             self.store.close_routines(open.bot);
@@ -2040,12 +2054,6 @@ impl Application for App {
                 Some("Loading the Bots")
             }
             (BokkieAction::Refresh, _) => None,
-            (BokkieAction::OpenBot, _) if self.household().is_some() => {
-                Some("Leave the ChatGPT sign-in first")
-            }
-            (BokkieAction::OpenBot, _) if self.admin_screen().is_some() => {
-                Some("Leave the accounts first")
-            }
             (BokkieAction::OpenBot, _) if !self.store.bots_loaded() => Some("Loading the Bots"),
             (BokkieAction::OpenBot, _) => None,
             (BokkieAction::ShowPrompt, _) if self.open().is_none() => {
@@ -2080,16 +2088,7 @@ impl Application for App {
                     None
                 }
             }),
-            (BokkieAction::ShowHidden, _) => match signed_in {
-                Some(signed_in)
-                    if signed_in.open.is_some()
-                        || signed_in.household.is_some()
-                        || signed_in.admin.is_some() =>
-                {
-                    Some("Return to the list of Bots first")
-                }
-                _ => None,
-            },
+            (BokkieAction::ShowHidden, _) => None,
             (BokkieAction::Pin | BokkieAction::Hide, _) => self.can_update().err(),
             (BokkieAction::EditProfile, _) => match (signed_in, self.can_update()) {
                 (Some(signed_in), _) if !signed_in.may_edit_profiles() => {
@@ -2127,11 +2126,8 @@ impl Application for App {
             (BokkieAction::Household, _) => signed_in.and_then(|signed_in| {
                 if !signed_in.is_admin() {
                     Some("Only an admin signs the household in to ChatGPT or out")
-                } else if signed_in.open.is_some()
-                    || signed_in.household.is_some()
-                    || signed_in.admin.is_some()
-                {
-                    Some("Return to the list of Bots first")
+                } else if signed_in.household.is_some() {
+                    Some("The ChatGPT sign-in is open")
                 } else {
                     None
                 }
@@ -2217,6 +2213,8 @@ impl Application for App {
     /// `notifications`), and poll the household's sign-in while its device
     /// code is on screen.
     fn prepare(&mut self, pass: &mut PassContext<'_>, _: &mut ()) {
+        // The navigation lays its panes out across the whole page.
+        self.layout = NavigationLayout::for_width(pass.available_rect().width());
         self.sync();
         let now = self.now();
         let Session::SignedIn(signed_in) = &mut self.session else {
@@ -2512,7 +2510,12 @@ impl Application for App {
                 signed_in.message = None;
                 self.send(ApiRequest::AcknowledgeReset);
             }
-            (BokkieAction::Household, Session::SignedIn(signed_in)) => {
+            (BokkieAction::Household, Session::SignedIn(_)) => {
+                // The content pane holds one thing at a time.
+                self.close_content();
+                let Session::SignedIn(signed_in) = &mut self.session else {
+                    return Ok(false);
+                };
                 signed_in.household = Some(Household {
                     login: Login::Idle,
                     sign_out: SignOut::Idle,
@@ -2673,6 +2676,7 @@ impl Application for App {
     /// never one of them.
     fn observe(&self, observation: &mut Observation<'_>) {
         observation.fact("screen", self.screen());
+        self.observe_navigation(observation);
         observation.fact(
             "joining",
             matches!(&self.session, Session::SignedOut(form) if form.joining),

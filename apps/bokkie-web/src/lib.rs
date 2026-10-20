@@ -42,6 +42,7 @@ pub mod app;
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
 pub mod connection;
+mod navigation;
 mod notifications;
 mod settings;
 pub mod socket;

@@ -785,7 +785,6 @@ impl App {
         Some(match action {
             BokkieAction::BotSettings => match self.open() {
                 None => because("No conversation is open"),
-                Some(open) if open.settings.is_some() => because("The settings are open"),
                 Some(_) => None,
             },
             BokkieAction::SaveTimeZone => match signed_in {
@@ -957,8 +956,9 @@ impl App {
     /// Perform a settings action without an argument; `None` for an action
     /// that is not the settings'.
     pub(crate) fn settings_perform(&mut self, action: BokkieAction) -> Option<bool> {
+        // The conversation header's toggle shows or hides the settings.
         if action == BokkieAction::BotSettings {
-            return Some(self.open_settings());
+            return Some(self.close_settings() || self.open_settings());
         }
         if action == BokkieAction::SaveTimeZone {
             let Session::SignedIn(signed_in) = &mut self.session else {

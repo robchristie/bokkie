@@ -18,8 +18,8 @@ crate-type = ["cdylib", "rlib"]
 # target: natively the UI crate builds without eframe, for host tests only.
 [dependencies]
 bokkie-protocol = { path = "../../crates/bokkie-protocol" }
-stobie-core = { git = "https://github.com/robchristie/stobie", rev = "8bae37cef7049595506837ac245dea51270fc30c" }
-stobie-ui-egui = { git = "https://github.com/robchristie/stobie", rev = "8bae37cef7049595506837ac245dea51270fc30c", default-features = false }
+stobie-core = { git = "https://github.com/robchristie/stobie", rev = "45ce41b3f8eaab7cb100bf1f7122b20b83a1c3c2" }
+stobie-ui-egui = { git = "https://github.com/robchristie/stobie", rev = "45ce41b3f8eaab7cb100bf1f7122b20b83a1c3c2", default-features = false }
 egui = "=0.36.1"
 serde.workspace = true
 serde_json.workspace = true
@@ -28,7 +28,7 @@ serde_json.workspace = true
 # and `scripts/fetch-stobie` installs the version Cargo.lock names.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.127"
-stobie-ui-egui = { git = "https://github.com/robchristie/stobie", rev = "8bae37cef7049595506837ac245dea51270fc30c", default-features = false, features = ["eframe"] }
+stobie-ui-egui = { git = "https://github.com/robchristie/stobie", rev = "45ce41b3f8eaab7cb100bf1f7122b20b83a1c3c2", default-features = false, features = ["eframe"] }
 eframe = { version = "=0.36.1", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3.82", features = ["CloseEvent", "Document", "EventTarget", "Headers", "Location", "MessageEvent", "Performance", "Request", "RequestCredentials", "RequestInit", "Response", "VisibilityState", "WebSocket", "Window"] }
