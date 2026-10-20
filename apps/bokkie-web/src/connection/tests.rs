@@ -486,3 +486,107 @@ fn refusals_and_unreadable_frames_are_counted_apart() {
         ]
     );
 }
+
+fn viewing(bot: Option<i64>) -> Command {
+    Command::Send(ClientFrame::Viewing {
+        bot_id: bot.map(bokkie_protocol::BotId),
+    })
+}
+
+fn renewal(renewal: u32) -> Command {
+    Command::RenewViewing {
+        renewal,
+        after: VIEWING_RENEW,
+    }
+}
+
+#[test]
+fn the_bot_shown_is_said_once_live_and_whenever_it_changes() {
+    let mut connection = Connection::new();
+    // Before the socket is live nothing is said, but the wish is kept.
+    assert!(
+        connection
+            .handle(Input::Viewing(Some(bokkie_protocol::BotId(1))))
+            .is_empty()
+    );
+    let _ = connection.handle(Input::Start);
+    let _ = connection.handle(Input::Opened);
+    assert_eq!(
+        frame(&mut connection, ServerFrame::Live { latest: Seq(4) }),
+        [Command::Reload, viewing(Some(1)), renewal(1)]
+    );
+    // The same Bot again says nothing.
+    assert!(
+        connection
+            .handle(Input::Viewing(Some(bokkie_protocol::BotId(1))))
+            .is_empty()
+    );
+    assert_eq!(
+        connection.handle(Input::Viewing(Some(bokkie_protocol::BotId(2)))),
+        [viewing(Some(2)), renewal(2)]
+    );
+    // None needs no renewal: the gateway forgets on its own.
+    assert_eq!(connection.handle(Input::Viewing(None)), [viewing(None)]);
+    assert!(
+        connection
+            .handle(Input::ViewingDue { renewal: 2 })
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_hidden_page_shows_no_bot_and_a_visible_one_shows_it_again() {
+    let mut connection = live(4);
+    let _ = connection.handle(Input::Viewing(Some(bokkie_protocol::BotId(1))));
+    assert_eq!(connection.handle(Input::Hidden), [viewing(None)]);
+    assert_eq!(connection.shown(), None);
+    // The application's wish still changes while hidden, unsaid.
+    assert!(
+        connection
+            .handle(Input::Viewing(Some(bokkie_protocol::BotId(3))))
+            .is_empty()
+    );
+    let commands = connection.handle(Input::Visible);
+    // The ping that checks a socket after the page was hidden comes first.
+    assert_eq!(&commands[2..], [viewing(Some(3)), renewal(2)]);
+}
+
+#[test]
+fn the_bot_shown_is_renewed_before_the_gateway_forgets_it() {
+    let mut connection = live(4);
+    assert_eq!(
+        connection.handle(Input::Viewing(Some(bokkie_protocol::BotId(1)))),
+        [viewing(Some(1)), renewal(1)]
+    );
+    assert_eq!(
+        connection.handle(Input::ViewingDue { renewal: 1 }),
+        [viewing(Some(1)), renewal(2)]
+    );
+    // A renewal overtaken by another is dropped.
+    assert!(
+        connection
+            .handle(Input::ViewingDue { renewal: 1 })
+            .is_empty()
+    );
+    // The renewal comes well inside the gateway's expiry.
+    assert!(VIEWING_RENEW < Duration::from_millis(bokkie_protocol::events::VIEWING_EXPIRES_MS) / 2);
+}
+
+#[test]
+fn a_new_socket_says_the_bot_shown_again() {
+    let mut connection = live(4);
+    let _ = connection.handle(Input::Viewing(Some(bokkie_protocol::BotId(1))));
+    let _ = connection.handle(Input::Closed { code: Some(1006) });
+    // A renewal for the closed socket does nothing.
+    assert!(
+        connection
+            .handle(Input::ViewingDue { renewal: 1 })
+            .is_empty()
+    );
+    let _ = connection.handle(Input::RetryDue);
+    let _ = connection.handle(Input::Opened);
+    assert_eq!(
+        frame(&mut connection, ServerFrame::Live { latest: Seq(4) }),
+        [viewing(Some(1)), renewal(2)]
+    );
+}

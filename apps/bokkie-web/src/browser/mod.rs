@@ -1,25 +1,28 @@
 //! The browser transport: `fetch` to the page's own origin for commands,
 //! with same-origin credentials so the session cookie travels and the
 //! browser adds the `Origin` header the gateway checks, and the event
-//! WebSocket ([`socket`]).
+//! WebSocket ([`socket`]), and Stobie's Web Push bridge for the device's
+//! notifications and app badge.
 
 mod socket;
 
 use stobie_ui_egui::IntentSender;
+use stobie_ui_egui::web_push::WebPush;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestCredentials, RequestInit, Response};
 
 use crate::BokkieIntent;
-use bokkie_protocol::Timestamp;
+use bokkie_protocol::{BotId, Timestamp};
 
 use crate::api::{Api, ApiRequest, Generation};
 
 /// Sends each command with `fetch` and reports its reply as an intent, and
-/// runs the event socket.
+/// runs the event socket and Web Push.
 pub struct BrowserApi {
     intents: IntentSender<BokkieIntent>,
     socket: socket::EventSocket,
+    push: WebPush,
 }
 
 impl std::fmt::Debug for BrowserApi {
@@ -32,6 +35,7 @@ impl BrowserApi {
     pub fn new(intents: IntentSender<BokkieIntent>) -> Self {
         Self {
             socket: socket::EventSocket::new(intents.clone()),
+            push: WebPush::start(intents.clone(), BokkieIntent::Push),
             intents,
         }
     }
@@ -56,6 +60,22 @@ impl Api for BrowserApi {
 
     fn disconnect_events(&self) {
         self.socket.stop();
+    }
+
+    fn set_viewing(&self, bot: Option<BotId>) {
+        self.socket.set_viewing(bot);
+    }
+
+    fn subscribe_push(&self, key: &str) {
+        self.push.subscribe(key);
+    }
+
+    fn unsubscribe_push(&self) {
+        self.push.unsubscribe();
+    }
+
+    fn set_app_badge(&self, count: u64) {
+        self.push.set_app_badge(count);
     }
 
     fn reload_page(&self) {

@@ -19,9 +19,17 @@
 //   nothing lost or repeated;
 // - shows a reply in Markdown, streamed with its link split across
 //   pieces, formatted, with the link a link that opens a new tab;
+// - switches notifications on for the device, through a stand-in push
+//   service: the subscription reaches the gateway, and no observation
+//   carries its endpoint;
 // - makes a routine in the Bot's settings and runs it now: the run
-//   succeeds in its history, and Show brings its marker and the mock's reply
-//   into view;
+//   succeeds in its history; its push is recorded for the one subscription
+//   (whose endpoint, on a loopback name, the gateway refuses to reach), the
+//   Bot is unread in the list and the badge counts it; Show brings its
+//   marker and the mock's reply into view, says the Bot is viewed, and
+//   marks it read;
+// - opens the Bot a tapped notification names, through the service
+//   worker's own route handling, then switches notifications off;
 // - shows the subscription meter and the limit-reached banner from windows
 //   the mock reports;
 // - has the admin invite a member, with permissions, from the accounts
@@ -36,7 +44,8 @@
 // - fails on any CSP violation, page error or console error;
 // - shows that no app server tried to reach any host but the mocks.
 //
-// It never calls a real model and never uses a real ChatGPT credential.
+// It never calls a real model, never uses a real ChatGPT credential and
+// never reaches a real push service.
 //
 // node smoke.mjs GATEWAY_BIN MOCK_BIN CODEX_BIN WEB_ROOT EVIDENCE_DIR
 import assert from 'node:assert/strict';
@@ -48,6 +57,7 @@ import { createServer, connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { chromium } from 'playwright';
 
 // The pinned Node, wherever this runs (directly, in CI or through a runner).
@@ -77,6 +87,14 @@ const PIECES = ['Kia ora! ', 'Here ', 'is ', 'a ', 'plan: ', 'Monday, ', 'a ', '
 const REPLY = PIECES.join('');
 const PIECE_MS = 200;
 const PASSWORD = `synthetic ${randomUUID()}`;
+// The stand-in push service's subscription. Its endpoint names a loopback
+// host, which the gateway refuses to send to; its keys are well-formed, as
+// the gateway requires, and belong to no device.
+const PUSH_ENDPOINT = 'https://localhost/push-stand-in/device-1';
+const PUSH_KEYS = {
+  p256dh: 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U',
+  auth: 'c21va2UtYXV0aC0xMjM0NQ',
+};
 const USERNAME = 'smoke';
 
 // Processes and servers to stop at the end.
@@ -207,14 +225,14 @@ class Automation {
     return nodes.map(({ node }) => node);
   }
   setText(id, text) { return this.invoke({ id, capability: 'stobie.set-text' }, text); }
-  // Scroll down with the mouse wheel, as a person does, until a control is
-  // in view and so presented.
-  async scrollTo(selector) {
+  // Scroll down (or up) with the mouse wheel, as a person does, until a
+  // control is in view and so presented.
+  async scrollTo(selector, by = 200) {
     for (let attempt = 0; attempt < 40; attempt++) {
       const { capabilities } = await this.request({ op: 'discover', selector, limit: 64 });
       if (capabilities.length > 0) return;
       await this.page.mouse.move(215, 600);
-      await this.page.mouse.wheel(0, 200);
+      await this.page.mouse.wheel(0, by);
       await wait(100);
     }
     throw new Error(`${JSON.stringify(selector)} never came into view`);
@@ -231,7 +249,9 @@ class Automation {
 }
 
 // Visible text the page's accessibility layer carries: aria-labels and leaf
-// text. Facts never carry content text, nor ever an invitation code.
+// text. Facts never carry content text, nor ever an invitation code, and
+// content text carries no control's label, so the code and controls are
+// read here; Bot text is read as content text.
 const pageTexts = page => page.evaluate(() => {
   const texts = new Set();
   for (const element of document.querySelectorAll('body *:not(style):not(script)')) {
@@ -243,6 +263,35 @@ const pageTexts = page => page.evaluate(() => {
   }
   return [...texts];
 });
+
+// The page's stand-ins for a push service and the app badge, as Stobie's
+// web-push smoke has them: subscribing records the call and keeps the
+// subscription across reloads, and badge calls are recorded. No push
+// service is asked for anything.
+function pushStandIn({ endpoint, keys }) {
+  const stored = () => JSON.parse(localStorage.getItem('push-stand-in') ?? 'null');
+  const subscription = value => value && Object.assign(Object.create(null), {
+    endpoint: value.endpoint, expirationTime: null,
+    toJSON: () => value,
+    unsubscribe: async () => { localStorage.removeItem('push-stand-in'); return true; },
+  });
+  window.__pushStandIn = { calls: [], badges: [] };
+  PushManager.prototype.subscribe = function (options) {
+    window.__pushStandIn.calls.push({
+      userVisibleOnly: options?.userVisibleOnly,
+      key_bytes: new Uint8Array(options?.applicationServerKey ?? []).length,
+    });
+    const value = { endpoint, expirationTime: null, keys };
+    localStorage.setItem('push-stand-in', JSON.stringify(value));
+    return Promise.resolve(subscription(value));
+  };
+  PushManager.prototype.getSubscription = function () { return Promise.resolve(subscription(stored())); };
+  Navigator.prototype.setAppBadge = function (count) { window.__pushStandIn.badges.push(count); return Promise.resolve(); };
+  Navigator.prototype.clearAppBadge = function () { window.__pushStandIn.badges.push(0); return Promise.resolve(); };
+}
+
+// The gateway's log without its colours.
+const plain = log => log.join('').replace(/\x1b\[[0-9;]*m/g, '');
 
 const scratch = await mkdtemp(join(tmpdir(), 'bokkie-smoke-'));
 let context;
@@ -305,6 +354,9 @@ try {
     PATH: process.env.PATH, HOME: scratch, BOKKIE_DATA: data, BOKKIE_ORIGIN: origin,
     BOKKIE_LISTEN: `127.0.0.1:${gatewayPort}`, BOKKIE_WEB_ROOT: webRoot, BOKKIE_CODEX_BIN: wrapper,
     BOKKIE_LOG: 'info',
+    // The gateway sends pushes, to the stand-in's loopback endpoint, which
+    // it refuses to reach.
+    BOKKIE_PUSH_CONTACT: 'mailto:smoke@example.invalid',
   };
   const bootstrap = start('bootstrap-admin', gatewayBin, ['bootstrap-admin', USERNAME, 'Smoke Admin'], { env });
   bootstrap.child.stdin.end(`${PASSWORD}\n`);
@@ -351,6 +403,10 @@ try {
   });
   report.browser = context.browser()?.version() ?? 'persistent context';
   const page = context.pages()[0] ?? await context.newPage();
+  // Notifications are allowed, as a person allows them when the switch
+  // asks, and the push service is the stand-in.
+  await context.grantPermissions(['notifications'], { origin });
+  await page.addInitScript(pushStandIn, { endpoint: PUSH_ENDPOINT, keys: PUSH_KEYS });
   const problems = [];
   // Failed requests are expected: the session check before signing in
   // (401), the dropped and refused connections, and a send refused beyond
@@ -376,7 +432,15 @@ try {
   // Every event frame the page receives, and which API responses the
   // service worker answered.
   const frames = [];
-  page.on('websocket', socket => socket.on('framereceived', frame => frames.push({ at: Date.now(), payload: String(frame.payload) })));
+  const sentFrames = [];
+  page.on('websocket', socket => {
+    socket.on('framereceived', frame => frames.push({ at: Date.now(), payload: String(frame.payload) }));
+    socket.on('framesent', frame => sentFrames.push(String(frame.payload)));
+  });
+  const viewingSent = () => sentFrames.map(payload => JSON.parse(payload)).filter(frame => frame.type === 'viewing')
+    .map(frame => frame.bot_id ?? null);
+  // What the page's own session holds at the gateway.
+  const pageApi = path => page.evaluate(async path => (await fetch(`/api/v1${path}`)).json(), path);
   const apiFromWorker = [];
   page.on('response', response => {
     if (new URL(response.url()).pathname.startsWith('/api/') && response.fromServiceWorker()) apiFromWorker.push(response.url());
@@ -439,6 +503,20 @@ try {
   assert.equal(notices.headers()['content-type'], 'text/plain; charset=utf-8');
   assert.match(await notices.text(), /^Third-party notices for Bokkie's web client/);
   step('installable', { manifest: manifest.url, service_worker: worker, icons: parsed.icons.length, notices: licence });
+
+  // Notifications on for this device: the switch subscribes with the
+  // gateway's key, and the subscription reaches the gateway once.
+  await app.until('the device checked', facts => facts.push === 'off' && facts.push_sending === true);
+  await app.scrollTo({ capability: 'bokkie.notifications' });
+  await app.action('bokkie.notifications');
+  const switchedOn = await app.until('notifications on', facts => facts.push === 'on' && facts.push_saved === true
+    && facts.push_error === '');
+  const pushCalls = await page.evaluate(() => window.__pushStandIn.calls);
+  assert.deepEqual(pushCalls, [{ userVisibleOnly: true, key_bytes: 65 }], 'one subscribe, with the gateway\'s key');
+  assert.deepEqual(await pageApi('/push/subscription'), { subscribed: true }, 'the gateway holds the subscription');
+  assert(!JSON.stringify(await app.request({ op: 'observe' })).includes('push-stand-in'), 'no observation carries the endpoint');
+  await app.scrollTo({ capability: 'bokkie.open-bot' }, -200);
+  step('notifications switched on', { push: switchedOn.push, saved: switchedOn.push_saved });
 
   // Open the Bot and send: the reply streams in several deltas.
   await app.action('bokkie.open-bot', bot.id);
@@ -522,7 +600,7 @@ try {
   const ariaLink = page.getByRole('link', { name: 'the guide', exact: true });
   assert.equal(await ariaLink.count(), 1, 'the accessibility layer presents the link');
   assert.equal(await ariaLink.getAttribute('aria-description'), 'Opens in a new tab');
-  const readTexts = await pageTexts(page);
+  const readTexts = await app.contents();
   assert(readTexts.includes('Read the notes in the guide.'), `the reply reads formatted: ${JSON.stringify(readTexts)}`);
   assert(!readTexts.some(text => text.includes('**') || text.includes('](')), 'no Markdown source on the page');
   step('Markdown reply with a link', { reply: formatted.reply, link: guide.value });
@@ -553,6 +631,27 @@ try {
   const ran = await app.until('the run to succeed', facts => facts.history === routine.id
     && facts.run_state === 'succeeded' && facts.run_messages >= 2, 60000);
   assert.equal(ran.runs, 1, 'one run in the history');
+  // The run's push was recorded and sent to the one subscription; the
+  // stand-in's endpoint is a loopback name, so the gateway refused to reach
+  // it and recorded the push as failed.
+  for (const deadline = Date.now() + 30000; !/sent a push .*cause="?run"? delivered=0 devices=1/.test(plain(gateway.log)); await wait(50)) {
+    assert(Date.now() < deadline, 'the run\'s push was sent');
+  }
+  assert.match(plain(gateway.log), /a push service refused a push .*service=localhost .*is not a public address/);
+  assert(!plain(gateway.log).includes('push-stand-in'), 'the gateway\'s log carries no endpoint');
+  const database = new DatabaseSync(join(data, 'bokkie.sqlite3'), { readOnly: true });
+  const pushes = database.prepare('SELECT bot_id, cause, routine_run_id, state FROM pushes').all();
+  const subscriptions = database.prepare('SELECT endpoint FROM push_subscriptions').all();
+  database.close();
+  assert.deepEqual(pushes.map(row => ({ ...row })), [{ bot_id: bot.id, cause: 'run', routine_run_id: ran.run, state: 'failed' }]);
+  assert.deepEqual(subscriptions.map(row => row.endpoint), [PUSH_ENDPOINT]);
+  // The Planner is unread, in the list and on the badge, while its
+  // settings show.
+  const unread = await app.until('the Planner unread', facts => facts.unread === String(bot.id) && facts.badge === 1);
+  assert.equal((await api('GET', `/bots/${bot.id}`, undefined, cookie)).body.unread, true);
+  assert.equal((await page.evaluate(() => window.__pushStandIn.badges)).at(-1), 1, 'the app badge says one');
+  assert.equal(viewingSent().at(-1), null, 'settings view no conversation');
+  step('routine push recorded and the Bot unread', { pushes, unread: unread.unread, badge: unread.badge });
   await app.action('bokkie.show-run', ran.run);
   const shown = await app.until('the run shown', facts => facts.screen === 'conversation'
     && facts.bot_status === 'idle' && facts.reply_state === 'complete', 30000);
@@ -571,6 +670,39 @@ try {
   assert.equal(runs.length, 1);
   assert.equal(runs[0].state, 'succeeded');
   step('routine made and run now', { routine: routine.id, run: ran.run, marker: shown.marker, run_messages: ran.run_messages });
+  // The conversation in view, with the page in the foreground, is viewed
+  // and read.
+  const read = await app.until('the Planner read', facts => facts.unread === '' && facts.badge === 0
+    && facts.bot_unread === false && facts.viewing === bot.id);
+  assert.equal((await api('GET', `/bots/${bot.id}`, undefined, cookie)).body.unread, false);
+  assert.equal((await page.evaluate(() => window.__pushStandIn.badges)).at(-1), 0, 'the app badge cleared');
+  assert.equal(viewingSent().at(-1), bot.id, 'the page says it views the Planner');
+  step('viewed and read', { read_up_to: read.read_up_to, viewing: viewingSent() });
+
+  // A tapped notification opens its Bot: Chromium cannot click a system
+  // notification under automation, so the worker's own openRoute, which its
+  // notificationclick handler calls, posts the route to the open page.
+  await app.action('bokkie.back');
+  await app.until('the list', facts => facts.screen === 'signed_in');
+  const serviceWorker = context.serviceWorkers().find(candidate => candidate.url() === `${origin}/sw.js`);
+  assert(serviceWorker, 'the service worker is running');
+  await serviceWorker.evaluate(route => openRoute(route), `${origin}/?bot=${bot.id}`);
+  await app.until('the routed Bot', facts => facts.screen === 'conversation' && facts.bot === bot.id
+    && facts.conversation === 'loaded');
+  step('tapped notification opened its Bot', { route: `/?bot=${bot.id}` });
+
+  // Notifications off: the device unsubscribes and the gateway forgets it.
+  await app.action('bokkie.back');
+  await app.until('the list', facts => facts.screen === 'signed_in');
+  await app.scrollTo({ capability: 'bokkie.notifications' });
+  await app.action('bokkie.notifications');
+  await app.until('notifications off', facts => facts.push === 'off' && facts.push_saved === false);
+  assert.deepEqual(await pageApi('/push/subscription'), { subscribed: false }, 'the gateway forgot the subscription');
+  assert.equal(await page.evaluate(() => localStorage.getItem('push-stand-in')), null, 'the device unsubscribed');
+  await app.scrollTo({ capability: 'bokkie.open-bot' }, -200);
+  await app.action('bokkie.open-bot', bot.id);
+  await app.until('the Planner once more', facts => facts.conversation === 'loaded' && facts.bot === bot.id);
+  step('notifications switched off');
 
   // Load older: a conversation longer than the newest page of 50 messages.
   // Its first 26 exchanges are sent over the API, each with a short reply.

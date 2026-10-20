@@ -136,7 +136,15 @@ open account's ID), `account_role`, `account_may_create_bots`,
 `account_daily_turns` (-1 for no limit), `account_saving`,
 `account_error`, `reset`, `member_bots`, `reading` (the Bot whose
 conversation is read under oversight) and `reading_count`; `time_zone` and
-`time_zone_error` for the account's time zone; `marker` (the latest
+`time_zone_error` for the account's time zone; for this device's
+notifications `push` (`off`, `subscribing`, `on`, `unsubscribing`,
+`denied` or `unsupported`, or empty until the device is read),
+`push_saved` (the gateway holds this sign-in's subscription),
+`push_sending` (the gateway sends pushes) and `push_error`, never the
+subscription's endpoint or keys; `badge` (the app badge's count),
+`viewing` (the Bot this device says it shows, 0 for none), `unread_bots`,
+`unread` (the unread Bots' IDs, comma-separated), `bot_unread` and
+`read_up_to` for the open Bot; `marker` (the latest
 marker's text), `showing` and `showing_error` for a routine run brought into
 view; and for a Bot's settings (`screen` is `bot_settings`) `grants`,
 `notes`, `notes_chars`, `notes_clear`, `tool_calls`, `tool_calls_state`,
@@ -165,7 +173,16 @@ and act on one routine with `bokkie.edit-routine`, `bokkie.pause-routine`,
 `bokkie.run-routine`, `bokkie.delete-routine` and `bokkie.routine-history`
 with `--value ROUTINE_ID`; `bokkie.show-run --value RUN_ID` closes the
 settings and brings that run's marker into view. The account's time zone
-is set below the Bot list, with `stobie set-text bokkie.time-zone`. Times
+is set below the Bot list, with `stobie set-text bokkie.time-zone`, and
+`stobie invoke bokkie.notifications`, below it, switches this device's
+notifications on or off. The switch subscribes through Stobie's Web Push
+bridge with the gateway's key and sends the subscription; each launch sends
+it again, and switching off or signing out unsubscribes the device. While a
+conversation shows with the page in the foreground, the client tells the
+gateway it views that Bot (the event socket's `viewing`), so its pushes are
+not sent, and moves the Bot's read marker to its newest message. Unread
+Bots say so in the list, and the app badge counts them, hidden ones
+included. A tapped notification opens its Bot. Times
 show in the account's own time zone, in the browser's locale. Stobie offers no `set-text` on
 the password field, so type into it with the keyboard. Bots
 reply only while the household is signed in to ChatGPT (see
@@ -192,8 +209,15 @@ checks:
   the link presented as a link that opens a new tab;
 - a conversation longer than one page opens on its newest 50 messages, and
   loading the older ones while a reply streams leaves both whole;
+- the notifications switch subscribes the device through a stand-in push
+  service, and the gateway holds the subscription, whose endpoint no
+  observation and no log line carries;
 - a routine made in the Bot's settings and run now succeeds in its
-  history, and showing the run brings its marker and reply into view;
+  history; its push is recorded and sent to that one subscription; the
+  Bot shows unread and the app badge counts it; showing the run brings its
+  marker and reply into view, says the Bot is viewed and marks it read;
+- the route of a tapped notification opens its Bot, and switching
+  notifications off unsubscribes the device and the gateway forgets it;
 - the subscription meter and the limit-reached banner show;
 - the admin invites a member from the accounts screen, with permissions,
   and the member joins with the code in a second browser context and sees
@@ -229,6 +253,15 @@ request leaves the machine:
   refreshed. The gateway itself has no test seam: it starts app servers
   with a cleared environment, and nothing in its configuration reaches
   them.
+- Push services are never asked for anything. The page's
+  `PushManager.subscribe` and `getSubscription`, and its app badge, are
+  stand-ins, as in Stobie's web-push smoke. The stand-in's endpoint names
+  `localhost`, a loopback address, which the gateway refuses to send to
+  (it reaches only public addresses), so the gateway records the push as
+  failed; the smoke reads that record from the data directory's database.
+  Chromium cannot click a system notification under automation, so the
+  service worker's own route handling, which its click handler calls,
+  stands in for the tap.
 - The mocks are the gateway tests' own, `crates/bokkie-mock-model`. Its
   binary streams a reply piece by piece and reports subscription windows
   in the `x-codex-*` headers that Codex reads, and serves the authority and
