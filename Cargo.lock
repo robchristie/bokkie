@@ -5113,7 +5113,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "stobie-core"
 version = "0.1.6"
-source = "git+https://github.com/robchristie/stobie?rev=8bae37cef7049595506837ac245dea51270fc30c#8bae37cef7049595506837ac245dea51270fc30c"
+source = "git+https://github.com/robchristie/stobie?rev=45ce41b3f8eaab7cb100bf1f7122b20b83a1c3c2#45ce41b3f8eaab7cb100bf1f7122b20b83a1c3c2"
 dependencies = [
  "serde",
  "serde_json",
@@ -5123,7 +5123,7 @@ dependencies = [
 [[package]]
 name = "stobie-protocol"
 version = "0.1.6"
-source = "git+https://github.com/robchristie/stobie?rev=8bae37cef7049595506837ac245dea51270fc30c#8bae37cef7049595506837ac245dea51270fc30c"
+source = "git+https://github.com/robchristie/stobie?rev=45ce41b3f8eaab7cb100bf1f7122b20b83a1c3c2#45ce41b3f8eaab7cb100bf1f7122b20b83a1c3c2"
 dependencies = [
  "emath",
  "serde",
@@ -5134,7 +5134,7 @@ dependencies = [
 [[package]]
 name = "stobie-ui-egui"
 version = "0.1.6"
-source = "git+https://github.com/robchristie/stobie?rev=8bae37cef7049595506837ac245dea51270fc30c#8bae37cef7049595506837ac245dea51270fc30c"
+source = "git+https://github.com/robchristie/stobie?rev=45ce41b3f8eaab7cb100bf1f7122b20b83a1c3c2#45ce41b3f8eaab7cb100bf1f7122b20b83a1c3c2"
 dependencies = [
  "console_error_panic_hook",
  "eframe",
@@ -5155,7 +5155,7 @@ dependencies = [
 [[package]]
 name = "stobie-ui-egui-derive"
 version = "0.1.6"
-source = "git+https://github.com/robchristie/stobie?rev=8bae37cef7049595506837ac245dea51270fc30c#8bae37cef7049595506837ac245dea51270fc30c"
+source = "git+https://github.com/robchristie/stobie?rev=45ce41b3f8eaab7cb100bf1f7122b20b83a1c3c2#45ce41b3f8eaab7cb100bf1f7122b20b83a1c3c2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6392,7 +6392,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
