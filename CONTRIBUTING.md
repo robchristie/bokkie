@@ -336,7 +336,10 @@ against the new version. To move it:
    that the gateway's configuration and model catalog leave every Codex
    tool off, that a thread offers exactly the Bokkie tools of its grants,
    and that a tool call reaches the gateway's broker, and their control test
-   must still see the unsafe tools, so the capture is known to work. `live_household.rs`
+   must still see the unsafe tools, so the capture is known to work.
+   `live_search.rs` proves which web search path each kind of model
+   offers a `web.search` thread; read its output and update
+   [docs/gateway.md](docs/gateway.md#web-search) if that changed. `live_household.rs`
    proves the shared household sign-in against the new version's refresh,
    reload and sign-out behaviour, and records what it does on a repeated
    401 and on two simultaneous refreshes; read its output and update

@@ -331,6 +331,135 @@ async fn a_web_search_without_web_search_stops_codex() {
     assert!(!reason.contains("private"), "{reason}");
 }
 
+/// Gives rob's Bot `web.search` in the database: the API cannot grant it
+/// yet.
+async fn searching(gateway: &Gateway, bot: i64) {
+    store::set_grants(
+        &gateway.state.db,
+        gateway.state.clock.now(),
+        UserId(1),
+        BotId(bot),
+        &[Grant::WebSearch].into(),
+    )
+    .await
+    .unwrap();
+}
+
+/// A web search item on `thread`, as the app server reports it.
+fn search_item(
+    gateway: &Gateway,
+    method: &str,
+    thread: &str,
+    id: &str,
+    query: &str,
+    action: Value,
+) {
+    gateway.fake.inject(
+        UserId(1),
+        json!({"method": method, "params": {"threadId": thread, "turnId": "turn-s",
+            "item": {"type": "webSearch", "id": id, "query": query, "action": action,
+                     "results": null}}}),
+    );
+}
+
+#[tokio::test]
+async fn a_web_search_on_a_web_search_bot_is_logged_and_kept_out_of_the_conversation() {
+    let (gateway, rob) = setup().await;
+    let bot = create_bot(&gateway, &rob, "Scout", json!([])).await;
+    searching(&gateway, bot).await;
+    let thread = thread(&gateway, &rob, 1, bot).await;
+    // Codex reports a hosted search as it starts, without its query, and
+    // again when it completes.
+    search_item(&gateway, "item/started", &thread, "ws-1", "", Value::Null);
+    search_item(
+        &gateway,
+        "item/completed",
+        &thread,
+        "ws-1",
+        "new RLHF papers",
+        json!({"type": "search", "query": "new RLHF papers"}),
+    );
+    search_item(
+        &gateway,
+        "item/completed",
+        &thread,
+        "ws-2",
+        "",
+        json!({"type": "openPage", "url": "https://example.org/paper"}),
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let logged = loop {
+        let logged = calls(&gateway, 1, bot).await;
+        if logged.len() == 2 {
+            break logged;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{logged:?}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert!(gateway.state.supervisor.tainted().is_none());
+    assert_eq!(logged[1].tool, "web_search");
+    assert_eq!(logged[1].summary, "search new RLHF papers");
+    assert_eq!(logged[1].outcome, ToolCallOutcome::Ok);
+    assert_eq!(logged[0].tool, "web_search");
+    assert_eq!(logged[0].summary, "open https://example.org/paper");
+    assert_eq!(logged[0].outcome, ToolCallOutcome::Ok);
+    // The owner reads them like any call.
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{bot}/tool-calls")).cookie(&rob))
+        .await;
+    assert_eq!(page.body["calls"][1]["summary"], "search new RLHF papers");
+    // The conversation holds only the exchange.
+    let messages = gateway
+        .send(Call::get(&format!("/api/v1/bots/{bot}/messages")).cookie(&rob))
+        .await;
+    let messages = messages.body["messages"].as_array().unwrap().clone();
+    assert!(
+        messages
+            .iter()
+            .all(|m| !m.to_string().contains("RLHF") && !m.to_string().contains("example.org")),
+        "{messages:?}"
+    );
+    assert!(messages.iter().all(|m| m["kind"] == "text"), "{messages:?}");
+}
+
+#[tokio::test]
+async fn a_bot_that_lost_web_search_still_has_a_thread_that_holds_it_until_its_next_turn() {
+    // The thread's grants decide, as for Bokkie's own tools: a search on a
+    // thread started with web.search is allowed even after the Bot lost
+    // the grant, since that turn began with it; the next turn starts a
+    // fresh thread without it.
+    let (gateway, rob) = setup().await;
+    let bot = create_bot(&gateway, &rob, "Scout", json!([])).await;
+    searching(&gateway, bot).await;
+    let thread = thread(&gateway, &rob, 1, bot).await;
+    let removed = gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/bots/{bot}"))
+                .cookie(&rob)
+                .json(&json!({"grants": []})),
+        )
+        .await;
+    assert_eq!(removed.status, StatusCode::OK);
+    search_item(
+        &gateway,
+        "item/completed",
+        &thread,
+        "ws-1",
+        "q",
+        json!({"type": "search", "query": "q"}),
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while calls(&gateway, 1, bot).await.is_empty() {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(gateway.state.supervisor.tainted().is_none());
+    assert_eq!(
+        calls(&gateway, 1, bot).await[0].outcome,
+        ToolCallOutcome::Ok
+    );
+}
+
 #[tokio::test]
 async fn a_call_from_a_thread_with_no_bot_is_answered_with_an_error() {
     let (gateway, rob) = setup().await;

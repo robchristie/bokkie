@@ -405,6 +405,130 @@ async fn a_thread_offers_exactly_its_bots_grants() {
     }
 }
 
+/// Gives rob's Bot these grants in the database, past the API's rules.
+async fn hold(gateway: &Gateway, bot: i64, grants: &[Grant]) {
+    store::set_grants(
+        &gateway.state.db,
+        gateway.state.clock.now(),
+        UserId(1),
+        BotId(bot),
+        &grants.iter().copied().collect(),
+    )
+    .await
+    .unwrap();
+}
+
+/// Crashes the user's app server and waits until the gateway sees it.
+async fn crash(gateway: &Gateway, user: i64) {
+    gateway.fake.crash(UserId(user));
+    let crashed = gateway
+        .state
+        .supervisor
+        .running(UserId(user))
+        .await
+        .unwrap();
+    // Wake the watcher so it sees the closed stream.
+    let _ = crashed.rate_limits().await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while crashed.is_alive() {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// The request among `requests` that names `thread`.
+fn thread_of(requests: &[common::fake_codex::Received], thread: &str) -> Value {
+    requests
+        .iter()
+        .find(|r| r.params["threadId"] == thread)
+        .unwrap_or_else(|| panic!("no request for {thread}"))
+        .params
+        .clone()
+}
+
+#[tokio::test]
+async fn only_a_web_search_bots_threads_turn_web_search_on_at_every_start_and_resume() {
+    let (gateway, rob) = setup().await;
+    let bare = create_bot(&gateway, &rob, "Bare").await;
+    let scribe = create_bot(&gateway, &rob, "Scribe").await;
+    set_grants(&gateway, &rob, scribe, json!(["notes", "seen"])).await;
+    // web.search cannot be granted through the API yet; a Bot holding it
+    // is made in the database.
+    let scout = create_bot(&gateway, &rob, "Scout").await;
+    hold(&gateway, scout, &[Grant::WebSearch]).await;
+    let digest = create_bot(&gateway, &rob, "Digest").await;
+    hold(
+        &gateway,
+        digest,
+        &[Grant::Seen, Grant::WebSearch, Grant::Notes],
+    )
+    .await;
+    let bots = [bare, scribe, scout, digest];
+    for bot in bots {
+        say(&gateway, &rob, bot, "hi").await;
+        idle(&gateway, &rob, bot).await;
+    }
+    let live = json!({"web_search": "live"});
+    let starts = gateway.fake.received("thread/start");
+    assert_eq!(starts.len(), 4);
+    assert_eq!(starts[0].params.get("config"), None, "no grants");
+    assert_eq!(starts[1].params.get("config"), None, "notes and seen");
+    assert_eq!(starts[2].params["config"], live);
+    assert_eq!(starts[3].params["config"], live);
+    // Web search is Codex's own, not a Bokkie tool, and the instructions
+    // describe it.
+    assert_eq!(starts[2].params.get("dynamicTools"), None);
+    assert_eq!(tool_names(&starts[3].params).len(), 5);
+    for (start, searches) in starts.iter().zip([false, false, true, true]) {
+        let instructions = start.params["developerInstructions"].as_str().unwrap();
+        assert_eq!(
+            instructions.contains("Web search: you can search the live web"),
+            searches,
+            "{instructions}"
+        );
+        assert_eq!(start.params["permissions"], "bokkie");
+    }
+    let threads: Vec<String> = {
+        let mut threads = Vec::new();
+        for bot in bots {
+            let row = store::bot(&gateway.state.db, UserId(1), BotId(bot))
+                .await
+                .unwrap()
+                .unwrap();
+            threads.push(row.thread_id.unwrap());
+        }
+        threads
+    };
+
+    // Codex keeps the override only while a thread is loaded, so a cold
+    // resume sends it again, and only for the web.search Bots.
+    crash(&gateway, 1).await;
+    for bot in bots {
+        say(&gateway, &rob, bot, "again").await;
+        idle(&gateway, &rob, bot).await;
+    }
+    let resumes = gateway.fake.received("thread/resume");
+    assert_eq!(resumes.len(), 4);
+    assert_eq!(gateway.fake.received("thread/start").len(), 4);
+    assert_eq!(thread_of(&resumes, &threads[0]).get("config"), None);
+    assert_eq!(thread_of(&resumes, &threads[1]).get("config"), None);
+    assert_eq!(thread_of(&resumes, &threads[2])["config"], live);
+    assert_eq!(thread_of(&resumes, &threads[3])["config"], live);
+
+    // Losing the grant starts a fresh thread without it; gaining it, one
+    // with it.
+    set_grants(&gateway, &rob, scout, json!([])).await;
+    hold(&gateway, bare, &[Grant::WebSearch]).await;
+    say(&gateway, &rob, scout, "and now?").await;
+    idle(&gateway, &rob, scout).await;
+    say(&gateway, &rob, bare, "and now?").await;
+    idle(&gateway, &rob, bare).await;
+    let starts = gateway.fake.received("thread/start");
+    assert_eq!(starts.len(), 6);
+    assert_eq!(starts[4].params.get("config"), None);
+    assert_eq!(starts[5].params["config"], live);
+}
+
 #[tokio::test]
 async fn a_grant_change_starts_a_fresh_thread_with_the_conversation_carried_over() {
     let (gateway, rob) = setup().await;

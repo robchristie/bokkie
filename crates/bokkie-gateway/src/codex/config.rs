@@ -14,8 +14,19 @@
 //! Neither alone is enough. The live test in `tests/live_codex.rs` proves
 //! the combination by capturing the tools that the app server actually
 //! offers a model.
+//!
+//! The one exception is web search, for a Bot granted `web.search`: its
+//! threads alone turn Codex's web search on, through the per-thread
+//! override in [`thread_overrides`]. The app server's own setting stays
+//! `disabled`, so a thread started or resumed without the override has
+//! none.
 
 use std::path::Path;
+
+use bokkie_protocol::api::Grant;
+use serde_json::{Map, Value};
+
+use crate::grants::GrantSet;
 
 /// The permission profile every thread must run under.
 pub const PROFILE: &str = "bokkie";
@@ -50,7 +61,30 @@ pub const DISABLED_FEATURES: &[&str] = &[
     "memories",
     "realtime_conversation",
     "use_agent_identity",
+    // Codex's own `web.run` search tool, on every model while web search
+    // is on. Responses-Lite models offer it anyway, by their catalog entry
+    // (see docs/gateway.md, "Web search").
+    "standalone_web_search",
 ];
+
+/// The web search mode of a thread granted `web.search`: search that
+/// reaches the live web. Codex runs it through the model provider, either
+/// as the provider's hosted tool or as its own `web.run`, which asks the
+/// provider's search endpoint; the app server reaches no other host.
+pub const WEB_SEARCH_MODE: &str = "live";
+
+/// The per-thread configuration overrides for a thread with these grants,
+/// sent on its `thread/start` and on every `thread/resume`: Codex keeps
+/// them only while the thread is loaded, and a resumed thread without them
+/// falls back to the app server's `web_search = "disabled"`. Only
+/// `web.search` sets any.
+pub fn thread_overrides(grants: &GrantSet) -> Option<Map<String, Value>> {
+    grants.contains(&Grant::WebSearch).then(|| {
+        let mut overrides = Map::new();
+        overrides.insert("web_search".into(), Value::from(WEB_SEARCH_MODE));
+        overrides
+    })
+}
 
 /// Where Codex keeps the ChatGPT sign-in: in `auth.json`, so that the
 /// household's file and the links to it are what every app server uses,
@@ -122,6 +156,32 @@ mod tests {
                 "{feature}"
             );
         }
+    }
+
+    #[test]
+    fn only_web_search_turns_web_search_on_for_its_threads() {
+        assert_eq!(thread_overrides(&GrantSet::new()), None);
+        for grant in Grant::ALL {
+            let alone = thread_overrides(&[grant].into());
+            if grant == Grant::WebSearch {
+                let overrides = alone.expect("web.search sets the mode");
+                assert_eq!(
+                    Value::Object(overrides),
+                    serde_json::json!({"web_search": "live"})
+                );
+            } else {
+                assert_eq!(alone, None, "{grant}");
+            }
+        }
+        let every: GrantSet = Grant::ALL.into();
+        assert_eq!(
+            thread_overrides(&every).map(Value::Object),
+            Some(serde_json::json!({"web_search": "live"}))
+        );
+        // The app server's own setting stays off.
+        let text = render(Path::new("/data"), Path::new("/data/codex/models.json"));
+        assert!(text.contains("web_search = \"disabled\"\n"));
+        assert!(text.contains("\nstandalone_web_search = false\n"));
     }
 
     #[test]

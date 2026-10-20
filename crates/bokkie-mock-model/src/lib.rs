@@ -16,6 +16,14 @@
 //! `x-codex-*` headers that Codex reads from the real API. A test can also
 //! script the model to call a tool ([`MockModel::call_tool_next`]): that
 //! request is answered with a function call instead of the reply.
+//!
+//! It stands in for both of Codex's web search paths, so that nothing
+//! reaches the web: a hosted search, which the provider runs within its
+//! response ([`MockModel::search_hosted_next`]), and the standalone search
+//! endpoint that Codex's own `web.run` tool calls (`alpha/search`), whose
+//! requests it records in [`MockModel::searches`]. Its provider declares
+//! standalone search support, as OpenAI's does, so an app server offers a
+//! model what it would offer one of OpenAI's.
 
 pub mod chatgpt;
 
@@ -54,14 +62,24 @@ pub struct MockModel {
     /// Tool calls to answer the next requests with, in order, instead of
     /// the reply.
     pub tool_calls: Arc<Mutex<VecDeque<ToolCall>>>,
+    /// Queries of hosted web searches to begin the next replies with, in
+    /// order.
+    pub hosted_searches: Arc<Mutex<VecDeque<String>>>,
+    /// Every request to the standalone search endpoint, in order.
+    pub searches: Arc<Mutex<Vec<Value>>>,
 }
 
 /// A function call the model makes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolCall {
     pub name: String,
+    /// The tool's namespace, if it has one, such as `web` for `web.run`.
+    pub namespace: Option<String>,
     pub arguments: Value,
 }
+
+/// What the standalone search endpoint answers.
+pub const SEARCH_OUTPUT: &str = "Mock search result: nothing was searched.";
 
 /// Decides whether a bearer token may call the model.
 pub type Authorizer = Arc<dyn Fn(Option<&str>) -> bool + Send + Sync>;
@@ -127,8 +145,24 @@ impl MockModel {
     pub fn call_tool_next(&self, name: &str, arguments: Value) {
         self.tool_calls.lock().unwrap().push_back(ToolCall {
             name: name.into(),
+            namespace: None,
             arguments,
         });
+    }
+
+    /// The same, for a tool in a namespace, such as Codex's `web.run`.
+    pub fn call_namespaced_tool_next(&self, namespace: &str, name: &str, arguments: Value) {
+        self.tool_calls.lock().unwrap().push_back(ToolCall {
+            name: name.into(),
+            namespace: Some(namespace.into()),
+            arguments,
+        });
+    }
+
+    /// Begins the next reply not yet scripted with a completed hosted web
+    /// search for `query`, as a provider that ran one reports it.
+    pub fn search_hosted_next(&self, query: &str) {
+        self.hosted_searches.lock().unwrap().push_back(query.into());
     }
 
     /// The tools one request offered, by name, as
@@ -155,10 +189,12 @@ impl MockModel {
         *self.reply.lock().unwrap() = pieces;
     }
 
-    /// The Responses API route, for serving alongside other routes.
+    /// The Responses API route and the standalone search endpoint, for
+    /// serving alongside other routes.
     pub fn router(&self) -> Router {
         Router::new()
             .route("/v1/responses", post(respond))
+            .route("/v1/alpha/search", post(search))
             .with_state(self.clone())
     }
 
@@ -179,6 +215,7 @@ impl MockModel {
             "model_providers.bokkie_mock.wire_api=\"responses\"".into(),
             "model_providers.bokkie_mock.requires_openai_auth=false".into(),
             "model_providers.bokkie_mock.supports_websockets=false".into(),
+            "model_providers.bokkie_mock.supports_standalone_web_search=true".into(),
         ]
     }
 
@@ -246,8 +283,12 @@ fn collect(tools: &Value, names: &mut BTreeSet<String>) {
 /// A response whose only output is a call of `call`.
 fn function_call(call: &ToolCall) -> Response {
     let item = |arguments: &str| {
-        json!({"type": "function_call", "id": "fc-1", "call_id": "call-1",
-               "name": call.name, "arguments": arguments, "status": "completed"})
+        let mut item = json!({"type": "function_call", "id": "fc-1", "call_id": "call-1",
+               "name": call.name, "arguments": arguments, "status": "completed"});
+        if let Some(namespace) = &call.namespace {
+            item["namespace"] = json!(namespace);
+        }
+        item
     };
     let events = [
         json!({"type": "response.created", "response": {"id": "resp-call"}}),
@@ -316,11 +357,18 @@ async fn respond(
     let delay = *mock.piece_delay.lock().unwrap();
     let rate_limits = mock.rate_limits.lock().unwrap().clone();
     let text: String = reply.concat();
-    let opening = [
-        json!({"type": "response.created", "response": {"id": "resp-1"}}),
-        json!({"type": "response.output_item.added", "item": {
-            "type": "message", "role": "assistant", "id": "msg-1", "content": []}}),
-    ];
+    let mut opening = vec![json!({"type": "response.created", "response": {"id": "resp-1"}})];
+    // A hosted search runs before the reply, within the same response.
+    let hosted = mock.hosted_searches.lock().unwrap().pop_front();
+    if let Some(query) = hosted {
+        let searching = json!({"type": "web_search_call", "id": "ws_1", "status": "in_progress"});
+        let searched = json!({"type": "web_search_call", "id": "ws_1", "status": "completed",
+                              "action": {"type": "search", "query": query}});
+        opening.push(json!({"type": "response.output_item.added", "item": searching}));
+        opening.push(json!({"type": "response.output_item.done", "item": searched}));
+    }
+    opening.push(json!({"type": "response.output_item.added", "item": {
+        "type": "message", "role": "assistant", "id": "msg-1", "content": []}}));
     let closing = [
         json!({"type": "response.output_item.done", "item": {
             "type": "message", "role": "assistant", "id": "msg-1",
@@ -359,4 +407,13 @@ async fn respond(
         );
     }
     response
+}
+
+/// The standalone search endpoint that Codex's `web.run` tool calls. It
+/// records the request and answers with [`SEARCH_OUTPUT`], searching
+/// nothing.
+async fn search(State(mock): State<MockModel>, body: axum::body::Bytes) -> Response {
+    let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    mock.searches.lock().unwrap().push(request);
+    axum::Json(json!({"output": SEARCH_OUTPUT, "results": []})).into_response()
 }

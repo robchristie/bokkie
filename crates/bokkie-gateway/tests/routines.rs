@@ -704,6 +704,10 @@ async fn one_run_per_routine_at_a_time() {
     )
     .await;
     let id = hourly["id"].as_i64().unwrap();
+    // Run it ten minutes before it falls due, so that the pass at the due
+    // time is within the run's 15-minute deadline and does not race its
+    // interrupt.
+    set_clock(&gateway, 20 * MINUTE_MS);
     let first = run_now(&gateway, &rob, chef, id).await;
     assert_eq!(first.body["state"], "running", "{:?}", first.body);
     // Asked for again while it runs: skipped.

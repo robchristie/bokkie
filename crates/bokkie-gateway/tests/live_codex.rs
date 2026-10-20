@@ -6,8 +6,9 @@
 //!
 //! This is the proof of the capability rule: the gateway's configuration
 //! leaves every Codex tool off, and a thread offers exactly the Bokkie
-//! tools of its grants. It captures the tools the app server actually
-//! offers a model.
+//! tools of its grants, with Codex's web search only on a thread granted
+//! `web.search`. It captures the tools the app server actually offers a
+//! model. `tests/live_search.rs` follows web search further.
 
 mod common;
 
@@ -28,12 +29,37 @@ use common::live::Live;
 /// answers with an error.
 const ALWAYS_OFFERED: &str = "request_user_input";
 
-/// Exactly what a thread with these grants may offer the model.
+/// Exactly what a thread with these grants may offer the model on the
+/// default model. Its web search is Codex's `web.run` (see
+/// `tests/live_search.rs`), which the capture names `run`.
 fn expected_tools(grants: &GrantSet) -> std::collections::BTreeSet<String> {
+    let search = grants.contains(&Grant::WebSearch).then(|| "run".to_owned());
     bokkie_gateway::tools::granted(grants)
         .map(|tool| tool.name.to_owned())
         .chain([ALWAYS_OFFERED.to_owned()])
+        .chain(search)
         .collect()
+}
+
+/// Whether a model request offered Codex's `web.run` tool, and whether it
+/// offered a hosted `web_search` tool. A Responses-Lite request carries its
+/// tools in an `additional_tools` input item.
+fn search_tools(request: &serde_json::Value) -> (bool, bool) {
+    let mut tools = request["tools"].as_array().cloned().unwrap_or_default();
+    for item in request["input"].as_array().into_iter().flatten() {
+        if item["type"] == "additional_tools" {
+            tools.extend(item["tools"].as_array().cloned().unwrap_or_default());
+        }
+    }
+    let standalone = tools.iter().any(|tool| {
+        tool["type"] == "namespace"
+            && tool["name"] == "web"
+            && tool["tools"]
+                .as_array()
+                .is_some_and(|nested| nested.iter().any(|t| t["name"] == "run"))
+    });
+    let hosted = tools.iter().any(|tool| tool["type"] == "web_search");
+    (standalone, hosted)
 }
 
 type Events = tokio::sync::mpsc::UnboundedReceiver<bokkie_gateway::codex::RuntimeEvent>;
@@ -102,6 +128,12 @@ async fn capture(
     assert_eq!(status, TurnStatus::Completed);
     let requests = mock.requests.lock().unwrap();
     assert_eq!(requests.len(), asked + 1, "one model request per turn");
+    // Web search is Codex's web.run, on exactly the web.search threads.
+    assert_eq!(
+        search_tools(&requests[asked]),
+        (grants.contains(&Grant::WebSearch), false),
+        "grants {grants:?}"
+    );
     (MockModel::tools_in(&requests[asked]), text)
 }
 
@@ -116,21 +148,28 @@ async fn the_real_app_server_offers_exactly_the_granted_tools() {
     let user = UserId(1);
     let runtime = supervisor.runtime(user).await.expect("the checks pass");
     // Every grant with tools today, alone and together, and none.
-    let combinations: Vec<GrantSet> = vec![
-        GrantSet::new(),
-        [Grant::Notes].into(),
-        [Grant::Seen].into(),
-        [Grant::Notes, Grant::Seen].into(),
-    ];
+    let with_tools = [Grant::Notes, Grant::Seen, Grant::WebSearch];
+    let combinations: Vec<GrantSet> = (0..(1u32 << with_tools.len()))
+        .map(|bits| {
+            with_tools
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| bits & (1 << i) != 0)
+                .map(|(_, g)| *g)
+                .collect()
+        })
+        .collect();
     for grants in &combinations {
         let (offered, text) = capture(&runtime, &mut events, mock, grants).await;
         eprintln!("grants {grants:?}: offered {offered:?}");
         assert_eq!(text, "Hello from a mock");
         // The capture sees the always-offered tool, so it works, and
-        // nothing else but the grants' tools.
+        // nothing else but the grants' tools and, for web.search, Codex's
+        // web search.
         assert_eq!(offered, expected_tools(grants), "grants {grants:?}");
     }
-    // The grants whose tools do not exist yet offer nothing.
+    // The grants whose tools do not exist yet offer nothing of Bokkie's;
+    // web.search brings Codex's own search instead.
     for grant in [Grant::Notify, Grant::WebSearch, Grant::WebFetch] {
         assert_eq!(bokkie_gateway::tools::granted(&[grant].into()).count(), 0);
     }
