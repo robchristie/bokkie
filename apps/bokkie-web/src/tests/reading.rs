@@ -316,7 +316,7 @@ fn agents_find_each_bots_row_and_only_bots_that_are_listed() {
         .collect();
     assert_eq!(rows, [serde_json::json!(1)], "one binding per row");
     assert_eq!(
-        fixture.node("Open Tutor").argument,
+        fixture.row("Tutor").expect("the row").argument,
         Some(serde_json::json!(1))
     );
 
@@ -348,13 +348,13 @@ fn agents_find_each_bots_row_and_only_bots_that_are_listed() {
 fn a_bot_that_leaves_the_list_loses_its_row() {
     let mut fixture = Fixture::new();
     fixture.signed_in_and_live(7);
-    assert!(fixture.shows("Open Tutor"));
-    fixture.click("Refresh");
+    assert!(fixture.lists("Tutor"));
+    fixture.click("Refresh Bots");
     fixture.reply(ApiReply::Bots(Ok(BotList {
         bots: Vec::new(),
         ..tutor_list(BotStatus::Idle, 8)
     })));
-    assert!(!fixture.shows("Open Tutor"));
+    assert!(!fixture.lists("Tutor"));
     assert!(
         fixture
             .discover(BokkieAction::OpenBot)

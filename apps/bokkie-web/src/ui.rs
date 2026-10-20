@@ -1,6 +1,8 @@
 //! The application's presentation: sign-in on a page of its own, and once
-//! signed in Stobie's navigation recipe (see `navigation`), whose panes hold
-//! plain stand-ins (settled decision 3), each control on a row of its own.
+//! signed in Stobie's navigation recipe (see `navigation`). The Bot list is
+//! Stobie's conversation rows, with each Bot's avatar from `avatars`; the
+//! other panes still hold plain stand-ins (settled decision 3), each control
+//! on a row of its own.
 
 use std::collections::BTreeSet;
 
@@ -11,10 +13,12 @@ use bokkie_protocol::api::{
 };
 use stobie_ui_egui::local_time::LocalTime;
 use stobie_ui_egui::{
-    ActionEmphasis, BoundAction, ContentTextSpec, DomainReference, Frame, IconId, LinkSpec,
-    MarkdownSpec, NativeTextControlKind, NavigationContent, NavigationDetail, NavigationPane,
-    NavigationSpec, PresentationContext, PresentationScope, ReadingTextSpec, SemanticUiId,
-    TextInteraction, TextOverflow, TextRole, UiNode, UiRole, observe_visible_only,
+    ActionArgument, ActionEmphasis, AvatarSize, AvatarSpec, BoundAction, ContentTextSpec,
+    ConversationRowSpec, DomainReference, Frame, IconId, LinkSpec, ListRowSpec, MarkdownSpec,
+    NativeTextControlKind, NavigationContent, NavigationDetail, NavigationPane, NavigationSpec,
+    PresentationContext, PresentationScope, ReadingTextSpec, SemanticUiId, SwitchSpec,
+    TextInteraction, TextOverflow, TextRole, UiNode, UiRole, avatar_size, observe_visible_only,
+    paint_avatar,
 };
 
 use crate::app::{
@@ -23,6 +27,7 @@ use crate::app::{
     ProfileEditor, Session, SignInForm, SignOut, SignedIn, USERNAME_ID,
 };
 use crate::app::{DISPLAY_NAME_ID, INVITATION_CODE_ID};
+use crate::avatars::bot_avatar;
 use crate::socket::Link;
 
 pub(crate) type BokkieFrame<'a, 'b> = Frame<'a, BokkieAction, BokkieIntent>;
@@ -350,10 +355,9 @@ fn bots_ui(
     } else if let Some(message) = &signed_in.message {
         p.status(ui, "status", message, true);
     }
-    p.heading(ui, "bots-title", "Bots");
-    // The list's Refresh, while no other pane shows one of its own.
-    if signed_in.open.is_none() && signed_in.admin.is_none() {
-        frame.action(ui, p, BokkieAction::Refresh, ActionEmphasis::Normal);
+    let strip = app.strip();
+    if !strip.is_empty() {
+        strip_ui(ui, p, frame, &strip);
     }
     frame.toggle(
         ui,
@@ -367,16 +371,20 @@ fn bots_ui(
     } else if !store.bots_loaded() {
         p.status(ui, "bots-status", "Loading Bots…", false);
     }
-    let bots = if signed_in.show_hidden {
-        store.listed_bots()
-    } else {
-        store.visible_bots()
-    };
+    let bots = app.shown_bots();
+    let local = app.local_time();
+    let open = signed_in.open.as_ref().map(|open| open.bot);
+    if bots.iter().any(|bot| bot.last_message.is_some()) {
+        // "9:41 AM" becomes "Yesterday" at midnight.
+        frame.request_repaint_after("list days", crate::times::until_the_day_changes(&local));
+    }
+    let viewport = ui.available_height();
     // The list scrolls, so publish only what is visible.
     observe_visible_only(ui, |ui| {
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
+                let top = ui.cursor().top();
                 let mut rows =
                     frame.presentation(ui, PresentationScope::new("bots"), SemanticUiId::root());
                 if store.bots_loaded() {
@@ -384,7 +392,7 @@ fn bots_ui(
                         rows.content(ui, "no-bots", "No Bots yet", line(TextRole::Secondary, 1));
                     }
                     for bot in bots {
-                        bot_row(ui, &mut rows, frame, bot);
+                        bot_row(ui, &mut rows, frame, &local, bot, open == Some(bot.id));
                     }
                     if signed_in.may_create_bots() {
                         new_bot_ui(ui, &mut rows, frame, &signed_in.new_bot);
@@ -397,23 +405,119 @@ fn bots_ui(
                         );
                     }
                 }
-                // The account and this device, at the bottom of the list.
+                // The account and this device sit at the bottom of the
+                // pane, below a short list, and after a long one: the
+                // footer's height from the last pass places it.
+                let measured = ui.id().with("footer-height");
+                let footer = ui.data(|data| data.get_temp::<f32>(measured));
+                let spare = viewport
+                    - (ui.cursor().top() - top)
+                    - footer.unwrap_or(viewport)
+                    - ui.spacing().item_spacing.y * 2.0;
+                if spare > 0.0 {
+                    ui.add_space(spare);
+                }
+                let start = ui.cursor().top();
                 ui.separator();
-                let who = format!("Signed in as {}", signed_in.user.display_name);
-                rows.content(ui, "user", &who, line(TextRole::Secondary, 1));
-                account_ui(ui, &mut rows, frame, signed_in);
-                meter_ui(ui, &mut rows, frame, app);
-                ui.separator();
-                crate::settings::time_zone_ui(ui, &mut rows, frame, signed_in);
-                ui.separator();
-                notifications_ui(ui, &mut rows, frame, app);
-                ui.separator();
-                frame.action(ui, &mut rows, BokkieAction::SignOut, ActionEmphasis::Normal);
-                if signed_in.is_admin() {
-                    frame.action(ui, &mut rows, BokkieAction::Admin, ActionEmphasis::Normal);
+                footer_ui(ui, &mut rows, frame, app, signed_in);
+                let height = ui.cursor().top() - start;
+                if footer.is_none_or(|footer| (footer - height).abs() > 0.5) {
+                    ui.data_mut(|data| data.insert_temp(measured, height));
+                    frame.request_repaint("list footer");
                 }
             });
     });
+}
+
+/// The pinned Bots, above the list on a phone: each Bot's avatar over its
+/// name, a row scrolled sideways when they do not fit.
+///
+/// A plain stand-in until Stobie has an avatar strip: the name below each
+/// avatar is the control that keyboards, assistive technology and agents
+/// use (`bokkie.open-pinned`), and a tap on the avatar does the same.
+fn strip_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    bots: &[&Bot],
+) {
+    let tokens = *p.tokens();
+    let scale = p.font_scale();
+    let side = avatar_size(&tokens, AvatarSize::Strip, scale);
+    let width = side.max(tokens.geometry.minimum_hit_size.0 * 2.0);
+    observe_visible_only(ui, |ui| {
+        egui::ScrollArea::horizontal()
+            .id_salt("strip")
+            .show(ui, |ui| {
+                let mut cells =
+                    frame.presentation(ui, PresentationScope::new("strip"), SemanticUiId::root());
+                ui.horizontal(|ui| {
+                    for bot in bots {
+                        let layout = egui::Layout::top_down(egui::Align::Center);
+                        ui.allocate_ui_with_layout(egui::vec2(width, 0.0), layout, |ui| {
+                            ui.set_width(width);
+                            // A pointer target only: the name is the control.
+                            let (rect, response) =
+                                ui.allocate_exact_size(egui::Vec2::splat(side), egui::Sense::CLICK);
+                            paint_avatar(
+                                ui.painter(),
+                                &bot_avatar(bot.id, AvatarSize::Strip),
+                                rect,
+                                &tokens,
+                            );
+                            if response
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked()
+                            {
+                                frame.trigger_with(
+                                    BokkieAction::OpenPinned,
+                                    ActionArgument::Number(bot.id.0 as f64),
+                                );
+                            }
+                            frame.list_row(
+                                ui,
+                                &mut cells,
+                                BoundAction::new(BokkieAction::OpenPinned, bot.id.0),
+                                ListRowSpec {
+                                    title: &bot.name,
+                                    detail: None,
+                                },
+                            );
+                        });
+                    }
+                });
+            });
+    });
+    ui.separator();
+}
+
+/// The bottom of the list: who is signed in, the household's ChatGPT
+/// account and the usage meter, the time zone, this device's
+/// notifications, and Refresh Bots, Sign out and the accounts.
+fn footer_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
+    signed_in: &SignedIn,
+) {
+    let name = &signed_in.user.display_name;
+    ui.horizontal(|ui| {
+        p.avatar(ui, &AvatarSpec::person(name, AvatarSize::List));
+        let who = format!("Signed in as {name}");
+        p.content(ui, "user", &who, line(TextRole::Secondary, 1));
+    });
+    account_ui(ui, p, frame, signed_in);
+    meter_ui(ui, p, frame, app);
+    crate::settings::time_zone_ui(ui, p, frame, signed_in);
+    notifications_ui(ui, p, frame, app);
+    // Beside an open conversation, the accounts or the settings, which
+    // each refresh their own, the list still can.
+    frame.action(ui, p, BokkieAction::RefreshBots, ActionEmphasis::Normal);
+    frame.action(ui, p, BokkieAction::SignOut, ActionEmphasis::Normal);
+    if signed_in.is_admin() {
+        frame.action(ui, p, BokkieAction::Admin, ActionEmphasis::Normal);
+    }
 }
 
 /// This device's notifications switch, at the bottom of the Bot list.
@@ -423,19 +527,20 @@ fn notifications_ui(
     frame: &mut BokkieFrame<'_, '_>,
     app: &App,
 ) {
-    p.heading(ui, "notifications-title", "Notifications on this device");
+    frame.switch(
+        ui,
+        p,
+        BokkieAction::Notifications,
+        SwitchSpec {
+            label: "Notifications on this device",
+            on: app.notifications_on(),
+        },
+    );
     p.content(
         ui,
         "notifications-about",
         "Notify this device when a Bot sends you a notification or a routine run finishes, unless one of your devices shows that Bot's conversation.",
         line(TextRole::Secondary, 3),
-    );
-    frame.toggle(
-        ui,
-        p,
-        "notifications",
-        BokkieAction::Notifications,
-        app.notifications_on(),
     );
     if let Some((status, error)) = app.notifications_status() {
         p.status(ui, "notifications-status", &status, error);
@@ -756,36 +861,63 @@ fn sign_out_ui(
     }
 }
 
+/// One Bot in the list: its avatar, name, preview and time, and an unread
+/// dot while it has a message the user has not seen. The row opens it.
 fn bot_row(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
     frame: &mut BokkieFrame<'_, '_>,
+    local: &LocalTime,
     bot: &Bot,
+    selected: bool,
 ) {
-    let key = bot.id.0;
-    p.content(ui, ("name", key), &bot.name, line(TextRole::Body, 1));
-    // A plain stand-in for an unread dot.
-    let details = match bot.unread {
-        true => format!("Unread · {}", details(bot)),
-        false => details(bot),
-    };
-    p.content(ui, ("details", key), &details, line(TextRole::Secondary, 1));
-    if let Some(preview) = &bot.last_message {
-        p.content(
-            ui,
-            ("preview", key),
-            &preview.text,
-            line(TextRole::Caption, 2),
-        );
-    }
-    // "Open Tutor" to assistive technology and agents.
-    frame.action(
+    let preview = preview(bot);
+    let time = bot
+        .last_message
+        .as_ref()
+        .map(|message| crate::times::compact(local, message.at));
+    frame.conversation_row(
         ui,
         p,
-        BoundAction::new(BokkieAction::OpenBot, key).with_subject(&bot.name),
-        ActionEmphasis::Normal,
+        BoundAction::new(BokkieAction::OpenBot, bot.id.0),
+        ConversationRowSpec {
+            title: &bot.name,
+            preview: (!preview.is_empty()).then_some(preview.as_str()),
+            time: time.as_deref(),
+            unread: bot.unread.then_some("Unread"),
+            selected,
+            avatar: Some(bot_avatar(bot.id, AvatarSize::List)),
+        },
     );
-    ui.separator();
+}
+
+/// A Bot row's one line: whether it is hidden, working or unavailable, then
+/// its latest message, "You: " first when it is the user's own, or its label
+/// before it has one.
+pub(crate) fn preview(bot: &Bot) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if bot.hidden {
+        parts.push("Hidden".into());
+    }
+    if bot.status != BotStatus::Idle {
+        parts.push(status_text(bot.status).into());
+    }
+    match &bot.last_message {
+        Some(message) => {
+            let text = message
+                .text
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            parts.push(match message.author {
+                Author::User => format!("You: {text}"),
+                Author::Bot => text,
+            });
+        }
+        None if !bot.label.is_empty() => parts.push(bot.label.clone()),
+        None => {}
+    }
+    parts.join(" · ")
 }
 
 fn conversation_ui(

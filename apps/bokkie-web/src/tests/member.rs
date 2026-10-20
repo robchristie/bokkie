@@ -88,7 +88,7 @@ fn new_bot_is_hidden_without_the_permission_and_follows_it_live() {
 fn profile_editing_is_hidden_without_the_permission_and_pin_and_hide_stay() {
     let mut fixture = Fixture::new();
     fixture.member_live(with(NEITHER));
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     let _ = fixture.sent();
     assert_eq!(fixture.fact("may_edit_profiles"), false.into());
     assert!(!fixture.shows("Edit profile"));
@@ -131,7 +131,7 @@ fn profile_editing_is_hidden_without_the_permission_and_pin_and_hide_stay() {
 fn a_profile_edit_sends_only_what_changed() {
     let mut fixture = Fixture::new();
     fixture.member_live(member());
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     let _ = fixture.sent();
     fixture.click("Edit profile");
     assert!(fixture.shows("Bot name") && fixture.shows("Description"));
@@ -227,13 +227,13 @@ fn a_hidden_bot_leaves_the_list_until_hidden_bots_are_shown() {
     fixture.event(11, Event::BotUpdated { bot: hidden });
     assert!(!fixture.shows(refused));
     fixture.click("Back");
-    assert!(!fixture.shows("Open Tutor"));
+    assert!(!fixture.lists("Tutor"));
     assert_eq!(fixture.fact("bot_count"), 0_u64.into());
     fixture.click("Show hidden Bots");
     assert_eq!(fixture.fact("show_hidden"), true.into());
-    assert!(fixture.shows("Open Tutor") && fixture.shows("Maths help · Idle · Hidden"));
+    assert!(fixture.row_says("Tutor").starts_with("Hidden · "));
     fixture.click("Show hidden Bots");
-    assert!(!fixture.shows("Open Tutor"));
+    assert!(!fixture.lists("Tutor"));
 }
 
 #[test]
@@ -243,7 +243,7 @@ fn the_oversight_notice_shows_the_whole_time_oversight_is_on() {
     assert_eq!(fixture.fact("oversight"), true.into());
     assert!(fixture.shows(OVERSIGHT));
     // On every screen.
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     assert!(fixture.shows(OVERSIGHT));
     // Switched off live, it goes at once; on again, it comes back.
     fixture.account_updated(11, overseen(false));
@@ -340,7 +340,7 @@ fn a_member_is_told_an_admin_reset_their_password_until_they_acknowledge_it() {
     fixture.signed_in_and_live_as(reset.clone(), 10);
     assert_eq!(fixture.fact("reset_notice"), true.into());
     assert!(fixture.shows(notice));
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     let _ = fixture.sent();
     assert!(fixture.shows(notice), "on every screen until acknowledged");
     fixture.click("Acknowledge");
@@ -421,7 +421,7 @@ fn a_send_refused_while_the_household_is_signed_out_says_so_and_keeps_the_draft(
         "ChatGPT is signed out for the household, so your Bots cannot reply. Ask an admin to sign it in"
     ));
     // The list's Refresh asks again too.
-    fixture.click("Refresh");
+    fixture.click("Refresh Bots");
     assert_eq!(
         fixture.sent(),
         [ApiRequest::ListBots, ApiRequest::CodexAccount]
@@ -447,11 +447,11 @@ fn the_member_view_fits_at_phone_width() {
     );
     fixture.reply(ApiReply::Account(Ok(account(false))));
     fixture.assert_presentable();
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     fixture.assert_presentable();
     let mut fixture = Fixture::new();
     fixture.member_live(member());
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     fixture.click("Edit profile");
     fixture.assert_presentable();
 }

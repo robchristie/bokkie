@@ -102,8 +102,8 @@ impl Fixture {
     /// As [`Self::notifications_off`], then switched on and saved.
     fn notifications_on(&mut self) {
         self.notifications_off();
-        self.reveal("Notifications");
-        self.click("Notifications");
+        self.reveal("Notifications on this device");
+        self.click("Notifications on this device");
         assert_eq!(
             self.push_controls(),
             [DeviceControl::Subscribe("SERVER-KEY".into())]
@@ -178,7 +178,7 @@ fn the_endpoint_never_reaches_a_fact_or_a_log_line() {
 fn switching_off_removes_the_subscription_from_the_gateway_and_the_browser() {
     let mut fixture = Fixture::new();
     fixture.notifications_on();
-    fixture.click("Notifications");
+    fixture.click("Notifications on this device");
     assert_eq!(fixture.sent(), [ApiRequest::DeletePushSubscription]);
     assert_eq!(fixture.push_controls(), [DeviceControl::Unsubscribe]);
     assert_eq!(fixture.fact("push"), "unsubscribing".into());
@@ -188,7 +188,7 @@ fn switching_off_removes_the_subscription_from_the_gateway_and_the_browser() {
     assert_eq!(fixture.fact("push"), "off".into());
     assert!(fixture.sent().is_empty());
     // And on again, with a new subscription.
-    fixture.click("Notifications");
+    fixture.click("Notifications on this device");
     assert_eq!(
         fixture.push_controls(),
         [DeviceControl::Subscribe("SERVER-KEY".into())]
@@ -362,9 +362,9 @@ fn a_refused_subscription_and_a_gateway_that_does_not_send_are_said() {
     let _ = fixture.sent();
     fixture.reply(key(false));
     assert_eq!(fixture.fact("push_sending"), false.into());
-    fixture.reveal("Notifications");
+    fixture.reveal("Notifications on this device");
     assert!(fixture.shows("This Bokkie server is not set up to send notifications yet"));
-    fixture.click("Notifications");
+    fixture.click("Notifications on this device");
     fixture.push(PushEvent::Failed {
         operation: PushOperation::Subscribe,
         message: "Permission was not granted".into(),
@@ -403,7 +403,7 @@ fn unread_tutor(fixture: &mut Fixture, read_up_to: i64) {
     list.bots[0].unread = true;
     list.bots[0].read_up_to = Some(MessageId(read_up_to));
     list.unread_bots = 1;
-    fixture.click("Refresh");
+    fixture.click("Refresh Bots");
     assert!(fixture.sent().contains(&ApiRequest::ListBots));
     fixture.reply(ApiReply::Bots(Ok(list)));
 }
@@ -421,7 +421,8 @@ fn an_unread_bot_is_marked_in_the_list_and_counted_on_the_badge() {
     );
     assert_eq!(fixture.fact("unread"), "1".into());
     assert_eq!(fixture.fact("unread_bots"), 1_u64.into());
-    assert!(fixture.shows("Unread · Maths help · Idle"));
+    // The row leads with the unread words, beside its unread dot.
+    assert!(fixture.row_says("Tutor").starts_with("Unread; Done; "));
     assert_eq!(fixture.sent.take_device(), [DeviceControl::Badge(1)]);
     assert_eq!(fixture.fact("badge"), 1_u64.into());
     // The list does not read the Bot.
@@ -429,7 +430,7 @@ fn an_unread_bot_is_marked_in_the_list_and_counted_on_the_badge() {
     // Read on another device.
     fixture.event(12, read(5, false));
     assert_eq!(fixture.fact("unread"), "".into());
-    assert!(fixture.shows("Maths help · Idle"));
+    assert!(fixture.row_says("Tutor").starts_with("Done; "));
     assert_eq!(fixture.sent.take_device(), [DeviceControl::Badge(0)]);
 }
 
@@ -443,7 +444,7 @@ fn the_badge_counts_hidden_bots_and_clears_on_sign_out() {
     hidden.unread = true;
     list.bots.push(hidden);
     list.unread_bots = 1;
-    fixture.click("Refresh");
+    fixture.click("Refresh Bots");
     let _ = fixture.sent();
     fixture.reply(ApiReply::Bots(Ok(list)));
     assert!(!fixture.shows("Gardener"), "hidden from the list");
@@ -537,7 +538,7 @@ fn a_refused_read_marker_is_not_sent_again_in_a_loop() {
     assert!(fixture.sent().is_empty());
     // Opening the conversation again tries again.
     fixture.click("Back");
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     fixture.reply(ApiReply::Messages(
         TUTOR,
         Ok(MessagePage {

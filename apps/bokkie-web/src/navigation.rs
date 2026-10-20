@@ -5,6 +5,7 @@
 //! conversation's header. The layout follows the width the page last had,
 //! and what is open follows only the state, so a resize loses nothing.
 
+use bokkie_protocol::api::Bot;
 use stobie_ui_egui::{NavigationLayout, NavigationPane, Observation};
 
 use crate::app::{App, Session};
@@ -73,6 +74,26 @@ impl App {
         [NavigationPane::Content, NavigationPane::List]
             .into_iter()
             .find(|pane| panes.contains(pane))
+    }
+
+    /// The Bots the list shows: hidden ones too while Show hidden is on.
+    pub(crate) fn shown_bots(&self) -> Vec<&Bot> {
+        match &self.session {
+            Session::SignedIn(signed_in) if signed_in.show_hidden => self.store().listed_bots(),
+            Session::SignedIn(_) => self.store().visible_bots(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The pinned Bots in the strip above the list, as the `strip` fact
+    /// lists them: only on a phone, while the list is on screen.
+    pub(crate) fn strip(&self) -> Vec<&Bot> {
+        if self.layout != NavigationLayout::Stack || self.panes() != [NavigationPane::List] {
+            return Vec::new();
+        }
+        let mut bots = self.shown_bots();
+        bots.retain(|bot| bot.pinned);
+        bots
     }
 
     /// Whether the open conversation is on screen, for the read marker and
