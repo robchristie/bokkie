@@ -909,7 +909,7 @@ async fn a_token_a_push_service_refuses_is_replaced_after_an_hour() {
     notify(&gateway, 1, 901, &thread, "First", "result").await;
     deliver(&gateway).await;
     let first = tokens(&phone)[0].clone();
-    assert_eq!(tokens(&tablet), [first.clone()]);
+    assert_eq!(tokens(&tablet), vec![first.clone()]);
     assert_eq!(service.opened(&tablet).len(), 1);
     // The subscription stays: the token was at fault, not the device.
     assert_eq!(subscriptions(&gateway, 1).await, 2);
