@@ -256,6 +256,8 @@ impl Fetcher {
                     bounded(url.as_str(), "timed out"),
                 ),
             };
+        // A backstop: no answer, success or error, is ever longer.
+        let output = output.map(capped).map_err(capped);
         Served {
             outcome,
             output,
@@ -383,9 +385,33 @@ fn parse(arguments: &Value) -> Result<Url, (String, String)> {
     Ok(url)
 }
 
+/// A link a site chose, for an error message: at most 200 characters.
+fn shown(url: &Url) -> String {
+    let text = url.as_str();
+    if text.chars().count() > 200 {
+        let mut cut: String = text.chars().take(199).collect();
+        cut.push('…');
+        cut
+    } else {
+        text.to_owned()
+    }
+}
+
+/// `text`, cut to [`MAX_CHARS`] characters.
+fn capped(text: String) -> String {
+    if text.chars().count() > MAX_CHARS {
+        text.chars().take(MAX_CHARS).collect()
+    } else {
+        text
+    }
+}
+
 /// The rules every link, redirects included, must pass before any
 /// request: http or https, ports 80 and 443, no user name or password.
 fn check(url: &Url) -> Result<(), String> {
+    if url.as_str().chars().count() > URL_CHARS {
+        return Err(format!("The link is longer than {URL_CHARS} characters."));
+    }
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!(
             "web_fetch reads only http and https links, not {} links.",
@@ -547,7 +573,10 @@ async fn fetch(
                 });
             }
             check(&next).map_err(|error| Failure {
-                message: format!("{url} redirected to {next}, which is refused: {error}"),
+                message: format!(
+                    "{url} redirected to {}, which is refused: {error}",
+                    shown(&next)
+                ),
                 route: route(&next),
                 brief: "redirect refused".into(),
             })?;
@@ -697,6 +726,27 @@ fn kind(mime: &str) -> Option<Kind> {
     }
 }
 
+/// The charset a page declares in a `<meta>` tag near its start, for a
+/// page whose `Content-Type` names none.
+fn meta_charset(body: &[u8]) -> Option<String> {
+    let head = String::from_utf8_lossy(&body[..body.len().min(2048)]).to_ascii_lowercase();
+    let mut rest = head.as_str();
+    while let Some(at) = rest.find("<meta") {
+        rest = &rest[at + 5..];
+        let tag = &rest[..rest.find('>').unwrap_or(rest.len())];
+        if let Some(found) = tag.find("charset=") {
+            let value = tag[found + 8..].trim_start_matches(['"', '\'', ' ']);
+            let end = value
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                .unwrap_or(value.len());
+            if end > 0 {
+                return Some(value[..end].to_owned());
+            }
+        }
+    }
+    None
+}
+
 /// Decodes text in its charset, UTF-8 by default.
 fn decode(body: &[u8], charset: Option<&str>) -> String {
     let encoding = charset
@@ -722,7 +772,10 @@ fn render(
         });
     };
     match kind {
-        Kind::Html => Ok(html_text(&decode(body, charset))),
+        Kind::Html => {
+            let declared = charset.map(str::to_owned).or_else(|| meta_charset(body));
+            Ok(html_text(&decode(body, declared.as_deref())))
+        }
         Kind::Text | Kind::Json => Ok(decode(body, charset)),
         Kind::Feed | Kind::Xml => match feed_rs::parser::parse(body) {
             Ok(feed) => Ok(condense(&feed)),
@@ -744,7 +797,11 @@ pub fn html_text(html: &str) -> String {
     let config = html2text::config::plain()
         .add_css(HIDDEN_CSS)
         .expect("the hiding rules parse")
-        .link_footnotes(true);
+        .link_footnotes(true)
+        // Deeply nested lists and quotes would otherwise leave no room and
+        // fail to render at all.
+        .allow_width_overflow()
+        .min_wrap_width(40);
     let (text, cut) = convert(&config, html, MAX_HTML_BYTES, 100);
     let mut text = tidy(&text);
     if cut {
@@ -880,7 +937,10 @@ fn prepare(html: &str, limit: usize) -> (String, bool) {
 
 /// HTML's text alone, without marks or links.
 fn bare_text(html: &str) -> String {
-    let config = html2text::config::plain_no_decorate().link_footnotes(false);
+    let config = html2text::config::plain_no_decorate()
+        .link_footnotes(false)
+        .allow_width_overflow()
+        .min_wrap_width(40);
     convert(&config, html, MAX_SUMMARY_HTML_BYTES, 10_000).0
 }
 
@@ -1097,6 +1157,24 @@ mod tests {
             assert_eq!(kind(refused), None, "{refused}");
         }
         assert_eq!(decode(b"caf\xe9", Some("iso-8859-1")), "café");
+        assert_eq!(
+            meta_charset(b"<html><head><META Charset=\"Windows-1252\"><title>"),
+            Some("windows-1252".into())
+        );
+        assert_eq!(
+            meta_charset(
+                b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=shift_jis\">"
+            ),
+            Some("shift_jis".into())
+        );
+        assert_eq!(meta_charset(b"<meta name=x><p>charset=no</p>"), None);
+        let page = render(
+            "text/html",
+            None,
+            b"<meta charset=\"iso-8859-1\"><p>caf\xe9</p>",
+            false,
+        );
+        assert_eq!(page.unwrap(), "caf\u{e9}");
         assert_eq!(decode("café".as_bytes(), None), "café");
     }
 
@@ -1177,6 +1255,11 @@ mod tests {
                 "{name}"
             );
         }
+        // Lists and quotes nested past the width still render their text.
+        let nested = format!("{}inner text", "<ul><li><blockquote>".repeat(60));
+        let text = html_text(&nested);
+        assert!(text.contains("inner text"), "{text}");
+
         // A deep but small page converts whole, its deepest text dropped.
         let deep = format!(
             "<p>top</p>{}deep{}",

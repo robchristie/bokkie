@@ -120,6 +120,10 @@ async fn route(path: &str, headers: &HeaderMap) -> Response {
         "/to-other-port" => redirect(StatusCode::FOUND, "http://news.example:8080/page.html"),
         "/to-ftp" => redirect(StatusCode::FOUND, "ftp://news.example/file"),
         "/to-rebind" => redirect(StatusCode::FOUND, "https://rebind.example/page.html"),
+        "/to-long" => redirect(
+            StatusCode::FOUND,
+            &format!("https://news.example/{}", "a".repeat(300_000)),
+        ),
         "/to-feed" => redirect(StatusCode::SEE_OTHER, "https://papers.example/feed.xml"),
         _ => {
             if let Some(n) = path.strip_prefix("/hop/") {

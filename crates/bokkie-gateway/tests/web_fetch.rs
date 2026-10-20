@@ -351,11 +351,33 @@ async fn redirects_are_followed_five_times_and_each_hop_is_checked() {
         // Only the redirecting request reached the site.
         assert_eq!(s.site.seen().len(), before + 1, "{path}");
     }
+    // So is a redirect to a link longer than any the model may give, and
+    // the answer stays within its bound.
+    let before = s.site.seen().len();
+    fetch(g, 1, 8, &s.thread, "t1", "https://news.example/to-long");
+    let (ok, text) = answer(g, 8).await;
+    assert!(!ok);
+    assert!(
+        text.contains("longer than 2048 characters"),
+        "{}",
+        &text[..300]
+    );
+    assert!(
+        text.chars().count() < 1_000,
+        "{} characters",
+        text.chars().count()
+    );
+    assert_eq!(s.site.seen().len(), before + 1);
     // The private name was looked up, and refused on its answer.
     assert!(s.network.lookups().contains(&"private.example".to_owned()));
-    let calls = logged(g, 1, s.bot, 6).await;
+    let calls = logged(g, 1, s.bot, 7).await;
+    assert!(
+        calls[0].summary.chars().count() <= 200,
+        "{}",
+        calls[0].summary
+    );
     assert_eq!(
-        calls[2].summary,
+        calls[3].summary,
         "https://news.example/to-private-name → https://private.example/page.html: refused, not a public address"
     );
 

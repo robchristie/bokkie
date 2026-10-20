@@ -207,7 +207,8 @@ request leaves the machine:
 
 The gateway's live tests (`crates/bokkie-gateway/tests/live_*.rs`) use the
 same mocks in-process, and each fails if any app server asked the refusing
-proxy for anything.
+proxy for anything. A device-code sign-in is never started against the real
+authority: the gateway's tests drive it with a fake app server.
 
 The gateway's own outbound requests, such as a Bot's `web_fetch`, never
 reach the internet in tests either. A test reaches a local site through
@@ -216,8 +217,7 @@ the test gives it, may let loopback through and may trust a test
 certificate authority (`crates/bokkie-gateway/tests/common/site.rs`). It
 exists only with the gateway's `test-network` feature, which only the
 gateway's own tests turn on, through a development dependency on itself;
-`scripts/verify` fails if a build of the gateway itself turns it on. A device-code sign-in is never started against the real
-authority: the gateway's tests drive it with a fake app server.
+`scripts/verify` fails if a build of the gateway itself turns it on.
 
 Its tools are pinned:
 
