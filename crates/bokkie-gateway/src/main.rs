@@ -1,6 +1,12 @@
 //! `bokkie-gateway serve` runs the gateway. `bokkie-gateway bootstrap-admin
 //! <username> <display name>` creates the first admin, reading the password
 //! from standard input; it refuses once any admin exists.
+//!
+//! `bokkie-gateway bot apply [--dry-run] <account> <file>` makes or changes a
+//! Bot of the account from a definition file (`-` reads standard input),
+//! and `bokkie-gateway bot run <account> <bot> <routine>` runs one of its
+//! routines now. Both ask the gateway serving the same data directory,
+//! over its control socket ([`bokkie_gateway::control`]).
 
 use std::io::BufRead;
 use std::net::SocketAddr;
@@ -11,8 +17,13 @@ use bokkie_gateway::auth::LoginLimiter;
 use bokkie_gateway::clock::Clock;
 use bokkie_gateway::codex::{Launcher, RuntimeEvent, Supervisor, catalog};
 use bokkie_gateway::config::Config;
-use bokkie_gateway::{AppState, accounts, db, router};
+use bokkie_gateway::{AppState, accounts, control, db, router};
 use tokio::sync::mpsc;
+
+const USAGE: &str = "usage: bokkie-gateway serve
+       bokkie-gateway bootstrap-admin <username> <display name>
+       bokkie-gateway bot apply [--dry-run] <account> <definition file, or - for standard input>
+       bokkie-gateway bot run <account> <bot> <routine>";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -26,7 +37,8 @@ async fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("serve") => serve().await,
         Some("bootstrap-admin") if args.len() == 3 => bootstrap(&args[1], &args[2]).await,
-        _ => Err("usage: bokkie-gateway serve | bootstrap-admin <username> <display name>".into()),
+        Some("bot") => bot(&args[1..]).await,
+        _ => Err(USAGE.into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -47,6 +59,17 @@ async fn serve() -> Result<(), String> {
             "the system's time-zone database has no {default_zone}; install tzdata"
         ));
     }
+    // The operator's commands reach the gateway through its control
+    // socket. Bound before anything else touches the data directory, it
+    // also stops a second gateway on the same one. A data directory too
+    // deep for a socket's path still serves, without the commands.
+    let control = match control::check_path(&config.data_dir) {
+        Ok(_) => Some(control::listen(&config.data_dir).await?),
+        Err(error) => {
+            tracing::warn!("{error}; the bot commands cannot reach this gateway");
+            None
+        }
+    };
     let pool = db::open(&config.database_path())
         .await
         .map_err(|e| format!("database: {e}"))?;
@@ -69,6 +92,9 @@ async fn serve() -> Result<(), String> {
     state.push.recover().await.map_err(|f| f.message)?;
     state.conversations.recover().await.map_err(|f| f.message)?;
     state.routines.recover().await.map_err(|f| f.message)?;
+    if let Some(control) = control {
+        tokio::spawn(control::serve(state.clone(), control));
+    }
     tokio::spawn(
         state
             .push
@@ -156,4 +182,51 @@ async fn bootstrap(username: &str, display_name: &str) -> Result<(), String> {
     .map_err(|f| f.message)?;
     println!("created admin {} ({})", user.username, user.id);
     Ok(())
+}
+
+/// `bokkie-gateway bot apply` and `bokkie-gateway bot run`.
+async fn bot(args: &[String]) -> Result<(), String> {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let request = match args.as_slice() {
+        ["apply", rest @ ..] => {
+            let (dry_run, rest) = match rest {
+                ["--dry-run", rest @ ..] => (true, rest),
+                rest => (false, rest),
+            };
+            let [account, file] = rest else {
+                return Err(USAGE.into());
+            };
+            let definition = if *file == "-" {
+                let mut text = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+                    .map_err(|e| format!("reading standard input: {e}"))?;
+                text
+            } else {
+                std::fs::read_to_string(file).map_err(|e| format!("reading {file}: {e}"))?
+            };
+            control::Request::Apply {
+                account: (*account).to_owned(),
+                definition,
+                dry_run,
+            }
+        }
+        ["run", account, bot, routine] => control::Request::Run {
+            account: (*account).to_owned(),
+            bot: (*bot).to_owned(),
+            routine: (*routine).to_owned(),
+        },
+        _ => return Err(USAGE.into()),
+    };
+    let response = control::send(&Config::data_dir_from_env(), &request).await?;
+    for (index, line) in response.lines.iter().enumerate() {
+        if index == 0 {
+            println!("{line}");
+        } else {
+            println!("- {line}");
+        }
+    }
+    match response.error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }

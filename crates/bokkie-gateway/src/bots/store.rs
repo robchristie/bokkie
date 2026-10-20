@@ -319,6 +319,23 @@ pub async fn bot(db: impl SqliteExecutor<'_>, user: UserId, bot: BotId) -> Resul
     Ok(row.as_ref().map(bot_from))
 }
 
+/// The user's Bot with this name, whatever its case: names are unique
+/// per user that way.
+pub async fn bot_by_name(
+    db: impl SqliteExecutor<'_>,
+    user: UserId,
+    name: &str,
+) -> Result<Option<BotRow>> {
+    let row = sqlx::query(&format!(
+        "SELECT {BOT_COLUMNS} FROM bots WHERE user_id = ? AND name = ? COLLATE NOCASE"
+    ))
+    .bind(user.0)
+    .bind(name)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.as_ref().map(bot_from))
+}
+
 /// The user's Bot that a Codex thread belongs to, if any: the thread is
 /// the Bot's current one or one a fresh thread replaced
 /// ([`BotRow::is_current`] tells them apart). A replaced thread can still

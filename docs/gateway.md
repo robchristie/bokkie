@@ -13,7 +13,7 @@ The gateway reads its settings from the environment.
 | --- | --- | --- |
 | `BOKKIE_ORIGIN` | required | The one origin clients use, for example `https://bokkie.example.lan`. Every request's `Host` must be its host and port, and state-changing requests must send it as `Origin`. The gateway refuses to start unless its host is an ASCII host name (punycode for an international name) or IPv4 address of letters, digits, `-`, `_` and dots, or a bracketed IPv6 address, with a port only when it is not the scheme's default and without leading zeros. Write an address as browsers send it (`127.0.0.1`, not `127.1`); the gateway does not rewrite it |
 | `BOKKIE_EXTRA_HOSTS` | none | Further `Host` values to accept, comma-separated. `Origin` must still be `BOKKIE_ORIGIN` |
-| `BOKKIE_DATA` | `/data` | The data directory. The database is `bokkie.sqlite3`, created mode 600 |
+| `BOKKIE_DATA` | `/data` | The data directory. The database is `bokkie.sqlite3`, created mode 600, and the [control socket](#defining-a-bot) is `control/gateway.sock` |
 | `BOKKIE_LISTEN` | `0.0.0.0:8080` | The listening address. The gateway speaks plain HTTP behind the reverse proxy, which terminates TLS |
 | `BOKKIE_TRUST_FORWARDED_FOR` | off | Set to `1` behind a proxy that appends the client address to `X-Forwarded-For`, so sign-in rate limits apply per client rather than per proxy |
 | `BOKKIE_CODEX_BIN` | `/usr/local/bin/codex` | The pinned `codex` binary |
@@ -787,6 +787,99 @@ from it.
   was down follow the misfire rule above. App servers that stop end their
   user's running runs `failed`.
 - The minute pass deletes runs queued more than 90 days ago.
+
+## Defining a Bot
+
+An operator can make or change one Bot of an account from a definition
+file, and run one of its routines now, with the gateway's own command:
+
+```sh
+bokkie-gateway bot apply --dry-run rob gardener.toml   # check, change nothing
+bokkie-gateway bot apply rob gardener.toml             # apply
+bokkie-gateway bot apply rob - < gardener.toml         # the file on standard input
+bokkie-gateway bot run rob Gardener Watering           # "Run now"
+```
+
+A definition is TOML. Only `name` is required:
+
+```toml
+name = "Gardener"
+label = "Garden notes"
+description = """
+Keep track of the garden: what was planted where, and when.
+Be brief."""
+avatar = "🌱"
+grants = ["notes", "notify"]
+# Routines to delete, by name, with their run history.
+remove_routines = ["Frost watch"]
+
+[[routines]]
+name = "Watering"
+prompt = "Remind me which beds need water today."
+schedule = { repeat = "daily", at = "07:00" }
+
+[[routines]]
+name = "Weekly review"
+prompt = "Review the week's notes."
+schedule = { repeat = "days", days = ["sun"], at = "17:00" }
+push = "notify_only"   # or "every_run", the default
+paused = false
+```
+
+A schedule is as the routine routes take it ([Routines](#routines)):
+`repeat` is `daily`, `weekdays`, `days` (with `days`, of `mon` to `sun`)
+or `hours` (with `every`), each with `at`. A field the file does not know
+is refused, as is a grant not in the catalogue, a routine named twice, and
+a routine both defined and removed.
+
+- **Who it acts as.** The command acts as the account it names, under the
+  checks of that account's own requests: `POST` and `PATCH /api/v1/bots`
+  and the routine routes. So a member's Bot is made only when the member
+  may create Bots, its profile changed only when the member may edit Bot
+  profiles, and its grants only those a member may add; a grant that is
+  not available yet, or that breaks the taint rule, is refused for an admin
+  too ([Grants and tools](#grants-and-tools)). An account that does not
+  exist, or is disabled, is refused: the command creates no account. The
+  account's time zone schedules its routines; the definition does not set
+  it.
+- **Matching.** The Bot is found by its name in the account, whatever its
+  case, and made if absent. Each routine of the file is found on the Bot by
+  its name, whatever its case, and made if absent. The file's spelling of
+  a name wins. Where the file gives a profile field (`label`,
+  `description`, `avatar`), `grants` (the Bot's whole set) or a routine's
+  `push` or `paused`, it is applied; where it leaves one out, it is left as
+  it is. A routine's `prompt` and `schedule` are always applied. A routine
+  the file does not name is kept, and reported, unless `remove_routines`
+  names it. Pinning and hiding are the owner's and never change.
+- **What changes reach.** A changed profile reaches the Bot's next turn as
+  its profile fragment, and a change of grants starts a fresh thread at its
+  next turn, exactly as the same change from the client does. A changed
+  schedule, or resuming a routine, schedules it from now; pausing it skips
+  its run that waits to start. Each change arrives on the account's event
+  socket.
+- **All or nothing.** A definition applies in one transaction: a refusal
+  anywhere, such as a routine beyond the account's 20, changes nothing.
+  `--dry-run` makes every check and every change and then rolls them all
+  back, so its report is what applying would do. Applying a definition the
+  Bot already matches changes nothing, not even an event. The command
+  prints what it changed, or would, one line each, and fails with the
+  reason when refused.
+- **Run now.** `bot run` queues a `manual` run of the named routine, paused
+  or not, exactly as `POST /api/v1/bots/{id}/routines/{routine}/run` does,
+  and prints where the run then is.
+
+The command needs the serving gateway. It reads `BOKKIE_DATA` as `serve`
+does and sends its request to the gateway serving that data directory,
+through the gateway's control socket, `control/gateway.sock` in it: only the
+serving gateway numbers an account's events and tells its open
+connections, holds its Bots' send locks and starts routine runs. The
+socket's directory is mode 700 and the socket mode 600, and the gateway
+answers only a peer running as the user that owns the socket, its own,
+which can already read the whole data directory. A request is one JSON line
+of at most 1 MiB. When the gateway starts it replaces a socket a stopped
+gateway left, and refuses to start while another gateway answers on it. A
+Unix socket's path is at most 107 bytes, so a data directory whose socket
+path is longer serves without the socket, and says so in its log.
 
 ## Notifications
 

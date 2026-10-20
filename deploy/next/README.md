@@ -154,6 +154,25 @@ screen, which `POST /api/v1/codex/login` serves for admins. The credential
 lives in the `bokkie-next-data` volume, in `/data/household/codex/`, and
 nowhere else; every account's app server uses it.
 
+## Defining a Bot
+
+The operator makes or changes a Bot of an existing account from a
+definition file with the gateway's `bot` command, which asks the running
+gateway through its control socket in the data volume; see
+[docs/gateway.md](../../docs/gateway.md#defining-a-bot) for the file and
+what applying it changes. The gateway's root file system is read-only, so
+the file goes on standard input. Check it first, then apply it, then run
+one of its routines now to see it work:
+
+```sh
+docker compose exec -T gateway bokkie-gateway bot apply --dry-run rob - < gardener.toml
+docker compose exec -T gateway bokkie-gateway bot apply rob - < gardener.toml
+docker compose exec -T gateway bokkie-gateway bot run rob Gardener Watering
+```
+
+A dry run changes nothing and prints what applying would do. Applying the
+same file again changes nothing. The command creates no account.
+
 ## Notifications
 
 The operator sets nothing for notifications beyond `BOKKIE_NEXT_HOST`:

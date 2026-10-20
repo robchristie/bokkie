@@ -303,16 +303,34 @@ impl Routines {
         bot: BotId,
         request: CreateRoutineRequest,
     ) -> Result<Routine> {
+        let mut batch = self.events.begin(user).await?;
+        let routine = self
+            .create_in(&mut batch, self.clock.now(), user, bot, &request)
+            .await?;
+        batch.commit().await?;
+        tracing::info!(user = %user, bot = %bot, routine = %routine.id, "created a routine");
+        Ok(routine)
+    }
+
+    /// Creates a routine in the caller's batch and announces it there: the
+    /// checks of [`Routines::create`], the routine limit counting what the
+    /// batch has made so far.
+    pub(crate) async fn create_in(
+        &self,
+        batch: &mut Batch,
+        now: Timestamp,
+        user: UserId,
+        bot: BotId,
+        request: &CreateRoutineRequest,
+    ) -> Result<Routine> {
         let name = store::check_name(&request.name)?;
         let prompt = store::check_prompt(&request.prompt)?;
         schedule::check(&request.schedule)?;
-        let now = self.clock.now();
-        let mut batch = self.events.begin(user).await?;
-        let account = own_account(&mut batch, user).await?;
-        crate::bots::store::bot(&mut *batch, user, bot)
+        let account = own_account(batch, user).await?;
+        crate::bots::store::bot(&mut **batch, user, bot)
             .await?
             .ok_or_else(Failure::not_found)?;
-        if store::count(&mut *batch, user).await? >= store::MAX_ROUTINES {
+        if store::count(&mut **batch, user).await? >= store::MAX_ROUTINES {
             return Err(Failure::conflict(format!(
                 "You can have at most {} routines",
                 store::MAX_ROUTINES
@@ -325,7 +343,7 @@ impl Routines {
             schedule::next_after(&request.schedule, &zone, now)
         };
         let routine = store::create(
-            &mut *batch,
+            &mut **batch,
             now,
             user,
             NewRoutine {
@@ -345,8 +363,6 @@ impl Routines {
                 routine: routine.clone(),
             })
             .await?;
-        batch.commit().await?;
-        tracing::info!(user = %user, bot = %bot, routine = %routine.id, "created a routine");
         Ok(routine)
     }
 
@@ -355,6 +371,34 @@ impl Routines {
     /// its failures.
     pub async fn update(
         &self,
+        user: UserId,
+        bot: BotId,
+        id: RoutineId,
+        request: UpdateRoutineRequest,
+    ) -> Result<Routine> {
+        // Pausing waits for any start of a run of the Bot, which holds the
+        // Bot's lock, so that a run starts either before the pause or not
+        // at all.
+        let _starts = match request.paused {
+            Some(true) => Some(self.conversations.lock_bot(user, bot).await),
+            _ => None,
+        };
+        let mut batch = self.events.begin(user).await?;
+        let routine = self
+            .update_in(&mut batch, self.clock.now(), user, bot, id, request)
+            .await?;
+        batch.commit().await?;
+        tracing::info!(user = %user, bot = %bot, routine = %id, paused = routine.paused, "updated a routine");
+        Ok(routine)
+    }
+
+    /// Changes a routine in the caller's batch and announces it there, as
+    /// [`Routines::update`] does. A caller that pauses the routine holds
+    /// the Bot's lock ([`Conversations::lock_bot`]) first.
+    pub(crate) async fn update_in(
+        &self,
+        batch: &mut Batch,
+        now: Timestamp,
         user: UserId,
         bot: BotId,
         id: RoutineId,
@@ -369,17 +413,8 @@ impl Routines {
         if let Some(schedule) = &request.schedule {
             schedule::check(schedule)?;
         }
-        // Pausing waits for any start of a run of the Bot, which holds the
-        // Bot's lock, so that a run starts either before the pause or not
-        // at all.
-        let _starts = match request.paused {
-            Some(true) => Some(self.conversations.lock_bot(user, bot).await),
-            _ => None,
-        };
-        let now = self.clock.now();
-        let mut batch = self.events.begin(user).await?;
-        let account = own_account(&mut batch, user).await?;
-        let mut routine = store::routine(&mut *batch, user, bot, id)
+        let account = own_account(batch, user).await?;
+        let mut routine = store::routine(&mut **batch, user, bot, id)
             .await?
             .ok_or_else(Failure::not_found)?;
         let was_paused = routine.paused;
@@ -408,7 +443,7 @@ impl Routines {
             let zone = schedule::stored_zone(&account.user.time_zone);
             routine.next_run_at = schedule::next_after(&routine.schedule, &zone, now);
         }
-        let routine = store::save(&mut *batch, now, &routine).await?.to_api();
+        let routine = store::save(&mut **batch, now, &routine).await?.to_api();
         batch
             .emit(Event::RoutineUpdated {
                 routine: routine.clone(),
@@ -417,10 +452,10 @@ impl Routines {
         // A pause skips the run that waits to start.
         if routine.paused
             && !was_paused
-            && let Some(waiting) = store::active_run(&mut *batch, user, id).await?
+            && let Some(waiting) = store::active_run(&mut **batch, user, id).await?
         {
             end_waiting(
-                &mut batch,
+                batch,
                 now,
                 &waiting,
                 RunState::Skipped,
@@ -428,8 +463,6 @@ impl Routines {
             )
             .await?;
         }
-        batch.commit().await?;
-        tracing::info!(user = %user, bot = %bot, routine = %id, paused = routine.paused, "updated a routine");
         Ok(routine)
     }
 
@@ -437,15 +470,7 @@ impl Routines {
     /// it. A run of it that is running carries on as an ordinary turn.
     pub async fn delete(&self, user: UserId, bot: BotId, id: RoutineId) -> Result<()> {
         let mut batch = self.events.begin(user).await?;
-        if !store::delete(&mut *batch, user, bot, id).await? {
-            return Err(Failure::not_found());
-        }
-        batch
-            .emit(Event::RoutineDeleted {
-                bot_id: bot,
-                routine_id: id,
-            })
-            .await?;
+        delete_in(&mut batch, user, bot, id).await?;
         batch.commit().await?;
         tracing::info!(user = %user, bot = %bot, routine = %id, "deleted a routine");
         Ok(())
@@ -870,6 +895,25 @@ impl Routines {
         batch.commit().await?;
         Ok(())
     }
+}
+
+/// Deletes a routine with its history in the caller's batch, and
+/// announces it there, as [`Routines::delete`] does.
+pub(crate) async fn delete_in(
+    batch: &mut Batch,
+    user: UserId,
+    bot: BotId,
+    id: RoutineId,
+) -> Result<()> {
+    if !store::delete(&mut **batch, user, bot, id).await? {
+        return Err(Failure::not_found());
+    }
+    batch
+        .emit(Event::RoutineDeleted {
+            bot_id: bot,
+            routine_id: id,
+        })
+        .await
 }
 
 async fn own_account(batch: &mut Batch, user: UserId) -> Result<Account> {
