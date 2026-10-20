@@ -1595,6 +1595,168 @@ async fn the_scheduler_loop_passes_when_a_bot_turns_idle() {
     assert!(idle < started, "the run started while the Bot was working");
 }
 
+/// Waits, a few seconds at most, for a held start.
+async fn reached(hold: &bokkie_gateway::routines::seams::Hold) {
+    tokio::time::timeout(Duration::from_secs(5), hold.reached())
+        .await
+        .expect("a start finds the Bot busy");
+}
+
+/// A start that finds the Bot busy holds its run until it has recorded the
+/// wait. When the Bot's turn ends meanwhile, the pass its idle wake-up sets
+/// off leaves the run to that start, which then passes again: the run
+/// starts at once, not at the next tick.
+#[tokio::test]
+async fn a_run_found_busy_as_its_bot_turns_idle_starts_at_once() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    busy(&gateway, &rob, chef).await;
+    set_clock(&gateway, 30 * MINUTE_MS);
+    let routines = &gateway.state.routines;
+    let seams = routines.seams();
+    let held = seams.hold_next_busy_start();
+    // A tick an hour apart: the loop's first pass queues the run, and its
+    // start finds the Bot busy.
+    let scheduler = tokio::spawn(routines.clone().run(Duration::from_secs(3600)));
+    reached(&held).await;
+    let waiting = &runs(&gateway, &rob, chef, id).await[0];
+    assert_eq!(waiting["reason"], "Waiting for the Bot to finish its turn");
+    // The user's turn ends while the start still holds the run: the pass
+    // the idle wake-up sets off leaves the run to it.
+    interrupt(&gateway, &rob, chef).await;
+    eventually(|| seams.passes() == 2).await;
+    assert_eq!(seams.attempts(), 1);
+    held.open();
+    let running = wait_run(&gateway, &rob, chef, id, |r| r["state"] == "running").await;
+    assert_eq!(running["trigger"], "schedule");
+    assert_eq!(turn_starts(&gateway).len(), 2);
+    scheduler.abort();
+}
+
+/// The same when the start finds the Bot's send lock held by a message
+/// being sent to it: the run starts as soon as that message's turn ends.
+#[tokio::test]
+async fn a_run_found_busy_by_a_message_being_sent_starts_once_its_turn_ends() {
+    let (gateway, rob) = setup().await;
+    gateway
+        .fake
+        .with(|b| b.hold_thread_starts_of = vec![Owner::User(UserId(1))]);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    set_clock(&gateway, 30 * MINUTE_MS);
+    let routines = &gateway.state.routines;
+    let seams = routines.seams();
+    let held = seams.hold_next_busy_start();
+    let message = gateway.send(
+        Call::post(&format!("/api/v1/bots/{chef}/messages"))
+            .cookie(&rob)
+            .json(&json!({"text": "a question"})),
+    );
+    let scheduler = async {
+        // The message holds the Bot's send lock while its thread starts.
+        eventually(|| gateway.fake.received("thread/start").len() == 1).await;
+        let scheduler = tokio::spawn(routines.clone().run(Duration::from_secs(3600)));
+        reached(&held).await;
+        eventually(|| seams.passes() == 1).await;
+        // The message's turn starts and ends while the start holds the run.
+        gateway.fake.thread_starts.add_permits(1);
+        eventually(|| seams.passes() >= 2).await;
+        held.open();
+        scheduler.abort_handle()
+    };
+    let (said, scheduler) = tokio::join!(message, scheduler);
+    assert_eq!(said.body["delivery"], "new_turn", "{:?}", said.body);
+    // Its turn ends a moment after it starts.
+    let started = wait_run(&gateway, &rob, chef, id, |r| r["started_at"] != Value::Null).await;
+    assert_eq!(started["trigger"], "schedule");
+    let starts = turn_starts(&gateway);
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0]["input"][0]["text"], "a question");
+    assert_eq!(starts[1]["input"][0]["text"], "Run Digest.");
+    scheduler.abort();
+}
+
+/// A run that found the Bot's send lock held starts as soon as the lock is
+/// let go with the Bot idle, such as after a change to the Bot's grants.
+#[tokio::test]
+async fn a_run_found_busy_by_a_held_lock_starts_once_it_is_let_go() {
+    let (gateway, rob) = setup().await;
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    set_clock(&gateway, 30 * MINUTE_MS);
+    let routines = &gateway.state.routines;
+    let sending = gateway
+        .state
+        .conversations
+        .lock_bot(UserId(1), BotId(chef))
+        .await;
+    let scheduler = tokio::spawn(routines.clone().run(Duration::from_secs(3600)));
+    let waiting = wait_run(&gateway, &rob, chef, id, |r| {
+        r["reason"] == "Waiting for the Bot to finish its turn"
+    })
+    .await;
+    assert_eq!(waiting["state"], "waiting");
+    routines.settle().await;
+    drop(sending);
+    let run = wait_run(&gateway, &rob, chef, id, |r| r["state"] == "succeeded").await;
+    assert_eq!(run["trigger"], "schedule");
+    scheduler.abort();
+}
+
+/// A Bot that stays busy is not tried over and over: each wake-up tries
+/// its waiting run once, and nothing more happens until the Bot is idle.
+#[tokio::test]
+async fn a_bot_that_stays_busy_is_tried_once_per_wake_up() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    busy(&gateway, &rob, chef).await;
+    set_clock(&gateway, 30 * MINUTE_MS);
+    let routines = &gateway.state.routines;
+    let seams = routines.seams();
+    let scheduler = tokio::spawn(routines.clone().run(Duration::from_secs(3600)));
+    wait_run(&gateway, &rob, chef, id, |r| {
+        r["reason"] == "Waiting for the Bot to finish its turn"
+    })
+    .await;
+    routines.settle().await;
+    let first = seams.attempts();
+    // Twenty wake-ups, as other Bots turning idle give, each a moment
+    // after the last attempt let its run go.
+    const WAKES: usize = 20;
+    for woken in 1..=WAKES {
+        gateway.state.conversations.idle.notify_one();
+        eventually(|| seams.attempts() > first + woken - 1).await;
+        routines.settle().await;
+    }
+    // Then nothing: the Bot is still busy, so no attempt sets off another.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    routines.settle().await;
+    let tried = seams.attempts();
+    assert!(
+        tried <= first + WAKES + 1,
+        "{tried} attempts for {WAKES} wake-ups"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        seams.attempts(),
+        tried,
+        "the scheduler kept trying a busy Bot"
+    );
+    assert_eq!(runs(&gateway, &rob, chef, id).await[0]["state"], "waiting");
+    // Once the Bot is idle, the run starts.
+    interrupt(&gateway, &rob, chef).await;
+    wait_run(&gateway, &rob, chef, id, |r| r["state"] == "running").await;
+    scheduler.abort();
+}
+
 /// A message steered into a routine's run, which its turn left
 /// unanswered, gets a turn of its own: a user's turn, after the run ended
 /// as its turn did, and before a waiting run takes the idle Bot.

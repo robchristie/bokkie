@@ -33,6 +33,14 @@
 //! task per run at a time), so a user's slow app server holds up no other
 //! user's runs, and no later pass.
 //!
+//! The scheduler passes every [`PASS_INTERVAL`], on "run now", and whenever
+//! a Bot turns idle ([`Conversations::idle_count`]). A pass leaves a run
+//! that a task still holds to that task, so a start that found the Bot busy
+//! passes again once it lets its run go if the Bot turned idle since it
+//! looked: the pass the Bot's idle wake-up set off may have left the run to
+//! it. It passes again only then, so a Bot that stays busy is not tried
+//! over and over.
+//!
 //! Every change to a run goes out as [`Event::RoutineRunUpdated`] through
 //! [`emit_run`]. A run's end, wherever it happens, also queues its push
 //! ([`crate::push::run_ended`]). Three failed runs in a row pause the
@@ -230,9 +238,12 @@ pub struct Routines {
     clock: Clock,
     events: Arc<EventLog>,
     conversations: Arc<Conversations>,
-    /// Woken by "run now", so the scheduler starts the run at once.
+    /// Woken by "run now", so the scheduler starts the run at once, and by
+    /// a start that found its Bot busy and missed it turning idle.
     wake: Arc<tokio::sync::Notify>,
     tasks: Arc<Tasks>,
+    #[cfg(feature = "test-network")]
+    seams: Arc<seams::Seams>,
 }
 
 /// The runs the scheduler's tasks hold: at most one task per run.
@@ -291,7 +302,16 @@ impl Routines {
             conversations,
             wake: Default::default(),
             tasks: Default::default(),
+            #[cfg(feature = "test-network")]
+            seams: Default::default(),
         }
+    }
+
+    /// The scheduler's test seams. Only the `test-network` feature builds
+    /// them.
+    #[cfg(feature = "test-network")]
+    pub fn seams(&self) -> &seams::Seams {
+        &self.seams
     }
 
     // -- The API ------------------------------------------------------------
@@ -606,10 +626,15 @@ impl Routines {
         for run in store::active_runs(&self.db, RunState::Running).await? {
             let this = self.clone();
             let held = run.clone();
-            self.spawn_holding(&run, "stopping a routine's run", async move {
-                this.enforce_deadline(&held, now).await
-            });
+            self.spawn_holding(
+                &run,
+                "stopping a routine's run",
+                async move { this.enforce_deadline(&held, now).await },
+                |()| {},
+            );
         }
+        #[cfg(feature = "test-network")]
+        self.seams.passed();
         Ok(())
     }
 
@@ -619,22 +644,47 @@ impl Routines {
         self.tasks.until_not(|runs| !runs.is_empty()).await;
     }
 
-    /// Sets off starting a waiting run, unless a task holds it already.
+    /// Sets off starting a waiting run, unless a task holds it already. If
+    /// the attempt finds the Bot busy, and the Bot turns idle before the
+    /// task lets the run go, the scheduler passes again then: a pass the
+    /// Bot's idle wake-up set off meanwhile left the run to this task.
     fn spawn_start(&self, run: &RunRow, now: Timestamp) {
         let this = self.clone();
+        let after = self.clone();
         let held = run.clone();
-        self.spawn_holding(run, "starting a routine's run", async move {
-            this.try_start(&held, now).await
-        });
+        let bot = run.bot;
+        self.spawn_holding(
+            run,
+            "starting a routine's run",
+            async move {
+                // Counted before the attempt can find the Bot busy.
+                let idled = this.conversations.idle_count(held.bot);
+                let busy = this.attempt(&held, now).await?;
+                #[cfg(feature = "test-network")]
+                if busy {
+                    this.seams.found_busy().await;
+                }
+                Ok(busy.then_some(idled))
+            },
+            move |busy_since| {
+                if let Some(idled) = busy_since
+                    && after.conversations.idle_count(bot) != idled
+                {
+                    after.wake.notify_one();
+                }
+            },
+        );
     }
 
     /// Runs `work` in a task that holds `run` until it finishes, unless
-    /// another task holds it already.
-    fn spawn_holding(
+    /// another task holds it already, then hands what it did to `released`
+    /// once the run is let go.
+    fn spawn_holding<T: Send + 'static>(
         &self,
         run: &RunRow,
         doing: &'static str,
-        work: impl Future<Output = Result<()>> + Send + 'static,
+        work: impl Future<Output = Result<T>> + Send + 'static,
+        released: impl FnOnce(T) + Send + 'static,
     ) {
         if !self.tasks.runs().insert(run.id) {
             return;
@@ -645,9 +695,15 @@ impl Routines {
         };
         let (user, id) = (run.user, run.id);
         tokio::spawn(async move {
-            let _claim = claim;
-            if let Err(failure) = work.await {
-                tracing::error!(user = %user, run = %id, message = %failure.message, "{doing} failed");
+            let done = {
+                let _claim = claim;
+                work.await
+            };
+            match done {
+                Ok(done) => released(done),
+                Err(failure) => {
+                    tracing::error!(user = %user, run = %id, message = %failure.message, "{doing} failed");
+                }
             }
         });
     }
@@ -753,17 +809,26 @@ impl Routines {
     /// be out of date: an attempt that does not start it ends it only if it
     /// is still waiting.
     pub async fn try_start(&self, run: &RunRow, now: Timestamp) -> Result<()> {
+        self.attempt(run, now).await.map(drop)
+    }
+
+    /// The core of [`Routines::try_start`]. Returns whether the run was
+    /// left waiting for its Bot to be idle.
+    async fn attempt(&self, run: &RunRow, now: Timestamp) -> Result<bool> {
+        #[cfg(feature = "test-network")]
+        self.seams.attempted();
         let user = run.user;
         let Some(account) = accounts::account(&self.db, user).await? else {
-            return Ok(());
+            return Ok(false);
         };
         if account.user.disabled {
             return self
                 .end_unstarted(run, now, RunState::Missed, Some(reasons::DISABLED))
-                .await;
+                .await
+                .map(|()| false);
         }
         let Some(routine) = store::routine_of_user(&self.db, user, run.routine).await? else {
-            return Ok(());
+            return Ok(false);
         };
         let zone = schedule::stored_zone(&account.user.time_zone);
         let when = schedule::local_time(&zone, run.scheduled_for);
@@ -796,6 +861,8 @@ impl Routines {
             .conversations
             .start_routine(&account, &routine, run.id, &marker, about)
             .await;
+        // Whether the run is left waiting for the Bot to be idle.
+        let mut waits_for_bot = false;
         match started {
             RoutineStart::Started { turn_id } => {
                 tracing::info!(user = %user, run = %run.id, turn = %turn_id, "started a routine's run");
@@ -806,13 +873,13 @@ impl Routines {
                 self.end_unstarted(run, now, RunState::Skipped, Some(reasons::PAUSED))
                     .await
             }
+            RoutineStart::Busy if now.0 - run.queued_at.0 >= BUSY_WAIT_MS => {
+                self.end_unstarted(run, now, RunState::Skipped, Some(reasons::BUSY))
+                    .await
+            }
             RoutineStart::Busy => {
-                if now.0 - run.queued_at.0 >= BUSY_WAIT_MS {
-                    self.end_unstarted(run, now, RunState::Skipped, Some(reasons::BUSY))
-                        .await
-                } else {
-                    self.wait(run, Waiting::Busy, reasons::WAITING_BUSY).await
-                }
+                waits_for_bot = true;
+                self.wait(run, Waiting::Busy, reasons::WAITING_BUSY).await
             }
             RoutineStart::SignedOut => {
                 if now.0 - run.scheduled_for.0 > MISFIRE_WINDOW_MS {
@@ -828,7 +895,8 @@ impl Routines {
                 self.end_unstarted(run, now, RunState::Failed, Some(&reason))
                     .await
             }
-        }
+        }?;
+        Ok(waits_for_bot)
     }
 
     /// Interrupts a running run's turn once it passes its deadline, and
@@ -920,4 +988,90 @@ async fn own_account(batch: &mut Batch, user: UserId) -> Result<Account> {
     accounts::account(&mut **batch, user)
         .await?
         .ok_or_else(Failure::unauthenticated)
+}
+
+/// The scheduler's test seams: counts of its passes and start attempts, and
+/// a hold on a start between finding its Bot busy and letting its run go.
+/// Only the `test-network` feature builds this, and only this crate's own
+/// tests turn it on, so no gateway binary has it.
+#[cfg(feature = "test-network")]
+pub mod seams {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, PoisonError};
+
+    use tokio::sync::Semaphore;
+
+    #[derive(Debug, Default)]
+    pub struct Seams {
+        passes: AtomicUsize,
+        attempts: AtomicUsize,
+        hold: Mutex<Option<Arc<Hold>>>,
+    }
+
+    impl Seams {
+        /// How many passes the scheduler has finished.
+        pub fn passes(&self) -> usize {
+            self.passes.load(Ordering::SeqCst)
+        }
+
+        /// How many attempts to start a run have begun.
+        pub fn attempts(&self) -> usize {
+            self.attempts.load(Ordering::SeqCst)
+        }
+
+        /// Holds the next start that finds its Bot busy, once it has
+        /// recorded that its run waits and before its task lets the run
+        /// go, until [`Hold::open`].
+        pub fn hold_next_busy_start(&self) -> Arc<Hold> {
+            let hold = Arc::new(Hold {
+                reached: Semaphore::new(0),
+                open: Semaphore::new(0),
+            });
+            *self.hold.lock().unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
+            hold
+        }
+
+        pub(super) fn passed(&self) {
+            self.passes.fetch_add(1, Ordering::SeqCst);
+        }
+
+        pub(super) fn attempted(&self) {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+        }
+
+        pub(super) async fn found_busy(&self) {
+            let hold = self
+                .hold
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            if let Some(hold) = hold {
+                hold.reached.add_permits(1);
+                if let Ok(open) = hold.open.acquire().await {
+                    open.forget();
+                }
+            }
+        }
+    }
+
+    /// A start held by [`Seams::hold_next_busy_start`].
+    #[derive(Debug)]
+    pub struct Hold {
+        reached: Semaphore,
+        open: Semaphore,
+    }
+
+    impl Hold {
+        /// Waits until a start is held.
+        pub async fn reached(&self) {
+            if let Ok(reached) = self.reached.acquire().await {
+                reached.forget();
+            }
+        }
+
+        /// Lets the held start go on.
+        pub fn open(&self) {
+            self.open.add_permits(1);
+        }
+    }
 }

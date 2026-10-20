@@ -760,11 +760,19 @@ from it.
   `routine_created`, `routine_updated` or `routine_deleted`. `push` says
   which of its finished runs push to the user's devices (see
   [Notifications](#notifications)).
-- **The scheduler.** Every 10 seconds, and as soon as a Bot's turn ends,
+- **The scheduler.** Every 10 seconds, and as soon as a Bot turns idle,
   the gateway queues a run of each routine whose time has come and starts
-  the runs that can start. Each start, and each interrupt of a run past its
-  deadline, goes on by itself, one at a time per run, so one user's slow
-  app server holds up no other run. A run records its routine, its trigger
+  the runs that can start. A Bot turns idle when its turn ends (or stops
+  with its app server) with no other turn owed, and when a message to it,
+  or a change that holds off sends to it (such as to its grants), is done
+  with the Bot idle. Each
+  start, and each interrupt of a run past its deadline, goes on by itself,
+  one at a time per run, so one user's slow app server holds up no other
+  run. A run that waits for its Bot starts as soon as the Bot turns idle,
+  even when that happens while an attempt to start the run is still
+  finding the Bot busy: that attempt has the scheduler pass again once it
+  is done. It does so only then, so a Bot that stays busy is tried once a
+  pass, never over and over. A run records its routine, its trigger
   (`schedule` or `manual`), when it was due (`scheduled_for`) and when its
   turn started and ended, its state and why, the messages it added to the
   conversation and the tokens its turn used. Each change arrives as

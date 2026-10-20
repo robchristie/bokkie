@@ -407,6 +407,9 @@ struct Live {
     /// answering, in order, until the Bot's next turn starts. They count as
     /// the Bot working, so that no routine's run starts first.
     owed: HashMap<BotId, Vec<MessageId>>,
+    /// How many times each Bot has turned idle, for the scheduler
+    /// ([`Conversations::idle_count`]).
+    idled: HashMap<BotId, u64>,
 }
 
 impl Live {
@@ -472,9 +475,30 @@ pub struct Conversations {
     live: std::sync::Mutex<Live>,
     /// Serialises the sends to each Bot.
     sends: std::sync::Mutex<HashMap<(UserId, BotId), SendLock>>,
-    /// Woken when a Bot's turn ends, so that a routine run waiting for it
-    /// can start.
+    /// Woken when a Bot turns idle ([`Conversations::idle_count`]), so that
+    /// a routine run waiting for it can start.
     pub idle: tokio::sync::Notify,
+}
+
+/// A hold on a Bot's send lock ([`Conversations::lock_bot`]). Letting it go
+/// while the Bot is idle counts as the Bot turning idle, so that a routine's
+/// run that found the lock held starts at once rather than at the
+/// scheduler's next tick.
+#[derive(Debug)]
+#[must_use = "the Bot's lock is let go at once"]
+pub struct BotLock<'a> {
+    conversations: &'a Conversations,
+    bot: BotId,
+    held: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl Drop for BotLock<'_> {
+    fn drop(&mut self) {
+        drop(self.held.take());
+        if !self.conversations.is_working(self.bot) {
+            self.conversations.turned_idle(self.bot);
+        }
+    }
 }
 
 fn limit_reached() -> Failure {
@@ -553,6 +577,24 @@ impl Conversations {
         live.turns.contains_key(&bot) || live.owed.contains_key(&bot)
     }
 
+    /// How many times the Bot has turned idle since the gateway started:
+    /// its turn ended, or stopped with its app server, with no other turn
+    /// owed; a turn it was owed did not start; or a message to it, or a
+    /// change that holds off sends to it ([`Conversations::lock_bot`]),
+    /// was done with it idle. The scheduler compares it across an attempt
+    /// that found the Bot busy, so as to pass again only when the Bot
+    /// turned idle meanwhile.
+    pub fn idle_count(&self, bot: BotId) -> u64 {
+        self.live().idled.get(&bot).copied().unwrap_or(0)
+    }
+
+    /// Records that the Bot turned idle and wakes the scheduler. A wake
+    /// that comes while the scheduler is mid-pass is kept for its next.
+    fn turned_idle(&self, bot: BotId) {
+        *self.live().idled.entry(bot).or_default() += 1;
+        self.idle.notify_one();
+    }
+
     fn send_lock(&self, user: UserId, bot: BotId) -> SendLock {
         self.sends
             .lock()
@@ -565,8 +607,12 @@ impl Conversations {
     /// Holds off sends to the Bot, for a change that a send must see whole,
     /// such as its grants: a turn then starts either before the change or
     /// after it, on a thread that matches. Take it before any event batch.
-    pub async fn lock_bot(&self, user: UserId, bot: BotId) -> tokio::sync::OwnedMutexGuard<()> {
-        self.send_lock(user, bot).lock_owned().await
+    pub async fn lock_bot(&self, user: UserId, bot: BotId) -> BotLock<'_> {
+        BotLock {
+            conversations: self,
+            bot,
+            held: Some(self.send_lock(user, bot).lock_owned().await),
+        }
     }
 
     /// Marks replies left streaming by a previous gateway run as failed.
@@ -610,9 +656,10 @@ impl Conversations {
         // One send per Bot at a time, so that a Bot's thread starts once and
         // each message either steers its running turn or starts one. Sends
         // to other Bots do not wait, even on a Codex call that hangs: the
-        // allowance is checked and counted in one transaction instead.
-        let lock = self.send_lock(user, bot_id);
-        let _sending = lock.lock().await;
+        // allowance is checked and counted in one transaction instead. A
+        // send that ends with the Bot idle, such as one that fails, lets a
+        // routine's run that waited on it start at once.
+        let _sending = self.lock_bot(user, bot_id).await;
         let bot = store::bot(&self.db, user, bot_id)
             .await?
             .ok_or_else(Failure::not_found)?;
@@ -832,7 +879,7 @@ impl Conversations {
                     .is_none()
         };
         if started {
-            self.status(user, bot.id).await;
+            self.announce_working(user, bot.id).await;
         }
         Ok(turn.id)
     }
@@ -996,7 +1043,8 @@ impl Conversations {
     }
 
     /// Starts a turn for the Bot's steered messages that their turn ended
-    /// without answering, then wakes the scheduler if the Bot is idle.
+    /// without answering. If none starts, it announces the Bot idle and
+    /// wakes the scheduler; a turn that starts does so when it ends.
     /// Codex 0.163.0 can accept a `turn/steer` as the turn ends, record the
     /// message in the thread and end the turn without asking the model
     /// again. The new turn is a user's turn, begun by the latest of them,
@@ -1007,8 +1055,8 @@ impl Conversations {
     /// left messages owed, and a turn of the Bot that starts first answers
     /// them instead.
     async fn answer_owed(self: Arc<Self>, user: UserId, bot_id: BotId) {
-        let working = match self.start_owed(user, bot_id).await {
-            Ok(working) => working,
+        let started = match self.start_owed(user, bot_id).await {
+            Ok(started) => started,
             Err(failure) => {
                 tracing::warn!(user = %user, bot = %bot_id, message = %failure.message, "answering a steered message failed");
                 self.emit(
@@ -1022,14 +1070,14 @@ impl Conversations {
                 self.is_working(bot_id)
             }
         };
-        if !working {
+        if !started {
             self.status(user, bot_id).await;
-            self.idle.notify_one();
+            self.turned_idle(bot_id);
         }
     }
 
-    /// The core of [`Conversations::answer_owed`]. Returns whether the Bot
-    /// is now mid-turn.
+    /// The core of [`Conversations::answer_owed`]. Returns whether a turn
+    /// of the Bot started, here or meanwhile.
     async fn start_owed(&self, user: UserId, bot_id: BotId) -> Result<bool> {
         let lock = self.send_lock(user, bot_id);
         let _sending = lock.lock().await;
@@ -1098,8 +1146,8 @@ impl Conversations {
             },
         )
         .await?;
-        // The turn may have ended already.
-        Ok(self.is_working(bot_id))
+        // Its end, even if it came already, announces the Bot idle.
+        Ok(true)
     }
 
     /// How a turn of the user's that recently finished ended, if it did.
@@ -1646,8 +1694,7 @@ impl Conversations {
                             let this = self.clone();
                             tokio::spawn(async move { this.answer_owed(user, bot.id).await });
                         } else if ended {
-                            // Kept for the scheduler if it is mid-pass.
-                            self.idle.notify_one();
+                            self.turned_idle(bot.id);
                         }
                     }
                 }
@@ -1731,6 +1778,7 @@ impl Conversations {
                     )
                     .await?;
                     self.commit(batch).await;
+                    self.turned_idle(bot.id);
                 }
             }
             // A web search goes to the Bot's tool-call log, not the
@@ -1780,7 +1828,7 @@ impl Conversations {
                 let mut batch = self
                     .finish_streaming(user, None, None, MessageState::Failed)
                     .await?;
-                for bot in stopped {
+                for &bot in &stopped {
                     self.emit_status(&mut batch, bot).await?;
                 }
                 routines::end_running(
@@ -1793,6 +1841,9 @@ impl Conversations {
                 )
                 .await?;
                 self.commit(batch).await;
+                for bot in stopped {
+                    self.turned_idle(bot);
+                }
             }
         }
         Ok(())
@@ -2033,6 +2084,27 @@ impl Conversations {
             .to_api(self.is_working(bot_id), Default::default())
             .status;
         batch.emit(Event::BotStatusChanged { bot_id, status }).await
+    }
+
+    /// Announces that a turn of the Bot began, unless it ended first: its
+    /// end announced the Bot idle, and saying so again would be a stray.
+    async fn announce_working(&self, user: UserId, bot_id: BotId) {
+        match self.events.begin(user).await {
+            // Read under the user's log lock, after which the turn's end
+            // announces its status.
+            Ok(mut batch) if self.is_working(bot_id) => {
+                match self.emit_status(&mut batch, bot_id).await {
+                    Ok(()) => self.commit(batch).await,
+                    Err(failure) => {
+                        tracing::error!(user = %user, message = %failure.message, "reading a Bot failed");
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(failure) => {
+                tracing::error!(user = %user, message = %failure.message, "reading a Bot failed");
+            }
+        }
     }
 
     /// Announces the Bot's current status.
