@@ -9,11 +9,12 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use bokkie_protocol::api::{
-    Bot, BotList, BotNotes, CreateBotRequest, MessagePage, SendMessageRequest, SendMessageResponse,
-    StopResponse, ToolCallPage, UpdateBotRequest,
+    Bot, BotList, BotNotes, CreateBotRequest, MarkReadRequest, MessagePage, NotificationPage,
+    ReadState, SendMessageRequest, SendMessageResponse, StopResponse, ToolCallPage,
+    UpdateBotRequest,
 };
 use bokkie_protocol::events::Event;
-use bokkie_protocol::{BotId, MessageId};
+use bokkie_protocol::{BotId, MessageId, NotificationId};
 use serde::Deserialize;
 
 use crate::AppState;
@@ -30,10 +31,10 @@ pub(crate) async fn to_api(
     db: impl SqliteExecutor<'_>,
     bot: &BotRow,
 ) -> Result<Bot> {
-    let previews = store::previews(db, bot.user).await?;
+    let mut activity = store::activity(db, bot.user, Some(bot.id)).await?;
     Ok(bot.to_api(
         state.conversations.is_working(bot.id),
-        previews.get(&bot.id).cloned(),
+        activity.remove(&bot.id).unwrap_or_default(),
     ))
 }
 
@@ -42,16 +43,24 @@ pub async fn list(State(state): State<AppState>, signed_in: SignedIn) -> Result<
     // Read the watermark first: the list then reflects at least every event
     // up to it.
     let seq = state.events.latest(signed_in.id()).await?;
-    let mut previews = store::previews(&state.db, signed_in.id()).await?;
-    let bots = store::list_bots(&state.db, signed_in.id())
+    // One read transaction, so the Bots and their activity agree.
+    let mut tx = state.db.begin().await?;
+    let mut activity = store::activity(&mut *tx, signed_in.id(), None).await?;
+    let bots: Vec<Bot> = store::list_bots(&mut *tx, signed_in.id())
         .await?
         .into_iter()
         .map(|bot| {
-            let preview = previews.remove(&bot.id);
-            bot.to_api(state.conversations.is_working(bot.id), preview)
+            let activity = activity.remove(&bot.id).unwrap_or_default();
+            bot.to_api(state.conversations.is_working(bot.id), activity)
         })
         .collect();
-    Ok(Json(BotList { bots, seq }))
+    drop(tx);
+    let unread_bots = bots.iter().filter(|bot| bot.unread).count();
+    Ok(Json(BotList {
+        bots,
+        unread_bots: u32::try_from(unread_bots).unwrap_or(u32::MAX),
+        seq,
+    }))
 }
 
 /// `POST /api/v1/bots`.
@@ -306,4 +315,64 @@ pub async fn tool_calls(
     )
     .await?;
     Ok(Json(ToolCallPage { calls, older }))
+}
+
+/// `PUT /api/v1/bots/{id}/read`: moves the user's read marker on their Bot
+/// forward, and tells their other devices.
+pub async fn mark_read(
+    State(state): State<AppState>,
+    signed_in: SignedIn,
+    Path(id): Path<i64>,
+    Body(request): Body<MarkReadRequest>,
+) -> Result<Json<ReadState>> {
+    let user = signed_in.id();
+    // The marker and its event commit together.
+    let mut batch = state.events.begin(user).await?;
+    let bot = store::bot(&mut *batch, user, BotId(id))
+        .await?
+        .ok_or_else(Failure::not_found)?;
+    let message = store::message(&mut *batch, user, request.message_id).await?;
+    if message.is_none_or(|message| message.bot_id != bot.id) {
+        return Err(Failure::invalid(
+            "message_id names none of the Bot's messages",
+        ));
+    }
+    let moved = store::mark_read(
+        &mut *batch,
+        state.clock.now(),
+        user,
+        bot.id,
+        request.message_id,
+    )
+    .await?;
+    let read = store::read_state(&mut *batch, user, bot.id)
+        .await?
+        .ok_or_else(Failure::not_found)?;
+    if moved {
+        batch
+            .emit(Event::ReadUpdated { read: read.clone() })
+            .await?;
+        batch.commit().await?;
+    }
+    Ok(Json(read))
+}
+
+/// `GET /api/v1/notifications?before=&limit=`: the user's notifications
+/// from every Bot of theirs, newest first.
+pub async fn notifications(
+    State(state): State<AppState>,
+    signed_in: SignedIn,
+    Query(query): Query<CallQuery>,
+) -> Result<Json<NotificationPage>> {
+    let (notifications, older) = tools::notify::page(
+        &state.db,
+        signed_in.id(),
+        query.before.map(NotificationId),
+        query.limit.unwrap_or(50),
+    )
+    .await?;
+    Ok(Json(NotificationPage {
+        notifications,
+        older,
+    }))
 }

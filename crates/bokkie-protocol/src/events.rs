@@ -33,10 +33,17 @@
 //! client that falls too far behind is disconnected rather than allowed to
 //! slow the gateway down; it reconnects and resumes from its last sequence
 //! number.
+//!
+//! A client also says which of the user's Bots, if any, it shows with the
+//! app in the foreground, with [`ClientFrame::Viewing`]. The gateway sends no
+//! push notification about a Bot while one of the user's devices shows it.
+//! What a connection said lapses when it closes, and
+//! [`VIEWING_EXPIRES_MS`] after it last said it, so a client that still
+//! shows a Bot says so again every [`VIEWING_RENEW_MS`].
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{Bot, BotStatus, Message, Routine, RoutineRun, Usage, User};
+use crate::api::{Bot, BotStatus, Message, ReadState, Routine, RoutineRun, Usage, User};
 #[cfg(doc)]
 use crate::api::{BotList, MessagePage};
 use crate::{BotId, MessageId, RoutineId, Timestamp};
@@ -112,7 +119,15 @@ pub enum Event {
     /// now is; [`RunState::is_finished`](crate::api::RunState::is_finished)
     /// says whether this is its end.
     RoutineRunUpdated { run: RoutineRun },
+    /// A Bot's read marker moved, on this device or another of the user's.
+    ReadUpdated { read: ReadState },
 }
+
+/// How often a client that shows a Bot says so again.
+pub const VIEWING_RENEW_MS: u64 = 30_000;
+/// How long after a connection last said it shows a Bot the gateway still
+/// counts it as shown.
+pub const VIEWING_EXPIRES_MS: u64 = 75_000;
 
 /// A frame from the client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +139,14 @@ pub enum ClientFrame {
     /// Keeps the connection alive; the gateway answers with
     /// [`ServerFrame::Pong`].
     Ping,
+    /// The Bot whose conversation this device shows with the app in the
+    /// foreground, or `None` when it shows none or the page is hidden.
+    /// The gateway does not answer it. A Bot that is not the user's counts
+    /// as none.
+    Viewing {
+        #[serde(default)]
+        bot_id: Option<BotId>,
+    },
 }
 
 /// A frame from the gateway.

@@ -126,6 +126,7 @@ impl Fixture {
 
 pub(super) fn tutor_list(status: BotStatus, seq: u64) -> BotList {
     BotList {
+        unread_bots: 0,
         bots: vec![bot(1, "Tutor", "Maths help", status, Some("Hi"))],
         seq: Seq(seq),
     }
@@ -133,6 +134,7 @@ pub(super) fn tutor_list(status: BotStatus, seq: u64) -> BotList {
 
 pub(super) fn message(id: i64, author: Author, text: &str, state: MessageState) -> Message {
     Message {
+        notification: None,
         id: MessageId(id),
         bot_id: TUTOR,
         author,

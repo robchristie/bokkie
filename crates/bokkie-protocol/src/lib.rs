@@ -70,3 +70,7 @@ id_type!(
     /// One run of a routine, scheduled or started by hand.
     RoutineRunId
 );
+id_type!(
+    /// A notification a Bot sent its owner with its `notify` tool.
+    NotificationId
+);

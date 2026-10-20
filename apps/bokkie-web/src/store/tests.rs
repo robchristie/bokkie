@@ -1,5 +1,7 @@
 use bokkie_protocol::Timestamp;
-use bokkie_protocol::api::{Allowance, Author, BotStatus, Limits, MessageKind, RateLimitBucket};
+use bokkie_protocol::api::{
+    Allowance, Author, BotStatus, Limits, MessageKind, RateLimitBucket, ReadState,
+};
 
 use super::*;
 
@@ -19,6 +21,8 @@ fn bot(id: i64, name: &str) -> Bot {
         updated_at: Timestamp(1_000),
         last_message: None,
         grants: Vec::new(),
+        read_up_to: None,
+        unread: false,
     }
 }
 
@@ -33,6 +37,7 @@ fn message(id: i64, author: Author, text: &str, state: MessageState) -> Message 
         updated_at: Timestamp(2_000 + id),
         kind: MessageKind::Text,
         routine: None,
+        notification: None,
     }
 }
 
@@ -81,6 +86,7 @@ fn status(seq: u64, bot: i64, status: BotStatus) -> EventEnvelope {
 fn bots(seq: u64, bots: Vec<Bot>) -> BotList {
     BotList {
         bots,
+        unread_bots: 0,
         seq: Seq(seq),
     }
 }
@@ -805,4 +811,57 @@ fn a_failed_older_page_stops_holding_events_and_can_be_asked_for_again() {
     );
     assert!(applied.changed);
     assert_eq!(ids(&store), [9, 10, 11, 12]);
+}
+
+#[test]
+fn a_bot_turns_unread_when_it_writes_and_read_when_any_device_reads() {
+    let mut store = Store::new();
+    assert!(store.request(Snapshot::Bots));
+    let read = Bot {
+        read_up_to: Some(MessageId(4)),
+        ..bot(1, "Ada")
+    };
+    let _ = store.load_bots(bots(5, vec![read]));
+    // The user's own message leaves it read; the Bot's reply does not.
+    assert!(
+        store
+            .apply(&created(
+                6,
+                message(5, Author::User, "hi", MessageState::Complete)
+            ))
+            .changed
+    );
+    assert!(!store.bot(BOT).unwrap().unread);
+    assert!(store.apply(&created(7, reply(6, ""))).changed);
+    assert!(store.bot(BOT).unwrap().unread);
+    // Another device read up to the reply.
+    let read = |seq, up_to: i64, unread| {
+        at(
+            seq,
+            Event::ReadUpdated {
+                read: ReadState {
+                    bot_id: BOT,
+                    read_up_to: Some(MessageId(up_to)),
+                    unread,
+                },
+            },
+        )
+    };
+    assert!(store.apply(&read(8, 6, false)).changed);
+    let bot = store.bot(BOT).unwrap();
+    assert_eq!((bot.read_up_to, bot.unread), (Some(MessageId(6)), false));
+    // Applying it again changes nothing.
+    assert!(!store.apply(&read(8, 6, false)).changed);
+    // A read event for a Bot the list lacks reloads the list.
+    let other = at(
+        9,
+        Event::ReadUpdated {
+            read: ReadState {
+                bot_id: BotId(2),
+                read_up_to: None,
+                unread: false,
+            },
+        },
+    );
+    assert!(store.apply(&other).reload.contains(&Snapshot::Bots));
 }

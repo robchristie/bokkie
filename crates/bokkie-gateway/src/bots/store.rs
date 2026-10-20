@@ -6,7 +6,8 @@
 //! [`Batch`](crate::events::Batch) alike.
 
 use bokkie_protocol::api::{
-    Author, Bot, BotStatus, Message, MessageKind, MessagePreview, MessageRoutine, MessageState,
+    Author, Bot, BotStatus, Message, MessageKind, MessageNotification, MessagePreview,
+    MessageRoutine, MessageState, NotificationKind, ReadState,
 };
 use bokkie_protocol::{BotId, MessageId, RoutineId, RoutineRunId, Timestamp, UserId};
 use sqlx::Row;
@@ -55,7 +56,7 @@ impl BotRow {
     }
 
     /// The Bot as its owner sees it.
-    pub fn to_api(&self, working: bool, last_message: Option<MessagePreview>) -> Bot {
+    pub fn to_api(&self, working: bool, activity: Activity) -> Bot {
         Bot {
             id: self.id,
             name: self.name.clone(),
@@ -73,8 +74,10 @@ impl BotRow {
             },
             created_at: self.created_at,
             updated_at: self.updated_at,
-            last_message,
+            last_message: activity.last_message,
             grants: self.grants.iter().copied().collect(),
+            read_up_to: activity.read_up_to,
+            unread: activity.unread,
         }
     }
 }
@@ -154,7 +157,22 @@ fn kind_from(name: &str) -> MessageKind {
 }
 
 const MESSAGE_COLUMNS: &str = "id, bot_id, author, text, state, created_at, updated_at, kind, \
-     routine_id, routine_run_id, detail";
+     routine_id, routine_run_id, detail, notification_kind";
+
+pub fn notification_kind_name(kind: NotificationKind) -> &'static str {
+    match kind {
+        NotificationKind::Result => "result",
+        NotificationKind::Question => "question",
+    }
+}
+
+pub fn notification_kind_from(name: &str) -> NotificationKind {
+    if name == "question" {
+        NotificationKind::Question
+    } else {
+        NotificationKind::Result
+    }
+}
 
 fn message_from(row: &sqlx::sqlite::SqliteRow) -> Message {
     Message {
@@ -178,6 +196,12 @@ fn message_from(row: &sqlx::sqlite::SqliteRow) -> Message {
             }),
             _ => None,
         },
+        notification: row.get::<Option<&str>, _>("notification_kind").map(|kind| {
+            MessageNotification {
+                kind: notification_kind_from(kind),
+                body: row.get::<Option<String>, _>("detail").unwrap_or_default(),
+            }
+        }),
     }
 }
 
@@ -542,6 +566,9 @@ pub struct NewMessage<'a> {
     pub kind: MessageKind,
     /// For a routine run's marker: the routine, the run and its prompt.
     pub routine: Option<(RoutineId, RoutineRunId, &'a str)>,
+    /// For a notification's marker: its kind and body. The text is the
+    /// title.
+    pub notification: Option<(NotificationKind, &'a str)>,
 }
 
 pub async fn insert_message(
@@ -558,11 +585,14 @@ pub async fn insert_message(
         turn,
         kind,
         routine,
+        notification,
     } = new;
     let row = sqlx::query(&format!(
         "INSERT INTO messages (bot_id, user_id, author, text, state, turn_id, item_id,
-                               created_at, updated_at, kind, routine_id, routine_run_id, detail)
-         SELECT id, user_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM bots WHERE id = ? AND user_id = ?
+                               created_at, updated_at, kind, routine_id, routine_run_id, detail,
+                               notification_kind)
+         SELECT id, user_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM bots
+         WHERE id = ? AND user_id = ?
          RETURNING {MESSAGE_COLUMNS}"
     ))
     .bind(author_name(author))
@@ -575,7 +605,8 @@ pub async fn insert_message(
     .bind(kind_name(kind))
     .bind(routine.map(|r| r.0.0))
     .bind(routine.map(|r| r.1.0))
-    .bind(routine.map(|r| r.2))
+    .bind(routine.map(|r| r.2).or(notification.map(|n| n.1)))
+    .bind(notification.map(|n| notification_kind_name(n.0)))
     .bind(bot.0)
     .bind(user.0)
     .fetch_optional(db)
@@ -728,32 +759,143 @@ pub async fn messages(
     Ok((messages, older))
 }
 
-/// The start of each of the user's Bots' latest message.
-pub async fn previews(
+/// What a Bot's conversation list entry shows of its conversation: the
+/// start of its latest message, and whether its user has seen it all.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Activity {
+    pub last_message: Option<MessagePreview>,
+    pub read_up_to: Option<MessageId>,
+    pub unread: bool,
+}
+
+/// The conversation activity of each of the user's Bots, or of `only`.
+pub async fn activity(
     db: impl SqliteExecutor<'_>,
     user: UserId,
-) -> Result<std::collections::HashMap<BotId, MessagePreview>> {
+    only: Option<BotId>,
+) -> Result<std::collections::HashMap<BotId, Activity>> {
     let rows = sqlx::query(
-        "SELECT m.bot_id, m.author, substr(m.text, 1, ?) AS text, m.updated_at
-         FROM messages m
-         WHERE m.user_id = ?
-           AND m.id = (SELECT max(id) FROM messages WHERE bot_id = m.bot_id)",
+        "SELECT b.id AS bot_id, r.message_id AS read_up_to,
+                (SELECT max(id) FROM messages WHERE bot_id = b.id AND author = 'bot') AS newest,
+                m.author, substr(m.text, 1, ?) AS text, m.updated_at
+         FROM bots b
+         LEFT JOIN read_markers r ON r.bot_id = b.id AND r.user_id = b.user_id
+         LEFT JOIN messages m
+           ON m.id = (SELECT max(id) FROM messages WHERE bot_id = b.id) AND m.user_id = b.user_id
+         WHERE b.user_id = ? AND (? IS NULL OR b.id = ?)",
     )
     .bind(PREVIEW_CHARS as i64)
     .bind(user.0)
+    .bind(only.map(|b| b.0))
+    .bind(only.map(|b| b.0))
     .fetch_all(db)
     .await?;
     Ok(rows
         .iter()
         .map(|r| {
-            (
-                BotId(r.get("bot_id")),
-                MessagePreview {
-                    author: author_from(r.get::<&str, _>("author")),
+            let read_up_to = r.get::<Option<i64>, _>("read_up_to").map(MessageId);
+            let newest = r.get::<Option<i64>, _>("newest").map(MessageId);
+            let last_message = r
+                .get::<Option<&str>, _>("author")
+                .map(|author| MessagePreview {
+                    author: author_from(author),
                     text: r.get("text"),
                     at: Timestamp(r.get("updated_at")),
+                });
+            (
+                BotId(r.get("bot_id")),
+                Activity {
+                    last_message,
+                    read_up_to,
+                    unread: is_unread(newest, read_up_to),
                 },
             )
         })
         .collect())
+}
+
+/// Whether a Bot whose newest message of its own is `newest` is unread to
+/// a user who has seen its conversation up to `read_up_to`, by the rule of
+/// [`Message::is_unread`].
+fn is_unread(newest: Option<MessageId>, read_up_to: Option<MessageId>) -> bool {
+    newest.is_some_and(|newest| read_up_to.is_none_or(|read| newest > read))
+}
+
+// ---------------------------------------------------------------------------
+// Read markers
+
+/// The user's read marker on one of their Bots, or `None` if the Bot is not
+/// theirs.
+pub async fn read_state(
+    db: impl SqliteExecutor<'_>,
+    user: UserId,
+    bot: BotId,
+) -> Result<Option<ReadState>> {
+    let row = sqlx::query(
+        "SELECT r.message_id AS read_up_to,
+                (SELECT max(id) FROM messages WHERE bot_id = b.id AND author = 'bot') AS newest
+         FROM bots b
+         LEFT JOIN read_markers r ON r.bot_id = b.id AND r.user_id = b.user_id
+         WHERE b.id = ? AND b.user_id = ?",
+    )
+    .bind(bot.0)
+    .bind(user.0)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|r| {
+        let read_up_to = r.get::<Option<i64>, _>("read_up_to").map(MessageId);
+        let newest = r.get::<Option<i64>, _>("newest").map(MessageId);
+        ReadState {
+            bot_id: bot,
+            read_up_to,
+            unread: is_unread(newest, read_up_to),
+        }
+    }))
+}
+
+/// Moves the user's read marker on their Bot forward to `message`, one of
+/// that Bot's messages. Returns whether it moved: an older message, or one
+/// that is not the user's Bot's, leaves it where it is.
+pub async fn mark_read(
+    db: impl SqliteExecutor<'_>,
+    now: Timestamp,
+    user: UserId,
+    bot: BotId,
+    message: MessageId,
+) -> Result<bool> {
+    let moved = sqlx::query(
+        "INSERT INTO read_markers (bot_id, user_id, message_id, updated_at)
+         SELECT m.bot_id, m.user_id, m.id, ?
+         FROM messages m JOIN bots b ON b.id = m.bot_id AND b.user_id = m.user_id
+         WHERE m.id = ? AND m.bot_id = ? AND m.user_id = ?
+         ON CONFLICT (bot_id) DO UPDATE
+           SET message_id = excluded.message_id, updated_at = excluded.updated_at
+           WHERE excluded.message_id > read_markers.message_id
+             AND read_markers.user_id = excluded.user_id
+         RETURNING message_id",
+    )
+    .bind(now.0)
+    .bind(message.0)
+    .bind(bot.0)
+    .bind(user.0)
+    .fetch_optional(db)
+    .await?;
+    Ok(moved.is_some())
+}
+
+/// How many of the user's Bots are unread, hidden ones too: the count the
+/// app's badge shows.
+pub async fn unread_bots(db: impl SqliteExecutor<'_>, user: UserId) -> Result<u32> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM bots b
+         LEFT JOIN read_markers r ON r.bot_id = b.id AND r.user_id = b.user_id
+         WHERE b.user_id = ?
+           AND EXISTS (SELECT 1 FROM messages m
+                       WHERE m.bot_id = b.id AND m.author = 'bot'
+                         AND (r.message_id IS NULL OR m.id > r.message_id))",
+    )
+    .bind(user.0)
+    .fetch_one(db)
+    .await?;
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
 }

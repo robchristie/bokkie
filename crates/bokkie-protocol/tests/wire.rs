@@ -3,7 +3,9 @@
 
 use bokkie_protocol::api::*;
 use bokkie_protocol::events::*;
-use bokkie_protocol::{BotId, MessageId, RoutineId, RoutineRunId, Timestamp, UserId};
+use bokkie_protocol::{
+    BotId, MessageId, NotificationId, RoutineId, RoutineRunId, Timestamp, UserId,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -37,6 +39,8 @@ fn bot() -> Bot {
             at: Timestamp(2_000),
         }),
         grants: vec![Grant::Notes, Grant::WebSearch],
+        read_up_to: Some(MessageId(40)),
+        unread: true,
     }
 }
 
@@ -51,6 +55,7 @@ fn message() -> Message {
         updated_at: Timestamp(3_500),
         kind: MessageKind::Text,
         routine: None,
+        notification: None,
     }
 }
 
@@ -295,9 +300,16 @@ fn bot_types() {
             "avatar": "🍳", "pinned": true, "hidden": false, "status": "idle",
             "created_at": 1000, "updated_at": 2000,
             "last_message": {"author": "bot", "text": "Pasta tonight?", "at": 2000},
-            "grants": ["notes", "web.search"],
+            "grants": ["notes", "web.search"], "read_up_to": 40, "unread": true,
         }),
     );
+    // A Bot stored in an event before unread state existed decodes as
+    // read, with no marker.
+    let mut old = serde_json::to_value(bot()).unwrap();
+    old.as_object_mut().unwrap().remove("read_up_to");
+    old.as_object_mut().unwrap().remove("unread");
+    let old: Bot = serde_json::from_value(old).unwrap();
+    assert_eq!((old.read_up_to, old.unread), (None, false));
     // A Bot stored in an event before grants existed decodes with none.
     let mut old = serde_json::to_value(bot()).unwrap();
     old.as_object_mut().unwrap().remove("grants");
@@ -693,6 +705,13 @@ fn events_are_tagged_by_type() {
             message: "The Bot is unavailable".into(),
         },
         Event::AccountUpdated { user: user() },
+        Event::ReadUpdated {
+            read: ReadState {
+                bot_id: BotId(7),
+                read_up_to: None,
+                unread: true,
+            },
+        },
     ];
     for event in events {
         let encoded = serde_json::to_value(&event).unwrap();
@@ -723,6 +742,22 @@ fn websocket_frames() {
         ClientFrame::Resume { after: None }
     );
     pin(&ClientFrame::Ping, json!({"type": "ping"}));
+    pin(
+        &ClientFrame::Viewing {
+            bot_id: Some(BotId(7)),
+        },
+        json!({"type": "viewing", "bot_id": 7}),
+    );
+    pin(
+        &ClientFrame::Viewing { bot_id: None },
+        json!({"type": "viewing", "bot_id": null}),
+    );
+    assert_eq!(
+        serde_json::from_value::<ClientFrame>(json!({"type": "viewing"})).unwrap(),
+        ClientFrame::Viewing { bot_id: None }
+    );
+    // A shown Bot is said again well before it lapses.
+    const { assert!(VIEWING_RENEW_MS * 2 < VIEWING_EXPIRES_MS) };
     pin(&ServerFrame::Pong, json!({"type": "pong"}));
     pin(
         &ServerFrame::Reset { after: Seq(100) },
@@ -888,9 +923,17 @@ fn more_request_and_response_shapes() {
     pin(
         &BotList {
             bots: vec![],
+            unread_bots: 2,
             seq: Seq(4),
         },
-        json!({"bots": [], "seq": 4}),
+        json!({"bots": [], "unread_bots": 2, "seq": 4}),
+    );
+    // A list from before unread state counts none.
+    assert_eq!(
+        serde_json::from_value::<BotList>(json!({"bots": [], "seq": 4}))
+            .unwrap()
+            .unread_bots,
+        0
     );
     pin(
         &MessagePage {
@@ -902,4 +945,92 @@ fn more_request_and_response_shapes() {
                              "state": "streaming", "created_at": 3000, "updated_at": 3500, "kind": "text"}],
                "older": 40, "seq": 5}),
     );
+}
+
+#[test]
+fn unread_state_and_notifications() {
+    pin(
+        &MarkReadRequest {
+            message_id: MessageId(42),
+        },
+        json!({"message_id": 42}),
+    );
+    pin(
+        &ReadState {
+            bot_id: BotId(7),
+            read_up_to: Some(MessageId(42)),
+            unread: false,
+        },
+        json!({"bot_id": 7, "read_up_to": 42, "unread": false}),
+    );
+    pin(
+        &Event::ReadUpdated {
+            read: ReadState {
+                bot_id: BotId(7),
+                read_up_to: Some(MessageId(42)),
+                unread: false,
+            },
+        },
+        json!({"type": "read_updated",
+               "read": {"bot_id": 7, "read_up_to": 42, "unread": false}}),
+    );
+    let marker = Message {
+        kind: MessageKind::Marker,
+        text: "Dinner plan ready".into(),
+        state: MessageState::Complete,
+        notification: Some(MessageNotification {
+            kind: NotificationKind::Question,
+            body: "Pasta or curry?".into(),
+        }),
+        ..message()
+    };
+    pin(
+        &marker,
+        json!({"id": 42, "bot_id": 7, "author": "bot", "text": "Dinner plan ready",
+               "state": "complete", "created_at": 3000, "updated_at": 3500,
+               "kind": "marker",
+               "notification": {"kind": "question", "body": "Pasta or curry?"}}),
+    );
+    pin(&NotificationKind::Result, json!("result"));
+    pin(
+        &NotificationPage {
+            notifications: vec![Notification {
+                id: NotificationId(3),
+                bot_id: BotId(7),
+                message_id: MessageId(42),
+                routine_run_id: Some(RoutineRunId(9)),
+                kind: NotificationKind::Result,
+                title: "Dinner plan ready".into(),
+                body: String::new(),
+                created_at: Timestamp(8),
+            }],
+            older: None,
+        },
+        json!({"notifications": [{"id": 3, "bot_id": 7, "message_id": 42,
+                                  "routine_run_id": 9, "kind": "result",
+                                  "title": "Dinner plan ready", "body": "",
+                                  "created_at": 8}],
+               "older": null}),
+    );
+    assert!(serde_json::from_value::<NotificationKind>(json!("alert")).is_err());
+}
+
+#[test]
+fn a_bot_is_unread_while_it_wrote_after_the_read_marker() {
+    let reply = message();
+    assert!(reply.is_unread(None));
+    assert!(reply.is_unread(Some(MessageId(41))));
+    assert!(!reply.is_unread(Some(MessageId(42))));
+    assert!(!reply.is_unread(Some(MessageId(43))));
+    // Markers count; the user's own messages never do.
+    let marker = Message {
+        kind: MessageKind::Marker,
+        ..message()
+    };
+    assert!(marker.is_unread(Some(MessageId(41))));
+    let own = Message {
+        author: Author::User,
+        ..message()
+    };
+    assert!(!own.is_unread(None));
 }

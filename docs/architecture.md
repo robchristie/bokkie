@@ -64,8 +64,8 @@ These crates appear as each phase needs them:
   Bot is mid-turn maps to `turn/steer`.
 - Bokkie's own capabilities are tools the Bot can call, each brought by a
   grant (see [The capability model](#the-capability-model)). The first are
-  the Bot's notes and seen items and reading the web; notifications
-  follow, and "message another Bot" later.
+  the Bot's notes and seen items, reading the web and notifying its
+  owner; "message another Bot" follows later.
 - Those tools are experimental app-server `dynamicTools`, served through
   `item/tool/call`. Phase 0 chose them over an MCP server: the call names the
   calling thread and turn, needs no extra process, and survives

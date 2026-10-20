@@ -634,7 +634,7 @@ async fn a_change_and_its_event_commit_together_or_not_at_all() {
     .unwrap();
     batch
         .emit(Event::BotCreated {
-            bot: bot.to_api(false, None),
+            bot: bot.to_api(false, Default::default()),
         })
         .await
         .unwrap();
@@ -716,7 +716,7 @@ async fn an_edit_waits_for_the_change_before_it_and_is_announced_after_it() {
     .unwrap();
     earlier
         .emit(Event::BotUpdated {
-            bot: bot.to_api(false, None),
+            bot: bot.to_api(false, Default::default()),
         })
         .await
         .unwrap();

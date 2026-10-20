@@ -151,7 +151,7 @@ account (`forbidden`):
 
 | Route | Does |
 | --- | --- |
-| `GET /api/v1/admin/users/{id}/bots` | Lists the member's Bots. With oversight off, only the Bots an admin made for the member, and only their profile (name, label, description, avatar), ordered by id. With it on, every Bot, hidden ones too, each with the member's own view of it (`overseen`: status, pin, visibility and latest message) |
+| `GET /api/v1/admin/users/{id}/bots` | Lists the member's Bots. With oversight off, only the Bots an admin made for the member, and only their profile (name, label, description, avatar), ordered by id. With it on, every Bot, hidden ones too, each with the member's own view of it (`overseen`: status, pin, visibility and latest message, but never what the member has read: its `read_up_to` is empty and `unread` false) |
 | `POST /api/v1/admin/users/{id}/bots` | Makes a Bot for the member, whatever the switches say. The gateway records that an admin made it |
 | `PATCH /api/v1/admin/users/{id}/bots/{bot}` | Changes the name, label, description or avatar of a Bot an admin made. The member's own Bots are read-only to admins: with oversight off they read as not found, and with it on a change is refused (`forbidden`). Pinning and hiding stay the member's |
 | `GET /api/v1/admin/users/{id}/bots/{bot}/messages` | Reads a conversation, paged like the member's own, only while oversight is on (`forbidden` otherwise) |
@@ -367,7 +367,7 @@ The gateway refuses to serve an app server or thread unless these all hold:
 `tests/live_codex.rs` proves the result against the real pinned app server
 with a mock model and a synthetic household sign-in: a thread offers
 exactly the tools of its grants, for every combination of `notes`, `seen`,
-`web.search` and `web.fetch`, plus `request_user_input`, which the gateway answers
+`notify`, `web.search` and `web.fetch`, plus `request_user_input`, which the gateway answers
 with an error, and Codex's web search only with `web.search`. Its control
 test shows that the same capture sees `apply_patch`, `exec_command` and
 `spawn_agent` without the gateway's configuration. Other live tests show
@@ -375,8 +375,9 @@ that a thread runs with every Bubblewrap broken, and that one user's app
 server cannot load another user's thread. `tests/live_tools.rs` drives the
 whole gateway: a grant change starts a fresh thread with the new tools,
 and a tool call the mock model makes reaches the broker and is answered
-from the calling Bot's notes or seen items, or with a feed fetched from a
-local site (see [Web fetch](#web-fetch)).
+from the calling Bot's notes or seen items, with a notification recorded
+for its owner, or with a feed fetched from a local site (see
+[Web fetch](#web-fetch)).
 
 These results hold for the pinned release: the tool flags, the catalog
 fields and the static catalog are all Codex 0.163.0 behaviour. Moving the
@@ -462,13 +463,34 @@ long-lived Codex thread in that user's app server.
   own routes (see [Permissions and oversight](#permissions-and-oversight)),
   which name the member.
 
+### Unread conversations
+
+Each user has a read marker on each of their Bots: the newest of the Bot's
+messages they have seen, on any device. A Bot is unread while it has a
+message of its own, a reply or a marker, newer than the marker; the
+user's own messages never make it unread. A Bot that has written nothing
+is read. Upgrading to the gateway that brought read markers set each
+Bot's marker to its newest message, so nothing was unread.
+
+- `GET /api/v1/bots` and `GET /api/v1/bots/{id}` carry each Bot's
+  `read_up_to` (the marker's message, or none) and `unread`, and the list
+  carries `unread_bots`, how many of the user's Bots are unread, hidden
+  ones included, for the app's badge.
+- `PUT /api/v1/bots/{id}/read` with `message_id` moves the marker to that
+  message, one of the Bot's own (`invalid_request` otherwise), while the
+  conversation shows on a device. It only moves forward: an older message
+  leaves it where it was. It answers with the Bot's `bot_id`, `read_up_to`
+  and `unread`, and a move commits with a `read_updated` event carrying the
+  same, so the user's other devices follow.
+- A new message of the Bot's arrives as `message_created`, from which a
+  client can tell the Bot is unread without asking.
+
 ## Grants and tools
 
 Each Bot holds a set of grants from the catalogue `notes`, `seen`,
 `notify`, `web.search` and `web.fetch`, carried as `grants` on the Bot (in
-`GET /api/v1/bots` and `bot_updated` events). Today `notes`, `seen` and
-`web.fetch` have tools; the gateway refuses to grant `notify`
-(`invalid_request`) until its tools exist. `web.search` brings Codex's own web search
+`GET /api/v1/bots` and `bot_updated` events). `notes`, `seen`, `notify`
+and `web.fetch` have tools. `web.search` brings Codex's own web search
 ([Web search](#web-search)), which its threads already turn on and
 describe in their instructions; it is refused until its path is settled.
 
@@ -500,7 +522,7 @@ describe in their instructions; it is refused until its path is settled.
   error, and only the gateway's own log records it, by its tool's name cut
   to 64 characters, since no Bot's owner could read it. If the Bot lost
   the grant since its thread started, the call is refused with an error. Otherwise the tool runs within its deadline (10
-  seconds for the notes and seen tools, 30 for `web_fetch`), and the answer, or an error if the
+  seconds for the notes, seen and notify tools, 30 for `web_fetch`), and the answer, or an error if the
   deadline passes, goes back to the app server. A call that nobody serves,
   because the gateway is shutting down, is answered with an error, since
   Codex itself would wait until the turn is interrupted.
@@ -534,13 +556,33 @@ describe in their instructions; it is refused until its path is settled.
     parameters (`fbclid`, `gclid` and the like) removed, the other
     parameters sorted, and no `/` after the path. A link without a scheme
     is read as https when its host has a dot.
+- **Notify.** `notify` brings `notify`, which tells the Bot's owner that
+  it has a result they should see (`kind` `result`) or needs their answer
+  (`question`). It takes a `title` of 1 to 80 characters on one line, a
+  `body` of at most 500 characters (it may be empty, and may hold line
+  breaks and tabs but no other control characters) and the `kind`; both
+  texts are trimmed, the limits count characters, and a call outside them
+  fails and records nothing. A call records, in one transaction with its
+  `message_created` event, a notification and its marker in the
+  conversation: a `marker` message by the Bot whose text is the title and
+  whose `notification` carries the kind and the body, with the call's turn
+  and call ids, so a routine run's messages include it. The notification
+  keeps its Bot, its marker, the call's thread, turn and call ids, and the
+  routine run whose turn sent it, even when the model sent it before the
+  run was recorded running. The owner reads their notifications from
+  every Bot, newest first, with `GET /api/v1/notifications?before=&limit=`
+  (`notifications` and `older`). The gateway's own log records each one
+  by its ids and kind, never its title or body. The minute pass deletes
+  notifications older than 90 days; their markers stay. Sending them to
+  the owner's devices is not built yet.
 - **The tool-call log.** Every call the broker resolves to a Bot is
   recorded, refused ones included, with its user, Bot, thread, turn and
   call ids, the tool, a bounded summary of its arguments (for the notes
   tools, the size of the text, never the text; for `seen_check`, how many
   items; for `seen_mark`, how many and their canonical ids; for
   `web_fetch`, the link, where its redirects led, and the status, type and
-  size, or why it failed), the outcome
+  size, or why it failed; for `notify`, its kind and title, such as
+  `result: Dinner plan ready`), the outcome
   (`ok`, `failed`, `refused` or `timed_out`) and how long it took. The
   owner reads a Bot's calls, newest first, with
   `GET /api/v1/bots/{id}/tool-calls?before=&limit=`. A call the app
@@ -564,8 +606,8 @@ describe in their instructions; it is refused until its path is settled.
 - **Web fetch.** `web.fetch` brings `web_fetch`; see [Web fetch](#web-fetch).
 
 Every query names the signed-in user, or for the broker the app server's
-user: another user's Bot's grants, notes, seen items and tool calls read as
-not found.
+user: another user's Bot's grants, notes, seen items, notifications and
+tool calls read as not found.
 
 ### Web fetch
 
@@ -691,7 +733,7 @@ from it.
   A routine carries `next_run_at` (none while paused), `failures` (failed
   runs in a row) and `paused`. Each change arrives on the event socket as
   `routine_created`, `routine_updated` or `routine_deleted`. `push` is
-  stored for notifications, which are not built yet.
+  stored for sending notifications to devices, which is not built yet.
 - **The scheduler.** Every 10 seconds, and as soon as a Bot's turn ends,
   the gateway queues a run of each routine whose time has come and starts
   the runs that can start. Each start, and each interrupt of a run past its
@@ -768,6 +810,15 @@ user's event log. The upgrade needs the session cookie and the gateway's
   sequence number.
 - An open socket rechecks its session every 30 seconds, so signing out, a
   revoked session or a disabled account closes it.
+- A client says which of its user's Bots it shows with a `viewing` frame
+  (`bot_id`, or none when it shows no conversation or the page is
+  hidden), sent when that changes and again every 30 seconds while it
+  shows one. The gateway does not answer it, and a Bot that is not the
+  user's counts as none. What a socket said lasts until it says otherwise,
+  until 75 seconds pass without it saying it again, or until the socket
+  closes. The gateway keeps it in memory only, per user, so that it can
+  send no notification to a user's devices about a Bot one of those
+  devices shows.
 
 ## Usage and allowances
 

@@ -128,18 +128,16 @@ async fn grants_are_set_read_and_announced() {
 async fn grants_without_tools_yet_are_refused_even_to_admins() {
     let (gateway, rob) = setup().await;
     let bot = create_bot(&gateway, &rob, "Scout").await;
-    for grant in ["notify", "web.search"] {
-        let refused = set_grants(&gateway, &rob, bot, json!([grant])).await;
-        assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{grant}");
-        assert!(
-            refused.body["message"]
-                .as_str()
-                .unwrap()
-                .contains("not available"),
-            "{grant}: {:?}",
-            refused.body
-        );
-    }
+    let refused = set_grants(&gateway, &rob, bot, json!(["web.search"])).await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+    assert!(
+        refused.body["message"]
+            .as_str()
+            .unwrap()
+            .contains("not available"),
+        "{:?}",
+        refused.body
+    );
     let bot = store::bot(&gateway.state.db, UserId(1), BotId(bot))
         .await
         .unwrap()
@@ -163,9 +161,9 @@ async fn members_may_add_only_their_grants() {
     let seen = set_grants(&gateway, &amy, bot, json!(["seen", "notes"])).await;
     assert_eq!(seen.status, StatusCode::OK, "{:?}", seen.body);
     assert_eq!(seen.body["grants"], json!(["notes", "seen"]));
-    // A member's own grants that have no tools yet are refused as such.
-    let notify = set_grants(&gateway, &amy, bot, json!(["notify"])).await;
-    assert_eq!(notify.status, StatusCode::BAD_REQUEST);
+    let notify = set_grants(&gateway, &amy, bot, json!(["notify", "seen"])).await;
+    assert_eq!(notify.status, StatusCode::OK, "{:?}", notify.body);
+    assert_eq!(notify.body["grants"], json!(["seen", "notify"]));
     let cleared = set_grants(&gateway, &amy, bot, json!([])).await;
     assert_eq!(cleared.body["grants"], json!([]));
 }
@@ -1021,6 +1019,7 @@ async fn existing_threads_keep_their_bots_and_token_totals_after_the_migration()
             turn: None,
             kind: bokkie_protocol::api::MessageKind::Marker,
             routine: None,
+            notification: None,
         },
     )
     .await

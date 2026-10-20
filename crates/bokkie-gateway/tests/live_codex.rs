@@ -148,7 +148,13 @@ async fn the_real_app_server_offers_exactly_the_granted_tools() {
     let user = UserId(1);
     let runtime = supervisor.runtime(user).await.expect("the checks pass");
     // Every grant with tools today, alone and together, and none.
-    let with_tools = [Grant::Notes, Grant::Seen, Grant::WebSearch, Grant::WebFetch];
+    let with_tools = [
+        Grant::Notes,
+        Grant::Seen,
+        Grant::Notify,
+        Grant::WebSearch,
+        Grant::WebFetch,
+    ];
     let combinations: Vec<GrantSet> = (0..(1u32 << with_tools.len()))
         .map(|bits| {
             with_tools
@@ -168,12 +174,16 @@ async fn the_real_app_server_offers_exactly_the_granted_tools() {
         // web search.
         assert_eq!(offered, expected_tools(grants), "grants {grants:?}");
     }
-    // notify has no tools yet, so it offers nothing of Bokkie's; web.search
-    // brings Codex's own search instead; web.fetch brings exactly
-    // web_fetch.
-    for grant in [Grant::Notify, Grant::WebSearch] {
-        assert_eq!(bokkie_gateway::tools::granted(&[grant].into()).count(), 0);
-    }
+    // web.search brings Codex's own search instead of a tool of Bokkie's;
+    // notify brings exactly notify, and web.fetch exactly web_fetch.
+    assert_eq!(
+        bokkie_gateway::tools::granted(&[Grant::WebSearch].into()).count(),
+        0
+    );
+    let notify: Vec<&str> = bokkie_gateway::tools::granted(&[Grant::Notify].into())
+        .map(|tool| tool.name)
+        .collect();
+    assert_eq!(notify, ["notify"]);
     let fetch: Vec<&str> = bokkie_gateway::tools::granted(&[Grant::WebFetch].into())
         .map(|tool| tool.name)
         .collect();

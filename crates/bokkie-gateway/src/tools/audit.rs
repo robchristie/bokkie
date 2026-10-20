@@ -18,7 +18,7 @@ pub const RETENTION_MS: i64 = 90 * DAY_MS;
 pub const SUMMARY_CHARS: usize = 200;
 
 /// The longest id or tool name stored, in characters.
-const ID_CHARS: usize = 128;
+pub(crate) const ID_CHARS: usize = 128;
 
 /// One call to record.
 #[derive(Debug)]
@@ -34,7 +34,7 @@ pub struct Entry<'a> {
     pub duration_ms: u64,
 }
 
-fn bounded(text: &str, chars: usize) -> String {
+pub(crate) fn bounded(text: &str, chars: usize) -> String {
     text.chars().take(chars).collect()
 }
 

@@ -122,7 +122,7 @@ pub enum Command {
     /// frame makes the report harmless, so it needs no cancelling.
     AwaitPong { ping: u32, after: Duration },
     /// Apply this event to the store.
-    Apply(EventEnvelope),
+    Apply(Box<EventEnvelope>),
     /// Reload every snapshot over HTTP (see [`crate::store::Store::reload_all`]).
     Reload,
     /// The socket failed before it opened, which is how a browser reports a
@@ -323,7 +323,7 @@ impl Connection {
                 if self.state == State::Resuming {
                     self.state = State::Replaying;
                 }
-                vec![Command::Apply(envelope)]
+                vec![Command::Apply(Box::new(envelope))]
             }
             ServerFrame::Live { latest } => {
                 if self.state == State::Live {

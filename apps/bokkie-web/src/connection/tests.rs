@@ -51,7 +51,7 @@ fn the_first_connection_resumes_from_the_end_and_reloads_once_live() {
     assert_eq!(connection.last(), Some(Seq(12)));
     assert_eq!(
         frame(&mut connection, event(13)),
-        [Command::Apply(envelope(13))]
+        [Command::Apply(Box::new(envelope(13)))]
     );
     assert_eq!(connection.last(), Some(Seq(13)));
 }
@@ -77,12 +77,12 @@ fn a_reconnection_resumes_after_the_last_event_and_replays() {
     );
     assert_eq!(
         frame(&mut connection, event(14)),
-        [Command::Apply(envelope(14))]
+        [Command::Apply(Box::new(envelope(14)))]
     );
     assert_eq!(connection.state(), State::Replaying);
     assert_eq!(
         frame(&mut connection, event(15)),
-        [Command::Apply(envelope(15))]
+        [Command::Apply(Box::new(envelope(15)))]
     );
     // Replay finished where it should: no reload.
     assert!(frame(&mut connection, ServerFrame::Live { latest: Seq(15) }).is_empty());
@@ -188,7 +188,7 @@ fn a_socket_closed_mid_replay_resumes_after_the_last_replayed_event() {
     for seq in 11..=13 {
         assert_eq!(
             frame(&mut connection, event(seq)),
-            [Command::Apply(envelope(seq))]
+            [Command::Apply(Box::new(envelope(seq)))]
         );
     }
     assert_eq!(connection.state(), State::Replaying);
@@ -209,7 +209,7 @@ fn a_socket_closed_mid_replay_resumes_after_the_last_replayed_event() {
     assert!(frame(&mut connection, event(13)).is_empty());
     assert_eq!(
         frame(&mut connection, event(14)),
-        [Command::Apply(envelope(14))]
+        [Command::Apply(Box::new(envelope(14)))]
     );
     assert!(frame(&mut connection, ServerFrame::Live { latest: Seq(14) }).is_empty());
     assert_eq!(connection.state(), State::Live);
@@ -269,7 +269,7 @@ fn duplicate_and_out_of_order_events_are_dropped() {
     assert!(frame(&mut connection, event(9)).is_empty(), "older");
     assert_eq!(
         frame(&mut connection, event(12)),
-        [Command::Apply(envelope(12))]
+        [Command::Apply(Box::new(envelope(12)))]
     );
     assert_eq!(connection.last(), Some(Seq(12)));
 }
@@ -334,7 +334,7 @@ fn reset_reloads_and_continues_after_it() {
     assert!(frame(&mut connection, ServerFrame::Live { latest: Seq(7_000) }).is_empty());
     assert_eq!(
         frame(&mut connection, event(7_001)),
-        [Command::Apply(envelope(7_001))]
+        [Command::Apply(Box::new(envelope(7_001)))]
     );
 }
 
