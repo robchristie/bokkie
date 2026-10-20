@@ -1851,6 +1851,13 @@ impl App {
         // The content pane holds one conversation, or another screen.
         signed_in.household = None;
         signed_in.admin = None;
+        // Choosing the open Bot again, from the list beside it, keeps its
+        // conversation as it stands and brings it into view: outside the
+        // columns the settings give way to it.
+        if signed_in.open.as_ref().is_some_and(|open| open.bot == bot) {
+            let shown = self.layout == NavigationLayout::Columns || self.close_settings();
+            return Ok(shown);
+        }
         if let Some(open) = signed_in.open.take() {
             self.store.close_conversation(open.bot);
             self.store.close_routines(open.bot);

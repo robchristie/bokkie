@@ -416,7 +416,7 @@ fn bots_ui(
     });
 }
 
-/// This device's notifications switch, below the Bot list.
+/// This device's notifications switch, at the bottom of the Bot list.
 fn notifications_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,

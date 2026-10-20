@@ -117,10 +117,12 @@ list is the list pane; the open conversation, the household's ChatGPT
 sign-in or the admin section is the content pane, one at a time; and the
 open Bot's settings are the detail pane. Below 720 points wide the panes
 stack, one at a time, with Back; from 720 the list stands beside the
-content, or the settings; from 1040 the settings stand beside the
-conversation too. Each pane is a region named by its title, and the
-conversation's pane carries the Bot as its domain reference (`bot`, with
-its ID). A resize changes only the layout. The facts `layout` (`stack`,
+content, or beside the settings with Back to the conversation; from 1040
+the settings stand beside the conversation too. Beside the list the admin
+section keeps a Back of its own, to go back a level. Choosing the open Bot
+again keeps its conversation as it stands. Each pane is a region named by
+its title, and the conversation's pane carries the Bot as its domain
+reference (`bot`, with its ID). A resize changes only the layout. The facts `layout` (`stack`,
 `split` or `columns`, empty while signed out), `content` (`conversation`,
 `household`, `admin`, or empty), `detail` (`settings` or empty) and
 `panes` (those on screen, from the start of the line, comma-separated,
@@ -222,8 +224,9 @@ checks:
   the link presented as a link that opens a new tab;
 - resizing the page from a phone's width to a tablet's and a desktop's and
   back moves between the stack, the split and the columns, with each pane
-  a named region, Back only in the stack and the settings beside the
-  conversation in the columns, and keeps the open conversation as it was;
+  a named region, Back beside the conversation only in the stack and the
+  settings beside the conversation in the columns, and keeps the open
+  conversation as it was;
 - a conversation longer than one page opens on its newest 50 messages, and
   loading the older ones while a reply streams leaves both whole;
 - the notifications switch subscribes the device through a stand-in push

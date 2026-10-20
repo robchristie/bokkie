@@ -289,3 +289,35 @@ fn nothing_is_lost_on_a_resize() {
     fixture.assert_panes("content", &["Tutor"]);
     assert_eq!(fixture.fact("draft"), "Half a thought".into());
 }
+
+#[test]
+fn choosing_the_open_bot_again_keeps_its_conversation() {
+    for (size, panes, detail) in [
+        (TABLET, "list,content", ""),
+        (DESKTOP, "list,content,detail", "settings"),
+        (PHONE, "content", ""),
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.live_at(size);
+        fixture.open_tutor(hello(), 10);
+        fixture.write("Half a thought");
+        fixture.click("Settings");
+        let _ = fixture.sent();
+        // From the list beside it, or as an agent where the list is out of
+        // sight, the open Bot is chosen again.
+        if size == PHONE {
+            fixture.perform_with(BokkieAction::OpenBot, TUTOR.0 as f64);
+        } else {
+            fixture.click("Open Tutor");
+        }
+        // Its conversation comes into view as it stood, with nothing
+        // fetched again; the settings give way to it unless there is room
+        // for both.
+        assert!(fixture.sent().is_empty(), "{size:?}");
+        assert_eq!(fixture.fact("bot"), 1_i64.into());
+        assert_eq!(fixture.fact("draft"), "Half a thought".into());
+        assert_eq!(fixture.fact("message_count"), 2_u64.into());
+        assert_eq!(fixture.fact("detail"), detail.into(), "{size:?}");
+        assert_eq!(fixture.fact("panes"), panes.into(), "{size:?}");
+    }
+}
