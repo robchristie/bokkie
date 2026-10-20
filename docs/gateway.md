@@ -954,7 +954,10 @@ through the same client as [Web fetch](#web-fetch).
   - every finished routine run, titled "Bot · Routine": with the
     notification its turn sent (its newest question, or else its newest),
     or else, for a routine whose `push` is `every_run`, the first line of
-    its reply, without Markdown, or "Finished, with no reply." A
+    its reply with words in it, without Markdown's block markers (a quote's
+    `>`, and a heading's `#`s or a list item's `-`, `*` or `+` only before
+    a space, so "-5 °C" keeps its sign), bold or code marks, or "Finished,
+    with no reply." A
     `notify_only` routine's run pushes only with a notification. A
     notification that went out alone before its run was recorded running
     is not sent again;
@@ -964,7 +967,9 @@ through the same client as [Web fetch](#web-fetch).
   - a missed run, with why, unless the account was disabled. A skipped
     run does not push.
 
-  A question is sent with `Urgency: high`, everything else `normal`.
+  A question is sent with `Urgency: high`, everything else `normal`. A
+  Bot's name that shows nothing in a notification, such as one of
+  formatting characters only, is titled "Your Bot" instead.
 - **When it does not.** The sender settles each queued push in order, as
   it is queued and at least every 30 seconds. It drops one, and records
   why, when the account is disabled, when one of the user's devices shows
@@ -981,7 +986,10 @@ through the same client as [Web fetch](#web-fetch).
   as `unread_bots` counts it. The texts hold no control or layout
   characters but line breaks. A push is sent to each of the user's live
   subscriptions with a `TTL` of a day. A token is signed for each push
-  service's origin, valid 12 hours and reused for 6.
+  service's origin, valid 12 hours and reused for 6. One that a push
+  service refuses (Apple's `403` with `BadJwtToken`) is replaced once it
+  is an hour old, since Apple asks for no more than one new token an
+  hour; the push it refused is not sent again.
 - **Delivery.** A push service's `429` or `5xx`, or a failed connection,
   is retried three times, after 2, 4 and 8 seconds or its `Retry-After`,
   at most a minute. Any other refusal is logged and not retried. A push

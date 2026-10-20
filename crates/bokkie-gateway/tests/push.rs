@@ -15,7 +15,7 @@ use axum::http::{Method, StatusCode};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bokkie_gateway::clock::{HOUR_MS, MINUTE_MS};
-use bokkie_gateway::push::{HOURLY_LIMIT, Retry};
+use bokkie_gateway::push::{self, HOURLY_LIMIT, Retry};
 use bokkie_gateway::tools::notify;
 use bokkie_protocol::events::ClientFrame;
 use bokkie_protocol::{BotId, UserId};
@@ -885,6 +885,59 @@ async fn gone_subscriptions_are_removed_and_busy_services_are_retried() {
 }
 
 #[tokio::test]
+async fn a_token_a_push_service_refuses_is_replaced_after_an_hour() {
+    let (gateway, service, rob) = setup().await;
+    let phone = Device::new("phone");
+    let tablet = Device::new("tablet");
+    subscribed(&gateway, &rob, &phone).await;
+    let tablets = sign_in(&gateway, "rob").await;
+    subscribed(&gateway, &tablets, &tablet).await;
+    let chef = create_bot(&gateway, &rob, "Chef", json!(["notify"])).await;
+    let thread = thread(&gateway, &rob, 1, chef).await;
+    // The token sent with each push to `device`, oldest first.
+    let tokens = |device: &Device| -> Vec<String> {
+        service
+            .sent_to(device)
+            .iter()
+            .map(|push| push.header("authorization").unwrap().to_owned())
+            .collect()
+    };
+
+    // The phone's push service refuses the token; the tablet's, on the
+    // same origin, takes it.
+    service.script(&phone, vec![Answer::bad_token()]);
+    notify(&gateway, 1, 901, &thread, "First", "result").await;
+    deliver(&gateway).await;
+    let first = tokens(&phone)[0].clone();
+    assert_eq!(tokens(&tablet), [first.clone()]);
+    assert_eq!(service.opened(&tablet).len(), 1);
+    // The subscription stays: the token was at fault, not the device.
+    assert_eq!(subscriptions(&gateway, 1).await, 2);
+
+    // Within the hour the gateway signs no new token for that service.
+    gateway.state.clock.advance(HOUR_MS - 1);
+    notify(&gateway, 1, 902, &thread, "Second", "result").await;
+    deliver(&gateway).await;
+    assert_eq!(tokens(&phone), [first.clone(), first.clone()]);
+
+    // Once the refused token is an hour old, the next push carries a new
+    // one, long before the six hours a token is otherwise reused.
+    gateway.state.clock.advance(1);
+    notify(&gateway, 1, 903, &thread, "Third", "result").await;
+    deliver(&gateway).await;
+    let renewed = tokens(&phone)[2].clone();
+    assert_ne!(renewed, first);
+    assert_eq!(tokens(&tablet)[2], renewed);
+    assert!(service.sent_to(&phone)[2].claims.is_some());
+    // A token no push service refused is reused as before.
+    gateway.state.clock.advance(HOUR_MS);
+    notify(&gateway, 1, 904, &thread, "Fourth", "result").await;
+    deliver(&gateway).await;
+    assert_eq!(tokens(&phone)[3], renewed);
+    assert_eq!(service.opened(&phone).len(), 4);
+}
+
+#[tokio::test]
 async fn pushes_left_being_delivered_by_a_stopped_gateway_are_failed() {
     let (gateway, _service, rob) = setup().await;
     let chef = create_bot(&gateway, &rob, "Chef", json!([])).await;
@@ -1003,6 +1056,49 @@ async fn every_finished_run_pushes_its_replys_first_line() {
     assert_eq!(
         bodies(&service, &phone),
         vec![("Chef · Digest".into(), "Finished, with no reply.".into())]
+    );
+
+    // A sign is not a list marker: only a bullet before a space is.
+    service.clear();
+    gateway.fake.with(|b| {
+        b.reply = vec!["-5 °C overnight.\n".into(), "- Frost likely.".into()];
+    });
+    run_now(&gateway, &rob, chef, routine).await;
+    ended(&gateway, &rob, chef, routine).await;
+    deliver(&gateway).await;
+    assert_eq!(
+        bodies(&service, &phone),
+        vec![("Chef · Digest".into(), "-5 °C overnight.".into())]
+    );
+}
+
+#[tokio::test]
+async fn a_bot_whose_name_shows_nothing_pushes_under_a_fixed_title() {
+    let (gateway, service, rob) = setup().await;
+    let phone = Device::new("phone");
+    subscribed(&gateway, &rob, &phone).await;
+    // Formatting characters only: a bidirectional override and isolate,
+    // which no notification shows, and a joiner, which draws nothing.
+    let name = "\u{202e}\u{2066}\u{200d}";
+    let bot = create_bot(&gateway, &rob, name, json!(["notify"])).await;
+    let thread = thread(&gateway, &rob, 1, bot).await;
+    notify(&gateway, 1, 901, &thread, "Ready", "result").await;
+    deliver(&gateway).await;
+    assert_eq!(
+        bodies(&service, &phone),
+        vec![(push::FALLBACK_TITLE.into(), "Ready".into())]
+    );
+    assert_eq!(push::FALLBACK_TITLE, "Your Bot");
+
+    service.clear();
+    let routine = digest(&gateway, &rob, bot, "every_run").await;
+    gateway.fake.with(|b| b.reply = vec!["Done.".into()]);
+    run_now(&gateway, &rob, bot, routine).await;
+    ended(&gateway, &rob, bot, routine).await;
+    deliver(&gateway).await;
+    assert_eq!(
+        bodies(&service, &phone),
+        vec![("Your Bot · Digest".into(), "Done.".into())]
     );
 }
 

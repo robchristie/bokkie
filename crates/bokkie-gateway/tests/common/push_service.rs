@@ -81,6 +81,14 @@ impl Answer {
         }
     }
 
+    /// Apple's answer when it will not take the request's VAPID token.
+    pub fn bad_token() -> Self {
+        Self {
+            body: json!({"reason": "BadJwtToken"}).to_string(),
+            ..Self::status(403)
+        }
+    }
+
     pub fn retry_after(mut self, seconds: u32) -> Self {
         self.headers
             .push(("retry-after".into(), seconds.to_string()));
