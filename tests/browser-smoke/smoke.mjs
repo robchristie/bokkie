@@ -19,6 +19,9 @@
 //   nothing lost or repeated;
 // - shows a reply in Markdown, streamed with its link split across
 //   pieces, formatted, with the link a link that opens a new tab;
+// - makes a routine in the Bot's settings and runs it now: the run
+//   succeeds in its history, and Show brings its marker and the mock's reply
+//   into view;
 // - shows the subscription meter and the limit-reached banner from windows
 //   the mock reports;
 // - has the admin invite a member, with permissions, from the accounts
@@ -204,6 +207,27 @@ class Automation {
     return nodes.map(({ node }) => node);
   }
   setText(id, text) { return this.invoke({ id, capability: 'stobie.set-text' }, text); }
+  // Scroll down with the mouse wheel, as a person does, until a control is
+  // in view and so presented.
+  async scrollTo(selector) {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const { capabilities } = await this.request({ op: 'discover', selector, limit: 64 });
+      if (capabilities.length > 0) return;
+      await this.page.mouse.move(215, 600);
+      await this.page.mouse.wheel(0, 200);
+      await wait(100);
+    }
+    throw new Error(`${JSON.stringify(selector)} never came into view`);
+  }
+  // The content text in view: the excerpts the page publishes of its
+  // headings, labels and reading text, in presentation order.
+  async contents() {
+    const { observation } = await this.request({ op: 'observe' });
+    return (observation.snapshot?.text ?? [])
+      .map(text => text.content)
+      .filter(content => content?.kind === 'excerpt')
+      .map(content => content.text);
+  }
 }
 
 // Visible text the page's accessibility layer carries: aria-labels and leaf
@@ -503,6 +527,51 @@ try {
   assert(!readTexts.some(text => text.includes('**') || text.includes('](')), 'no Markdown source on the page');
   step('Markdown reply with a link', { reply: formatted.reply, link: guide.value });
 
+  // A routine, made in the Bot's settings and run now: its run shows in its
+  // history as it goes, and Show brings its marker and reply into view.
+  const ROUTINE = 'Smoke check';
+  await controlRequest('reply', { pieces: ['Routine ', 'done.'], piece_delay_ms: 50 });
+  await app.until('the Planner idle', facts => facts.bot_status === 'idle' && facts.reply_state !== 'streaming', 60000);
+  await app.action('bokkie.bot-settings');
+  await app.until('the settings', facts => facts.screen === 'bot_settings' && facts.routines === 'loaded'
+    && facts.routine_count === 0);
+  await app.action('bokkie.new-routine');
+  await app.until('the new routine form', facts => facts.routine_form === 'new');
+  await app.setText('bokkie.routine-name', ROUTINE);
+  await app.setText('bokkie.routine-prompt', 'Check the smoke.');
+  await app.scrollTo({ id: 'bokkie.routine-at', capability: 'stobie.set-text' });
+  await app.setText('bokkie.routine-at', '06:45');
+  await app.action('bokkie.save-routine');
+  await app.until('the routine saved', facts => facts.routine_form === '' && facts.routine_count === 1);
+  const { body: { routines: [routine] } } = await api('GET', `/bots/${bot.id}/routines`, undefined, cookie);
+  assert.equal(routine.name, ROUTINE);
+  assert.equal(routine.prompt, 'Check the smoke.');
+  assert.deepEqual(routine.schedule, { repeat: 'daily', at: '06:45' });
+  const scheduled = await app.contents();
+  assert(scheduled.some(text => text.startsWith('Every day at 06:45 · Next run ')), `the routine's schedule shows: ${JSON.stringify(scheduled)}`);
+  await app.action('bokkie.run-routine', routine.id);
+  const ran = await app.until('the run to succeed', facts => facts.history === routine.id
+    && facts.run_state === 'succeeded' && facts.run_messages >= 2, 60000);
+  assert.equal(ran.runs, 1, 'one run in the history');
+  await app.action('bokkie.show-run', ran.run);
+  const shown = await app.until('the run shown', facts => facts.screen === 'conversation'
+    && facts.bot_status === 'idle' && facts.reply_state === 'complete', 30000);
+  assert(shown.marker.startsWith(`${ROUTINE} · `) && shown.marker.endsWith(' · test run'), `the marker: ${shown.marker}`);
+  assert.equal(shown.reply, 'Routine done.');
+  assert.equal(shown.showing_error, '');
+  // The view scrolls there smoothly, so wait for the marker and the reply
+  // below it to be in view.
+  let inView = [];
+  for (const deadline = Date.now() + 10000; ; await wait(50)) {
+    inView = await app.contents();
+    if (inView.some(text => text.startsWith(`Routine run: ${ROUTINE} · `)) && inView.includes('Routine done.')) break;
+    assert(Date.now() < deadline, `the run's marker and reply in view: ${JSON.stringify(inView)}`);
+  }
+  const { body: { runs } } = await api('GET', `/bots/${bot.id}/routines/${routine.id}/runs`, undefined, cookie);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].state, 'succeeded');
+  step('routine made and run now', { routine: routine.id, run: ran.run, marker: shown.marker, run_messages: ran.run_messages });
+
   // Load older: a conversation longer than the newest page of 50 messages.
   // Its first 26 exchanges are sent over the API, each with a short reply.
   await controlRequest('reply', { pieces: ['Noted.'], piece_delay_ms: 0 });
@@ -597,7 +666,7 @@ try {
   const codes = (await pageTexts(page)).filter(text => /^[A-Za-z0-9_-]{43}$/.test(text));
   assert.equal(codes.length, 1, `one invitation code on the page: ${codes.length}`);
   const [invitationCode] = codes;
-  assert(!JSON.stringify(await app.facts()).includes(invitationCode), 'the code is no fact');
+  assert(!JSON.stringify(await app.request({ op: 'observe' })).includes(invitationCode), 'the code is in no observation');
   step('admin invited a member', { invitations: 1 });
 
   // The member joins in a second browser context, with its own cookies.

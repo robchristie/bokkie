@@ -321,6 +321,190 @@ pub enum BokkieAction {
     #[action(label = "Stop", description = "Stop the Bot's reply in progress")]
     Stop,
     #[action(
+        label = "Settings",
+        description = "Open the open Bot's settings: its grants, notes, tool calls and routines"
+    )]
+    BotSettings,
+    #[action(
+        label = "Grant notes",
+        description = "Let the Bot keep notes that it reads at the start of each turn, or take the grant away"
+    )]
+    GrantNotes,
+    #[action(
+        label = "Grant seen",
+        description = "Let the Bot remember what it has already shown you, or take the grant away"
+    )]
+    GrantSeen,
+    #[action(
+        label = "Grant notify",
+        description = "Let the Bot send you notifications, or take the grant away"
+    )]
+    GrantNotify,
+    #[action(
+        label = "Grant web.fetch",
+        description = "Let the Bot read web pages, or take the grant away; only an admin can grant it"
+    )]
+    GrantWebFetch,
+    #[action(
+        label = "Grant web.search",
+        description = "Take web search away from the Bot; it cannot be granted yet"
+    )]
+    GrantWebSearch,
+    #[action(
+        label = "Clear notes",
+        description = "Clear the Bot's notes, after confirming"
+    )]
+    ClearNotes,
+    #[action(
+        label = "Clear for good",
+        description = "Confirm clearing the Bot's notes, which cannot be undone"
+    )]
+    ConfirmClearNotes,
+    #[action(label = "Keep notes", description = "Keep the Bot's notes after all")]
+    KeepNotes,
+    #[action(
+        label = "Earlier tool calls",
+        description = "Load the Bot's earlier tool calls, a page at a time"
+    )]
+    OlderToolCalls,
+    #[action(
+        label = "New routine",
+        description = "Start a routine: a prompt the Bot runs on a schedule"
+    )]
+    NewRoutine,
+    #[action(
+        label = "Edit routine",
+        description = "Change the routine with this ID",
+        id = "bokkie.edit-routine",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    EditRoutine,
+    #[action(label = "Every day", description = "Run the routine every day")]
+    RepeatDaily,
+    #[action(label = "Weekdays", description = "Run the routine Monday to Friday")]
+    RepeatWeekdays,
+    #[action(
+        label = "On chosen days",
+        description = "Run the routine on the days of the week chosen"
+    )]
+    RepeatDays,
+    #[action(
+        label = "Every few hours",
+        description = "Run the routine every few hours, from the time entered"
+    )]
+    RepeatHours,
+    #[action(label = "Monday", description = "Run the routine on Mondays, or not")]
+    RoutineMon,
+    #[action(label = "Tuesday", description = "Run the routine on Tuesdays, or not")]
+    RoutineTue,
+    #[action(
+        label = "Wednesday",
+        description = "Run the routine on Wednesdays, or not"
+    )]
+    RoutineWed,
+    #[action(
+        label = "Thursday",
+        description = "Run the routine on Thursdays, or not"
+    )]
+    RoutineThu,
+    #[action(label = "Friday", description = "Run the routine on Fridays, or not")]
+    RoutineFri,
+    #[action(
+        label = "Saturday",
+        description = "Run the routine on Saturdays, or not"
+    )]
+    RoutineSat,
+    #[action(label = "Sunday", description = "Run the routine on Sundays, or not")]
+    RoutineSun,
+    #[action(
+        label = "Notify every run",
+        description = "Send a notification after every run, or only when the Bot asks to notify you"
+    )]
+    RoutinePush,
+    #[action(label = "Save routine", description = "Save the routine")]
+    SaveRoutine,
+    #[action(
+        label = "Close without saving",
+        description = "Close the routine without saving it",
+        id = "bokkie.cancel-routine"
+    )]
+    CancelRoutine,
+    #[action(
+        label = "Paused",
+        description = "Pause the routine with this ID, or resume it",
+        id = "bokkie.pause-routine",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    PauseRoutine,
+    #[action(
+        label = "Run now",
+        description = "Run the routine with this ID now, even while it is paused",
+        id = "bokkie.run-routine",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    RunRoutine,
+    #[action(
+        label = "Delete",
+        description = "Delete the routine with this ID and its history, after confirming",
+        id = "bokkie.delete-routine",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    DeleteRoutine,
+    #[action(
+        label = "Delete for good",
+        description = "Confirm deleting the routine, which cannot be undone",
+        id = "bokkie.confirm-delete-routine"
+    )]
+    ConfirmDeleteRoutine,
+    #[action(
+        label = "Keep routine",
+        description = "Keep the routine after all",
+        id = "bokkie.keep-routine"
+    )]
+    KeepRoutine,
+    #[action(
+        label = "History",
+        description = "Show the run history of the routine with this ID, or hide it",
+        id = "bokkie.routine-history",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    RoutineHistory,
+    #[action(
+        label = "Earlier runs",
+        description = "Load the routine's earlier runs, a page at a time"
+    )]
+    OlderRuns,
+    #[action(
+        label = "Show",
+        description = "Show the run with this ID in the conversation, from its marker",
+        id = "bokkie.show-run",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    ShowRun,
+    #[action(
+        label = "Save time zone",
+        description = "Save the time zone entered, which routines run in and times show in"
+    )]
+    SaveTimeZone,
+    #[action(
         label = "Reload page",
         description = "Reload the page to fetch the client that matches Bokkie's server"
     )]
@@ -343,6 +527,11 @@ pub enum BokkieIntent {
     EditWeeklyTokens(String),
     EditNewPassword(String),
     EditMemberBotName(String),
+    EditRoutineName(String),
+    EditRoutinePrompt(String),
+    EditRoutineAt(String),
+    EditRoutineEvery(String),
+    EditTimeZone(String),
     /// A command's reply, with the generation it was sent in.
     Reply {
         generation: Generation,
@@ -383,6 +572,13 @@ impl std::fmt::Debug for BokkieIntent {
             Self::EditMemberBotName(name) => {
                 f.debug_tuple("EditMemberBotName").field(name).finish()
             }
+            Self::EditRoutineName(text) => f.debug_tuple("EditRoutineName").field(text).finish(),
+            Self::EditRoutinePrompt(text) => {
+                f.debug_tuple("EditRoutinePrompt").field(text).finish()
+            }
+            Self::EditRoutineAt(text) => f.debug_tuple("EditRoutineAt").field(text).finish(),
+            Self::EditRoutineEvery(text) => f.debug_tuple("EditRoutineEvery").field(text).finish(),
+            Self::EditTimeZone(text) => f.debug_tuple("EditTimeZone").field(text).finish(),
             Self::Reply { generation, reply } => f
                 .debug_struct("Reply")
                 .field("generation", generation)
@@ -461,6 +657,12 @@ pub(crate) struct SignedIn {
     /// The user's own time zone, which times are shown in, or `None` when
     /// it is not one the platform knows.
     pub(crate) zone: Option<TimeZone>,
+    /// The time zone being entered, until it is saved.
+    pub(crate) zone_draft: Option<String>,
+    /// A time zone change is under way.
+    pub(crate) zone_saving: bool,
+    /// Why the last time zone change failed.
+    pub(crate) zone_error: Option<String>,
 }
 
 impl SignedIn {
@@ -486,7 +688,7 @@ impl SignedIn {
     }
 
     /// Take the account as it now is, and drop what it no longer allows.
-    fn account_changed(&mut self, user: User) {
+    pub(crate) fn account_changed(&mut self, user: User) {
         if user.time_zone != self.user.time_zone {
             self.zone = TimeZone::named(&user.time_zone).ok();
         }
@@ -619,6 +821,14 @@ pub(crate) struct Open {
     /// The routine runs whose prompt is shown, by their marker's ID; every
     /// other run's prompt is folded away.
     pub(crate) prompts: BTreeSet<MessageId>,
+    /// The Bot's settings, when open in place of the conversation.
+    pub(crate) settings: Option<crate::settings::Settings>,
+    /// A message to bring into view, such as a routine run's marker, with
+    /// the number of that request among all made, so the view moves once
+    /// for each. Earlier pages load until the conversation holds it.
+    pub(crate) goto: Option<(u64, MessageId)>,
+    /// Why the last message asked for could not be shown.
+    pub(crate) goto_note: Option<String>,
 }
 
 impl Open {
@@ -638,6 +848,9 @@ impl Open {
             updating: false,
             update_error: None,
             prompts: BTreeSet::new(),
+            settings: None,
+            goto: None,
+            goto_note: None,
         }
     }
 }
@@ -664,6 +877,9 @@ pub struct App {
     account_event_seen: bool,
     /// Pages of older messages added since the application started.
     older_pages: u64,
+    /// Messages asked to be brought into view since the application
+    /// started.
+    gotos: u64,
     make_api: Option<ApiFactory>,
     api: Option<Box<dyn Api>>,
     /// The viewer's zone and locale, as the transport last read them.
@@ -692,6 +908,7 @@ impl App {
             usage_again: false,
             account_event_seen: false,
             older_pages: 0,
+            gotos: 0,
             make_api: Some(make_api),
             api: None,
             viewer: None,
@@ -708,6 +925,14 @@ impl App {
             Session::SignedIn(signed_in) if signed_in.household.is_some() => "household",
             Session::SignedIn(_) if self.admin_screen().is_some() => {
                 self.admin_screen().unwrap_or_default()
+            }
+            Session::SignedIn(signed_in)
+                if signed_in
+                    .open
+                    .as_ref()
+                    .is_some_and(|o| o.settings.is_some()) =>
+            {
+                "bot_settings"
             }
             Session::SignedIn(signed_in) if signed_in.open.is_some() => "conversation",
             Session::SignedIn(_) => "signed_in",
@@ -868,6 +1093,9 @@ impl App {
             account: Account::Checking,
             household: None,
             admin: None,
+            zone_draft: None,
+            zone_saving: false,
+            zone_error: None,
         }));
         // The list shows at once. Once the socket is live it is loaded again,
         // so that no event can fall between the list and the socket.
@@ -897,10 +1125,11 @@ impl App {
     ///
     /// Older messages load one page at a time, from where the conversation
     /// starts when the page is requested.
-    fn load(&mut self, snapshot: Snapshot) {
+    pub(crate) fn load(&mut self, snapshot: Snapshot) {
         let request = match snapshot {
             Snapshot::Bots => ApiRequest::ListBots,
             Snapshot::Messages(bot) => ApiRequest::LoadMessages(bot),
+            Snapshot::Routines(bot) => ApiRequest::ListRoutines(bot),
             Snapshot::Older(_) if self.in_flight.contains(&snapshot) => return,
             Snapshot::Older(bot) => match self.store.request_older(bot) {
                 Some(before) => ApiRequest::LoadOlder(bot, before),
@@ -915,7 +1144,7 @@ impl App {
         self.send(request);
     }
 
-    fn load_all(&mut self, snapshots: impl IntoIterator<Item = Snapshot>) {
+    pub(crate) fn load_all(&mut self, snapshots: impl IntoIterator<Item = Snapshot>) {
         for snapshot in snapshots {
             self.load(snapshot);
         }
@@ -929,6 +1158,11 @@ impl App {
             all.insert(Snapshot::Messages(bot));
         }
         self.load_all(all);
+        // The settings' notes, tool calls and run history announce no
+        // events of their own that the store keeps.
+        if let Some(bot) = self.open_bot() {
+            self.load_settings_extras(bot);
+        }
         // The meter and the account may have missed events too, and the
         // household's sign-in announces no events at all.
         self.load_usage();
@@ -943,8 +1177,13 @@ impl App {
         self.send(ApiRequest::CheckSession);
     }
 
+    /// Whether a load of `snapshot` is in flight.
+    pub(crate) fn loading(&self, snapshot: Snapshot) -> bool {
+        self.in_flight.contains(&snapshot)
+    }
+
     /// A load answered. Returns whether to load it again at once.
-    fn answered(&mut self, snapshot: Snapshot) -> bool {
+    pub(crate) fn answered(&mut self, snapshot: Snapshot) -> bool {
         self.in_flight.remove(&snapshot);
         self.again.remove(&snapshot)
     }
@@ -956,6 +1195,10 @@ impl App {
 
     fn reply(&mut self, reply: ApiReply) -> bool {
         let reply = match self.admin_reply(reply) {
+            Ok(changed) => return changed,
+            Err(reply) => *reply,
+        };
+        let reply = match self.settings_reply(reply) {
             Ok(changed) => return changed,
             Err(reply) => *reply,
         };
@@ -1067,6 +1310,7 @@ impl App {
                         }
                         let applied = self.store.load_messages(bot, page);
                         self.load_all(applied.reload);
+                        self.seek_goto();
                     }
                     Err(error) if error.is_unauthenticated() => {
                         self.session_ended();
@@ -1107,6 +1351,7 @@ impl App {
                             }
                         }
                         self.load_all(applied.reload);
+                        self.seek_goto();
                     }
                     Err(error) if error.is_unauthenticated() => {
                         self.session_ended();
@@ -1401,6 +1646,62 @@ impl App {
     }
 
     /// The time the next poll of a pending sign-in is due.
+    fn edit_routine(
+        &mut self,
+        field: fn(&mut crate::settings::RoutineForm) -> &mut String,
+        text: String,
+    ) -> bool {
+        match self
+            .open_mut()
+            .and_then(|open| open.settings.as_mut())
+            .and_then(|settings| settings.form.as_mut())
+        {
+            Some(form) if !form.busy => {
+                *field(form) = text;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Bring a message of the open conversation into view.
+    pub(crate) fn go_to(&mut self, message: MessageId) {
+        self.gotos += 1;
+        let gotos = self.gotos;
+        if let Some(open) = self.open_mut() {
+            open.goto = Some((gotos, message));
+            open.goto_note = None;
+        }
+        self.seek_goto();
+    }
+
+    /// Load earlier pages until the conversation holds the message asked
+    /// for, or say it cannot be found.
+    fn seek_goto(&mut self) {
+        let Some((bot, (_, message))) = self.open().and_then(|open| Some((open.bot, open.goto?)))
+        else {
+            return;
+        };
+        let Some(conversation) = self.store.conversation(bot) else {
+            // The conversation's first page is still loading.
+            return;
+        };
+        if conversation.message(message).is_some() {
+            return;
+        }
+        if conversation.older().is_some() {
+            // After a failed page, Load older tries again and carries on.
+            if self.open().is_some_and(|open| open.older_error.is_none()) {
+                self.load(Snapshot::Older(bot));
+            }
+            return;
+        }
+        if let Some(open) = self.open_mut() {
+            open.goto = None;
+            open.goto_note = Some("That run's messages are no longer in the conversation".into());
+        }
+    }
+
     fn next_poll(&self) -> Timestamp {
         Timestamp(self.now().0 + LOGIN_POLL.as_millis() as i64)
     }
@@ -1443,6 +1744,13 @@ impl App {
                 }
                 let applied = self.store.apply(&envelope);
                 self.load_all(applied.reload);
+                match &envelope.event {
+                    Event::RoutineRunUpdated { run } => changed |= self.run_updated(run),
+                    Event::RoutineDeleted {
+                        bot_id, routine_id, ..
+                    } => changed |= self.routine_gone(*bot_id, *routine_id),
+                    _ => {}
+                }
                 changed || applied.changed
             }
             SocketUpdate::Reload => {
@@ -1470,6 +1778,14 @@ impl App {
                     {
                         failed.push(Snapshot::Messages(open.bot));
                     }
+                    if let Some(open) = &signed_in.open
+                        && open
+                            .settings
+                            .as_ref()
+                            .is_some_and(|s| s.routines_error.is_some())
+                    {
+                        failed.push(Snapshot::Routines(open.bot));
+                    }
                     self.load_all(failed);
                 }
                 true
@@ -1486,6 +1802,7 @@ impl App {
         }
         if let Some(open) = signed_in.open.take() {
             self.store.close_conversation(open.bot);
+            self.store.close_routines(open.bot);
         }
         signed_in.open = Some(Open::new(bot));
         self.load(Snapshot::Messages(bot));
@@ -1563,7 +1880,7 @@ impl App {
 
     /// The open Bot, if the user may change it now: not while a change to it
     /// is under way.
-    fn can_update(&self) -> Result<&Bot, &'static str> {
+    pub(crate) fn can_update(&self) -> Result<&Bot, &'static str> {
         let Some(open) = self.open() else {
             return Err("No conversation is open");
         };
@@ -1603,6 +1920,11 @@ impl Application for App {
         if let Some(reason) = self.admin_availability(target.action) {
             return reason.map_or(Availability::Enabled, |reason| Availability::Disabled {
                 reason: reason.into(),
+            });
+        }
+        if let Some(reason) = self.settings_availability(target.action) {
+            return reason.map_or(Availability::Enabled, |reason| Availability::Disabled {
+                reason,
             });
         }
         let signed_in = match &self.session {
@@ -1814,13 +2136,20 @@ impl Application for App {
                 | BokkieAction::ReadConversation),
                 Some(id),
             ) => self.admin_lists(action, id),
+            (action, Some(id)) => self.settings_lists(action, id).unwrap_or(true),
             // An argument the action's contract refuses is refused there.
             _ => true,
         };
-        if listed {
-            self.availability(target)
-        } else {
-            Availability::Hidden
+        if !listed {
+            return Availability::Hidden;
+        }
+        match (self.availability(target), id) {
+            (Availability::Enabled, Some(id)) => self
+                .routine_availability(target.action, id)
+                .map_or(Availability::Enabled, |reason| Availability::Disabled {
+                    reason,
+                }),
+            (availability, _) => availability,
         }
     }
 
@@ -1926,6 +2255,17 @@ impl Application for App {
             BokkieIntent::EditProfileDescription(text) => {
                 self.edit_profile(|e| &mut e.description, text)
             }
+            BokkieIntent::EditRoutineName(text) => self.edit_routine(|f| &mut f.name, text),
+            BokkieIntent::EditRoutinePrompt(text) => self.edit_routine(|f| &mut f.prompt, text),
+            BokkieIntent::EditRoutineAt(text) => self.edit_routine(|f| &mut f.at, text),
+            BokkieIntent::EditRoutineEvery(text) => self.edit_routine(|f| &mut f.every, text),
+            BokkieIntent::EditTimeZone(text) => match &mut self.session {
+                Session::SignedIn(signed_in) if !signed_in.zone_saving => {
+                    signed_in.zone_draft = Some(text);
+                    true
+                }
+                _ => false,
+            },
             BokkieIntent::Reply { generation, reply } => {
                 generation == self.generation && self.reply(reply)
             }
@@ -1938,6 +2278,19 @@ impl Application for App {
     fn perform(&mut self, target: ActionTarget<BokkieAction>, _: &mut ()) -> Result<bool, String> {
         if let Some(done) = self.admin_perform(target.action) {
             return done;
+        }
+        if let Some(done) = self.settings_perform(target.action) {
+            return Ok(done);
+        }
+        if let Some(bot) = self.settings().and(self.open_bot()) {
+            match target.action {
+                BokkieAction::Refresh => {
+                    self.load_settings(bot);
+                    return Ok(true);
+                }
+                BokkieAction::Back => return Ok(self.close_settings()),
+                _ => {}
+            }
         }
         if self.admin_screen().is_some() {
             match target.action {
@@ -2000,6 +2353,7 @@ impl Application for App {
                     return Ok(false);
                 };
                 self.store.close_conversation(open.bot);
+                self.store.close_routines(open.bot);
             }
             (BokkieAction::LoadOlder, Session::SignedIn(signed_in)) => {
                 let Some(open) = &mut signed_in.open else {
@@ -2198,6 +2552,14 @@ impl Application for App {
                 "{} needs an ID",
                 target.action.specification().label
             )),
+            (action, ActionArgument::Number(id))
+                if id.fract() == 0.0
+                    && (1.0..=MAX_ID).contains(&id)
+                    && self.settings_lists(action, id as i64).is_some() =>
+            {
+                self.settings_perform_with(action, id as i64)
+                    .unwrap_or(Ok(false))
+            }
             (BokkieAction::OpenBot, ActionArgument::Number(id))
                 if id.fract() == 0.0 && (1.0..=MAX_ID).contains(&id) =>
             {
@@ -2436,6 +2798,23 @@ impl Application for App {
                     .unwrap_or(""),
             ),
         );
+        let marker = self.open_bot().and_then(|bot| {
+            self.store
+                .conversation(bot)?
+                .messages()
+                .rev()
+                .find(|message| message.kind == MessageKind::Marker)
+        });
+        observation.fact("marker", bounded(marker.map_or("", |m| &m.text)));
+        observation.fact(
+            "showing",
+            open.and_then(|open| open.goto).map_or(0, |(_, id)| id.0),
+        );
+        observation.fact(
+            "showing_error",
+            bounded(open.and_then(|o| o.goto_note.as_deref()).unwrap_or("")),
+        );
+        self.observe_settings(observation);
     }
 }
 

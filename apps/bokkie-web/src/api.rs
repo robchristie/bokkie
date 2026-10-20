@@ -6,13 +6,18 @@
 //! tests record them and reply by hand.
 
 use bokkie_protocol::api::{
-    AcceptInvitationRequest, AdminUser, AdminUserList, Allowance, Bot, BotList, CodexAccount,
-    CreateBotRequest, CreateInvitationRequest, CreatedInvitation, DeviceCodeLogin, InvitationList,
-    LoginRequest, MemberBot, MemberBotList, MessagePage, ResetPasswordRequest, SendMessageRequest,
-    SendMessageResponse, SessionResponse, StopResponse, UpdateBotProfileRequest, UpdateBotRequest,
+    AcceptInvitationRequest, AdminUser, AdminUserList, Allowance, Bot, BotList, BotNotes,
+    CodexAccount, CreateBotRequest, CreateInvitationRequest, CreateRoutineRequest,
+    CreatedInvitation, DeviceCodeLogin, InvitationList, LoginRequest, MemberBot, MemberBotList,
+    MessagePage, ResetPasswordRequest, Routine, RoutineList, RoutineRun, RoutineRunPage,
+    SendMessageRequest, SendMessageResponse, SessionResponse, SetTimeZoneRequest, StopResponse,
+    ToolCallPage, UpdateBotProfileRequest, UpdateBotRequest, UpdateRoutineRequest,
     UpdateUserRequest, Usage,
 };
-use bokkie_protocol::{API_PREFIX, BotId, MessageId, Timestamp, UserId};
+use bokkie_protocol::{API_PREFIX, BotId, MessageId, RoutineId, RoutineRunId, Timestamp, UserId};
+
+/// How many tool calls, or routine runs, a page asks for.
+pub const PAGE_SIZE: u32 = 20;
 
 use crate::wire::{self, CommandError};
 
@@ -89,6 +94,29 @@ pub enum ApiRequest {
     /// `GET /api/v1/admin/users/{id}/bots/{bot}/messages[?before=]`: read a
     /// member's conversation, under oversight.
     MemberMessages(UserId, BotId, Option<MessageId>),
+    /// `PUT /api/v1/session/time-zone`: the user's time zone.
+    SetTimeZone(SetTimeZoneRequest),
+    /// `GET /api/v1/bots/{id}/notes`: the Bot's notes.
+    LoadNotes(BotId),
+    /// `DELETE /api/v1/bots/{id}/notes`: clear the Bot's notes.
+    ClearNotes(BotId),
+    /// `GET /api/v1/bots/{id}/tool-calls?limit=[&before=]`: a page of the
+    /// Bot's tool calls, newest first.
+    LoadToolCalls(BotId, Option<i64>),
+    /// `GET /api/v1/bots/{id}/routines`: the Bot's routines.
+    ListRoutines(BotId),
+    /// `POST /api/v1/bots/{id}/routines`: create a routine.
+    CreateRoutine(BotId, CreateRoutineRequest),
+    /// `PATCH /api/v1/bots/{id}/routines/{routine}`: change a routine,
+    /// pause it or resume it.
+    UpdateRoutine(BotId, RoutineId, UpdateRoutineRequest),
+    /// `DELETE /api/v1/bots/{id}/routines/{routine}`: delete a routine.
+    DeleteRoutine(BotId, RoutineId),
+    /// `POST /api/v1/bots/{id}/routines/{routine}/run`: run it now.
+    RunRoutine(BotId, RoutineId),
+    /// `GET /api/v1/bots/{id}/routines/{routine}/runs?limit=[&before=]`: a
+    /// page of the routine's runs, newest first.
+    LoadRuns(BotId, RoutineId, Option<RoutineRunId>),
 }
 
 // The password must never reach a log line.
@@ -160,6 +188,42 @@ impl std::fmt::Debug for ApiRequest {
                 .field(bot)
                 .field(before)
                 .finish(),
+            Self::SetTimeZone(zone) => f.debug_tuple("SetTimeZone").field(zone).finish(),
+            Self::LoadNotes(bot) => f.debug_tuple("LoadNotes").field(bot).finish(),
+            Self::ClearNotes(bot) => f.debug_tuple("ClearNotes").field(bot).finish(),
+            Self::LoadToolCalls(bot, before) => f
+                .debug_tuple("LoadToolCalls")
+                .field(bot)
+                .field(before)
+                .finish(),
+            Self::ListRoutines(bot) => f.debug_tuple("ListRoutines").field(bot).finish(),
+            Self::CreateRoutine(bot, routine) => f
+                .debug_tuple("CreateRoutine")
+                .field(bot)
+                .field(routine)
+                .finish(),
+            Self::UpdateRoutine(bot, routine, changes) => f
+                .debug_tuple("UpdateRoutine")
+                .field(bot)
+                .field(routine)
+                .field(changes)
+                .finish(),
+            Self::DeleteRoutine(bot, routine) => f
+                .debug_tuple("DeleteRoutine")
+                .field(bot)
+                .field(routine)
+                .finish(),
+            Self::RunRoutine(bot, routine) => f
+                .debug_tuple("RunRoutine")
+                .field(bot)
+                .field(routine)
+                .finish(),
+            Self::LoadRuns(bot, routine, before) => f
+                .debug_tuple("LoadRuns")
+                .field(bot)
+                .field(routine)
+                .field(before)
+                .finish(),
         }
     }
 }
@@ -229,6 +293,23 @@ pub enum ApiReply {
         Option<MessageId>,
         Result<MessagePage, CommandError>,
     ),
+    TimeZoneSet(Result<SessionResponse, CommandError>),
+    Notes(BotId, Result<BotNotes, CommandError>),
+    NotesCleared(BotId, Result<(), CommandError>),
+    /// A page of tool calls, requested with that cursor.
+    ToolCalls(BotId, Option<i64>, Result<ToolCallPage, CommandError>),
+    Routines(BotId, Result<RoutineList, CommandError>),
+    RoutineCreated(BotId, Result<Routine, CommandError>),
+    RoutineUpdated(BotId, RoutineId, Result<Routine, CommandError>),
+    RoutineDeleted(BotId, RoutineId, Result<(), CommandError>),
+    RoutineStarted(BotId, RoutineId, Result<RoutineRun, CommandError>),
+    /// A page of a routine's runs, requested with that cursor.
+    Runs(
+        BotId,
+        RoutineId,
+        Option<RoutineRunId>,
+        Result<RoutineRunPage, CommandError>,
+    ),
 }
 
 /// A new invitation. Its code is shown on screen once and nowhere else;
@@ -269,7 +350,11 @@ impl ApiRequest {
             | Self::AccountUsage(_)
             | Self::ListInvitations
             | Self::MemberBots(_)
-            | Self::MemberMessages(..) => Method::Get,
+            | Self::MemberMessages(..)
+            | Self::LoadNotes(_)
+            | Self::LoadToolCalls(..)
+            | Self::ListRoutines(_)
+            | Self::LoadRuns(..) => Method::Get,
             Self::SignIn(_)
             | Self::SendMessage(..)
             | Self::StopBot(_)
@@ -278,15 +363,20 @@ impl ApiRequest {
             | Self::CodexLogout
             | Self::AcceptInvitation(_)
             | Self::CreateInvitation(_)
-            | Self::CreateMemberBot(..) => Method::Post,
-            Self::ResetPassword(..) => Method::Put,
-            Self::UpdateBot(..) | Self::UpdateAccount(..) | Self::UpdateMemberBot(..) => {
-                Method::Patch
-            }
+            | Self::CreateMemberBot(..)
+            | Self::CreateRoutine(..)
+            | Self::RunRoutine(..) => Method::Post,
+            Self::ResetPassword(..) | Self::SetTimeZone(_) => Method::Put,
+            Self::UpdateBot(..)
+            | Self::UpdateAccount(..)
+            | Self::UpdateMemberBot(..)
+            | Self::UpdateRoutine(..) => Method::Patch,
             Self::SignOut
             | Self::AcknowledgeReset
             | Self::CancelCodexLogin
-            | Self::WithdrawInvitation(_) => Method::Delete,
+            | Self::WithdrawInvitation(_)
+            | Self::ClearNotes(_)
+            | Self::DeleteRoutine(..) => Method::Delete,
         }
     }
 
@@ -323,6 +413,25 @@ impl ApiRequest {
             Self::LoadOlder(bot, before) => format!("/bots/{bot}/messages?before={before}"),
             Self::StopBot(bot) => format!("/bots/{bot}/stop"),
             Self::LoadUsage => "/usage".into(),
+            Self::SetTimeZone(_) => "/session/time-zone".into(),
+            Self::LoadNotes(bot) | Self::ClearNotes(bot) => format!("/bots/{bot}/notes"),
+            Self::LoadToolCalls(bot, None) => format!("/bots/{bot}/tool-calls?limit={PAGE_SIZE}"),
+            Self::LoadToolCalls(bot, Some(before)) => {
+                format!("/bots/{bot}/tool-calls?limit={PAGE_SIZE}&before={before}")
+            }
+            Self::ListRoutines(bot) | Self::CreateRoutine(bot, _) => {
+                format!("/bots/{bot}/routines")
+            }
+            Self::UpdateRoutine(bot, routine, _) | Self::DeleteRoutine(bot, routine) => {
+                format!("/bots/{bot}/routines/{routine}")
+            }
+            Self::RunRoutine(bot, routine) => format!("/bots/{bot}/routines/{routine}/run"),
+            Self::LoadRuns(bot, routine, None) => {
+                format!("/bots/{bot}/routines/{routine}/runs?limit={PAGE_SIZE}")
+            }
+            Self::LoadRuns(bot, routine, Some(before)) => {
+                format!("/bots/{bot}/routines/{routine}/runs?limit={PAGE_SIZE}&before={before}")
+            }
         };
         format!("{API_PREFIX}{route}")
     }
@@ -340,6 +449,9 @@ impl ApiRequest {
             Self::CreateInvitation(invitation) => Some(json(invitation)),
             Self::CreateMemberBot(_, bot) => Some(json(bot)),
             Self::UpdateMemberBot(_, _, changes) => Some(json(changes)),
+            Self::SetTimeZone(zone) => Some(json(zone)),
+            Self::CreateRoutine(_, routine) => Some(json(routine)),
+            Self::UpdateRoutine(_, _, changes) => Some(json(changes)),
             _ => None,
         }
     }
@@ -398,6 +510,30 @@ impl ApiRequest {
             Self::MemberMessages(user, bot, before) => {
                 ApiReply::MemberMessages(*user, *bot, *before, wire::decode_response(status, body))
             }
+            Self::SetTimeZone(_) => ApiReply::TimeZoneSet(wire::decode_response(status, body)),
+            Self::LoadNotes(bot) => ApiReply::Notes(*bot, wire::decode_response(status, body)),
+            Self::ClearNotes(bot) => ApiReply::NotesCleared(*bot, wire::decode_empty(status, body)),
+            Self::LoadToolCalls(bot, before) => {
+                ApiReply::ToolCalls(*bot, *before, wire::decode_response(status, body))
+            }
+            Self::ListRoutines(bot) => {
+                ApiReply::Routines(*bot, wire::decode_response(status, body))
+            }
+            Self::CreateRoutine(bot, _) => {
+                ApiReply::RoutineCreated(*bot, wire::decode_response(status, body))
+            }
+            Self::UpdateRoutine(bot, routine, _) => {
+                ApiReply::RoutineUpdated(*bot, *routine, wire::decode_response(status, body))
+            }
+            Self::DeleteRoutine(bot, routine) => {
+                ApiReply::RoutineDeleted(*bot, *routine, wire::decode_empty(status, body))
+            }
+            Self::RunRoutine(bot, routine) => {
+                ApiReply::RoutineStarted(*bot, *routine, wire::decode_response(status, body))
+            }
+            Self::LoadRuns(bot, routine, before) => {
+                ApiReply::Runs(*bot, *routine, *before, wire::decode_response(status, body))
+            }
         }
     }
 
@@ -437,6 +573,22 @@ impl ApiRequest {
             }
             Self::MemberMessages(user, bot, before) => {
                 ApiReply::MemberMessages(*user, *bot, *before, Err(error))
+            }
+            Self::SetTimeZone(_) => ApiReply::TimeZoneSet(Err(error)),
+            Self::LoadNotes(bot) => ApiReply::Notes(*bot, Err(error)),
+            Self::ClearNotes(bot) => ApiReply::NotesCleared(*bot, Err(error)),
+            Self::LoadToolCalls(bot, before) => ApiReply::ToolCalls(*bot, *before, Err(error)),
+            Self::ListRoutines(bot) => ApiReply::Routines(*bot, Err(error)),
+            Self::CreateRoutine(bot, _) => ApiReply::RoutineCreated(*bot, Err(error)),
+            Self::UpdateRoutine(bot, routine, _) => {
+                ApiReply::RoutineUpdated(*bot, *routine, Err(error))
+            }
+            Self::DeleteRoutine(bot, routine) => {
+                ApiReply::RoutineDeleted(*bot, *routine, Err(error))
+            }
+            Self::RunRoutine(bot, routine) => ApiReply::RoutineStarted(*bot, *routine, Err(error)),
+            Self::LoadRuns(bot, routine, before) => {
+                ApiReply::Runs(*bot, *routine, *before, Err(error))
             }
         }
     }
@@ -781,6 +933,90 @@ mod tests {
         };
         assert_eq!(invitation.0.code, "the-code");
         assert!(!format!("{invited:?}").contains("the-code"));
+    }
+
+    #[test]
+    fn settings_and_routine_commands_name_their_routes() {
+        use bokkie_protocol::api::{Schedule, TimeOfDay};
+        let bot = BotId(3);
+        let routine = RoutineId(5);
+        let create = ApiRequest::CreateRoutine(
+            bot,
+            CreateRoutineRequest {
+                name: "Morning digest".into(),
+                prompt: "Summarise the news.".into(),
+                schedule: Schedule::Daily {
+                    at: TimeOfDay::new(7, 0).expect("a time"),
+                },
+                push: Default::default(),
+                paused: false,
+            },
+        );
+        let routes: Vec<(&str, String)> = [
+            ApiRequest::SetTimeZone(SetTimeZoneRequest {
+                time_zone: "Europe/London".into(),
+            }),
+            ApiRequest::LoadNotes(bot),
+            ApiRequest::ClearNotes(bot),
+            ApiRequest::LoadToolCalls(bot, None),
+            ApiRequest::LoadToolCalls(bot, Some(40)),
+            ApiRequest::ListRoutines(bot),
+            create.clone(),
+            ApiRequest::UpdateRoutine(bot, routine, UpdateRoutineRequest::default()),
+            ApiRequest::DeleteRoutine(bot, routine),
+            ApiRequest::RunRoutine(bot, routine),
+            ApiRequest::LoadRuns(bot, routine, None),
+            ApiRequest::LoadRuns(bot, routine, Some(RoutineRunId(9))),
+        ]
+        .iter()
+        .map(|request| (request.method().as_str(), request.path()))
+        .collect();
+        assert_eq!(
+            routes,
+            [
+                ("PUT", "/api/v1/session/time-zone".to_owned()),
+                ("GET", "/api/v1/bots/3/notes".to_owned()),
+                ("DELETE", "/api/v1/bots/3/notes".to_owned()),
+                ("GET", "/api/v1/bots/3/tool-calls?limit=20".to_owned()),
+                (
+                    "GET",
+                    "/api/v1/bots/3/tool-calls?limit=20&before=40".to_owned()
+                ),
+                ("GET", "/api/v1/bots/3/routines".to_owned()),
+                ("POST", "/api/v1/bots/3/routines".to_owned()),
+                ("PATCH", "/api/v1/bots/3/routines/5".to_owned()),
+                ("DELETE", "/api/v1/bots/3/routines/5".to_owned()),
+                ("POST", "/api/v1/bots/3/routines/5/run".to_owned()),
+                ("GET", "/api/v1/bots/3/routines/5/runs?limit=20".to_owned()),
+                (
+                    "GET",
+                    "/api/v1/bots/3/routines/5/runs?limit=20&before=9".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(
+            create.body().as_deref(),
+            Some(
+                r#"{"name":"Morning digest","prompt":"Summarise the news.","schedule":{"repeat":"daily","at":"07:00"},"push":"every_run","paused":false}"#
+            )
+        );
+        assert_eq!(
+            ApiRequest::UpdateRoutine(
+                bot,
+                routine,
+                UpdateRoutineRequest {
+                    paused: Some(true),
+                    ..Default::default()
+                }
+            )
+            .body()
+            .as_deref(),
+            Some(r#"{"paused":true}"#)
+        );
+        assert_eq!(
+            ApiRequest::ClearNotes(bot).decode(204, ""),
+            ApiReply::NotesCleared(bot, Ok(()))
+        );
     }
 
     #[test]

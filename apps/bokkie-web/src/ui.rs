@@ -49,6 +49,9 @@ pub(crate) fn present(app: &App, ui: &mut egui::Ui, frame: &mut BokkieFrame<'_, 
             }
             Session::SignedIn(signed_in) => match (&signed_in.household, &signed_in.open) {
                 (Some(household), _) => household_ui(ui, &mut p, frame, app, signed_in, household),
+                (None, Some(open)) if open.settings.is_some() => {
+                    crate::settings::present(ui, &mut p, frame, app, signed_in, open);
+                }
                 (None, Some(open)) => conversation_ui(ui, &mut p, frame, app, signed_in, open),
                 (None, None) => bots_ui(ui, &mut p, frame, app, signed_in),
             },
@@ -310,6 +313,8 @@ fn bots_ui(
                         line(TextRole::Secondary, 1),
                     );
                 }
+                ui.separator();
+                crate::settings::time_zone_ui(ui, &mut rows, frame, signed_in);
             });
     });
 }
@@ -512,7 +517,11 @@ fn household_ui(
                 },
             );
             p.content(ui, "step-2", "2. Enter this code:", line(TextRole::Body, 1));
-            p.heading(ui, "code", &code.0.user_code);
+            // On screen for the person, never published to an inspecting
+            // client.
+            stobie_ui_egui::withhold_content_text(ui, |ui| {
+                p.heading(ui, "code", &code.0.user_code);
+            });
             let now = app.now();
             let expiry = if now >= code.0.expires_at {
                 "The code is about to expire".to_owned()
@@ -691,6 +700,9 @@ fn conversation_ui(
     if let Some(error) = store.error(open.bot) {
         p.status(ui, "bot-error", error, true);
     }
+    if let Some(note) = &open.goto_note {
+        p.status(ui, "goto-status", note, true);
+    }
     ui.separator();
     messages_ui(ui, frame, app, open, name);
     ui.separator();
@@ -718,6 +730,7 @@ fn bot_controls_ui(
         if signed_in.may_edit_profiles() {
             frame.action(ui, p, BokkieAction::EditProfile, ActionEmphasis::Normal);
         }
+        frame.action(ui, p, BokkieAction::BotSettings, ActionEmphasis::Normal);
     });
     if open.updating {
         p.status(ui, "update-status", "Saving…", false);
@@ -863,6 +876,13 @@ fn messages_ui(
                 let scroll_to = open
                     .anchor
                     .filter(|(page, _)| ui.data(|data| data.get_temp(anchored)) != Some(*page));
+                // A message asked for, such as a routine run's marker, comes
+                // to the top of the view once, ahead of the anchor.
+                let sought = egui::Id::new("bokkie.goto");
+                let goto = open
+                    .goto
+                    .filter(|(n, _)| ui.data(|data| data.get_temp(sought)) != Some(*n))
+                    .filter(|(_, id)| conversation.message(*id).is_some());
                 let local = app.local_time();
                 // Today's messages show their time alone until midnight.
                 frame.request_repaint_after(
@@ -877,8 +897,18 @@ fn messages_ui(
                 };
                 for message in conversation.messages() {
                     let byline = message_by(ui, &mut p, frame, &shown, message);
-                    if let Some((page, anchor)) = scroll_to
+                    if let Some((n, id)) = goto
+                        && id == message.id
+                    {
+                        byline.scroll_to_me(Some(egui::Align::TOP));
+                        ui.data_mut(|data| data.insert_temp(sought, n));
+                        // The page that brought it in needs no move of its own.
+                        if let Some((page, _)) = scroll_to {
+                            ui.data_mut(|data| data.insert_temp(anchored, page));
+                        }
+                    } else if let Some((page, anchor)) = scroll_to
                         && anchor == message.id
+                        && goto.is_none()
                     {
                         byline.scroll_to_me(Some(egui::Align::TOP));
                         ui.data_mut(|data| data.insert_temp(anchored, page));

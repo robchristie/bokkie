@@ -865,3 +865,118 @@ fn a_bot_turns_unread_when_it_writes_and_read_when_any_device_reads() {
     );
     assert!(store.apply(&other).reload.contains(&Snapshot::Bots));
 }
+
+fn routine(id: i64, name: &str, updated_at: i64) -> Routine {
+    use bokkie_protocol::api::{RoutinePush, Schedule, TimeOfDay};
+    Routine {
+        id: RoutineId(id),
+        bot_id: BOT,
+        name: name.into(),
+        prompt: "Summarise the news.".into(),
+        schedule: Schedule::Daily {
+            at: TimeOfDay::new(7, 0).unwrap(),
+        },
+        push: RoutinePush::EveryRun,
+        paused: false,
+        failures: 0,
+        next_run_at: None,
+        created_at: Timestamp(1_000),
+        updated_at: Timestamp(updated_at),
+    }
+}
+
+fn routine_names(store: &Store) -> Vec<&str> {
+    store
+        .routines(BOT)
+        .map(|routines| routines.routines().map(|r| r.name.as_str()).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn routines_follow_their_events_after_their_list() {
+    let mut store = Store::new();
+    assert!(store.request(Snapshot::Routines(BOT)));
+    // Held while the list loads, and replayed only after its seq.
+    let _ = store.apply(&at(
+        4,
+        Event::RoutineCreated {
+            routine: routine(1, "Old", 1_000),
+        },
+    ));
+    let _ = store.apply(&at(
+        6,
+        Event::RoutineCreated {
+            routine: routine(2, "Evening", 1_000),
+        },
+    ));
+    let applied = store.load_routines(
+        BOT,
+        RoutineList {
+            routines: vec![routine(1, "Morning", 1_000)],
+            seq: Seq(5),
+        },
+    );
+    assert!(applied.changed && !store.is_loading(Snapshot::Routines(BOT)));
+    assert_eq!(routine_names(&store), ["Morning", "Evening"]);
+    let mut renamed = routine(2, "Night", 2_000);
+    renamed.paused = true;
+    assert!(
+        store
+            .apply(&at(7, Event::RoutineUpdated { routine: renamed }))
+            .changed
+    );
+    assert!(
+        store
+            .routines(BOT)
+            .unwrap()
+            .routine(RoutineId(2))
+            .unwrap()
+            .paused
+    );
+    let deleted = at(
+        8,
+        Event::RoutineDeleted {
+            bot_id: BOT,
+            routine_id: RoutineId(1),
+        },
+    );
+    assert!(store.apply(&deleted).changed);
+    assert!(!store.apply(&deleted).changed, "a repeat changes nothing");
+    assert_eq!(routine_names(&store), ["Night"]);
+    // A reconnection reloads the routines kept.
+    assert!(store.reload_all().contains(&Snapshot::Routines(BOT)));
+    // Once closed, their events are ignored.
+    store.close_routines(BOT);
+    let _ = store.apply(&at(
+        9,
+        Event::RoutineCreated {
+            routine: routine(3, "Later", 1_000),
+        },
+    ));
+    assert!(store.routines(BOT).is_none());
+}
+
+#[test]
+fn a_reply_older_than_a_routine_event_does_not_undo_it() {
+    let mut store = Store::new();
+    let _ = store.load_routines(
+        BOT,
+        RoutineList {
+            routines: vec![routine(1, "Morning", 1_000)],
+            seq: Seq(1),
+        },
+    );
+    let _ = store.apply(&at(
+        2,
+        Event::RoutineUpdated {
+            routine: routine(1, "Dawn", 3_000),
+        },
+    ));
+    assert!(!store.routine_changed(routine(1, "Sunrise", 2_000)));
+    assert_eq!(routine_names(&store), ["Dawn"]);
+    assert!(store.routine_changed(routine(1, "Sunrise", 4_000)));
+    assert!(store.routine_changed(routine(2, "Evening", 4_000)));
+    assert_eq!(routine_names(&store), ["Sunrise", "Evening"]);
+    assert!(store.routine_deleted(BOT, RoutineId(2)));
+    assert!(!store.routine_deleted(BOT, RoutineId(2)));
+}

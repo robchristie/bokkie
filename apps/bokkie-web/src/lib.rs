@@ -11,7 +11,10 @@
 //!   sign-in, and a member's notices of oversight and of an admin's
 //!   password reset;
 //! - `admin` is the admin section: accounts, invitations, permissions,
-//!   oversight, limits, password resets and a member's Bots.
+//!   oversight, limits, password resets and a member's Bots;
+//! - `settings` is one Bot's settings: its grants, notes, recent tool calls
+//!   and routines, with each routine's run history, and the account's time
+//!   zone.
 //! - [`api`] describes each HTTP command and decodes its reply;
 //!   `browser` sends them with `fetch` and runs the event WebSocket.
 //!
@@ -35,6 +38,7 @@ pub mod app;
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
 pub mod connection;
+mod settings;
 pub mod socket;
 pub mod store;
 mod times;

@@ -27,6 +27,12 @@
 //! has moved, is dropped. Reloading a conversation's newest page starts it
 //! afresh, without the older pages loaded before.
 //!
+//! A Bot's routines load the same way ([`Snapshot::Routines`]), once its
+//! settings are open, and follow the routine events after their list's
+//! own [`RoutineList::seq`]. Routine runs have no snapshot of their own
+//! here: the settings keep the history they load, and take
+//! [`Event::RoutineRunUpdated`] directly.
+//!
 //! The store expects events in log order with no duplicates, as
 //! [`Connection`](crate::connection::Connection) delivers them. A repeated
 //! event changes nothing, but an old event applied after newer ones, such as
@@ -35,10 +41,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bokkie_protocol::api::{
-    Bot, BotList, Message, MessagePage, MessagePreview, MessageState, Usage,
+    Bot, BotList, Message, MessagePage, MessagePreview, MessageState, Routine, RoutineList, Usage,
 };
 use bokkie_protocol::events::{Event, EventEnvelope, Seq};
-use bokkie_protocol::{BotId, MessageId};
+use bokkie_protocol::{BotId, MessageId, RoutineId};
 
 /// How many characters of a conversation's latest message the Bot list
 /// shows, as the gateway's own previews hold.
@@ -59,6 +65,34 @@ pub enum Snapshot {
     /// `GET /api/v1/bots/{id}/messages?before=`: the page before the oldest
     /// message the conversation holds.
     Older(BotId),
+    /// `GET /api/v1/bots/{id}/routines`.
+    Routines(BotId),
+}
+
+/// One Bot's routines, as loaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Routines {
+    seq: Seq,
+    routines: BTreeMap<RoutineId, Routine>,
+}
+
+impl Routines {
+    /// The routines, oldest first, as the gateway orders them.
+    pub fn routines(&self) -> impl DoubleEndedIterator<Item = &Routine> {
+        self.routines.values()
+    }
+
+    pub fn routine(&self, id: RoutineId) -> Option<&Routine> {
+        self.routines.get(&id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.routines.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.routines.is_empty()
+    }
 }
 
 /// What applying a snapshot or an event did.
@@ -134,6 +168,8 @@ pub struct Store {
     /// here until an event or a loaded conversation shows it.
     newest: BTreeMap<BotId, MessageId>,
     conversations: BTreeMap<BotId, Conversation>,
+    /// The routines of each Bot whose settings are open.
+    routines: BTreeMap<BotId, Routines>,
     /// The latest error each Bot reported.
     errors: BTreeMap<BotId, String>,
     usage: Option<Usage>,
@@ -194,6 +230,11 @@ impl Store {
         self.conversations.get(&bot)
     }
 
+    /// A Bot's routines, once loaded.
+    pub fn routines(&self, bot: BotId) -> Option<&Routines> {
+        self.routines.get(&bot)
+    }
+
     /// The latest error a Bot reported, if any.
     pub fn error(&self, bot: BotId) -> Option<&str> {
         self.errors.get(&bot).map(String::as_str)
@@ -249,8 +290,8 @@ impl Store {
     }
 
     /// Everything to load again, as after a `reset` frame or on the first
-    /// connection: the Bot list and every open conversation. Each is marked
-    /// as loading.
+    /// connection: the Bot list, every open conversation and every routine
+    /// list kept. Each is marked as loading.
     pub fn reload_all(&mut self) -> BTreeSet<Snapshot> {
         let all: BTreeSet<Snapshot> = std::iter::once(Snapshot::Bots)
             .chain(
@@ -258,6 +299,7 @@ impl Store {
                     .keys()
                     .map(|bot| Snapshot::Messages(*bot)),
             )
+            .chain(self.routines.keys().map(|bot| Snapshot::Routines(*bot)))
             .collect();
         self.loading.extend(all.iter().copied());
         all
@@ -302,6 +344,66 @@ impl Store {
             self.stale.remove(&snapshot);
         }
         self.settle();
+    }
+
+    /// Stop keeping a Bot's routines. Events for them are then ignored.
+    pub fn close_routines(&mut self, bot: BotId) {
+        self.routines.remove(&bot);
+        let snapshot = Snapshot::Routines(bot);
+        self.loading.remove(&snapshot);
+        self.stale.remove(&snapshot);
+        self.settle();
+    }
+
+    /// Load a Bot's routines and apply the held events that followed them.
+    pub fn load_routines(&mut self, bot: BotId, list: RoutineList) -> Applied {
+        let mut applied = Applied::changed(true);
+        self.routines.insert(
+            bot,
+            Routines {
+                seq: list.seq,
+                routines: list
+                    .routines
+                    .into_iter()
+                    .filter(|routine| routine.bot_id == bot)
+                    .map(|routine| (routine.id, routine))
+                    .collect(),
+            },
+        );
+        let snapshot = Snapshot::Routines(bot);
+        self.loading.remove(&snapshot);
+        for envelope in std::mem::take(&mut self.held) {
+            if envelope.seq > list.seq {
+                applied.merge(self.apply_to_routines(&envelope));
+            }
+            self.held.push(envelope);
+        }
+        applied.merge(self.reload_if_stale(snapshot));
+        self.settle();
+        self.finish(applied)
+    }
+
+    /// A routine as a reply to the user's own change reported it. Kept only
+    /// if the Bot's routines are loaded and hold nothing newer, since an
+    /// event may already have brought a later change.
+    pub fn routine_changed(&mut self, routine: Routine) -> bool {
+        let Some(routines) = self.routines.get_mut(&routine.bot_id) else {
+            return false;
+        };
+        match routines.routines.get(&routine.id) {
+            Some(held) if held.updated_at > routine.updated_at || *held == routine => false,
+            _ => {
+                routines.routines.insert(routine.id, routine);
+                true
+            }
+        }
+    }
+
+    /// A routine the user deleted.
+    pub fn routine_deleted(&mut self, bot: BotId, routine: RoutineId) -> bool {
+        self.routines
+            .get_mut(&bot)
+            .is_some_and(|routines| routines.routines.remove(&routine).is_some())
     }
 
     /// Load the Bot list and apply the held events that followed it.
@@ -433,6 +535,7 @@ impl Store {
         };
         // After the conversation, so a preview can show its assembled text.
         applied.merge(self.apply_to_bots(envelope));
+        applied.merge(self.apply_to_routines(envelope));
         if let Event::UsageUpdated { usage } = &envelope.event {
             applied.changed |= self.usage.as_ref() != Some(usage);
             self.usage = Some(usage.clone());
@@ -534,7 +637,8 @@ impl Store {
             },
             // The application keeps the account itself.
             Event::UsageUpdated { .. } | Event::AccountUpdated { .. } => Applied::default(),
-            // This client has no routine view yet.
+            // The routines are kept apart (`apply_to_routines`); the
+            // settings take run updates.
             Event::RoutineCreated { .. }
             | Event::RoutineUpdated { .. }
             | Event::RoutineDeleted { .. }
@@ -590,6 +694,32 @@ impl Store {
                 Applied::changed(changed)
             }
             None => Applied::reload(Snapshot::Bots),
+        }
+    }
+
+    /// The part of an event that concerns a Bot's loaded routines.
+    fn apply_to_routines(&mut self, envelope: &EventEnvelope) -> Applied {
+        let bot = match &envelope.event {
+            Event::RoutineCreated { routine } | Event::RoutineUpdated { routine } => routine.bot_id,
+            Event::RoutineDeleted { bot_id, .. } => *bot_id,
+            _ => return Applied::default(),
+        };
+        let Some(routines) = self.routines.get_mut(&bot) else {
+            return Applied::default();
+        };
+        if envelope.seq <= routines.seq {
+            return Applied::default();
+        }
+        match &envelope.event {
+            Event::RoutineCreated { routine } | Event::RoutineUpdated { routine } => {
+                let changed = routines.routines.get(&routine.id) != Some(routine);
+                routines.routines.insert(routine.id, routine.clone());
+                Applied::changed(changed)
+            }
+            Event::RoutineDeleted { routine_id, .. } => {
+                Applied::changed(routines.routines.remove(routine_id).is_some())
+            }
+            _ => Applied::default(),
         }
     }
 
