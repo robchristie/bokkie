@@ -354,8 +354,8 @@ The gateway refuses to serve an app server or thread unless these all hold:
 - during a turn, every item must be a message, reasoning, a plan, a
   compaction, or a call of a Bokkie tool that the thread's grants bring,
   and every `item/tool/call` must name such a tool. A web search
-  (`webSearch` item) is allowed only on a thread granted `web.search`,
-  which cannot be granted yet. Any other item or tool call, any approval
+  (`webSearch` item) is allowed only on a thread granted `web.search`
+  (see [Web search](#web-search)). Any other item or tool call, any approval
   request (declined), and any item or approval the gateway cannot decode
   shows that the configuration did not hold. The gateway then refuses the
   thread, stops every user's app server and serves no Codex at all until it
@@ -366,9 +366,9 @@ The gateway refuses to serve an app server or thread unless these all hold:
 
 `tests/live_codex.rs` proves the result against the real pinned app server
 with a mock model and a synthetic household sign-in: a thread offers
-exactly the tools of its grants, for no grants, `notes`, `seen`, and
-`notes` with `seen`, plus `request_user_input`, which the gateway answers
-with an error. Its control
+exactly the tools of its grants, for every combination of `notes`, `seen`
+and `web.search`, plus `request_user_input`, which the gateway answers
+with an error, and Codex's web search only with `web.search`. Its control
 test shows that the same capture sees `apply_patch`, `exec_command` and
 `spawn_agent` without the gateway's configuration. Other live tests show
 that a thread runs with every Bubblewrap broken, and that one user's app
@@ -380,6 +380,44 @@ from the calling Bot's notes or seen items.
 These results hold for the pinned release: the tool flags, the catalog
 fields and the static catalog are all Codex 0.163.0 behaviour. Moving the
 pin must rerun the live tests, including the control.
+
+### Web search
+
+Web search is Codex's own, not a Bokkie tool, and the one Codex tool a
+thread may use. The app server's `config.toml` keeps `web_search =
+"disabled"`, which the checks above require, and `standalone_web_search`
+off. A thread of a Bot holding `web.search` turns it on for itself alone:
+the gateway sends `web_search = "live"` in the `config` overrides of its
+`thread/start` and of every `thread/resume`, and no other thread's.
+Codex 0.163.0 keeps those overrides only while a thread is loaded; a
+cold resume restores none of them, so the gateway sends them again, and a
+thread resumed without them has no search. No response reports a
+thread's effective mode, so the live tests prove it by capture.
+
+What a thread then offers depends on its model's catalog entry:
+
+- On a Responses-Lite model (`use_responses_lite`), which is every model
+  the pinned release bundles except `gpt-5.5`, and so the default, Codex
+  offers its own `web.run` tool. The app server runs it itself by sending
+  the query, with recent conversation, to the model provider's search
+  endpoint (`alpha/search`): only the provider is reached.
+- On `gpt-5.5`, Codex offers the provider's hosted `web_search` tool,
+  which the provider runs within its response, with live access to the
+  web.
+
+Either way a search reaches the gateway as a `webSearch` item, with its
+query and action; the gateway ignores any results it carries. What a Bot searches
+for leaves the household, so a Bot can leak what it is told through its
+queries.
+
+`web.search` cannot be granted yet (`invalid_request`): which of those
+paths Bokkie's Bots search by is not settled. `tests/live_search.rs`
+proves both paths against the mock model, which answers both and reaches
+nothing: only a `web.search` thread offers search, by its model's path,
+after starting and after a cold resume; a `web.run` call reaches the
+mock's search endpoint and its `webSearch` item is allowed; a hosted
+search's item is allowed; and a search on a thread without `web.search`
+stops Codex.
 
 ## Bots and conversations
 
@@ -429,7 +467,9 @@ Each Bot holds a set of grants from the catalogue `notes`, `seen`,
 `notify`, `web.search` and `web.fetch`, carried as `grants` on the Bot (in
 `GET /api/v1/bots` and `bot_updated` events). Today `notes` and `seen` have
 tools; the gateway refuses to grant the others (`invalid_request`) until
-their tools exist.
+their tools exist. `web.search` brings Codex's own web search
+([Web search](#web-search)), which its threads already turn on and
+describe in their instructions; it is refused until its path is settled.
 
 - **Setting them.** `PATCH /api/v1/bots/{id}` with `grants` replaces the
   Bot's set, which commits with a `bot_updated` event. An admin may grant
@@ -506,6 +546,13 @@ their tools exist.
   [The capability rule](#the-capability-rule)), recorded as the Bot's
   refusal. The minute pass deletes entries older than 90 days, and seen
   items last shown more than 365 days ago.
+- **Web searches.** Each completed search on a `web.search` thread is
+  recorded in the same log as `web_search`, with the item's id as its call
+  id and its query or the page it opened as its summary (such as `search
+  new RLHF papers` or `open https://example.org/a`), on one line and at
+  most 200 characters, outcome `ok` and how long it took. Searches stay
+  out of the conversation: the Bot's reply says what it found. The
+  gateway's own log never records a query.
 
 Every query names the signed-in user, or for the broker the app server's
 user: another user's Bot's grants, notes, seen items and tool calls read as

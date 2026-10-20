@@ -9,6 +9,10 @@
 //!
 //! - **Availability.** A grant whose tools do not exist yet cannot be
 //!   granted. Today that is `notify`, `web.search` and `web.fetch`.
+//!   `web.search` brings Codex's own web search rather than a Bokkie tool;
+//!   its threads turn it on ([`crate::codex::config::thread_overrides`]),
+//!   but it stays unavailable until the path Codex searches by is settled
+//!   for Bokkie's models.
 //! - **Who grants what.** An admin may grant anything available; a member
 //!   may add only `notes`, `seen` and `notify` ([`member_may_grant`]), and
 //!   may remove any grant.

@@ -15,6 +15,7 @@
 pub mod audit;
 pub mod notes;
 pub mod seen;
+pub mod web_search;
 
 use std::time::{Duration, Instant};
 
@@ -320,6 +321,53 @@ impl Broker {
         }
     }
 
+    /// Records a completed web search, item `item_id` of `user`'s thread,
+    /// in its Bot's tool-call log. `granted` says whether the thread
+    /// started with `web.search`; a search on any other thread is a
+    /// violation that the app server's read loop has already acted on, and
+    /// is recorded as refused.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_web_search(
+        &self,
+        user: UserId,
+        thread_id: &str,
+        turn_id: &str,
+        item_id: &str,
+        query: &str,
+        action: Option<&Value>,
+        granted: bool,
+        duration: Duration,
+    ) {
+        let bot = match store::bot_by_thread(&self.db, user, thread_id).await {
+            Ok(Some(bot)) => bot,
+            Ok(None) => return,
+            Err(failure) => {
+                tracing::error!(user = %user, message = %failure.message, "resolving a web search failed");
+                return;
+            }
+        };
+        let outcome = if granted {
+            ToolCallOutcome::Ok
+        } else {
+            ToolCallOutcome::Refused
+        };
+        let entry = audit::Entry {
+            user,
+            bot: bot.id,
+            thread_id,
+            turn_id,
+            call_id: item_id,
+            tool: web_search::TOOL,
+            summary: web_search::summary(query, action),
+            outcome,
+            duration_ms: duration.as_millis() as u64,
+        };
+        if let Err(failure) = audit::record(&self.db, self.clock.now(), entry).await {
+            tracing::error!(user = %user, bot = %bot.id, message = %failure.message, "recording a web search failed");
+        }
+        tracing::info!(user = %user, bot = %bot.id, ?outcome, "recorded a web search");
+    }
+
     /// Records a call in its Bot's tool-call log.
     #[allow(clippy::too_many_arguments)]
     async fn record(
@@ -366,7 +414,8 @@ mod tests {
         assert_eq!(names, ["seen_check", "seen_mark"]);
         let both: GrantSet = [Grant::Seen, Grant::Notes].into();
         assert_eq!(granted(&both).count(), 5);
-        // Grants without tools yet bring none.
+        // Grants without tools yet bring none, and web.search brings Codex's
+        // own web search, not a Bokkie tool.
         for grant in [Grant::Notify, Grant::WebSearch, Grant::WebFetch] {
             assert_eq!(granted(&[grant].into()).count(), 0, "{grant}");
         }

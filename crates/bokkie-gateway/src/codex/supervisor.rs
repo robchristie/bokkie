@@ -1117,8 +1117,8 @@ impl Runtime {
     }
 
     /// Starts a thread in the user's workspace under the `bokkie` profile,
-    /// offering exactly the tools of `grants`, and checks it before serving
-    /// it.
+    /// offering exactly the tools of `grants`, with web search on only for
+    /// `web.search`, and checks it before serving it.
     pub async fn start_thread(
         &self,
         developer_instructions: String,
@@ -1136,6 +1136,7 @@ impl Runtime {
             developer_instructions: Some(developer_instructions),
             ephemeral: Some(false),
             dynamic_tools: tools::specs(grants),
+            config: config::thread_overrides(grants),
             ..ThreadStartParams::default()
         }))
         .await?;
@@ -1144,7 +1145,8 @@ impl Runtime {
 
     /// Loads a thread into this app server and checks it before serving it.
     /// `grants` are those the thread started with: Codex restores its tools
-    /// and its developer instructions from then.
+    /// and its developer instructions from then, but not its configuration
+    /// overrides, so they are sent again.
     pub async fn resume_thread(
         &self,
         thread_id: &str,
@@ -1159,7 +1161,7 @@ impl Runtime {
             approval_policy: Some(AskForApproval::Never),
             permissions: Some(PROFILE.into()),
             developer_instructions: Some(developer_instructions),
-            ..ThreadResumeParams::default()
+            config: config::thread_overrides(grants),
         }))
         .await?;
         if response.thread.id != thread_id {
