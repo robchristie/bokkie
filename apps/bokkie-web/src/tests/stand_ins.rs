@@ -32,12 +32,15 @@ fn the_new_bot_form_creates_a_named_bot_which_arrives_as_an_event() {
     assert_eq!(fixture.fact("creating"), false.into());
     assert_eq!(fixture.fact("new_bot_name"), "".into());
     // The list takes the Bot from its event.
-    assert!(!fixture.shows("Open Gardener"));
+    assert!(!fixture.lists("Gardener"));
     fixture.event(11, Event::BotCreated { bot: created });
-    assert!(fixture.shows("Open Gardener"));
+    assert!(fixture.lists("Gardener"));
     assert_eq!(fixture.fact("bot_count"), 2_u64.into());
-    // A Bot with no label shows its status alone.
-    assert!(fixture.shows("Idle"));
+    // A Bot with neither a label nor a message has no preview.
+    assert_eq!(
+        fixture.row_says("Gardener"),
+        "Open the conversation of the Bot with this ID"
+    );
 }
 
 #[test]

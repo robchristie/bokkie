@@ -104,7 +104,7 @@ impl Fixture {
 
     /// Open the Tutor's conversation, holding `messages`, as of `seq`.
     pub(super) fn open_tutor(&mut self, messages: Vec<Message>, seq: u64) {
-        self.click("Open Tutor");
+        self.open("Tutor");
         assert_eq!(self.sent(), [ApiRequest::LoadMessages(TUTOR)]);
         assert_eq!(self.fact("screen"), "conversation".into());
         assert_eq!(self.fact("conversation"), "loading".into());
@@ -232,7 +232,7 @@ fn the_socket_connecting_is_said_until_it_is_live() {
 fn opening_a_bot_shows_its_conversation_and_back_returns_to_the_list() {
     let mut fixture = Fixture::new();
     fixture.signed_in_and_live(7);
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     assert!(fixture.shows("Loading the conversation…"));
     let _ = fixture.sent();
     fixture.reply(ApiReply::Messages(
@@ -269,7 +269,7 @@ fn opening_a_bot_shows_its_conversation_and_back_returns_to_the_list() {
     assert_eq!(fixture.fact("screen"), "signed_in".into());
     assert_eq!(fixture.fact("bot"), 0_i64.into());
     assert!(fixture.store_has_no_conversation());
-    assert!(fixture.shows("Open Tutor"));
+    assert!(fixture.lists("Tutor"));
 }
 
 impl Fixture {
@@ -324,7 +324,11 @@ fn a_reply_streams_in_and_settles_and_the_list_follows() {
     assert_eq!(fixture.sent(), [mark_read(TUTOR, 4)]);
     // The list's preview followed the conversation.
     fixture.click("Back");
-    assert!(fixture.shows("A fraction is a part of a whole 🍕."));
+    let row = fixture.row_says("Tutor");
+    assert!(
+        row.contains("A fraction is a part of a whole 🍕.; 9:30 AM"),
+        "{row}"
+    );
 }
 
 #[test]
@@ -334,8 +338,11 @@ fn the_list_follows_events_while_no_conversation_is_open() {
     for (seq, event) in (11..).zip(exchange()).take(2) {
         fixture.event(seq, event);
     }
-    assert!(fixture.shows("Maths help · Working"));
-    assert!(fixture.shows("Explain fractions"));
+    assert!(
+        fixture
+            .row_says("Tutor")
+            .starts_with("Working · You: Explain fractions; ")
+    );
     let mut renamed = bot(1, "Maths Tutor", "Maths help", BotStatus::Working, None);
     renamed.last_message = fixture
         .app()
@@ -345,7 +352,7 @@ fn the_list_follows_events_while_no_conversation_is_open() {
         .last_message
         .clone();
     fixture.event(13, Event::BotUpdated { bot: renamed });
-    assert!(fixture.shows("Open Maths Tutor"));
+    assert!(fixture.lists("Maths Tutor"));
     fixture.event(
         14,
         Event::BotCreated {
@@ -353,7 +360,7 @@ fn the_list_follows_events_while_no_conversation_is_open() {
         },
     );
     assert_eq!(fixture.fact("bot_count"), 2_u64.into());
-    assert!(fixture.shows("Open Gardener"));
+    assert!(fixture.lists("Gardener"));
 }
 
 #[test]
@@ -500,7 +507,7 @@ fn a_bot_error_shows_until_the_next_message() {
 fn a_conversation_that_failed_to_load_can_be_refreshed() {
     let mut fixture = Fixture::new();
     fixture.signed_in_and_live(10);
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     let _ = fixture.sent();
     fixture.reply(ApiReply::Messages(
         TUTOR,
@@ -628,7 +635,7 @@ fn reset_reloads_the_list_and_the_open_conversation() {
 fn a_reload_asked_for_while_a_load_is_in_flight_follows_it() {
     let mut fixture = Fixture::new();
     fixture.signed_in_and_live(10);
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     assert_eq!(fixture.sent(), [ApiRequest::LoadMessages(TUTOR)]);
     // A reset arrives before the page: the page may predate it.
     fixture.socket(Input::Closed { code: None });
@@ -685,7 +692,7 @@ fn a_visible_page_reconnects_at_once_or_checks_a_live_socket() {
 fn a_failed_load_is_retried_when_the_socket_is_live_again() {
     let mut fixture = Fixture::new();
     fixture.signed_in_and_live(10);
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     let _ = fixture.sent();
     let down = "Bokkie's server is not available. Try again shortly";
     fixture.reply(ApiReply::Messages(
@@ -820,7 +827,7 @@ impl Fixture {
     /// Open the Tutor on its newest page, messages 20 and 21 at event 10,
     /// with older messages before them.
     fn open_tutor_with_history(&mut self) {
-        self.click("Open Tutor");
+        self.open("Tutor");
         assert_eq!(self.sent(), [ApiRequest::LoadMessages(TUTOR)]);
         self.reply(ApiReply::Messages(
             TUTOR,
@@ -1068,7 +1075,7 @@ fn an_older_page_out_across_a_reset_or_back_is_dropped() {
 fn the_message_that_was_oldest_stays_in_view_when_older_ones_arrive() {
     let mut fixture = Fixture::new();
     fixture.signed_in_and_live(10);
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     let _ = fixture.sent();
     let newest = (100..120)
         .map(|id| {

@@ -39,6 +39,7 @@
 mod admin;
 pub mod api;
 pub mod app;
+mod avatars;
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
 pub mod connection;

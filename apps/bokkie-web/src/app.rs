@@ -86,6 +86,20 @@ pub enum BokkieAction {
         integer = true
     )]
     OpenBot,
+    #[action(
+        label = "Open",
+        description = "Open the conversation of the pinned Bot with this ID, from the strip of pinned Bots above the list",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    OpenPinned,
+    #[action(
+        label = "Refresh Bots",
+        description = "Load the list of Bots and the household's ChatGPT sign-in again"
+    )]
+    RefreshBots,
     #[action(label = "Back", description = "Return to the previous level")]
     Back,
     #[action(
@@ -2054,8 +2068,14 @@ impl Application for App {
                 Some("Loading the Bots")
             }
             (BokkieAction::Refresh, _) => None,
-            (BokkieAction::OpenBot, _) if !self.store.bots_loaded() => Some("Loading the Bots"),
-            (BokkieAction::OpenBot, _) => None,
+            (BokkieAction::RefreshBots, _) if self.in_flight.contains(&Snapshot::Bots) => {
+                Some("Loading the Bots")
+            }
+            (BokkieAction::RefreshBots, _) => None,
+            (BokkieAction::OpenBot | BokkieAction::OpenPinned, _) if !self.store.bots_loaded() => {
+                Some("Loading the Bots")
+            }
+            (BokkieAction::OpenBot | BokkieAction::OpenPinned, _) => None,
             (BokkieAction::ShowPrompt, _) if self.open().is_none() => {
                 Some("No conversation is open")
             }
@@ -2171,6 +2191,9 @@ impl Application for App {
         };
         let listed = match (target.action, id) {
             (BokkieAction::OpenBot, Some(id)) => self.store.bot(BotId(id)).is_some(),
+            (BokkieAction::OpenPinned, Some(id)) => {
+                self.strip().iter().any(|bot| bot.id == BotId(id))
+            }
             (BokkieAction::ShowPrompt, Some(id)) => self.open().is_some_and(|open| {
                 self.store
                     .conversation(open.bot)
@@ -2403,6 +2426,11 @@ impl Application for App {
                     self.send(ApiRequest::CodexAccount);
                 }
             },
+            // Wherever the user is, the Bots and the household's sign-in.
+            (BokkieAction::RefreshBots, Session::SignedIn(_)) => {
+                self.load(Snapshot::Bots);
+                self.send(ApiRequest::CodexAccount);
+            }
             (BokkieAction::Back, Session::SignedIn(signed_in)) => {
                 // Leaving the ChatGPT sign-in drops its code with it.
                 if signed_in.household.take().is_some() {
@@ -2624,13 +2652,15 @@ impl Application for App {
                 self.settings_perform_with(action, id as i64)
                     .unwrap_or(Ok(false))
             }
-            (BokkieAction::OpenBot, ActionArgument::Number(id))
+            (BokkieAction::OpenBot | BokkieAction::OpenPinned, ActionArgument::Number(id))
                 if id.fract() == 0.0 && (1.0..=MAX_ID).contains(&id) =>
             {
                 // Exact: the contract admits only integers in range.
                 self.open_conversation(BotId(id as i64))
             }
-            (BokkieAction::OpenBot, _) => Err("Open needs a Bot ID".into()),
+            (BokkieAction::OpenBot | BokkieAction::OpenPinned, _) => {
+                Err("Open needs a Bot ID".into())
+            }
             (BokkieAction::ShowPrompt, ActionArgument::Number(id))
                 if id.fract() == 0.0 && (1.0..=MAX_ID).contains(&id) =>
             {
@@ -2689,6 +2719,12 @@ impl Application for App {
         );
         observation.fact("bots", self.bots_state());
         observation.fact("bot_count", self.store.visible_bots().len());
+        let strip: Vec<String> = self
+            .strip()
+            .iter()
+            .map(|bot| bot.id.0.to_string())
+            .collect();
+        observation.fact("strip", strip.join(","));
         observation.fact("message", bounded(self.message().unwrap_or("")));
         observation.fact("connection", self.link().name());
         observation.fact("bot", self.open_bot().map_or(0, |bot| bot.0));

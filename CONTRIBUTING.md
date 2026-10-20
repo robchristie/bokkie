@@ -128,7 +128,9 @@ reference (`bot`, with its ID). A resize changes only the layout. The facts `lay
 `panes` (those on screen, from the start of the line, comma-separated,
 among `list`, `content`, `detail` and `empty`) say how it stands. The
 client's other facts say where it is: `screen`, `user`, `bots`,
-`bot_count`, `show_hidden`, `message` and `connection` (the event socket);
+`bot_count`, `show_hidden`, `strip` (the IDs of the pinned Bots in the
+strip above the list, comma-separated: only on a phone while the list
+shows), `message` and `connection` (the event socket);
 for the account `role`, `may_create_bots`, `may_edit_profiles`,
 `oversight` (the notice that an admin can read the member's Bots) and
 `reset_notice` (the notice that an admin reset the password); for the open
@@ -167,10 +169,22 @@ view; and for a Bot's settings (`screen` is `bot_settings`) `grants`,
 `saving`), `routine_error`, `routine_delete`, `history` (the routine whose
 runs show), `runs`, and the newest run's `run`, `run_state` and
 `run_messages`. Name a new Bot with `stobie set-text
-bokkie.bot-name`. Open a Bot with `stobie invoke bokkie.open-bot --value
-ID` and fill the message field with `stobie set-text bokkie.draft`. Each
-row's control carries its row's ID, so `--value ID` acts through that
-row's control, and an ID that no row lists is refused; the admin's
+bokkie.bot-name`. Each Bot's row in the list is Stobie's conversation
+row: a navigation item named by the Bot, with its avatar (a soft shape
+with eyes and a colour, picked from the Bot's ID and drawn from
+`src/avatars.rs`, not its emoji), whose description reads, joined by
+`; `, `Unread` while the Bot is unread (which paints the unread dot), the
+preview (the Bot's state when it is not idle, `Hidden` for a hidden Bot,
+and its last message, or its label before any), and the last message's
+time: the time of day today, otherwise its day. Read a row's name and
+preview from its node, as the browser smoke does; a row publishes no
+content text. On a phone the pinned Bots also show as a strip of avatars
+above the list. Open a Bot with `stobie invoke bokkie.open-bot --value ID`,
+or from the strip with `bokkie.open-pinned --value ID`, and fill the
+message field with `stobie set-text bokkie.draft`. Each row's control
+carries its row's ID, so `--value ID` acts through that row's control,
+and an ID that no row (or, for `bokkie.open-pinned`, no avatar in the
+strip) lists is refused; the admin's
 `bokkie.open-account`, `bokkie.withdraw-invitation`,
 `bokkie.edit-member-bot` and `bokkie.read-conversation` work the same way.
 A conversation opens on its newest 50 messages; `stobie invoke
@@ -187,17 +201,22 @@ routine's form with `stobie set-text` on `bokkie.routine-name`,
 and act on one routine with `bokkie.edit-routine`, `bokkie.pause-routine`,
 `bokkie.run-routine`, `bokkie.delete-routine` and `bokkie.routine-history`
 with `--value ROUTINE_ID`; `bokkie.show-run --value RUN_ID` closes the
-settings and brings that run's marker into view. The account's time zone
-is set at the bottom of the Bot list, with `stobie set-text bokkie.time-zone`, and
-`stobie invoke bokkie.notifications`, below it, switches this device's
-notifications on or off. The switch subscribes through Stobie's Web Push
+settings and brings that run's marker into view. The bottom of the Bot
+list holds the account: who is signed in, the usage meter, the account's
+time zone (`stobie set-text bokkie.time-zone`), this device's
+notifications, `bokkie.refresh-bots` (Refresh Bots, which loads the list
+and the household's sign-in again, and stays in reach beside a
+conversation or the admin section), Sign out and, for an admin, the
+admin section. `stobie invoke bokkie.notifications`, a switch named
+"Notifications on this device", switches this device's notifications on
+or off. The switch subscribes through Stobie's Web Push
 bridge with the gateway's key and sends the subscription; each launch sends
 it again, and switching off or signing out unsubscribes the device. While a
 conversation shows with the page in the foreground, the client tells the
 gateway it views that Bot (the event socket's `viewing`), so its pushes are
 not sent, and moves the Bot's read marker to its newest message. Unread
-Bots say so in the list, and the app badge counts them, hidden ones
-included. A tapped notification opens its Bot. Times
+Bots show the unread dot in the list, and the app badge counts them,
+hidden ones included. A tapped notification opens its Bot. Times
 show in the account's own time zone, in the browser's locale. Stobie offers no `set-text` on
 the password field, so type into it with the keyboard. Bots
 reply only while the household is signed in to ChatGPT (see
@@ -234,7 +253,10 @@ checks:
   observation and no log line carries;
 - a routine made in the Bot's settings and run now succeeds in its
   history; its push is recorded and sent to that one subscription; the
-  Bot shows unread and the app badge counts it; showing the run brings its
+  Bot shows unread and the app badge counts it; beside the settings, the
+  list's row for the Bot, a navigation item named by the Bot and presented
+  as a button, reads it unread with the run's reply as its preview and the
+  time of day; showing the run brings its
   marker and reply into view, says the Bot is viewed and marks it read;
 - the route of a tapped notification opens its Bot, and switching
   notifications off unsubscribes the device and the gateway forgets it;

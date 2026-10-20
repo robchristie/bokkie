@@ -25,7 +25,9 @@
 // - makes a routine in the Bot's settings and runs it now: the run
 //   succeeds in its history; its push is recorded for the one subscription
 //   (whose endpoint, on a loopback name, the gateway refuses to reach), the
-//   Bot is unread in the list and the badge counts it; Show brings its
+//   Bot is unread and the badge counts it; beside the settings, the list's
+//   row for the Bot reads it unread, with the run's reply as its preview,
+//   from its node and its accessible button; Show brings its
 //   marker and the mock's reply into view, says the Bot is viewed, and
 //   marks it read;
 // - opens the Bot a tapped notification names, through the service
@@ -689,6 +691,28 @@ try {
   assert.equal((await page.evaluate(() => window.__pushStandIn.badges)).at(-1), 1, 'the app badge says one');
   assert.equal(viewingSent().at(-1), null, 'settings view no conversation');
   step('routine push recorded and the Bot unread', { pushes, unread: unread.unread, badge: unread.badge });
+  // Beside the settings, the list's row for the Planner is a navigation
+  // item named by the Bot, whose description reads its unread state (which
+  // paints the unread dot), the run's reply as its preview, and the time
+  // of day; the accessibility layer presents it as a button with that
+  // description. The settings stay open, so nothing is viewed or read.
+  await page.setViewportSize({ width: 800, height: 900 });
+  await app.until('the list beside the settings', facts => facts.layout === 'split' && facts.panes === 'list,detail');
+  let plannerRow;
+  for (const deadline = Date.now() + 10000; ; await wait(50)) {
+    [plannerRow] = await app.nodes({ role: 'navigation_item', name: 'Planner' });
+    if (plannerRow?.description?.startsWith('Unread; Routine done.; ')) break;
+    assert(Date.now() < deadline, `the Planner's row: ${JSON.stringify(plannerRow)}`);
+  }
+  assert.match(plannerRow.description, /^Unread; Routine done\.; \d{1,2}:\d{2} [AP]M; Open the conversation of the Bot with this ID$/);
+  assert.equal((await app.nodes({ role: 'navigation_item', name: 'Planner' })).length, 1, 'one row for the Planner');
+  const ariaRow = page.getByRole('button', { name: 'Planner', exact: true });
+  assert.equal(await ariaRow.count(), 1, 'the accessibility layer presents the row');
+  assert.equal(await ariaRow.getAttribute('aria-description'), plannerRow.description);
+  assert.equal((await app.facts()).unread, String(bot.id), 'still unread beside the list');
+  await page.setViewportSize({ width: 430, height: 900 });
+  await app.until('the settings alone', facts => facts.layout === 'stack' && facts.panes === 'detail');
+  step('the list\'s row reads the Bot unread', { row: plannerRow.name, says: plannerRow.description });
   await app.action('bokkie.show-run', ran.run);
   const shown = await app.until('the run shown', facts => facts.screen === 'conversation'
     && facts.bot_status === 'idle' && facts.reply_state === 'complete', 30000);

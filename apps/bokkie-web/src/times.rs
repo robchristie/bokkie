@@ -33,6 +33,12 @@ pub(crate) fn message_time(local: &LocalTime, at: Timestamp) -> String {
     }
 }
 
+/// When a Bot's latest message arrived, for its row in the list: "9:41 AM"
+/// today, otherwise its day, such as "Yesterday" or "14 Apr".
+pub(crate) fn compact(local: &LocalTime, at: Timestamp) -> String {
+    local.compact(instant(at))
+}
+
 /// When something happened, inside a sentence: "today at 9:41 AM",
 /// "yesterday at 9:41 AM", "on Monday at 9:41 AM" or "on 14 Apr at
 /// 9:41 AM".

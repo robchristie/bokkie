@@ -25,6 +25,7 @@ mod admin;
 mod conversation;
 mod household;
 mod limits;
+mod list;
 mod member;
 mod navigation;
 mod notifications;
@@ -126,6 +127,51 @@ impl Fixture {
 
     fn click(&mut self, label: &str) {
         self.harness.get_by_label(label).click();
+        self.harness.run();
+    }
+
+    /// The Bot's row in the list, as Stobie publishes it to agents: named
+    /// by the Bot, its description the unread state, preview and time.
+    fn row(&self, name: &str) -> Option<stobie_ui_egui::UiNode> {
+        let open = stobie_ui_egui::ActionKey::stable_id(BokkieAction::OpenBot);
+        self.host()
+            .ui_snapshot()
+            .nodes
+            .iter()
+            .find(|node| {
+                node.role == stobie_ui_egui::UiRole::NavigationItem
+                    && node.name == name
+                    && node.actions.iter().any(|action| action.0 == open)
+            })
+            .cloned()
+    }
+
+    /// Whether the list has a row for the Bot named `name`.
+    fn lists(&self, name: &str) -> bool {
+        self.row(name).is_some()
+    }
+
+    /// The description of the Bot's row: its unread state, preview and
+    /// time, then what the row does.
+    fn row_says(&self, name: &str) -> String {
+        self.row(name)
+            .and_then(|row| row.description)
+            .unwrap_or_else(|| panic!("no row for {name:?}"))
+    }
+
+    /// Open the Bot named `name` from its row in the list, as a person
+    /// would; a phone's strip of pinned Bots names them too.
+    fn open(&mut self, name: &str) {
+        let action = stobie_ui_egui::ActionKey::specification(BokkieAction::OpenBot).description;
+        self.harness
+            .query_all_by_label(name)
+            .find(|node| {
+                egui_kittest::kittest::NodeT::accesskit_node(node)
+                    .description()
+                    .is_some_and(|description| description.ends_with(action))
+            })
+            .unwrap_or_else(|| panic!("no row for {name:?}"))
+            .click();
         self.harness.run();
     }
 
@@ -420,16 +466,19 @@ fn signing_in_loads_and_lists_the_bots() {
     })));
     assert_eq!(fixture.fact("bots"), "loaded".into());
     assert_eq!(fixture.fact("bot_count"), 2_u64.into());
-    for text in [
-        "Meal Planner",
-        "Plans dinners · Idle",
-        "Tacos on Friday?",
-        "Tutor",
-        "Maths help · Working",
-    ] {
-        assert!(fixture.shows(text), "{text}");
-    }
-    assert!(!fixture.shows("Hidden"));
+    // Each row gives the latest message, or the label before there is one,
+    // after what the Bot is doing when it is not idle.
+    assert!(
+        fixture
+            .row_says("Meal Planner")
+            .starts_with("Tacos on Friday?; ")
+    );
+    assert!(
+        fixture
+            .row_says("Tutor")
+            .starts_with("Working · Maths help; ")
+    );
+    assert!(!fixture.lists("Hidden"));
     assert!(fixture.enabled(BokkieAction::Refresh));
 }
 
@@ -460,7 +509,7 @@ fn a_failed_list_can_be_refreshed() {
     assert_eq!(fixture.fact("bots"), "failed".into());
     assert_eq!(fixture.fact("message"), down.into());
     assert!(fixture.shows(down));
-    fixture.click("Refresh");
+    fixture.click("Refresh Bots");
     // The household's sign-in announces no events, so it is asked too.
     assert_eq!(
         fixture.sent(),
@@ -570,7 +619,7 @@ fn both_screens_present_their_controls_at_phone_width() {
         seq: Seq(1),
     })));
     fixture.assert_presentable();
-    assert!(fixture.shows("Sign out") && fixture.shows("Refresh"));
+    assert!(fixture.shows("Sign out") && fixture.shows("Refresh Bots"));
 }
 
 /// The page links the licences of the fonts the application embeds, and the

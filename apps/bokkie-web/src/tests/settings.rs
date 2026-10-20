@@ -756,7 +756,7 @@ fn show_run_brings_its_marker_into_view_loading_earlier_pages() {
     let mut fixture = Fixture::new();
     fixture.sent.set_now(Timestamp(NOW));
     fixture.signed_in_and_live_as(session(user()), 10);
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     let _ = fixture.sent();
     // The newest page does not hold the run's marker.
     fixture.reply(ApiReply::Messages(
@@ -901,7 +901,7 @@ fn the_time_zone_is_saved_and_times_follow_it() {
     assert_eq!(fixture.fact("time_zone"), "Europe/London".into());
     assert_eq!(fixture.fact("time_zone_error"), "".into());
     // Times now show on the London clock.
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     let _ = fixture.sent();
     fixture.reply(ApiReply::Messages(
         TUTOR,

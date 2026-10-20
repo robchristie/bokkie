@@ -8,14 +8,14 @@ use super::conversation::{TUTOR, hello};
 use super::*;
 
 /// A phone held upright: one pane at a time, with Back.
-const PHONE: egui::Vec2 = egui::vec2(390.0, 844.0);
+pub(super) const PHONE: egui::Vec2 = egui::vec2(390.0, 844.0);
 /// A tablet: the list beside the content.
-const TABLET: egui::Vec2 = egui::vec2(800.0, 1_000.0);
+pub(super) const TABLET: egui::Vec2 = egui::vec2(800.0, 1_000.0);
 /// A desktop: the list, the content and the settings side by side.
-const DESKTOP: egui::Vec2 = egui::vec2(1_280.0, 1_000.0);
+pub(super) const DESKTOP: egui::Vec2 = egui::vec2(1_280.0, 1_000.0);
 
 impl Fixture {
-    fn resize(&mut self, size: egui::Vec2) {
+    pub(super) fn resize(&mut self, size: egui::Vec2) {
         self.harness.set_size(size);
         self.harness.run();
     }
@@ -69,13 +69,13 @@ fn the_layout_follows_the_page_width() {
         // The list's own controls, rearranged: the account, the meter, the
         // time zone and the notifications at its bottom.
         for label in [
-            "Refresh",
+            "Refresh Bots",
             "Show hidden Bots",
-            "Open Tutor",
+            "Tutor",
             "Sign out",
             "Accounts",
             "ChatGPT sign-in",
-            "Notifications",
+            "Notifications on this device",
         ] {
             assert!(fixture.shows(label), "{label} at {size:?}");
         }
@@ -107,9 +107,9 @@ fn choosing_a_bot_opens_its_conversation_in_the_content_pane() {
         );
         assert!(fixture.shows("Kia ora! What shall we study?"));
         // Back is the stack's: beside the list there is nothing to go back
-        // to, and the list's Refresh gives way to the conversation's.
+        // to. Beside the conversation, the list still has Refresh Bots.
         assert_eq!(fixture.shows("Back"), size == PHONE);
-        assert!(!fixture.shows("Refresh"));
+        assert_eq!(fixture.shows("Refresh Bots"), size != PHONE);
         fixture.assert_presentable();
     }
 }
@@ -125,7 +125,7 @@ fn back_on_a_phone_returns_to_the_list_and_to_the_row_that_opened_it() {
     assert_eq!(fixture.fact("screen"), "signed_in".into());
     assert_eq!(fixture.fact("bot"), 0_i64.into());
     fixture.assert_panes("list", &[APPLICATION_NAME]);
-    assert!(fixture.focused("Open Tutor"));
+    assert!(fixture.focused("Tutor"));
     assert!(!fixture.enabled(BokkieAction::Back));
 }
 
@@ -233,7 +233,7 @@ fn the_admin_and_household_screens_open_in_the_content_pane() {
     );
     assert!(!fixture.enabled(BokkieAction::Household));
     // And a Bot chosen from the list replaces the sign-in.
-    fixture.click("Open Tutor");
+    fixture.open("Tutor");
     assert_eq!(fixture.sent(), [ApiRequest::LoadMessages(TUTOR)]);
     assert_eq!(fixture.fact("content"), "conversation".into());
     assert_eq!(fixture.fact("chatgpt_login"), "".into());
@@ -308,7 +308,7 @@ fn choosing_the_open_bot_again_keeps_its_conversation() {
         if size == PHONE {
             fixture.perform_with(BokkieAction::OpenBot, TUTOR.0 as f64);
         } else {
-            fixture.click("Open Tutor");
+            fixture.open("Tutor");
         }
         // Its conversation comes into view as it stood, with nothing
         // fetched again; the settings give way to it unless there is room
