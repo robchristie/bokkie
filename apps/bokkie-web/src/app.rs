@@ -393,7 +393,7 @@ pub enum BokkieAction {
     RepeatDays,
     #[action(
         label = "Every few hours",
-        description = "Run the routine every few hours, from the time entered"
+        description = "Run the routine every few hours through the day, at the time entered and the times a multiple of the hours from it"
     )]
     RepeatHours,
     #[action(label = "Monday", description = "Run the routine on Mondays, or not")]

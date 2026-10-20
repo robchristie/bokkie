@@ -354,8 +354,21 @@ pub(crate) fn schedule_text(schedule: &Schedule) -> String {
             let days: Vec<&str> = days.iter().map(|day| day_name(*day)).collect();
             format!("{} at {at}", days.join(", "))
         }
-        Schedule::Hours { every: 1, at } => format!("Every hour from {at}"),
-        Schedule::Hours { every, at } => format!("Every {every} hours from {at}"),
+        // The gateway runs it at `at` and at every multiple of `every` hours
+        // from it, through the whole day, so name the day's first and last
+        // runs rather than `at`.
+        Schedule::Hours { every: 1, at } if at.minute() == 0 => "Every hour on the hour".into(),
+        Schedule::Hours { every: 1, at } => {
+            format!("Every hour at {:02} minutes past", at.minute())
+        }
+        Schedule::Hours { every, at } => {
+            let step = u16::from(*every) * 60;
+            let minutes = u16::from(at.hour()) * 60 + u16::from(at.minute());
+            let first = minutes % step.max(1);
+            let last = first + (24 * 60 / step.max(1)).saturating_sub(1) * step;
+            let time = |minutes: u16| format!("{:02}:{:02}", minutes / 60, minutes % 60);
+            format!("Every {every} hours from {} to {}", time(first), time(last))
+        }
     }
 }
 
@@ -603,10 +616,9 @@ impl App {
                                     .filter(|call| last.is_none_or(|last| call.id < last)),
                             );
                         }
-                        // A first page loaded again keeps the earlier pages.
-                        if before.is_some() || !settings.calls_loaded {
-                            settings.calls_older = page.older;
-                        }
+                        // A first page loaded again replaces the earlier
+                        // pages, so the next page follows it.
+                        settings.calls_older = page.older;
                         settings.calls_loaded = true;
                     }
                     Err(error) if ended(&error) => return Ok(self.settings_ended()),
@@ -931,7 +943,7 @@ impl App {
             {
                 because("Deleting the routine")
             }
-            BokkieAction::PauseRoutine | BokkieAction::RunRoutine
+            BokkieAction::PauseRoutine | BokkieAction::RunRoutine | BokkieAction::EditRoutine
                 if settings.busy.contains(&routine) || saving =>
             {
                 because("Saving the routine")

@@ -352,7 +352,8 @@ fn earlier_tool_calls_load_a_page_at_a_time() {
     assert_eq!(fixture.fact("tool_calls"), 3_u64.into());
     assert_eq!(fixture.fact("tool_calls_state"), "loaded".into());
     assert!(!fixture.enabled(BokkieAction::OlderToolCalls));
-    // Refresh loads the first page again and keeps the earlier ones.
+    // Refresh loads the first page again, in place of the earlier ones, and
+    // the next page follows it.
     fixture.click("Refresh");
     assert!(
         fixture
@@ -368,6 +369,46 @@ fn earlier_tool_calls_load_a_page_at_a_time() {
         }),
     ));
     assert_eq!(fixture.fact("tool_calls"), 1_u64.into());
+    assert_eq!(fixture.fact("tool_calls_state"), "more".into());
+    fixture.reveal("Earlier tool calls");
+    fixture.click("Earlier tool calls");
+    assert!(
+        fixture
+            .sent()
+            .contains(&ApiRequest::LoadToolCalls(TUTOR, Some(10)))
+    );
+}
+
+#[test]
+fn a_schedule_every_few_hours_names_the_days_first_and_last_runs() {
+    use crate::settings::schedule_text;
+    let at = |text: &str| text.parse().unwrap();
+    let hours = |every, time| Schedule::Hours {
+        every,
+        at: at(time),
+    };
+    // The gateway also runs it before the time entered, at 03:00.
+    assert_eq!(
+        schedule_text(&hours(4, "07:00")),
+        "Every 4 hours from 03:00 to 23:00"
+    );
+    assert_eq!(
+        schedule_text(&hours(12, "13:30")),
+        "Every 12 hours from 01:30 to 13:30"
+    );
+    assert_eq!(
+        schedule_text(&hours(3, "00:15")),
+        "Every 3 hours from 00:15 to 21:15"
+    );
+    assert_eq!(schedule_text(&hours(1, "07:00")), "Every hour on the hour");
+    assert_eq!(
+        schedule_text(&hours(1, "06:45")),
+        "Every hour at 45 minutes past"
+    );
+    assert_eq!(
+        schedule_text(&Schedule::Daily { at: at("07:00") }),
+        "Every day at 07:00"
+    );
 }
 
 #[test]
@@ -564,6 +605,11 @@ fn a_routine_pauses_resumes_and_is_deleted_after_confirming() {
     );
     assert_eq!(
         fixture.availability_with(BokkieAction::PauseRoutine, DIGEST.0),
+        disabled("Saving the routine")
+    );
+    // An edit waits for the pause, whose reply is not the form's.
+    assert_eq!(
+        fixture.availability_with(BokkieAction::EditRoutine, DIGEST.0),
         disabled("Saving the routine")
     );
     let mut paused = digest();
@@ -887,7 +933,7 @@ fn a_reset_reloads_what_the_settings_show() {
 }
 
 #[test]
-fn an_ended_session_while_saving_a_routine_returns_to_the_form() {
+fn a_session_that_ended_during_run_now_signs_out() {
     let mut fixture = Fixture::new();
     fixture.settings_loaded(vec![digest()]);
     fixture.click("Run now Morning digest");

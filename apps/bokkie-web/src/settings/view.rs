@@ -495,7 +495,7 @@ fn form_ui(
             }
         }
         let label = if form.repeat == Repeat::Hours {
-            "Starting at, such as 07:00"
+            "At one of its times, such as 07:00"
         } else {
             "At, such as 07:00"
         };
