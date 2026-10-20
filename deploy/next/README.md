@@ -38,8 +38,9 @@ Compose project name `bokkie`.
   - non-root, `cap_drop: ALL`, `no-new-privileges`, a read-only root, a
     tmpfs `/tmp`, an init process, and memory, CPU and PID limits;
   - the named volume `bokkie-next-data` at `/data`;
-  - `BOKKIE_ORIGIN`, `BOKKIE_TRUST_FORWARDED_FOR=1` and `BOKKIE_WEB_ROOT`
-    (see [docs/gateway.md](../../docs/gateway.md)).
+  - `BOKKIE_ORIGIN`, `BOKKIE_TRUST_FORWARDED_FOR=1`, `BOKKIE_WEB_ROOT` and
+    `BOKKIE_PUSH_CONTACT`, the origin again (see
+    [docs/gateway.md](../../docs/gateway.md)).
 - `env.example` lists the host facts the untracked `.env` holds: the
   hostname and the deployed commit.
 - `check.sh` checks a running deployment and changes nothing (see
@@ -48,15 +49,18 @@ Compose project name `bokkie`.
   with `docker compose config` and fails if the posture above weakens: a
   published port, a security option other than `no-new-privileges`, a
   kept capability, another network or mount, or a Traefik router or
-  middleware other than the allowlisted one. Any setting it does not know
-  fails too, until the check covers it.
+  middleware other than the allowlisted one, or a push contact other than
+  the origin. Any setting it does not know fails too, until the check
+  covers it.
 
 The `proxy` network is the container's only network, and also its way out
-to ChatGPT. The host's other containers on `proxy` can reach the gateway's
-port directly, past the allowlist, and can set their own
-`X-Forwarded-For`, so for them the sign-in limit per address does not
-hold; they are the owner's own services, and the gateway still checks
-`Host`, `Origin` and the session on every request.
+to ChatGPT and to the push services of the household's browsers (Apple's,
+Google's or Mozilla's), which need outbound HTTPS. The host's other
+containers on `proxy` can reach the gateway's port directly, past the
+allowlist, and can set their own `X-Forwarded-For`, so for them the
+sign-in limit per address does not hold; they are the owner's own
+services, and the gateway still checks `Host`, `Origin` and the session
+on every request.
 
 Every Codex tool stays off and Bokkie's own tools run in the gateway, as it
 enforces today ([docs/gateway.md](../../docs/gateway.md#the-capability-rule)),
@@ -149,6 +153,18 @@ as an admin, signs the household in to ChatGPT from the client's ChatGPT
 screen, which `POST /api/v1/codex/login` serves for admins. The credential
 lives in the `bokkie-next-data` volume, in `/data/household/codex/`, and
 nowhere else; every account's app server uses it.
+
+## Notifications
+
+The operator sets nothing for notifications beyond `BOKKIE_NEXT_HOST`:
+`compose.yml` gives the gateway `BOKKIE_PUSH_CONTACT=https://<host>`,
+which push services may use to write about its pushes. On its first start
+the gateway makes its push (VAPID) key in the `bokkie-next-data` volume,
+at `/data/push/vapid.pem`, readable by the gateway alone; it is never in
+the image or a log, and every later start reuses it. Keep it with the
+volume: a new key means every device must turn notifications on again.
+Devices subscribe from the client; see
+[docs/gateway.md](../../docs/gateway.md#notifications).
 
 ## Update
 

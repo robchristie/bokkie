@@ -34,9 +34,9 @@
 //! user's runs, and no later pass.
 //!
 //! Every change to a run goes out as [`Event::RoutineRunUpdated`] through
-//! [`emit_run`], the one place a run's end is announced, so later work can
-//! hang notifications on it. Three failed runs in a row pause the routine
-//! ([`store::count_outcome`]).
+//! [`emit_run`]. A run's end, wherever it happens, also queues its push
+//! ([`crate::push::run_ended`]). Three failed runs in a row pause the
+//! routine ([`store::count_outcome`]).
 
 pub mod schedule;
 pub mod store;
@@ -140,7 +140,8 @@ pub async fn end_waiting(
     Ok(Some(ended))
 }
 
-/// Announces a run that just ended in `state`, and counts its outcome.
+/// Announces a run that just ended in `state`, counts its outcome, and
+/// queues its push ([`crate::push::run_ended`]).
 async fn announce_end(
     batch: &mut Batch,
     now: Timestamp,
@@ -154,16 +155,18 @@ async fn announce_end(
         RunState::Succeeded => Some(false),
         _ => None,
     };
+    let mut paused = false;
     if let Some(failed) = failed
-        && let Some(routine) = store::count_outcome(batch, now, ended, failed).await?
+        && let Some((routine, paused_now)) = store::count_outcome(batch, now, ended, failed).await?
     {
+        paused = paused_now;
         batch
             .emit(Event::RoutineUpdated {
                 routine: routine.to_api(),
             })
             .await?;
     }
-    Ok(())
+    crate::push::run_ended(batch, now, ended, state, paused).await
 }
 
 /// Ends the run of one of the user's turns that ended with `status`, if a
@@ -714,6 +717,9 @@ impl Routines {
         )
         .await?;
         emit_run(batch, &run).await?;
+        if state == RunState::Missed {
+            crate::push::run_ended(batch, now, &run, state, false).await?;
+        }
         tracing::info!(user = %routine.user, routine = %routine.id, run = %run.id, state = store::state_name(state), "queued a routine's run");
         Ok(Some(run))
     }

@@ -35,6 +35,9 @@ services:
       BOKKIE_LISTEN: 0.0.0.0:8080
       BOKKIE_CODEX_BIN: /usr/local/bin/codex
       BOKKIE_LOG: info
+      # Push services may write here about the gateway's pushes. The
+      # gateway makes its push key in the data volume on first start.
+      BOKKIE_PUSH_CONTACT: https://${BOKKIE_NEXT_HOST:?set BOKKIE_NEXT_HOST in .env}
       # Plain log lines for `docker compose logs`.
       NO_COLOR: "1"
     volumes:

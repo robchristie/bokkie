@@ -1042,6 +1042,56 @@ pub struct NotificationPage {
 }
 
 // ---------------------------------------------------------------------------
+// Web Push
+
+/// `GET /api/v1/push/key`: what a device needs to subscribe to Web Push.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushKey {
+    /// The gateway's VAPID public key: an uncompressed P-256 point in
+    /// unpadded base64url, for `PushManager.subscribe`'s
+    /// `applicationServerKey`.
+    pub public_key: String,
+    /// Whether the gateway sends pushes. Without a configured contact it
+    /// serves its key but sends nothing.
+    pub sending: bool,
+}
+
+/// The longest push endpoint the gateway accepts, in bytes.
+pub const PUSH_ENDPOINT_BYTES: usize = 1024;
+
+/// `PUT /api/v1/push/subscription`: the current session's Web Push
+/// subscription, as `PushSubscription.toJSON()` gives it (other fields,
+/// such as `expirationTime`, are ignored). It replaces the session's
+/// earlier subscription; a device sends it again on every launch. An
+/// endpoint belongs to one session at a time, so another session's
+/// subscription with the same endpoint ends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushSubscriptionRequest {
+    /// The push service's `https` URL for the device, at most
+    /// [`PUSH_ENDPOINT_BYTES`]. The gateway never sends it back.
+    pub endpoint: String,
+    pub keys: PushSubscriptionKeys,
+}
+
+/// A subscription's keys, in base64url (padding allowed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushSubscriptionKeys {
+    /// The device's P-256 public key, uncompressed: 65 bytes.
+    pub p256dh: String,
+    /// The device's authentication secret: 16 bytes.
+    pub auth: String,
+}
+
+/// `GET` and `PUT /api/v1/push/subscription`: whether the current session
+/// has a subscription. The endpoint itself is never sent back: anyone who
+/// holds it can address the device. `DELETE` removes the subscription;
+/// signing out or revoking the session does too.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushSubscriptionState {
+    pub subscribed: bool,
+}
+
+// ---------------------------------------------------------------------------
 // The household's ChatGPT sign-in
 
 /// `GET /api/v1/codex/account`: whether the household's ChatGPT sign-in,

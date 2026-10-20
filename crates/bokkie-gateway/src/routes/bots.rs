@@ -55,10 +55,9 @@ pub async fn list(State(state): State<AppState>, signed_in: SignedIn) -> Result<
         })
         .collect();
     drop(tx);
-    let unread_bots = bots.iter().filter(|bot| bot.unread).count();
     Ok(Json(BotList {
+        unread_bots: store::unread_count(bots.iter().map(|bot| bot.unread)),
         bots,
-        unread_bots: u32::try_from(unread_bots).unwrap_or(u32::MAX),
         seq,
     }))
 }

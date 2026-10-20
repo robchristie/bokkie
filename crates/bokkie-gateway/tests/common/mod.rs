@@ -5,6 +5,7 @@
 
 pub mod fake_codex;
 pub mod live;
+pub mod push_service;
 pub mod site;
 
 use axum::Router;
@@ -12,7 +13,7 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use bokkie_gateway::clock::Clock;
 use bokkie_gateway::codex::{RuntimeEvent, Supervisor, catalog};
-use bokkie_gateway::config::{Config, PublicOrigin};
+use bokkie_gateway::config::{Config, PublicOrigin, PushContact};
 use bokkie_gateway::{AppState, accounts, db, router};
 use bokkie_protocol::api::{CreateInvitationRequest, Permissions, Role, SessionResponse};
 use http_body_util::BodyExt;
@@ -22,6 +23,8 @@ use tower::ServiceExt;
 
 pub const ORIGIN: &str = "https://bokkie.test";
 pub const HOST: &str = "bokkie.test";
+/// The contact the tests' gateways give push services.
+pub const PUSH_CONTACT: &str = "mailto:owner@bokkie.test";
 pub const PASSWORD: &str = "a long test password";
 
 pub struct Gateway {
@@ -128,16 +131,23 @@ impl Gateway {
 
     /// A gateway that serves `web_root` as its web package.
     pub async fn with_web_root(web_root: Option<bokkie_gateway::web::WebRoot>) -> Self {
+        Self::configured(|config| config.web_root = web_root).await
+    }
+
+    /// A gateway whose configuration `change` alters from the tests' own.
+    pub async fn configured(change: impl FnOnce(&mut Config)) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let config = Config {
+        let mut config = Config {
             data_dir: dir.path().to_owned(),
             listen: "127.0.0.1:0".parse().unwrap(),
             origin: PublicOrigin::parse(ORIGIN).unwrap(),
             extra_hosts: vec!["bokkie.tailnet.test".into()],
             trust_forwarded_for: false,
             codex_program: "/nonexistent/codex".into(),
-            web_root,
+            web_root: None,
+            push_contact: Some(PushContact::parse(PUSH_CONTACT).unwrap()),
         };
+        change(&mut config);
         let pool = db::open(&config.database_path()).await.unwrap();
         let catalog =
             catalog::write(&config.catalog_path(), fake_codex::bundled_catalog()).unwrap();
@@ -194,6 +204,7 @@ impl Gateway {
             trust_forwarded_for: false,
             codex_program: program.clone(),
             web_root: None,
+            push_contact: Some(PushContact::parse(PUSH_CONTACT).unwrap()),
         };
         let pool = db::open(&config.database_path()).await.unwrap();
         let bundled =

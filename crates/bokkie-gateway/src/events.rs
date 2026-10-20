@@ -68,6 +68,10 @@ pub struct Batch {
     retention: u64,
     log: Arc<UserLog>,
     user: UserId,
+    /// Whether the batch queued a push, to wake the sender once it
+    /// commits.
+    queued_push: bool,
+    pushes_queued: Arc<tokio::sync::Notify>,
 }
 
 impl std::fmt::Debug for Batch {
@@ -100,6 +104,7 @@ impl Batch {
         retention: u64,
         log: Arc<UserLog>,
         user: UserId,
+        pushes_queued: Arc<tokio::sync::Notify>,
     ) -> Result<Self> {
         let mut last = log.last.clone().lock_owned().await;
         let cached = last.take();
@@ -119,11 +124,18 @@ impl Batch {
             retention,
             log,
             user,
+            queued_push: false,
+            pushes_queued,
         })
     }
 
     pub fn user(&self) -> UserId {
         self.user
+    }
+
+    /// Wakes the push sender once the batch commits: it queued a push.
+    pub fn wake_pushes(&mut self) {
+        self.queued_push = true;
     }
 
     /// Adds an event to the log, numbered next. It is broadcast once the
@@ -169,9 +181,14 @@ impl Batch {
             retention,
             log,
             user,
+            queued_push,
+            pushes_queued,
             ..
         } = self;
         tx.commit().await?;
+        if queued_push {
+            pushes_queued.notify_one();
+        }
         *last = Some(previous);
         // Broadcast while still holding the lock, so live order is log
         // order. Nobody listening is fine.
@@ -201,6 +218,8 @@ pub struct EventLog {
     retention: u64,
     capacity: usize,
     users: std::sync::Mutex<HashMap<UserId, Arc<UserLog>>>,
+    /// Woken by each batch that queues a push.
+    pushes_queued: Arc<tokio::sync::Notify>,
 }
 
 impl EventLog {
@@ -215,7 +234,13 @@ impl EventLog {
             retention: retention.max(1),
             capacity: capacity.max(1),
             users: Default::default(),
+            pushes_queued: Arc::default(),
         }
+    }
+
+    /// What a batch that queues a push wakes, once it commits.
+    pub fn pushes_queued(&self) -> Arc<tokio::sync::Notify> {
+        self.pushes_queued.clone()
     }
 
     pub fn retention(&self) -> u64 {
@@ -249,6 +274,7 @@ impl EventLog {
             self.retention,
             self.user(user),
             user,
+            self.pushes_queued.clone(),
         )
         .await
     }
@@ -265,6 +291,7 @@ impl EventLog {
             self.retention,
             self.user(user),
             user,
+            self.pushes_queued.clone(),
         );
         tokio::spawn(async move {
             let mut batch = job.await?;

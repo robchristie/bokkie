@@ -19,6 +19,7 @@ The gateway reads its settings from the environment.
 | `BOKKIE_CODEX_BIN` | `/usr/local/bin/codex` | The pinned `codex` binary |
 | `BOKKIE_LOG` | `info` | A `tracing` filter |
 | `BOKKIE_WEB_ROOT` | none | The web client's production package directory, served at the origin's root. Unset or empty, the gateway serves no static files |
+| `BOKKIE_PUSH_CONTACT` | none | The contact push services may use about the gateway's pushes: an `https:` URL or a `mailto:` address, at most 256 printable ASCII characters. The gateway refuses to start with any other value. Unset or empty, it serves its push key but sends no push, and says so when it starts. See [Notifications](#notifications) |
 
 A blank value counts as unset. `GET /healthz` answers `ok` for any `Host`,
 for container health checks.
@@ -573,8 +574,15 @@ describe in their instructions; it is refused until its path is settled.
   every Bot, newest first, with `GET /api/v1/notifications?before=&limit=`
   (`notifications` and `older`). The gateway's own log records each one
   by its ids and kind, never its title or body. The minute pass deletes
-  notifications older than 90 days; their markers stay. Sending them to
-  the owner's devices is not built yet.
+  notifications older than 90 days; their markers stay. A notification
+  outside a routine's run is pushed to the owner's devices; one in a run's
+  turn is carried by the run's own push (see [Notifications](#notifications)).
+  The title and body may hold no line or paragraph separator (U+2028,
+  U+2029) or bidirectional formatting character (marks, embeddings,
+  overrides and isolates), nor a byte order mark or interlinear annotation
+  character. A Bot records at most 3 notifications in a turn, and a user's
+  Bots together at most 30 in an hour; a call past either fails, records
+  nothing and tells the model why.
 - **The tool-call log.** Every call the broker resolves to a Bot is
   recorded, refused ones included, with its user, Bot, thread, turn and
   call ids, the tool, a bounded summary of its arguments (for the notes
@@ -732,8 +740,9 @@ from it.
 
   A routine carries `next_run_at` (none while paused), `failures` (failed
   runs in a row) and `paused`. Each change arrives on the event socket as
-  `routine_created`, `routine_updated` or `routine_deleted`. `push` is
-  stored for sending notifications to devices, which is not built yet.
+  `routine_created`, `routine_updated` or `routine_deleted`. `push` says
+  which of its finished runs push to the user's devices (see
+  [Notifications](#notifications)).
 - **The scheduler.** Every 10 seconds, and as soon as a Bot's turn ends,
   the gateway queues a run of each routine whose time has come and starts
   the runs that can start. Each start, and each interrupt of a run past its
@@ -778,6 +787,87 @@ from it.
   was down follow the misfire rule above. App servers that stop end their
   user's running runs `failed`.
 - The minute pass deletes runs queued more than 90 days ago.
+
+## Notifications
+
+The gateway pushes notifications to the devices its users subscribe, with
+Web Push (RFC 8030, encrypted as RFC 8291's `aes128gcm`, signed with
+VAPID, RFC 8292). It sends to whatever push service a device's browser
+chose, such as Apple's, Google's or Mozilla's, so the gateway needs
+outbound HTTPS to the public internet; it reaches only public addresses,
+through the same client as [Web fetch](#web-fetch).
+
+- **The key.** On first start the gateway makes its VAPID key, a P-256
+  key, in the data directory at `push/vapid.pem` (PKCS#8, mode 600, in a
+  directory of mode 700). It is never in the image, a log or an answer.
+  Every later start reads the same key, and refuses to start if the file
+  is not a private P-256 key or other users may read it. A new key, as when
+  the data volume is lost, means every device must subscribe again: push
+  services refuse the old subscriptions, and the gateway removes them.
+- **The contact.** `BOKKIE_PUSH_CONTACT` is the VAPID `sub` claim, where a
+  push service may write about the gateway's pushes. Without it, the
+  gateway serves its key and keeps subscriptions but sends nothing: each
+  push is settled `unconfigured`.
+- **Subscriptions.** Each session holds at most one, sent by its device:
+
+  | Route | Does |
+  | --- | --- |
+  | `GET /api/v1/push/key` | The key a device subscribes with (`public_key`, an uncompressed P-256 point in base64url) and whether the gateway sends pushes (`sending`) |
+  | `GET /api/v1/push/subscription` | Whether the current session has a subscription (`subscribed`) |
+  | `PUT /api/v1/push/subscription` | Makes a subscription the current session's, replacing its earlier one: the browser's `PushSubscription.toJSON()`, `endpoint` and `keys` (`p256dh`, `auth`). The endpoint must be an `https` URL with a host name, no user name or fragment, and at most 1,024 bytes; `p256dh` an uncompressed P-256 point (65 bytes) and `auth` 16 bytes, both base64url. Anything else is `invalid_request`. Answers `subscribed` |
+  | `DELETE /api/v1/push/subscription` | Ends the current session's subscription, if any |
+
+  An endpoint belongs to one session at a time: the session that sent it
+  last. So a device signed in as someone else gets only their pushes.
+  Signing out, revoking the session, a password change or reset and
+  disabling the account delete its subscription in the same transaction.
+  A push service's `404` or `410`, or Apple's `403` with
+  `VapidPkHashMismatch` (a subscription made with another key), deletes
+  the subscription it was for. Subscriptions of expired sessions go with
+  the minute pass. Anyone holding an endpoint can address the device, so
+  no answer carries one back, and the gateway's log records a
+  subscription's push service host, never its endpoint or keys.
+- **What pushes.** A push is queued in the same transaction as what caused
+  it, for the Bot's user alone:
+  - a `notify` outside a routine's run: titled with the Bot's name, its
+    body the notification's title and body;
+  - every finished routine run, titled "Bot · Routine": with the
+    notification its turn sent (its newest question, or else its newest),
+    or else, for a routine whose `push` is `every_run`, the first line of
+    its reply, without Markdown, or "Finished, with no reply." A
+    `notify_only` routine's run pushes only with a notification. A
+    notification that went out alone before its run was recorded running
+    is not sent again;
+  - a failed or interrupted run, with why, and the run that paused its
+    routine, saying so, after its turn's notification if it sent one; a
+    run its user stopped pushes only its turn's notification;
+  - a missed run, with why, unless the account was disabled. A skipped
+    run does not push.
+
+  A question is sent with `Urgency: high`, everything else `normal`.
+- **When it does not.** The sender settles each queued push in order, as
+  it is queued and at least every 30 seconds. It drops one, and records
+  why, when the account is disabled, when one of the user's devices shows
+  the Bot (the event socket's `viewing`), when sending is not configured,
+  when the user has no subscription, when it has waited an hour, or when
+  the user has had 20 pushes in the past hour; it logs that limit with a
+  warning. A dropped push is never sent, not even empty.
+- **The message.** Each push is Stobie's declarative Web Push message,
+  at most 3,000 bytes before encryption (the body is cut, with an ellipsis,
+  to fit): `{"web_push": 8030, "mutable": true, "notification": {"title",
+  "body", "navigate", "tag", "app_badge"}}`, where `navigate` opens the
+  Bot (`<origin>/?bot=<id>`), `tag` is `bot-<id>` so a Bot's newer push
+  replaces its older one, and `app_badge` is the user's unread Bot count,
+  as `unread_bots` counts it. The texts hold no control or layout
+  characters but line breaks. A push is sent to each of the user's live
+  subscriptions with a `TTL` of a day. A token is signed for each push
+  service's origin, valid 12 hours and reused for 6.
+- **Delivery.** A push service's `429` or `5xx`, or a failed connection,
+  is retried three times, after 2, 4 and 8 seconds or its `Retry-After`,
+  at most a minute. Any other refusal is logged and not retried. A push
+  is `sent` when a device's push service took it, else `failed`; one being
+  delivered when the gateway stopped counts as `failed`. The minute pass
+  deletes settled pushes after a day.
 
 ## The event WebSocket
 

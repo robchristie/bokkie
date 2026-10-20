@@ -328,21 +328,23 @@ pub async fn due(db: impl SqliteExecutor<'_>, now: Timestamp) -> Result<Vec<Rout
 
 /// Counts a finished run against its routine: a failure adds one to its
 /// failures and pauses it at [`FAILURES_TO_PAUSE`]; a success clears them.
-/// Returns the routine if it changed.
+/// Returns the routine if it changed, and whether this outcome paused it.
 pub async fn count_outcome(
     conn: &mut SqliteConnection,
     now: Timestamp,
     run: &RunRow,
     failed: bool,
-) -> Result<Option<RoutineRow>> {
+) -> Result<Option<(RoutineRow, bool)>> {
     let Some(mut routine) = routine_of_user(&mut *conn, run.user, run.routine).await? else {
         return Ok(None);
     };
+    let mut paused = false;
     if failed {
         routine.failures = routine.failures.saturating_add(1);
         if routine.failures >= FAILURES_TO_PAUSE && !routine.paused {
             routine.paused = true;
             routine.next_run_at = None;
+            paused = true;
             tracing::info!(user = %run.user, routine = %routine.id, "pausing a routine after failed runs");
         }
     } else if routine.failures > 0 {
@@ -350,7 +352,8 @@ pub async fn count_outcome(
     } else {
         return Ok(None);
     }
-    save(&mut *conn, now, &routine).await.map(Some)
+    let routine = save(&mut *conn, now, &routine).await?;
+    Ok(Some((routine, paused)))
 }
 
 // ---------------------------------------------------------------------------

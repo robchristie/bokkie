@@ -26,6 +26,7 @@ pub mod events;
 pub mod grants;
 pub mod http;
 pub mod presence;
+pub mod push;
 pub mod routes;
 pub mod routines;
 pub mod secrets;
@@ -48,6 +49,7 @@ use crate::codex::Supervisor;
 use crate::config::Config;
 use crate::events::EventLog;
 use crate::presence::Presence;
+use crate::push::Push;
 use crate::routines::Routines;
 
 /// State shared by every request.
@@ -65,6 +67,8 @@ pub struct AppState {
     pub events: Arc<EventLog>,
     /// Which Bots each user's devices show.
     pub presence: Arc<Presence>,
+    /// Web Push: the VAPID key, subscriptions and the sender.
+    pub push: Arc<Push>,
     /// How often an open event socket rechecks its session.
     pub session_check: std::time::Duration,
 }
@@ -100,11 +104,20 @@ impl AppState {
             events.clone(),
             conversations.clone(),
         ));
+        let presence = Arc::new(Presence::new(clock.clone()));
+        let push = Arc::new(Push::new(
+            &config,
+            db.clone(),
+            clock.clone(),
+            presence.clone(),
+            events.pushes_queued(),
+        ));
         Self {
             conversations,
             routines,
             events,
-            presence: Arc::new(Presence::new(clock.clone())),
+            presence,
+            push,
             session_check: std::time::Duration::from_secs(30),
             config: Arc::new(config),
             db,
@@ -118,7 +131,7 @@ impl AppState {
 
 /// The gateway's routes, behind the request guard.
 pub fn router(state: AppState) -> Router {
-    use routes::{accounts, admin, bots, codex, events, routines, usage};
+    use routes::{accounts, admin, bots, codex, events, push, routines, usage};
     let api = Router::new()
         .route("/version", get(version))
         .route(
@@ -147,6 +160,13 @@ pub fn router(state: AppState) -> Router {
         .route("/bots/{id}/tool-calls", get(bots::tool_calls))
         .route("/bots/{id}/read", put(bots::mark_read))
         .route("/notifications", get(bots::notifications))
+        .route("/push/key", get(push::key))
+        .route(
+            "/push/subscription",
+            get(push::subscription)
+                .put(push::subscribe)
+                .delete(push::unsubscribe),
+        )
         .route("/routines", get(routines::list_all))
         .route(
             "/bots/{id}/routines",

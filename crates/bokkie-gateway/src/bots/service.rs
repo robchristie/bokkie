@@ -169,10 +169,11 @@ fn capability(owner: &str, grant: Grant) -> Option<String> {
         )),
         Grant::Notify => Some(format!(
             "Notify (notify): you can notify {owner} with a one-line title, an optional \
-             body and a kind, result or question. It reaches {owner}'s devices when they \
-             have notifications on, and adds a marker to this conversation. Notify once \
-             when you have a result {owner} should see or need {owner}'s answer, not for \
-             every message; your reply still carries the detail."
+             body and a kind, result or question. It adds a marker to this conversation \
+             and is pushed to {owner}'s devices that have notifications on, unless {owner} \
+             has this conversation open; in a routine's run, the run's one push carries \
+             it. Notify once when you have a result {owner} should see or need {owner}'s \
+             answer, not for every message; your reply still carries the detail."
         )),
     }
 }
@@ -1226,8 +1227,9 @@ impl Conversations {
     /// allowance window, or with a subscription window that reset, in
     /// `(since, now]`. A reset subscription is read again from the user's
     /// app server if it is running. Then deletes usage that no window
-    /// counts any more, tool calls past their 90 days and seen items past
-    /// their 365. Returns the users announced.
+    /// counts any more, tool calls past their 90 days, seen items past
+    /// their 365, and ended sessions' push subscriptions and settled
+    /// pushes. Returns the users announced.
     pub async fn roll_over(&self, since: Timestamp, now: Timestamp) -> Result<Vec<UserId>> {
         let mut users = usage::rolled_over(&self.db, since, now).await?;
         for user in self.subscription.resetting(since, now) {
@@ -1253,6 +1255,7 @@ impl Conversations {
         tools::seen::prune(&mut tx, now).await?;
         tools::notify::prune(&mut tx, now).await?;
         routines::store::prune(&mut tx, now).await?;
+        crate::push::prune(&mut tx, now).await?;
         tx.commit().await?;
         Ok(users)
     }
