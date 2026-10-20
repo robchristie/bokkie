@@ -115,11 +115,16 @@ pub fn capabilities(owner: &str, grants: &GrantSet) -> String {
         text.push_str("Apart from them, you");
         text
     };
+    let contact = if grants.contains(&Grant::Notify) {
+        format!("contact anyone but {owner}")
+    } else {
+        "contact anyone".to_owned()
+    };
     let mut cannot = vec!["run commands", "read or change files"];
     if !grants.contains(&Grant::WebSearch) && !grants.contains(&Grant::WebFetch) {
         cannot.push("browse the web");
     }
-    cannot.push("contact anyone");
+    cannot.push(&contact);
     let last = cannot.pop().unwrap_or_default();
     if tools_given {
         text.push_str(" cannot");
@@ -162,7 +167,13 @@ fn capability(owner: &str, grant: Grant) -> Option<String> {
              came from. The links you fetch leave the household, so never put anything \
              private that {owner} told you into a link."
         )),
-        Grant::Notify => None,
+        Grant::Notify => Some(format!(
+            "Notify (notify): you can notify {owner} with a one-line title, an optional \
+             body and a kind, result or question. It reaches {owner}'s devices when they \
+             have notifications on, and adds a marker to this conversation. Notify once \
+             when you have a result {owner} should see or need {owner}'s answer, not for \
+             every message; your reply still carries the detail."
+        )),
     }
 }
 
@@ -457,7 +468,7 @@ impl Conversations {
         events: Arc<EventLog>,
     ) -> Self {
         Self {
-            broker: Broker::new(db.clone(), clock.clone()),
+            broker: Broker::new(db.clone(), clock.clone(), events.clone()),
             db,
             clock,
             supervisor,
@@ -874,6 +885,7 @@ impl Conversations {
                     turn: None,
                     kind: MessageKind::Marker,
                     routine: Some((routine.id, run, &routine.prompt)),
+                    notification: None,
                 },
             )
             .await?;
@@ -920,8 +932,11 @@ impl Conversations {
         .await?
         {
             routines::emit_run(&mut batch, &running).await?;
-            // Calls the model made before the run was running are its too.
+            // Calls and notifications the model made before the run was
+            // running are its too.
             tools::audit::attribute_to_run(&mut *batch, user, bot.id, &thread_id, &turn_id, run)
+                .await?;
+            tools::notify::attribute_to_run(&mut *batch, user, bot.id, &thread_id, &turn_id, run)
                 .await?;
         }
         if let Some(status) = self.turn_end(user, &turn_id) {
@@ -1029,6 +1044,7 @@ impl Conversations {
                         turn: None,
                         kind: MessageKind::Marker,
                         routine: None,
+                        notification: None,
                     },
                 )
                 .await?;
@@ -1125,6 +1141,7 @@ impl Conversations {
                 turn: None,
                 kind: MessageKind::Text,
                 routine: None,
+                notification: None,
             },
         )
         .await?;
@@ -1234,6 +1251,7 @@ impl Conversations {
         usage::prune(&mut tx, now).await?;
         tools::audit::prune(&mut tx, now).await?;
         tools::seen::prune(&mut tx, now).await?;
+        tools::notify::prune(&mut tx, now).await?;
         routines::store::prune(&mut tx, now).await?;
         tx.commit().await?;
         Ok(users)
@@ -1620,6 +1638,7 @@ impl Conversations {
                 turn: Some((turn_id, item_id)),
                 kind: MessageKind::Text,
                 routine: None,
+                notification: None,
             },
         )
         .await?;
@@ -1815,7 +1834,9 @@ impl Conversations {
         let Some(bot) = store::bot(&mut **batch, user, bot_id).await? else {
             return Ok(());
         };
-        let status = bot.to_api(self.is_working(bot_id), None).status;
+        let status = bot
+            .to_api(self.is_working(bot_id), Default::default())
+            .status;
         batch.emit(Event::BotStatusChanged { bot_id, status }).await
     }
 
@@ -1872,6 +1893,7 @@ mod tests {
             updated_at: Timestamp(id),
             kind: MessageKind::Text,
             routine: None,
+            notification: None,
         }
     }
 
@@ -1914,8 +1936,20 @@ mod tests {
         );
         assert!(!search.contains("browse the web"), "{search}");
         assert!(!notes.contains("Web search"), "{notes}");
-        // A grant without tools yet adds nothing to the instructions.
-        assert_eq!(capabilities("Rob", &[Grant::Notify].into()), none);
+        // Notify is described, and the Bot can now contact its owner.
+        let notify = capabilities("Rob", &[Grant::Notify].into());
+        assert!(
+            notify.contains("\n- Notify (notify): you can notify Rob"),
+            "{notify}"
+        );
+        assert!(
+            notify.contains(
+                "Apart from them, you cannot run commands, read or change files, browse the \
+                 web or contact anyone but Rob."
+            ),
+            "{notify}"
+        );
+        assert!(!notes.contains("Notify"), "{notes}");
         assert_eq!(
             capabilities_marker(&GrantSet::new()),
             "Capabilities changed: none"

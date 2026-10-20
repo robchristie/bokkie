@@ -74,6 +74,8 @@ fn text(frame: &ServerFrame) -> String {
 
 fn bot(status: BotStatus) -> Bot {
     Bot {
+        read_up_to: None,
+        unread: false,
         id: BOT,
         name: "Ada".into(),
         label: "Trip planner".into(),
@@ -91,6 +93,7 @@ fn bot(status: BotStatus) -> Bot {
 
 fn message(id: MessageId, author: Author, text: &str, state: MessageState) -> Message {
     Message {
+        notification: None,
         id,
         bot_id: BOT,
         author,
@@ -251,6 +254,7 @@ async fn the_client_follows_a_streamed_reply_from_the_gateways_log() {
     assert_eq!(latest, Seq(0));
     // Once live, the client loads its snapshots: an empty account.
     let _ = client.store.load_bots(BotList {
+        unread_bots: 0,
         bots: Vec::new(),
         seq: latest,
     });
@@ -308,6 +312,7 @@ async fn a_socket_dropped_mid_reply_catches_up_without_losing_or_repeating_text(
     client.connect();
     client.receive(&text(&ServerFrame::Live { latest: Seq(0) }));
     let _ = client.store.load_bots(BotList {
+        unread_bots: 0,
         bots: Vec::new(),
         seq: Seq(0),
     });
@@ -514,6 +519,7 @@ async fn profile_edits_bot_errors_subscription_usage_and_pings_reach_the_client(
     client.connect();
     client.receive(&text(&ServerFrame::Live { latest: before }));
     let _ = client.store.load_bots(BotList {
+        unread_bots: 0,
         bots: vec![bot(BotStatus::Idle)],
         seq: before,
     });

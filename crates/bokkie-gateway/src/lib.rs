@@ -25,6 +25,7 @@ pub mod error;
 pub mod events;
 pub mod grants;
 pub mod http;
+pub mod presence;
 pub mod routes;
 pub mod routines;
 pub mod secrets;
@@ -46,6 +47,7 @@ use crate::clock::Clock;
 use crate::codex::Supervisor;
 use crate::config::Config;
 use crate::events::EventLog;
+use crate::presence::Presence;
 use crate::routines::Routines;
 
 /// State shared by every request.
@@ -61,6 +63,8 @@ pub struct AppState {
     pub conversations: Arc<Conversations>,
     pub routines: Arc<Routines>,
     pub events: Arc<EventLog>,
+    /// Which Bots each user's devices show.
+    pub presence: Arc<Presence>,
     /// How often an open event socket rechecks its session.
     pub session_check: std::time::Duration,
 }
@@ -100,6 +104,7 @@ impl AppState {
             conversations,
             routines,
             events,
+            presence: Arc::new(Presence::new(clock.clone())),
             session_check: std::time::Duration::from_secs(30),
             config: Arc::new(config),
             db,
@@ -140,6 +145,8 @@ pub fn router(state: AppState) -> Router {
             get(bots::notes).delete(bots::clear_notes),
         )
         .route("/bots/{id}/tool-calls", get(bots::tool_calls))
+        .route("/bots/{id}/read", put(bots::mark_read))
+        .route("/notifications", get(bots::notifications))
         .route("/routines", get(routines::list_all))
         .route(
             "/bots/{id}/routines",

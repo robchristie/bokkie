@@ -6,8 +6,8 @@
 //! The model is offered exactly the tools of the Bot's grants; a grant
 //! change starts a fresh thread at the next turn, carrying the conversation
 //! over; and a tool call reaches the broker, which answers it from the
-//! calling Bot's own notes or seen items, or fetches from a local site
-//! through the test network.
+//! calling Bot's own notes or seen items, records a notification for its
+//! owner, or fetches from a local site through the test network.
 
 mod common;
 
@@ -359,5 +359,117 @@ async fn web_fetch_works_end_to_end_through_the_test_network() {
         "{}",
         calls.body
     );
+    live.assert_nothing_left_the_machine();
+}
+
+#[tokio::test]
+async fn notify_works_end_to_end_for_a_member() {
+    let Some(live) = Live::start(&["Plan's ready."]).await else {
+        return;
+    };
+    let mock = &live.model;
+    let gateway = Gateway::live(&live).await;
+    gateway.route().await;
+    let rob = gateway.admin("rob").await;
+    // A member grants notify to their own Bot.
+    let (amy, _) = gateway.member(&rob, "amy").await;
+    let bot = gateway
+        .send(Call::post("/api/v1/bots").cookie(&amy).json(&json!({
+            "name": "Chef", "label": "Meal planner", "description": "Plan dinners."})))
+        .await;
+    let bot = bot.body["id"].as_i64().unwrap();
+    let granted = gateway
+        .send(
+            Call::new(axum::http::Method::PATCH, &format!("/api/v1/bots/{bot}"))
+                .cookie(&amy)
+                .json(&json!({"grants": ["notify"]})),
+        )
+        .await;
+    assert_eq!(granted.status, 200, "{:?}", granted.body);
+    assert_eq!(granted.body["grants"], json!(["notify"]));
+
+    mock.call_tool_next(
+        "notify",
+        json!({"title": "Dinner plan ready", "body": "Pasta on Monday.\nCurry on Tuesday.",
+               "kind": "result"}),
+    );
+    let conversation = exchange(&gateway, &amy, bot, "Plan the week.", 1).await;
+    assert_eq!(request_count(mock), 2, "a tool call and its follow-up");
+    let first = request(mock, 0);
+    assert_eq!(
+        MockModel::tools_in(&first),
+        names(&["notify", "request_user_input"])
+    );
+    let first_text = first.to_string();
+    assert!(
+        first_text.contains("Notify (notify): you can notify amy"),
+        "{first_text}"
+    );
+    assert!(
+        first_text.contains("contact anyone but amy"),
+        "{first_text}"
+    );
+    let output = tool_output(&request(mock, 1));
+    assert!(output.contains("Notification recorded."), "{output}");
+
+    // The conversation shows a marker with the notification, before the
+    // reply.
+    let messages = conversation["messages"].as_array().unwrap();
+    let marker = messages
+        .iter()
+        .find(|m| m["kind"] == "marker" && m["notification"].is_object())
+        .expect("the notification's marker");
+    assert_eq!(marker["author"], "bot");
+    assert_eq!(marker["text"], "Dinner plan ready");
+    assert_eq!(
+        marker["notification"],
+        json!({"kind": "result", "body": "Pasta on Monday.\nCurry on Tuesday."})
+    );
+    let reply = messages.last().unwrap();
+    assert_eq!(reply["text"], "Plan's ready.");
+    assert!(reply["id"].as_i64() > marker["id"].as_i64());
+
+    // The notification is recorded for amy, with its Bot and marker, and
+    // the call is logged with its kind and title.
+    let notifications = gateway
+        .send(Call::get("/api/v1/notifications").cookie(&amy))
+        .await;
+    assert_eq!(notifications.status, 200, "{:?}", notifications.body);
+    let recorded = &notifications.body["notifications"][0];
+    assert_eq!(recorded["bot_id"], bot);
+    assert_eq!(recorded["message_id"], marker["id"]);
+    assert_eq!(recorded["kind"], "result");
+    assert_eq!(recorded["title"], "Dinner plan ready");
+    assert!(recorded.get("routine_run_id").is_none(), "{recorded}");
+    let calls = gateway
+        .send(Call::get(&format!("/api/v1/bots/{bot}/tool-calls")).cookie(&amy))
+        .await;
+    assert_eq!(calls.body["calls"][0]["tool"], "notify");
+    assert_eq!(calls.body["calls"][0]["outcome"], "ok");
+    assert_eq!(
+        calls.body["calls"][0]["summary"],
+        "result: Dinner plan ready"
+    );
+    // Nobody else's notifications show them.
+    let robs = gateway
+        .send(Call::get("/api/v1/notifications").cookie(&rob))
+        .await;
+    assert_eq!(robs.body["notifications"], json!([]));
+
+    // The Bot is unread until amy reads up to its reply.
+    let list = gateway.send(Call::get("/api/v1/bots").cookie(&amy)).await;
+    assert_eq!(list.body["bots"][0]["unread"], true);
+    assert_eq!(list.body["unread_bots"], 1);
+    let read = gateway
+        .send(
+            Call::new(axum::http::Method::PUT, &format!("/api/v1/bots/{bot}/read"))
+                .cookie(&amy)
+                .json(&json!({"message_id": reply["id"]})),
+        )
+        .await;
+    assert_eq!(read.status, 200, "{:?}", read.body);
+    assert_eq!(read.body["unread"], false);
+    let list = gateway.send(Call::get("/api/v1/bots").cookie(&amy)).await;
+    assert_eq!(list.body["unread_bots"], 0);
     live.assert_nothing_left_the_machine();
 }

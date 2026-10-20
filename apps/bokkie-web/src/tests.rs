@@ -190,6 +190,8 @@ fn session(user: User) -> SessionResponse {
 
 fn bot(id: i64, name: &str, label: &str, status: BotStatus, preview: Option<&str>) -> Bot {
     Bot {
+        read_up_to: None,
+        unread: false,
         id: BotId(id),
         name: name.into(),
         label: label.into(),
@@ -353,6 +355,7 @@ fn signing_in_loads_and_lists_the_bots() {
     let mut hidden = bot(3, "Hidden", "Secret", BotStatus::Idle, None);
     hidden.hidden = true;
     fixture.reply(ApiReply::Bots(Ok(BotList {
+        unread_bots: 0,
         bots: vec![
             bot(
                 1,
@@ -387,6 +390,7 @@ fn an_empty_account_says_so() {
     let _ = fixture.sent();
     fixture.sign_in();
     fixture.reply(ApiReply::Bots(Ok(BotList {
+        unread_bots: 0,
         bots: Vec::new(),
         seq: Seq(0),
     })));
@@ -415,6 +419,7 @@ fn a_failed_list_can_be_refreshed() {
     );
     assert_eq!(fixture.fact("bots"), "loading".into());
     fixture.reply(ApiReply::Bots(Ok(BotList {
+        unread_bots: 0,
         bots: vec![bot(1, "Tutor", "Maths help", BotStatus::Idle, None)],
         seq: Seq(1),
     })));
@@ -449,6 +454,7 @@ fn sign_out_returns_to_the_form_and_ignores_late_replies() {
     assert_eq!(fixture.fact("user"), "".into());
     // The Bot list asked for before signing out arrives late: it is dropped.
     fixture.reply(ApiReply::Bots(Ok(BotList {
+        unread_bots: 0,
         bots: vec![bot(1, "Tutor", "Maths help", BotStatus::Idle, None)],
         seq: Seq(1),
     })));
@@ -500,6 +506,7 @@ fn both_screens_present_their_controls_at_phone_width() {
     fixture.assert_presentable();
     fixture.sign_in();
     fixture.reply(ApiReply::Bots(Ok(BotList {
+        unread_bots: 0,
         bots: vec![bot(1, "Tutor", "Maths help", BotStatus::Idle, Some("Hi"))],
         seq: Seq(1),
     })));
@@ -586,6 +593,7 @@ fn a_reply_from_an_earlier_sign_in_is_never_shown_to_the_next_user() {
     fixture.send(BokkieIntent::Reply {
         generation: first,
         reply: ApiReply::Bots(Ok(BotList {
+            unread_bots: 0,
             bots: vec![bot(1, "Ada's Tutor", "Maths help", BotStatus::Idle, None)],
             seq: Seq(4),
         })),
@@ -593,6 +601,7 @@ fn a_reply_from_an_earlier_sign_in_is_never_shown_to_the_next_user() {
     assert_eq!(fixture.fact("bots"), "loading".into());
     assert!(!fixture.shows("Ada's Tutor"));
     fixture.reply(ApiReply::Bots(Ok(BotList {
+        unread_bots: 0,
         bots: vec![bot(
             7,
             "Gardener",

@@ -1333,6 +1333,76 @@ async fn a_tool_call_made_before_its_run_is_running_is_the_runs() {
     assert_eq!(calls.body["calls"][0]["routine_run_id"], run["id"]);
 }
 
+/// A notification sent in a routine run's turn is the run's, whether the
+/// model sent it before the run was recorded running or after.
+#[tokio::test]
+async fn a_notification_sent_in_a_runs_turn_is_the_runs() {
+    let (gateway, rob) = setup().await;
+    gateway.fake.with(|b| {
+        b.finish_turns = false;
+        b.hold_turn_answers = true;
+    });
+    let chef = create_bot(&gateway, &rob, "Chef").await;
+    let granted = gateway
+        .send(
+            Call::new(Method::PATCH, &format!("/api/v1/bots/{chef}"))
+                .cookie(&rob)
+                .json(&json!({"grants": ["notify"]})),
+        )
+        .await;
+    assert_eq!(granted.status, StatusCode::OK, "{:?}", granted.body);
+    let digest = daily(&gateway, &rob, chef, "Digest", "19:00").await;
+    let id = digest["id"].as_i64().unwrap();
+    set_clock(&gateway, 30 * MINUTE_MS);
+    let routines = &gateway.state.routines;
+    routines.pass(gateway.state.clock.now()).await.unwrap();
+    eventually(|| gateway.fake.with(|b| b.turns.len()) == 1).await;
+    let (thread, turn) = gateway.fake.with(|b| b.turns[0].clone());
+    let notify = |id: i64, title: &str| {
+        gateway.fake.inject(
+            UserId(1),
+            json!({"id": id, "method": "item/tool/call", "params": {
+                "threadId": thread, "turnId": turn, "callId": format!("call-{id}"),
+                "tool": "notify", "namespace": null,
+                "arguments": {"title": title, "kind": "result"}}}),
+        );
+    };
+    let answered = |id: i64| {
+        gateway
+            .fake
+            .received("<response>")
+            .iter()
+            .any(|r| r.params["id"] == id)
+    };
+    // Before `turn/start` answers, the run still waits.
+    notify(911, "Early");
+    eventually(|| answered(911)).await;
+    let page = gateway
+        .send(Call::get("/api/v1/notifications").cookie(&rob))
+        .await;
+    assert!(
+        page.body["notifications"][0]
+            .get("routine_run_id")
+            .is_none(),
+        "{:?}",
+        page.body
+    );
+    gateway.fake.turn_answers.add_permits(1);
+    routines.settle().await;
+    let run = runs(&gateway, &rob, chef, id).await[0].clone();
+    assert_eq!(run["state"], "running");
+    notify(912, "Late");
+    eventually(|| answered(912)).await;
+    let page = gateway
+        .send(Call::get("/api/v1/notifications").cookie(&rob))
+        .await;
+    let notifications = page.body["notifications"].as_array().unwrap();
+    assert_eq!(notifications.len(), 2);
+    for notification in notifications {
+        assert_eq!(notification["routine_run_id"], run["id"], "{notification}");
+    }
+}
+
 #[tokio::test]
 async fn one_users_slow_app_server_holds_up_no_one_elses_runs() {
     let (gateway, rob) = setup().await;

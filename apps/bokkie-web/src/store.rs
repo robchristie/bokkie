@@ -492,25 +492,9 @@ impl Store {
                 None => Applied::reload(Snapshot::Bots),
             },
             Event::MessageCreated { message } => {
-                let newest = self.newest.get(&message.bot_id).copied();
-                self.note_newest(message.bot_id, message.id);
-                match newest {
-                    Some(newest) if newest > message.id => Applied::default(),
-                    // Already known, from a loaded page or as a repeat:
-                    // only the conversation's copy is newer than the event.
-                    Some(newest) if newest == message.id => {
-                        match self.held_preview(message.bot_id, message.id) {
-                            Some(preview) => self.set_preview(message.bot_id, preview),
-                            None => Applied::default(),
-                        }
-                    }
-                    _ => {
-                        let preview = self
-                            .held_preview(message.bot_id, message.id)
-                            .unwrap_or_else(|| preview(message));
-                        self.set_preview(message.bot_id, preview)
-                    }
-                }
+                let mut applied = self.note_unread(message);
+                applied.merge(self.preview_created(message));
+                applied
             }
             Event::MessageDelta {
                 bot_id, message_id, ..
@@ -539,6 +523,15 @@ impl Store {
                 self.errors.insert(*bot_id, message.clone());
                 Applied::changed(changed)
             }
+            Event::ReadUpdated { read } => match self.bots.get_mut(&read.bot_id) {
+                Some(bot) => {
+                    let changed = bot.read_up_to != read.read_up_to || bot.unread != read.unread;
+                    bot.read_up_to = read.read_up_to;
+                    bot.unread = read.unread;
+                    Applied::changed(changed)
+                }
+                None => Applied::reload(Snapshot::Bots),
+            },
             // The application keeps the account itself.
             Event::UsageUpdated { .. } | Event::AccountUpdated { .. } => Applied::default(),
             // This client has no routine view yet.
@@ -546,6 +539,40 @@ impl Store {
             | Event::RoutineUpdated { .. }
             | Event::RoutineDeleted { .. }
             | Event::RoutineRunUpdated { .. } => Applied::default(),
+        }
+    }
+
+    /// Marks a Bot unread when it wrote a message after its read marker.
+    fn note_unread(&mut self, message: &Message) -> Applied {
+        match self.bots.get_mut(&message.bot_id) {
+            Some(bot) if !bot.unread && message.is_unread(bot.read_up_to) => {
+                bot.unread = true;
+                Applied::changed(true)
+            }
+            _ => Applied::default(),
+        }
+    }
+
+    /// The Bot list's preview after a message was created.
+    fn preview_created(&mut self, message: &Message) -> Applied {
+        let newest = self.newest.get(&message.bot_id).copied();
+        self.note_newest(message.bot_id, message.id);
+        match newest {
+            Some(newest) if newest > message.id => Applied::default(),
+            // Already known, from a loaded page or as a repeat:
+            // only the conversation's copy is newer than the event.
+            Some(newest) if newest == message.id => {
+                match self.held_preview(message.bot_id, message.id) {
+                    Some(preview) => self.set_preview(message.bot_id, preview),
+                    None => Applied::default(),
+                }
+            }
+            _ => {
+                let preview = self
+                    .held_preview(message.bot_id, message.id)
+                    .unwrap_or_else(|| preview(message));
+                self.set_preview(message.bot_id, preview)
+            }
         }
     }
 

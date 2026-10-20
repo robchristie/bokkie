@@ -14,6 +14,7 @@
 
 pub mod audit;
 pub mod notes;
+pub mod notify;
 pub mod seen;
 pub mod web_fetch;
 pub mod web_search;
@@ -30,6 +31,7 @@ use sqlx::SqlitePool;
 use crate::bots::store;
 use crate::clock::Clock;
 use crate::codex::ToolReply;
+use crate::events::EventLog;
 use crate::grants::GrantSet;
 use crate::http::Network;
 
@@ -141,6 +143,13 @@ pub const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: notify::TOOL,
+        grant: Grant::Notify,
+        description: notify::DESCRIPTION,
+        deadline: LOCAL_DEADLINE,
+        schema: notify::schema,
+    },
+    Tool {
         name: web_fetch::TOOL,
         grant: Grant::WebFetch,
         description: web_fetch::DESCRIPTION,
@@ -233,6 +242,7 @@ fn summary(tool: &Tool, arguments: &Value) -> String {
             None => "invalid arguments".into(),
         },
         "seen_check" | "seen_mark" => seen::summary(tool.name, arguments),
+        notify::TOOL => notify::summary(arguments),
         web_fetch::TOOL => match arguments["url"].as_str() {
             Some(url) => url.chars().take(audit::SUMMARY_CHARS).collect(),
             None => "invalid arguments".into(),
@@ -254,16 +264,18 @@ pub async fn within<T>(
 pub struct Broker {
     db: SqlitePool,
     clock: Clock,
+    events: Arc<EventLog>,
     fetcher: Arc<web_fetch::Fetcher>,
 }
 
 impl Broker {
     /// A broker whose fetches go out through the system's network, public
     /// addresses only.
-    pub fn new(db: SqlitePool, clock: Clock) -> Self {
+    pub fn new(db: SqlitePool, clock: Clock, events: Arc<EventLog>) -> Self {
         Self {
             db,
             clock,
+            events,
             fetcher: Arc::new(web_fetch::Fetcher::new(Network::system())),
         }
     }
@@ -343,6 +355,26 @@ impl Broker {
                 .await;
             reservation = served.reservation;
             (served.outcome, served.output, served.summary)
+        } else if tool.name == notify::TOOL {
+            // A notification and its marker are recorded in the user's
+            // event log, so the conversation shows the marker at once.
+            let served = notify::serve(
+                &caller,
+                &self.events,
+                &call.thread_id,
+                &call.turn_id,
+                &call.call_id,
+                &call.arguments,
+            );
+            let (outcome, output) = match within(tool.deadline, served).await {
+                Some(Ok(text)) => (ToolCallOutcome::Ok, Ok(text)),
+                Some(Err(error)) => (ToolCallOutcome::Failed, Err(error)),
+                None => (
+                    ToolCallOutcome::TimedOut,
+                    Err(format!("{} did not finish in time.", tool.name)),
+                ),
+            };
+            (outcome, output, summary(tool, &call.arguments))
         } else {
             let (outcome, output) =
                 match within(tool.deadline, run(tool, &caller, &call.arguments)).await {
@@ -465,11 +497,11 @@ mod tests {
             find("web_fetch", None).unwrap().deadline,
             Duration::from_secs(30)
         );
-        // notify has no tools yet, and web.search brings Codex's own web
-        // search, not a Bokkie tool.
-        for grant in [Grant::Notify, Grant::WebSearch] {
-            assert_eq!(granted(&[grant].into()).count(), 0, "{grant}");
-        }
+        let notify: GrantSet = [Grant::Notify].into();
+        let names: Vec<&str> = granted(&notify).map(|t| t.name).collect();
+        assert_eq!(names, ["notify"]);
+        // web.search brings Codex's own web search, not a Bokkie tool.
+        assert_eq!(granted(&[Grant::WebSearch].into()).count(), 0);
     }
 
     #[test]

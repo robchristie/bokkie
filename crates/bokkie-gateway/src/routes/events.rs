@@ -19,6 +19,7 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::AppState;
 use crate::accounts;
 use crate::auth::{self, SignedIn};
+use crate::bots::store;
 
 /// How long the client has to send its first frame.
 const RESUME_TIMEOUT: Duration = Duration::from_secs(10);
@@ -143,6 +144,9 @@ async fn serve(
     };
     send(&mut socket, &ServerFrame::Live { latest: sent }).await?;
 
+    // What this connection says it shows, forgotten when it closes.
+    let viewer = state.presence.connect(user);
+
     let mut check = tokio::time::interval(state.session_check);
     check.tick().await;
     loop {
@@ -168,6 +172,16 @@ async fn serve(
             frame = socket.recv() => match frame {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
                     Ok(ClientFrame::Ping) => send(&mut socket, &ServerFrame::Pong).await?,
+                    Ok(ClientFrame::Viewing { bot_id }) => {
+                        let own = match bot_id {
+                            Some(bot) => store::bot(&state.db, user, bot)
+                                .await
+                                .map_err(|_| "database unavailable")?
+                                .map(|bot| bot.id),
+                            None => None,
+                        };
+                        viewer.show(own);
+                    }
                     _ => return close(&mut socket, CLOSE_PROTOCOL, "unexpected frame").await,
                 },
                 Some(Ok(Message::Ping(payload))) => {

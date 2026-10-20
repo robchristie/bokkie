@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::events::Seq;
-use crate::{BotId, MessageId, RoutineId, RoutineRunId, Timestamp, UserId};
+use crate::{BotId, MessageId, NotificationId, RoutineId, RoutineRunId, Timestamp, UserId};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -407,6 +407,14 @@ pub struct Bot {
     /// from the Bot's next turn, which starts a fresh Codex thread.
     #[serde(default)]
     pub grants: Vec<Grant>,
+    /// The newest of the Bot's messages the user has seen, on any of their
+    /// devices; `None` before they have seen any.
+    #[serde(default)]
+    pub read_up_to: Option<MessageId>,
+    /// Whether the Bot has a message the user has not seen: see
+    /// [`Message::is_unread`].
+    #[serde(default)]
+    pub unread: bool,
 }
 
 /// The start of a conversation's latest message, for the conversation list.
@@ -420,6 +428,10 @@ pub struct MessagePreview {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BotList {
     pub bots: Vec<Bot>,
+    /// How many of the Bots are unread, hidden ones too: the count the
+    /// app's badge shows. A client keeps it from each Bot's `unread`.
+    #[serde(default)]
+    pub unread_bots: u32,
     /// The list reflects every event up to and including this one.
     pub seq: Seq,
 }
@@ -572,6 +584,20 @@ pub struct Message {
     /// and the prompt the Bot was given, for a client to show folded away.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routine: Option<MessageRoutine>,
+    /// For the marker of a notification the Bot sent with its `notify`
+    /// tool: what it said. The marker's text is the title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification: Option<MessageNotification>,
+}
+
+impl Message {
+    /// Whether this message makes its Bot unread for a user who has seen
+    /// the conversation up to `read_up_to`: the Bot wrote it, a reply or a
+    /// marker, after the newest message the user has seen. The user's own
+    /// messages never do.
+    pub fn is_unread(&self, read_up_to: Option<MessageId>) -> bool {
+        self.author == Author::Bot && read_up_to.is_none_or(|read| self.id > read)
+    }
 }
 
 /// What a routine run's marker in the conversation carries.
@@ -581,6 +607,14 @@ pub struct MessageRoutine {
     pub run_id: RoutineRunId,
     /// The routine's prompt as the run gave it to the Bot.
     pub prompt: String,
+}
+
+/// What a notification's marker in the conversation carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageNotification {
+    pub kind: NotificationKind,
+    /// The body, possibly empty. The title is the marker's text.
+    pub body: String,
 }
 
 /// `GET /api/v1/bots/{id}/messages?before={message_id}&limit={n}`, newest
@@ -940,6 +974,71 @@ pub struct ToolCallPage {
     pub calls: Vec<ToolCall>,
     /// Pass as `before` to fetch older calls; `None` at the end.
     pub older: Option<i64>,
+}
+
+// ---------------------------------------------------------------------------
+// Unread state and notifications
+
+/// `PUT /api/v1/bots/{id}/read`: the user has seen the Bot's conversation
+/// up to `message_id`, one of its messages. A client sends it while the
+/// conversation is visible with the app in the foreground. The read marker
+/// only moves forward: an older message leaves it where it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarkReadRequest {
+    pub message_id: MessageId,
+}
+
+/// A Bot's read marker, which every device of its user shares: the answer
+/// to `PUT /api/v1/bots/{id}/read`, and what
+/// [`Event::ReadUpdated`](crate::events::Event::ReadUpdated) carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadState {
+    pub bot_id: BotId,
+    pub read_up_to: Option<MessageId>,
+    /// Whether the Bot still has a message the user has not seen.
+    pub unread: bool,
+}
+
+/// What a notification is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationKind {
+    /// Something finished or was found.
+    Result,
+    /// The Bot needs an answer from its owner.
+    Question,
+}
+
+/// The longest notification title, in Unicode scalar values (Rust
+/// `char`s). A title is one line.
+pub const NOTIFICATION_TITLE_CHARS: usize = 80;
+/// The longest notification body, in Unicode scalar values.
+pub const NOTIFICATION_BODY_CHARS: usize = 500;
+
+/// A notification a Bot sent its owner with its `notify` tool, kept 90
+/// days. Its marker in the conversation stays.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Notification {
+    pub id: NotificationId,
+    pub bot_id: BotId,
+    /// The notification's marker in the conversation.
+    pub message_id: MessageId,
+    /// The routine run whose turn sent it, if a routine's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine_run_id: Option<RoutineRunId>,
+    pub kind: NotificationKind,
+    pub title: String,
+    pub body: String,
+    pub created_at: Timestamp,
+}
+
+/// `GET /api/v1/notifications?before={id}&limit={n}`: the user's
+/// notifications from every Bot, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationPage {
+    pub notifications: Vec<Notification>,
+    /// Pass as `before` to fetch older notifications; `None` at the end.
+    pub older: Option<NotificationId>,
 }
 
 // ---------------------------------------------------------------------------

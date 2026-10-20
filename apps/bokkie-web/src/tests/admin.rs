@@ -92,6 +92,7 @@ fn invitation(id: i64, name: Option<&str>) -> InvitationSummary {
 
 fn read_message(id: i64, author: Author, text: &str) -> Message {
     Message {
+        notification: None,
         id: MessageId(id),
         bot_id: BotId(7),
         author,

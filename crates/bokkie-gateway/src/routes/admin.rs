@@ -185,7 +185,14 @@ fn visible(member: &Account, bot: &BotRow) -> bool {
     member.user.oversight || bot.made_by.is_some()
 }
 
+/// A member's Bot as an admin sees it. The overseen view leaves out what
+/// the member has read: oversight shows conversations, not their reading.
 fn member_bot(bot: &BotRow, overseen: Option<Bot>) -> MemberBot {
+    let overseen = overseen.map(|bot| Bot {
+        read_up_to: None,
+        unread: false,
+        ..bot
+    });
     MemberBot {
         id: bot.id,
         name: bot.name.clone(),
@@ -211,7 +218,7 @@ pub async fn member_bots(
     let member = member(&mut *tx, UserId(id)).await?;
     let oversight = member.user.oversight;
     let mut previews = if oversight {
-        store::previews(&mut *tx, member.user.id).await?
+        store::activity(&mut *tx, member.user.id, None).await?
     } else {
         Default::default()
     };
@@ -231,7 +238,7 @@ pub async fn member_bots(
             let overseen = oversight.then(|| {
                 bot.to_api(
                     state.conversations.is_working(bot.id),
-                    previews.remove(&bot.id),
+                    previews.remove(&bot.id).unwrap_or_default(),
                 )
             });
             member_bot(bot, overseen)

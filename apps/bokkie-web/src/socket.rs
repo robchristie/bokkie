@@ -136,7 +136,7 @@ impl Driver {
                 Command::RetryAfter(delay) => step.io.push(Io::RetryAfter(delay)),
                 Command::CancelRetry => step.io.push(Io::CancelRetry),
                 Command::AwaitPong { ping, after } => step.io.push(Io::AwaitPong { ping, after }),
-                Command::Apply(envelope) => step.updates.push(SocketUpdate::Event(envelope)),
+                Command::Apply(envelope) => step.updates.push(SocketUpdate::Event(*envelope)),
                 Command::Reload => step.updates.push(SocketUpdate::Reload),
                 Command::CheckSession => step.updates.push(SocketUpdate::CheckSession),
                 Command::SignedOut => step.updates.push(SocketUpdate::SignedOut),

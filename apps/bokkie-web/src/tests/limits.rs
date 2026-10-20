@@ -277,6 +277,7 @@ fn one_meter_request_is_in_flight_at_a_time_and_a_later_one_follows_it() {
     fixture.sign_in();
     fixture.socket_started();
     fixture.reply(ApiReply::Bots(Ok(BotList {
+        unread_bots: 0,
         bots: Vec::new(),
         seq: Seq(3),
     })));
