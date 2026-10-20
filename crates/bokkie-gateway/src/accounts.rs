@@ -219,6 +219,20 @@ pub async fn account(db: impl sqlx::SqliteExecutor<'_>, user: UserId) -> Result<
     Ok(row.as_ref().map(account_from))
 }
 
+/// The account a username names, as typed: trimmed and in lower case.
+pub async fn account_by_username(
+    db: impl sqlx::SqliteExecutor<'_>,
+    username: &str,
+) -> Result<Option<Account>> {
+    let row = sqlx::query(&format!(
+        "SELECT {ACCOUNT_COLUMNS} FROM users WHERE username = ?"
+    ))
+    .bind(username.trim().to_ascii_lowercase())
+    .fetch_optional(db)
+    .await?;
+    Ok(row.as_ref().map(account_from))
+}
+
 /// Sets the user's own time zone, already checked, inside the caller's
 /// write transaction. Returns the account as it now is.
 pub async fn set_time_zone(

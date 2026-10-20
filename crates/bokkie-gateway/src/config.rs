@@ -168,7 +168,7 @@ impl Config {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
         let origin = var("BOKKIE_ORIGIN").ok_or("BOKKIE_ORIGIN is required")?;
         Ok(Self {
-            data_dir: var("BOKKIE_DATA").unwrap_or_else(|| "/data".into()).into(),
+            data_dir: Self::data_dir_from_env(),
             listen: var("BOKKIE_LISTEN")
                 .unwrap_or_else(|| "0.0.0.0:8080".into())
                 .parse()
@@ -194,6 +194,15 @@ impl Config {
                 .map(|contact| PushContact::parse(&contact))
                 .transpose()?,
         })
+    }
+
+    /// `BOKKIE_DATA`, or `/data`: all an operator's command needs.
+    pub fn data_dir_from_env() -> PathBuf {
+        std::env::var("BOKKIE_DATA")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "/data".into())
+            .into()
     }
 
     /// The database file.
