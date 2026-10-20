@@ -12,6 +12,7 @@ use axum::http::{Method, StatusCode};
 use bokkie_gateway::clock::{DAY_MS, HOUR_MS, MINUTE_MS};
 use bokkie_gateway::codex::Owner;
 use bokkie_gateway::routines::{Routines, store};
+use bokkie_protocol::api::{BotStatus, RunState};
 use bokkie_protocol::events::{Event, Seq};
 use bokkie_protocol::{BotId, UserId};
 use common::{Call, Gateway};
@@ -1145,12 +1146,19 @@ async fn busy(gateway: &Gateway, cookie: &str, bot: i64) {
     assert_eq!(said.status, StatusCode::OK, "{:?}", said.body);
 }
 
-/// Stops the Bot's turn and waits until it is idle.
-async fn stop(gateway: &Gateway, cookie: &str, bot: i64) {
+/// Asks the Bot's turn to stop. The turn ends a moment later.
+async fn interrupt(gateway: &Gateway, cookie: &str, bot: i64) {
     let stopped = gateway
         .send(Call::post(&format!("/api/v1/bots/{bot}/stop")).cookie(cookie))
         .await;
     assert_eq!(stopped.body["stopped"], true);
+}
+
+/// Stops the Bot's turn and waits until it is idle. With the scheduler's
+/// loop running, a waiting run can start as soon as the Bot is idle, too
+/// soon for a poll to see it: use [`interrupt`] there.
+async fn stop(gateway: &Gateway, cookie: &str, bot: i64) {
+    interrupt(gateway, cookie, bot).await;
     gateway
         .wait_for(cookie, &format!("/api/v1/bots/{bot}"), |b| {
             b["status"] == "idle"
@@ -1488,9 +1496,31 @@ async fn the_scheduler_loop_passes_when_a_bot_turns_idle() {
     .await;
     assert_eq!(waiting["state"], "waiting");
     // The user's turn ends: the loop passes at once, long before its tick.
-    stop(&gateway, &rob, chef).await;
+    // The run starts as soon as the Bot is idle, so the idle status may be
+    // gone before a poll could see it; the event log keeps it.
+    interrupt(&gateway, &rob, chef).await;
     let running = wait_run(&gateway, &rob, chef, id, |r| r["state"] == "running").await;
     assert_eq!(running["trigger"], "schedule");
     assert_eq!(turn_starts(&gateway).len(), 2);
     scheduler.abort();
+    // The run started only after the user's turn had ended.
+    let log = events(&gateway, 1).await;
+    let position = |wanted: &dyn Fn(&Event) -> bool| log.iter().position(wanted);
+    let working = position(&|e| {
+        matches!(e, Event::BotStatusChanged { bot_id, status: BotStatus::Working } if bot_id.0 == chef)
+    })
+    .expect("the user's turn runs");
+    let idle = log[working..]
+        .iter()
+        .position(|e| {
+            matches!(e, Event::BotStatusChanged { bot_id, status: BotStatus::Idle } if bot_id.0 == chef)
+        })
+        .map(|at| working + at)
+        .expect("the user's turn ends");
+    let started = position(&|e| {
+        matches!(e, Event::RoutineRunUpdated { run }
+            if run.routine_id.0 == id && run.state == RunState::Running)
+    })
+    .expect("the run starts");
+    assert!(idle < started, "the run started while the Bot was working");
 }
