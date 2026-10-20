@@ -572,7 +572,7 @@ async fn profile_context_on_a_steer_reaches_the_model() {
     )]
     .into();
     let steered = runtime
-        .steer_turn(&thread, &turn.id, "STEER-TEXT", Some(context))
+        .steer_turn(&thread, &turn.id, "STEER-TEXT", "steer-1", Some(context))
         .await
         .unwrap();
     assert_eq!(steered, turn.id);

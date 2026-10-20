@@ -125,7 +125,7 @@ async fn one_users_app_server_will_not_act_on_anothers_thread() {
     let reason = refused(ben.start_turn(&thread.thread.id, "hi", None).await);
     assert!(reason.contains("not passed"), "{reason}");
     refused(
-        ben.steer_turn(&thread.thread.id, "turn-1", "hi", None)
+        ben.steer_turn(&thread.thread.id, "turn-1", "hi", "m-1", None)
             .await,
     );
     assert!(

@@ -108,6 +108,12 @@ pub struct Behaviour {
     pub finish_before_answer: bool,
     /// Whether `turn/steer` fails, as it does once the turn has ended.
     pub steer_fails: bool,
+    /// When set, an accepted `turn/steer` ends its turn at once, as Codex
+    /// can when the steer arrives as the turn ends: the turn records the
+    /// steered messages and completes, with or without the model answering.
+    pub steer_ends_turn: Option<SteerEnding>,
+    /// Accepted steers that their turn has not yet taken in, in order.
+    pub steers: Vec<Steer>,
     /// Whether `thread/start` waits for a permit from
     /// [`FakeCodex::thread_starts`] before it answers.
     pub hold_thread_starts: bool,
@@ -156,6 +162,8 @@ impl Default for Behaviour {
             finish_turns: true,
             finish_before_answer: false,
             steer_fails: false,
+            steer_ends_turn: None,
+            steers: Vec::new(),
             hold_thread_starts: false,
             hold_thread_starts_of: Vec::new(),
             hold_turn_answers: false,
@@ -180,6 +188,25 @@ impl Default for Behaviour {
             next_id: 0,
         }
     }
+}
+
+/// How a turn that takes in steered messages as it ends goes on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SteerEnding {
+    /// The turn ends without asking the model again.
+    Unanswered,
+    /// The model answers them before the turn ends.
+    Answered,
+}
+
+/// A steer the fake accepted.
+#[derive(Debug, Clone)]
+pub struct Steer {
+    pub owner: Owner,
+    pub thread: String,
+    pub turn: String,
+    pub client_id: Value,
+    pub text: Value,
 }
 
 #[derive(Clone)]
@@ -244,6 +271,73 @@ impl FakeCodex {
     pub fn inject_into(&self, owner: Owner, message: Value) {
         let outlet = self.outlets.lock().unwrap().get(&owner).cloned();
         outlet.expect("the app server runs").send(message).unwrap();
+    }
+
+    /// Ends the user's latest steered turn as Codex ends a turn whose steers
+    /// arrive as it finishes: it records each steered message in the turn,
+    /// in order, then completes it, with or without the model answering.
+    pub fn end_steered_turn(&self, user: UserId, ending: SteerEnding) {
+        let outlet = self
+            .outlets
+            .lock()
+            .unwrap()
+            .get(&Owner::User(user))
+            .cloned();
+        self.end_steered_turn_into(
+            &outlet.expect("the app server runs"),
+            Owner::User(user),
+            ending,
+        );
+    }
+
+    fn end_steered_turn_into(
+        &self,
+        out: &mpsc::UnboundedSender<Value>,
+        owner: Owner,
+        ending: SteerEnding,
+    ) {
+        let (steers, reply) = self.with(|b| {
+            let turn = b
+                .steers
+                .iter()
+                .rev()
+                .find(|s| s.owner == owner)
+                .map(|s| s.turn.clone())
+                .expect("a steered turn");
+            let (taken, kept) = std::mem::take(&mut b.steers)
+                .into_iter()
+                .partition(|s| s.owner == owner && s.turn == turn);
+            b.steers = kept;
+            b.finished.insert(turn);
+            (taken, b.reply.clone())
+        });
+        let steers: Vec<Steer> = steers;
+        let (thread, turn) = (steers[0].thread.clone(), steers[0].turn.clone());
+        for (n, steer) in steers.iter().enumerate() {
+            let item = json!({"type": "userMessage", "id": format!("{turn}-steer-{n}"),
+                "clientId": steer.client_id, "content": [{"type": "text", "text": steer.text}]});
+            for method in ["item/started", "item/completed"] {
+                let _ = out.send(json!({"method": method, "params": {
+                    "threadId": thread, "turnId": turn, "item": item}}));
+            }
+        }
+        if ending == SteerEnding::Answered {
+            let item = format!("{turn}-answer");
+            let _ = out.send(
+                json!({"method": "item/started", "params": {"threadId": thread,
+                "turnId": turn, "item": {"type": "agentMessage", "id": item, "text": ""}}}),
+            );
+            for piece in &reply {
+                let _ = out.send(json!({"method": "item/agentMessage/delta", "params": {
+                    "threadId": thread, "turnId": turn, "itemId": item, "delta": piece}}));
+            }
+            let _ = out.send(json!({"method": "item/completed", "params": {"threadId": thread,
+                "turnId": turn, "item": {"type": "agentMessage", "id": item, "text": reply.concat()}}}));
+        }
+        let _ = out.send(
+            json!({"method": "turn/completed", "params": {"threadId": thread,
+            "turn": {"id": turn, "items": [], "status": "completed", "error": null}}}),
+        );
     }
 
     /// Ends the user's app server, as if it crashed.
@@ -445,7 +539,24 @@ impl FakeCodex {
                     "code": -32600, "message": "no active turn to steer"}}));
                 return;
             }
-            "turn/steer" => json!({"turnId": params["expectedTurnId"]}),
+            "turn/steer" => {
+                let steer = Steer {
+                    owner: context.owner,
+                    thread: params["threadId"].as_str().unwrap().to_owned(),
+                    turn: params["expectedTurnId"].as_str().unwrap().to_owned(),
+                    client_id: params["clientUserMessageId"].clone(),
+                    text: params["input"][0]["text"].clone(),
+                };
+                let ending = self.with(|b| {
+                    b.steers.push(steer.clone());
+                    b.steer_ends_turn
+                });
+                let _ = out.send(json!({"id": id, "result": {"turnId": steer.turn}}));
+                if let Some(ending) = ending {
+                    self.end_steered_turn_into(out, context.owner, ending);
+                }
+                return;
+            }
             "turn/interrupt"
                 if self.with(|b| b.finished.contains(params["turnId"].as_str().unwrap_or(""))) =>
             {

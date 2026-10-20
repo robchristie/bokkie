@@ -663,6 +663,87 @@ async fn a_grant_change_starts_a_fresh_thread_with_the_conversation_carried_over
     assert_eq!(last.params.get("additionalContext"), None);
 }
 
+/// A steered message that its turn left unanswered gets a turn under the
+/// rules of any new turn: when the Bot's grants changed meanwhile, on a
+/// fresh thread with the conversation carried over.
+#[tokio::test]
+async fn a_message_steered_in_as_its_turn_ends_gets_a_thread_with_the_bots_grants() {
+    use common::fake_codex::SteerEnding;
+    let (gateway, rob) = setup().await;
+    let bot = create_bot(&gateway, &rob, "Scribe").await;
+    gateway.fake.with(|b| b.finish_turns = false);
+    say(&gateway, &rob, bot, "My favourite fruit is the apricot.").await;
+    gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{bot}/messages"), |b| {
+            b["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["author"] == "bot" && m["text"] == "Hello there")
+        })
+        .await;
+    let steered = say(&gateway, &rob, bot, "And plums.").await;
+    assert_eq!(steered.body["delivery"], "steered");
+    set_grants(&gateway, &rob, bot, json!(["notes"])).await;
+    gateway.fake.with(|b| b.finish_turns = true);
+    gateway
+        .fake
+        .end_steered_turn(UserId(1), SteerEnding::Unanswered);
+    gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{bot}/messages"), |b| {
+            let messages = b["messages"].as_array().unwrap();
+            messages.len() == 5 && messages[4]["state"] == "complete"
+        })
+        .await;
+    idle(&gateway, &rob, bot).await;
+
+    let starts = gateway.fake.received("thread/start");
+    assert_eq!(starts.len(), 2);
+    assert_eq!(
+        tool_names(&starts[1].params),
+        ["notes_read", "notes_replace", "notes_append"]
+    );
+    let thread = store::bot(&gateway.state.db, UserId(1), BotId(bot))
+        .await
+        .unwrap()
+        .unwrap()
+        .thread_id
+        .unwrap();
+    let turns = gateway.fake.received("turn/start");
+    assert_eq!(turns.len(), 2);
+    let fresh = &turns[1];
+    assert_eq!(fresh.params["threadId"], thread);
+    assert_eq!(fresh.params["input"][0]["text"], "And plums.");
+    let carried = fresh.params["additionalContext"]["bokkie-earlier-conversation"]["value"]
+        .as_str()
+        .unwrap();
+    assert!(
+        carried.contains("rob: My favourite fruit is the apricot.\nYou: Hello there"),
+        "{carried}"
+    );
+    assert!(!carried.contains("And plums."), "{carried}");
+
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{bot}/messages")).cookie(&rob))
+        .await;
+    let texts: Vec<_> = page.body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "My favourite fruit is the apricot.",
+            "Hello there",
+            "And plums.",
+            "Capabilities changed: notes",
+            "Hello there",
+        ]
+    );
+}
+
 #[tokio::test]
 async fn a_restart_resumes_a_thread_with_the_grants_it_started_with() {
     let (gateway, rob) = setup().await;

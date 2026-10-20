@@ -189,3 +189,103 @@ async fn the_mock_models_rate_limit_windows_reach_the_usage_meter() {
     }
     live.assert_nothing_left_the_machine();
 }
+
+/// A message sent the moment the Bot's reply completes arrives while its
+/// turn is ending. The real app server may then refuse the steer, answer it
+/// in the turn, or take it into the thread and end the turn without asking
+/// the model; the gateway starts a turn for it in the last case. Every way,
+/// each message gets one reply.
+#[tokio::test]
+async fn a_message_sent_as_the_turn_ends_gets_a_reply() {
+    let Some(live) = Live::start(&["Noted."]).await else {
+        return;
+    };
+    let mock = &live.model;
+    let gateway = Gateway::live(&live).await;
+    gateway.route().await;
+    let rob = gateway.admin("rob").await;
+    let mut events = gateway.state.events.subscribe(bokkie_protocol::UserId(1));
+    let bot = gateway
+        .send(Call::post("/api/v1/bots").cookie(&rob).json(&json!({
+            "name": "Scribe", "label": "", "description": ""})))
+        .await;
+    let bot_id = bot.body["id"].as_i64().unwrap();
+    let say = async |text: &str| {
+        let sent = gateway
+            .send(
+                Call::post(&format!("/api/v1/bots/{bot_id}/messages"))
+                    .cookie(&rob)
+                    .json(&json!({"text": text})),
+            )
+            .await;
+        assert_eq!(sent.status, 200, "{:?}", sent.body);
+        sent.body["delivery"].as_str().unwrap().to_owned()
+    };
+    let mut deliveries = vec![say("Round 0").await];
+    const ROUNDS: usize = 8;
+    for round in 1..=ROUNDS {
+        // Each message's reply completes, and the next goes at once.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match events.recv().await.unwrap().event {
+                    Event::MessageCompleted { message } if message.author == Author::Bot => {
+                        return;
+                    }
+                    Event::BotError { message, .. } => panic!("Bot error: {message}"),
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("no reply to round {}: {deliveries:?}", round - 1));
+        if round < ROUNDS {
+            deliveries.push(say(&format!("Round {round}")).await);
+        }
+    }
+    // Each message has one reply, after it.
+    let page = gateway
+        .wait_for(&rob, &format!("/api/v1/bots/{bot_id}"), |b| {
+            b["status"] == "idle"
+        })
+        .await;
+    assert_eq!(page["status"], "idle");
+    let page = gateway
+        .send(Call::get(&format!("/api/v1/bots/{bot_id}/messages")).cookie(&rob))
+        .await;
+    let said: Vec<_> = page.body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            (
+                m["author"].as_str().unwrap().to_owned(),
+                m["text"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let expected: Vec<_> = (0..ROUNDS)
+        .flat_map(|round| {
+            [
+                ("user".to_owned(), format!("Round {round}")),
+                ("bot".to_owned(), "Noted.".to_owned()),
+            ]
+        })
+        .collect();
+    assert_eq!(said, expected, "{deliveries:?}");
+    // How often each message reached the model in the request that
+    // answered it: twice when the gateway started a turn for a steered
+    // message that the thread already held.
+    let requests = mock.requests.lock().unwrap().clone();
+    let seen: Vec<_> = (0..ROUNDS)
+        .map(|round| {
+            let text = format!("\"Round {round}\"");
+            requests
+                .iter()
+                .find(|r| r["input"].to_string().contains(&text))
+                .map(|r| r["input"].to_string().matches(&text).count())
+                .unwrap_or(0)
+        })
+        .collect();
+    eprintln!("deliveries {deliveries:?}, seen by the model {seen:?}");
+    live.assert_nothing_left_the_machine();
+}

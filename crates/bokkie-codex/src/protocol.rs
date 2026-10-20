@@ -398,6 +398,10 @@ pub struct TurnSteerParams {
     pub thread_id: String,
     pub expected_turn_id: String,
     pub input: Vec<UserInput>,
+    /// The client's id for the message, which the `userMessage` item that
+    /// records it in the thread carries as `clientId`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_user_message_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub additional_context: Option<BTreeMap<String, AdditionalContextEntry>>,
 }
@@ -471,8 +475,14 @@ impl TurnError {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ThreadItem {
+    /// A message from the user, recorded in the thread's history. A
+    /// message sent by `turn/steer` carries the client's id for it.
     #[serde(rename_all = "camelCase")]
-    UserMessage { id: String },
+    UserMessage {
+        id: String,
+        #[serde(default)]
+        client_id: Option<String>,
+    },
     #[serde(rename_all = "camelCase")]
     AgentMessage { id: String, text: String },
     #[serde(rename_all = "camelCase")]

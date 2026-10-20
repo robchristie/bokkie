@@ -441,6 +441,23 @@ long-lived Codex thread in that user's app server.
   that is mid-turn steers it (`turn/steer`, naming the running turn); if the
   turn has just ended, it starts a new one. `POST /api/v1/bots/{id}/stop`
   interrupts the running turn (`turn/interrupt`).
+- Every steered message is answered. Codex 0.163.0 can accept a steer just
+  as the turn ends, add the message to the thread and complete the turn
+  without asking the model again. The gateway steers each message with a
+  client id (`clientUserMessageId`, `bokkie-message-<id>`) that Codex's
+  `userMessage` item carries back, so it knows which messages the turn
+  took in. When a turn completes and the model began no reply after such
+  a message, the gateway starts one turn for it, as for a message to an
+  idle Bot: under the Bot's send lock, counted against the turn allowance,
+  on a thread with the Bot's grants, carrying any changed profile and a
+  fresh thread's carry-over, with the latest such message as its input (so
+  the model sees that message twice: once where the thread took it in, and
+  again as the input). Until that turn starts the Bot stays `working`, so a
+  routine's run waits for it rather than taking the idle Bot first. A turn
+  that starts meanwhile for another message answers it instead, and it is
+  started once, never for a turn that was interrupted or failed. With no
+  turn left, the message stays without a reply and the user gets a
+  `bot_error` saying so.
 - After an app server restart, the next message resumes the thread
   (`thread/resume`), which passes the per-thread checks again.
 - A thread that a fresh thread replaced (see
@@ -775,7 +792,9 @@ from it.
   and when it was due. The turn counts against the user's turn and token
   allowances like any other. It is interrupted after 15 minutes, and ended
   a minute later if the app server never confirms it. A user's message
-  while it runs steers it, as any message to a working Bot does. A tool it
+  while it runs steers it, as any message to a working Bot does; one that
+  the run's turn takes in without answering gets a user's turn of its own
+  after the run ends, before any other run starts. A tool it
   calls is logged with the run (`routine_run_id` on the Bot's tool calls),
   including a call the model made before the run was recorded running.
 - **Failures.** A run that fails, or is interrupted for running too long,
@@ -1029,9 +1048,11 @@ limits, and when a window rolls over.
   start a turn beyond the allowance, or any message once the tokens are used
   up, is refused with `limit_reached` and is not stored. The turn is
   checked and counted in one transaction before the message is stored, so
-  sends to several Bots at once cannot all pass the check. The exception: a
-  message meant to steer a turn that ends just before it arrives needs a
-  new turn; if none is left, it stays stored without a reply.
+  sends to several Bots at once cannot all pass the check. The exceptions:
+  a message meant to steer a turn that ends just before it arrives needs a
+  new turn, and so does a steered message the turn took in without
+  answering (see [Bots and conversations](#bots-and-conversations)); if
+  none is left, it stays stored without a reply.
 - **Token overshoot.** Codex reports a turn's tokens each time a model
   response completes, so a turn admitted under the allowance can pass it.
   When a report uses up the weekly tokens, the gateway interrupts every
