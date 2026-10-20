@@ -255,6 +255,19 @@ pub enum RuntimeEventKind {
         thread_id: String,
         reason: String,
     },
+    /// A web search completed. Sent just before the `item/completed`
+    /// notification that reports it, with what this app server's read loop
+    /// found when it checked the item: whether the thread was granted
+    /// `web.search`. A search on any other thread was a violation, already
+    /// acted on.
+    WebSearchCompleted {
+        thread_id: String,
+        turn_id: String,
+        item_id: String,
+        query: String,
+        action: Option<serde_json::Value>,
+        granted: bool,
+    },
     /// The app server exited. Threads must be resumed on its successor.
     Exited,
     /// The model called one of Bokkie's tools on a thread that was granted
@@ -1303,8 +1316,27 @@ async fn watch(runtime: Arc<Runtime>, mut incoming: mpsc::UnboundedReceiver<Inco
                 {
                     // A thread this app server never served has no grants.
                     let grants = runtime.thread_grants(&item.thread_id).unwrap_or_default();
-                    if let Err(refusal) = guard::check_item(&item.item, &grants) {
-                        violation(&runtime, Some(&item.thread_id), &refusal, &sink).await;
+                    let checked = guard::check_item(&item.item, &grants);
+                    if let Err(refusal) = &checked {
+                        violation(&runtime, Some(&item.thread_id), refusal, &sink).await;
+                    }
+                    // The verdict travels with the search, so recording it
+                    // never depends on which app server is running later.
+                    if let (
+                        ServerNotification::ItemCompleted(_),
+                        bokkie_codex::protocol::ThreadItem::WebSearch {
+                            id, query, action, ..
+                        },
+                    ) = (&notification, &item.item)
+                    {
+                        sink.send(RuntimeEventKind::WebSearchCompleted {
+                            thread_id: item.thread_id.clone(),
+                            turn_id: item.turn_id.clone(),
+                            item_id: id.clone(),
+                            query: query.clone(),
+                            action: action.clone(),
+                            granted: checked.is_ok(),
+                        });
                     }
                 }
                 match (&sink, &notification) {

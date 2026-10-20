@@ -13,27 +13,48 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 base64 = "0.22"
 bokkie-codex = { path = "../bokkie-codex" }
 bokkie-protocol = { path = "../bokkie-protocol" }
+bytes = "1"
+encoding_rs = "0.8"
+feed-rs = "3"
 getrandom = "0.3"
+html2text = { version = "0.17", features = ["css"] }
+# The HTML parser html2text builds on, which web_fetch feeds in timed pieces;
+# it must stay the version html2text uses.
+html5ever = "0.40.1"
+http-body-util = "0.1"
+# The outbound HTTP client: hyper over rustls on ring, trusting the system's
+# certificate authorities (not webpki-roots or aws-lc).
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 # Time zones from the system's tzdata (`/usr/share/zoneinfo`).
 jiff = { version = "0.2.38", default-features = false, features = ["std", "tz-fat", "tzdb-zoneinfo"] }
 percent-encoding = "2"
+rustls-native-certs = "0.8"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "signal"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tower-http = { version = "0.7.1", default-features = false, features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
 
+[features]
+# Test seams. Only this crate's own tests turn it on, through the development
+# dependency on itself below; no build of the gateway binary does, so a
+# production configuration cannot reach a seam.
+test-network = []
+
 [dev-dependencies]
+bokkie-gateway = { path = ".", features = ["test-network"] }
 bokkie-mock-model = { path = "../bokkie-mock-model" }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
-tokio-tungstenite = "0.27"
-http-body-util = "0.1"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 tempfile = "3"
+tokio-tungstenite = "0.27"
 tower = { version = "0.5", features = ["util"] }
 
 [lints]

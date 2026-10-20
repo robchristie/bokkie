@@ -24,6 +24,7 @@ pub mod db;
 pub mod error;
 pub mod events;
 pub mod grants;
+pub mod http;
 pub mod routes;
 pub mod routines;
 pub mod secrets;

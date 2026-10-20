@@ -128,7 +128,7 @@ async fn grants_are_set_read_and_announced() {
 async fn grants_without_tools_yet_are_refused_even_to_admins() {
     let (gateway, rob) = setup().await;
     let bot = create_bot(&gateway, &rob, "Scout").await;
-    for grant in ["notify", "web.search", "web.fetch"] {
+    for grant in ["notify", "web.search"] {
         let refused = set_grants(&gateway, &rob, bot, json!([grant])).await;
         assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{grant}");
         assert!(
@@ -168,6 +168,48 @@ async fn members_may_add_only_their_grants() {
     assert_eq!(notify.status, StatusCode::BAD_REQUEST);
     let cleared = set_grants(&gateway, &amy, bot, json!([])).await;
     assert_eq!(cleared.body["grants"], json!([]));
+}
+
+#[tokio::test]
+async fn web_fetch_is_granted_by_admins_only() {
+    let (gateway, rob) = setup().await;
+    // An admin grants it on their own Bot.
+    let own = create_bot(&gateway, &rob, "Reader").await;
+    let granted = set_grants(&gateway, &rob, own, json!(["web.fetch", "notes"])).await;
+    assert_eq!(granted.status, StatusCode::OK, "{:?}", granted.body);
+    assert_eq!(granted.body["grants"], json!(["notes", "web.fetch"]));
+
+    // And on a Bot an admin made for a member, whose member may not add it
+    // back once it is removed, nor add it to their own Bot.
+    let (amy, amy_id) = gateway.member(&rob, "amy").await;
+    let made = gateway
+        .send(
+            Call::post(&format!("/api/v1/admin/users/{amy_id}/bots"))
+                .cookie(&rob)
+                .json(&json!({"name": "Tutor", "label": "", "description": ""})),
+        )
+        .await;
+    let made = made.body["id"].as_i64().unwrap();
+    let path = format!("/api/v1/admin/users/{amy_id}/bots/{made}");
+    let granted = gateway
+        .send(
+            Call::new(Method::PATCH, &path)
+                .cookie(&rob)
+                .json(&json!({"grants": ["web.fetch"]})),
+        )
+        .await;
+    assert_eq!(granted.status, StatusCode::OK, "{:?}", granted.body);
+    assert_eq!(granted.body["grants"], json!(["web.fetch"]));
+    // Keeping it while adding notes is not adding it.
+    let kept = set_grants(&gateway, &amy, made, json!(["web.fetch", "notes"])).await;
+    assert_eq!(kept.status, StatusCode::OK, "{:?}", kept.body);
+    let removed = set_grants(&gateway, &amy, made, json!(["notes"])).await;
+    assert_eq!(removed.status, StatusCode::OK, "{:?}", removed.body);
+    let again = set_grants(&gateway, &amy, made, json!(["notes", "web.fetch"])).await;
+    assert_eq!(again.status, StatusCode::FORBIDDEN, "{:?}", again.body);
+    let diary = create_bot(&gateway, &amy, "Diary").await;
+    let refused = set_grants(&gateway, &amy, diary, json!(["web.fetch"])).await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{:?}", refused.body);
 }
 
 #[tokio::test]
