@@ -23,7 +23,13 @@ fn names(names: &[&str]) -> BTreeSet<String> {
 }
 
 /// Sends `text` to the Bot and waits until it has `replies` complete text
-/// replies. Returns the conversation.
+/// replies and its turn has ended. Returns the conversation.
+///
+/// A reply is complete when its item completes, a moment before its turn
+/// does. A message sent in that moment steers the turn instead of starting
+/// the next one, and when that steer misses, the message is stored before a
+/// fresh thread's marker; so the next exchange waits for the Bot to be
+/// idle.
 async fn exchange(gateway: &Gateway, cookie: &str, bot: i64, text: &str, replies: usize) -> Value {
     let sent = gateway
         .send(
@@ -44,7 +50,13 @@ async fn exchange(gateway: &Gateway, cookie: &str, bot: i64, text: &str, replies
             .iter()
             .filter(|m| m["author"] == "bot" && m["kind"] == "text" && m["state"] == "complete")
             .count();
-        if done >= replies {
+        let idle = done >= replies
+            && gateway
+                .send(Call::get(&format!("/api/v1/bots/{bot}")).cookie(cookie))
+                .await
+                .body["status"]
+                == "idle";
+        if idle {
             return page.body;
         }
         assert!(
