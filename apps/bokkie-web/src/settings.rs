@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use bokkie_protocol::api::{
-    BotNotes, CreateRoutineRequest, Grant, Role, Routine, RoutinePush, RoutineRun, RunState,
+    Bot, BotNotes, CreateRoutineRequest, Grant, Role, Routine, RoutinePush, RoutineRun, RunState,
     Schedule, SetTimeZoneRequest, TimeOfDay, ToolCall, UpdateBotRequest, UpdateRoutineRequest,
     Weekday,
 };
@@ -23,6 +23,7 @@ use bokkie_protocol::{BotId, RoutineId, RoutineRunId};
 use crate::api::{ApiReply, ApiRequest};
 use crate::app::{App, BokkieAction, Session};
 use crate::store::Snapshot;
+use crate::wire::CommandError;
 
 pub(crate) use view::{present, time_zone_ui};
 
@@ -508,6 +509,7 @@ impl App {
     pub(crate) fn settings_reply(&mut self, reply: ApiReply) -> Result<bool, Box<ApiReply>> {
         let ended = |error: &crate::wire::CommandError| error.is_unauthenticated();
         match reply {
+            ApiReply::Bot(id, result) => Ok(self.grant_from(id, result)),
             ApiReply::TimeZoneSet(result) => {
                 let Session::SignedIn(signed_in) = &mut self.session else {
                     return Ok(false);
@@ -1104,16 +1106,15 @@ impl App {
         Some(Ok(true))
     }
 
-    /// Turn a grant of the open Bot's on or off.
+    /// Turn a grant of the open Bot's on or off, as the switch shows it. The
+    /// rest of the new set comes from the Bot as the gateway has it now,
+    /// not from the store's copy, which may not yet show a change made on
+    /// another device.
     fn toggle_grant(&mut self, grant: Grant) -> bool {
         let Some(bot) = self.open_bot().and_then(|bot| self.store().bot(bot)) else {
             return false;
         };
-        let mut grants: BTreeSet<Grant> = bot.grants.iter().copied().collect();
-        if !grants.remove(&grant) {
-            grants.insert(grant);
-        }
-        let id = bot.id;
+        let on = !bot.grants.contains(&grant);
         let Session::SignedIn(signed_in) = &mut self.session else {
             return false;
         };
@@ -1121,12 +1122,45 @@ impl App {
             return false;
         };
         open.updating = true;
+        open.grant = Some((grant, on));
         open.update_error = None;
-        let changes = UpdateBotRequest {
-            grants: Some(grants.into_iter().collect()),
-            ..Default::default()
+        let bot = open.bot;
+        self.send(ApiRequest::LoadBot(bot));
+        true
+    }
+
+    /// The Bot as the gateway has it now, for a grant change: send the
+    /// change.
+    fn grant_from(&mut self, id: BotId, result: Result<Bot, CommandError>) -> bool {
+        let Session::SignedIn(signed_in) = &mut self.session else {
+            return false;
         };
-        self.send(ApiRequest::UpdateBot(id, changes));
+        let Some(open) = signed_in.open.as_mut().filter(|open| open.bot == id) else {
+            return false;
+        };
+        let Some((grant, on)) = open.grant.take() else {
+            return false;
+        };
+        match result {
+            Ok(bot) => {
+                let mut grants: BTreeSet<Grant> = bot.grants.iter().copied().collect();
+                if on {
+                    grants.insert(grant);
+                } else {
+                    grants.remove(&grant);
+                }
+                let changes = UpdateBotRequest {
+                    grants: Some(grants.into_iter().collect()),
+                    ..Default::default()
+                };
+                self.send(ApiRequest::UpdateBot(id, changes));
+            }
+            Err(error) if error.is_unauthenticated() => return self.settings_ended(),
+            Err(error) => {
+                open.updating = false;
+                open.update_error = Some(error.message);
+            }
+        }
         true
     }
 

@@ -8,11 +8,11 @@
 use bokkie_protocol::api::{
     AcceptInvitationRequest, AdminUser, AdminUserList, Allowance, Bot, BotList, BotNotes,
     CodexAccount, CreateBotRequest, CreateInvitationRequest, CreateRoutineRequest,
-    CreatedInvitation, DeviceCodeLogin, InvitationList, LoginRequest, MemberBot, MemberBotList,
-    MessagePage, ResetPasswordRequest, Routine, RoutineList, RoutineRun, RoutineRunPage,
-    SendMessageRequest, SendMessageResponse, SessionResponse, SetTimeZoneRequest, StopResponse,
-    ToolCallPage, UpdateBotProfileRequest, UpdateBotRequest, UpdateRoutineRequest,
-    UpdateUserRequest, Usage,
+    CreatedInvitation, DeviceCodeLogin, InvitationList, LoginRequest, MarkReadRequest, MemberBot,
+    MemberBotList, MessagePage, PushKey, PushSubscriptionRequest, PushSubscriptionState, ReadState,
+    ResetPasswordRequest, Routine, RoutineList, RoutineRun, RoutineRunPage, SendMessageRequest,
+    SendMessageResponse, SessionResponse, SetTimeZoneRequest, StopResponse, ToolCallPage,
+    UpdateBotProfileRequest, UpdateBotRequest, UpdateRoutineRequest, UpdateUserRequest, Usage,
 };
 use bokkie_protocol::{API_PREFIX, BotId, MessageId, RoutineId, RoutineRunId, Timestamp, UserId};
 
@@ -117,9 +117,22 @@ pub enum ApiRequest {
     /// `GET /api/v1/bots/{id}/routines/{routine}/runs?limit=[&before=]`: a
     /// page of the routine's runs, newest first.
     LoadRuns(BotId, RoutineId, Option<RoutineRunId>),
+    /// `GET /api/v1/bots/{id}`: one Bot as it is now.
+    LoadBot(BotId),
+    /// `PUT /api/v1/bots/{id}/read`: the user has seen the Bot's
+    /// conversation up to this message.
+    MarkRead(BotId, MarkReadRequest),
+    /// `GET /api/v1/push/key`: the key a device subscribes to Web Push with.
+    PushKey,
+    /// `PUT /api/v1/push/subscription`: this device's subscription, for the
+    /// session.
+    PutPushSubscription(PushSubscriptionRequest),
+    /// `DELETE /api/v1/push/subscription`: end the session's subscription.
+    DeletePushSubscription,
 }
 
-// The password must never reach a log line.
+// The password must never reach a log line, nor a push subscription's
+// endpoint or keys, with which anyone could address the device.
 impl std::fmt::Debug for ApiRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -224,6 +237,15 @@ impl std::fmt::Debug for ApiRequest {
                 .field(routine)
                 .field(before)
                 .finish(),
+            Self::LoadBot(bot) => f.debug_tuple("LoadBot").field(bot).finish(),
+            Self::MarkRead(bot, read) => f
+                .debug_tuple("MarkRead")
+                .field(bot)
+                .field(&read.message_id)
+                .finish(),
+            Self::PushKey => f.write_str("PushKey"),
+            Self::PutPushSubscription(_) => f.write_str("PutPushSubscription(<redacted>)"),
+            Self::DeletePushSubscription => f.write_str("DeletePushSubscription"),
         }
     }
 }
@@ -310,6 +332,13 @@ pub enum ApiReply {
         Option<RoutineRunId>,
         Result<RoutineRunPage, CommandError>,
     ),
+    /// One Bot, as asked for to change its grants.
+    Bot(BotId, Result<Bot, CommandError>),
+    /// The read marker after asking to move it to that message.
+    MarkedRead(BotId, MessageId, Result<ReadState, CommandError>),
+    PushKey(Result<PushKey, CommandError>),
+    PushSubscribed(Result<PushSubscriptionState, CommandError>),
+    PushUnsubscribed(Result<(), CommandError>),
 }
 
 /// A new invitation. Its code is shown on screen once and nowhere else;
@@ -354,7 +383,9 @@ impl ApiRequest {
             | Self::LoadNotes(_)
             | Self::LoadToolCalls(..)
             | Self::ListRoutines(_)
-            | Self::LoadRuns(..) => Method::Get,
+            | Self::LoadRuns(..)
+            | Self::LoadBot(_)
+            | Self::PushKey => Method::Get,
             Self::SignIn(_)
             | Self::SendMessage(..)
             | Self::StopBot(_)
@@ -366,7 +397,10 @@ impl ApiRequest {
             | Self::CreateMemberBot(..)
             | Self::CreateRoutine(..)
             | Self::RunRoutine(..) => Method::Post,
-            Self::ResetPassword(..) | Self::SetTimeZone(_) => Method::Put,
+            Self::ResetPassword(..)
+            | Self::SetTimeZone(_)
+            | Self::MarkRead(..)
+            | Self::PutPushSubscription(_) => Method::Put,
             Self::UpdateBot(..)
             | Self::UpdateAccount(..)
             | Self::UpdateMemberBot(..)
@@ -376,7 +410,8 @@ impl ApiRequest {
             | Self::CancelCodexLogin
             | Self::WithdrawInvitation(_)
             | Self::ClearNotes(_)
-            | Self::DeleteRoutine(..) => Method::Delete,
+            | Self::DeleteRoutine(..)
+            | Self::DeletePushSubscription => Method::Delete,
         }
     }
 
@@ -386,7 +421,12 @@ impl ApiRequest {
             Self::CheckSession | Self::SignIn(_) | Self::SignOut => "/session".into(),
             Self::ListBots | Self::CreateBot(_) => "/bots".into(),
             Self::AcknowledgeReset => "/session/password-reset".into(),
-            Self::UpdateBot(bot, _) => format!("/bots/{bot}"),
+            Self::UpdateBot(bot, _) | Self::LoadBot(bot) => format!("/bots/{bot}"),
+            Self::MarkRead(bot, _) => format!("/bots/{bot}/read"),
+            Self::PushKey => "/push/key".into(),
+            Self::PutPushSubscription(_) | Self::DeletePushSubscription => {
+                "/push/subscription".into()
+            }
             Self::CodexAccount => "/codex/account".into(),
             Self::CodexLogin | Self::CodexLoginStatus | Self::CancelCodexLogin => {
                 "/codex/login".into()
@@ -452,6 +492,8 @@ impl ApiRequest {
             Self::SetTimeZone(zone) => Some(json(zone)),
             Self::CreateRoutine(_, routine) => Some(json(routine)),
             Self::UpdateRoutine(_, _, changes) => Some(json(changes)),
+            Self::MarkRead(_, read) => Some(json(read)),
+            Self::PutPushSubscription(subscription) => Some(json(subscription)),
             _ => None,
         }
     }
@@ -534,6 +576,17 @@ impl ApiRequest {
             Self::LoadRuns(bot, routine, before) => {
                 ApiReply::Runs(*bot, *routine, *before, wire::decode_response(status, body))
             }
+            Self::LoadBot(bot) => ApiReply::Bot(*bot, wire::decode_response(status, body)),
+            Self::MarkRead(bot, read) => {
+                ApiReply::MarkedRead(*bot, read.message_id, wire::decode_response(status, body))
+            }
+            Self::PushKey => ApiReply::PushKey(wire::decode_response(status, body)),
+            Self::PutPushSubscription(_) => {
+                ApiReply::PushSubscribed(wire::decode_response(status, body))
+            }
+            Self::DeletePushSubscription => {
+                ApiReply::PushUnsubscribed(wire::decode_empty(status, body))
+            }
         }
     }
 
@@ -590,6 +643,11 @@ impl ApiRequest {
             Self::LoadRuns(bot, routine, before) => {
                 ApiReply::Runs(*bot, *routine, *before, Err(error))
             }
+            Self::LoadBot(bot) => ApiReply::Bot(*bot, Err(error)),
+            Self::MarkRead(bot, read) => ApiReply::MarkedRead(*bot, read.message_id, Err(error)),
+            Self::PushKey => ApiReply::PushKey(Err(error)),
+            Self::PutPushSubscription(_) => ApiReply::PushSubscribed(Err(error)),
+            Self::DeletePushSubscription => ApiReply::PushUnsubscribed(Err(error)),
         }
     }
 }
@@ -629,6 +687,23 @@ pub trait Api {
     /// called. The application shows times in the user's own zone when it
     /// knows it, in this locale.
     fn local_time(&self) -> stobie_ui_egui::local_time::LocalTime;
+
+    /// The Bot whose conversation the application shows, or `None`. The
+    /// event socket tells the gateway, as `viewing`, while the page is
+    /// visible, and `None` while it is hidden.
+    fn set_viewing(&self, bot: Option<BotId>);
+
+    /// Subscribe this device to Web Push with the gateway's key. Call it
+    /// directly from the action the user tapped: Safari subscribes only
+    /// inside the tap. The result arrives as
+    /// [`BokkieIntent::Push`](crate::BokkieIntent::Push).
+    fn subscribe_push(&self, key: &str);
+
+    /// Remove this device's Web Push subscription, if it has one.
+    fn unsubscribe_push(&self);
+
+    /// Show `count` on the app's icon, or clear it for 0.
+    fn set_app_badge(&self, count: u64);
 }
 
 /// What the application asked of the event socket, as a [`Recorder`] keeps
@@ -640,12 +715,23 @@ pub enum SocketControl {
     ReloadPage,
 }
 
+/// What the application asked of the device's Web Push and badge, as a
+/// [`Recorder`] keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceControl {
+    Subscribe(String),
+    Unsubscribe,
+    Badge(u64),
+}
+
 /// An [`Api`] that only records what it was asked to send, for tests and for
 /// the native build, which has no network transport.
 #[derive(Debug, Clone, Default)]
 pub struct Recorder {
     sent: std::rc::Rc<std::cell::RefCell<Vec<ApiRequest>>>,
     socket: std::rc::Rc<std::cell::RefCell<Vec<SocketControl>>>,
+    device: std::rc::Rc<std::cell::RefCell<Vec<DeviceControl>>>,
+    viewing: std::rc::Rc<std::cell::RefCell<Vec<Option<BotId>>>>,
     now: std::rc::Rc<std::cell::Cell<i64>>,
 }
 
@@ -663,6 +749,18 @@ impl Recorder {
     /// Everything asked of the event socket so far, which is then forgotten.
     pub fn take_socket(&self) -> Vec<SocketControl> {
         std::mem::take(&mut self.socket.borrow_mut())
+    }
+
+    /// Everything asked of Web Push and the badge so far, which is then
+    /// forgotten.
+    pub fn take_device(&self) -> Vec<DeviceControl> {
+        std::mem::take(&mut self.device.borrow_mut())
+    }
+
+    /// Each Bot the application said it shows, or none, so far, which is
+    /// then forgotten.
+    pub fn take_viewing(&self) -> Vec<Option<BotId>> {
+        std::mem::take(&mut self.viewing.borrow_mut())
     }
 }
 
@@ -698,6 +796,24 @@ impl Api for Recorder {
             TimeLocale::for_language_tag("en-AU"),
             Clock::System,
         )
+    }
+
+    fn set_viewing(&self, bot: Option<BotId>) {
+        self.viewing.borrow_mut().push(bot);
+    }
+
+    fn subscribe_push(&self, key: &str) {
+        self.device
+            .borrow_mut()
+            .push(DeviceControl::Subscribe(key.to_owned()));
+    }
+
+    fn unsubscribe_push(&self) {
+        self.device.borrow_mut().push(DeviceControl::Unsubscribe);
+    }
+
+    fn set_app_badge(&self, count: u64) {
+        self.device.borrow_mut().push(DeviceControl::Badge(count));
     }
 }
 
@@ -1043,5 +1159,85 @@ mod tests {
             panic!("no response");
         };
         assert_eq!((error.status, error.code), (0, ErrorCode::Unavailable));
+    }
+
+    #[test]
+    fn read_markers_and_push_name_their_routes_and_keep_the_endpoint_out_of_logs() {
+        use bokkie_protocol::api::PushSubscriptionKeys;
+        let subscription = ApiRequest::PutPushSubscription(PushSubscriptionRequest {
+            endpoint: "https://push.example/device-secret".into(),
+            keys: PushSubscriptionKeys {
+                p256dh: "the-device-key".into(),
+                auth: "the-device-secret".into(),
+            },
+        });
+        let read = ApiRequest::MarkRead(
+            BotId(3),
+            MarkReadRequest {
+                message_id: MessageId(41),
+            },
+        );
+        let routes: Vec<(&str, String)> = [
+            ApiRequest::LoadBot(BotId(3)),
+            read.clone(),
+            ApiRequest::PushKey,
+            subscription.clone(),
+            ApiRequest::DeletePushSubscription,
+        ]
+        .iter()
+        .map(|request| (request.method().as_str(), request.path()))
+        .collect();
+        assert_eq!(
+            routes,
+            [
+                ("GET", "/api/v1/bots/3".to_owned()),
+                ("PUT", "/api/v1/bots/3/read".to_owned()),
+                ("GET", "/api/v1/push/key".to_owned()),
+                ("PUT", "/api/v1/push/subscription".to_owned()),
+                ("DELETE", "/api/v1/push/subscription".to_owned()),
+            ]
+        );
+        assert_eq!(read.body().as_deref(), Some(r#"{"message_id":41}"#));
+        assert_eq!(
+            subscription.body().as_deref(),
+            Some(
+                r#"{"endpoint":"https://push.example/device-secret","keys":{"p256dh":"the-device-key","auth":"the-device-secret"}}"#
+            )
+        );
+        let logged = format!("{subscription:?}");
+        for secret in ["device-secret", "the-device-key", "push.example"] {
+            assert!(!logged.contains(secret), "{logged}");
+        }
+        assert_eq!(
+            read.decode(200, r#"{"bot_id":3,"read_up_to":41,"unread":false}"#),
+            ApiReply::MarkedRead(
+                BotId(3),
+                MessageId(41),
+                Ok(ReadState {
+                    bot_id: BotId(3),
+                    read_up_to: Some(MessageId(41)),
+                    unread: false,
+                })
+            )
+        );
+        assert_eq!(
+            ApiRequest::PushKey.decode(200, r#"{"public_key":"BKey","sending":false}"#),
+            ApiReply::PushKey(Ok(PushKey {
+                public_key: "BKey".into(),
+                sending: false,
+            }))
+        );
+        assert_eq!(
+            subscription.decode(200, r#"{"subscribed":true}"#),
+            ApiReply::PushSubscribed(Ok(PushSubscriptionState { subscribed: true }))
+        );
+        assert_eq!(
+            ApiRequest::DeletePushSubscription.decode(204, ""),
+            ApiReply::PushUnsubscribed(Ok(()))
+        );
+        let ApiReply::MarkedRead(_, _, Err(error)) = read.unreachable() else {
+            panic!("no response");
+        };
+        assert_eq!(error.code, ErrorCode::Unavailable);
     }
 }

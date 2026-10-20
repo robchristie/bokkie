@@ -11,7 +11,7 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
-use bokkie_protocol::EVENTS_PATH;
+use bokkie_protocol::{BotId, EVENTS_PATH};
 use stobie_ui_egui::IntentSender;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -37,6 +37,13 @@ struct Inner {
     pong: Cell<Option<i32>>,
     /// The ping the pong timer is for.
     pong_for: Cell<u32>,
+    renew: Cell<Option<i32>>,
+    /// The renewal the renewal timer is for.
+    renew_for: Cell<u32>,
+    /// The Bot the application shows, which a new driver must hear.
+    viewing: Cell<Option<BotId>>,
+    /// Whether the page is hidden, which a new driver must hear too.
+    hidden: Cell<bool>,
     /// The host has stopped: nothing more is sent or opened.
     stopped: Cell<bool>,
     callbacks: OnceCell<Callbacks>,
@@ -48,6 +55,7 @@ struct Callbacks {
     close: Closure<dyn FnMut(CloseEvent)>,
     retry: Closure<dyn FnMut()>,
     pong: Closure<dyn FnMut()>,
+    renew: Closure<dyn FnMut()>,
     visibility: Closure<dyn FnMut()>,
 }
 
@@ -61,6 +69,10 @@ impl EventSocket {
             retry: Cell::new(None),
             pong: Cell::new(None),
             pong_for: Cell::new(0),
+            renew: Cell::new(None),
+            renew_for: Cell::new(0),
+            viewing: Cell::new(None),
+            hidden: Cell::new(page_hidden()),
             stopped: Cell::new(false),
             callbacks: OnceCell::new(),
         });
@@ -70,6 +82,10 @@ impl EventSocket {
                 "visibilitychange",
                 inner.callbacks().visibility.as_ref().unchecked_ref(),
             );
+        }
+        // A page opened in the background reads nothing until it shows.
+        if inner.hidden.get() {
+            let _ = inner.intents.send(BokkieIntent::Background);
         }
         Self { inner }
     }
@@ -82,7 +98,17 @@ impl EventSocket {
         inner.clear_timers();
         inner.generation.set(generation);
         *inner.driver.borrow_mut() = Driver::new();
+        if inner.hidden.get() {
+            inner.handle(Input::Hidden);
+        }
+        inner.handle(Input::Viewing(inner.viewing.get()));
         inner.handle(Input::Start);
+    }
+
+    /// The Bot the application shows, or none.
+    pub(super) fn set_viewing(&self, bot: Option<BotId>) {
+        self.inner.viewing.set(bot);
+        self.inner.handle(Input::Viewing(bot));
     }
 
     /// Close for good, as on signing out.
@@ -152,13 +178,22 @@ impl Callbacks {
                     ping: inner.pong_for.get(),
                 });
             })),
+            renew: Closure::new(on(&inner, |inner| {
+                inner.renew.set(None);
+                inner.handle(Input::ViewingDue {
+                    renewal: inner.renew_for.get(),
+                });
+            })),
+            // The application hears it only at its next pass, which a
+            // hidden page does not run, so the socket itself says at once
+            // that the page shows no Bot.
             visibility: Closure::new(on(&inner, |inner| {
-                let visible = web_sys::window()
-                    .and_then(|window| window.document())
-                    .is_some_and(|document| {
-                        document.visibility_state() == VisibilityState::Visible
-                    });
-                if visible {
+                let hidden = page_hidden();
+                inner.hidden.set(hidden);
+                if hidden {
+                    let _ = inner.intents.send(BokkieIntent::Background);
+                    inner.handle(Input::Hidden);
+                } else {
                     // The viewer's zone or locale may have changed meanwhile.
                     let _ = inner.intents.send(BokkieIntent::Foreground);
                     inner.handle(Input::Visible);
@@ -205,6 +240,11 @@ impl Inner {
                     self.pong_for.set(ping);
                     self.pong.set(set_timeout(&self.callbacks().pong, after));
                 }
+                Io::RenewViewing { renewal, after } => {
+                    clear(&self.renew);
+                    self.renew_for.set(renewal);
+                    self.renew.set(set_timeout(&self.callbacks().renew, after));
+                }
             }
         }
         let generation = self.generation.get();
@@ -250,6 +290,7 @@ impl Inner {
     fn clear_timers(&self) {
         clear(&self.retry);
         clear(&self.pong);
+        clear(&self.renew);
     }
 
     fn shut_down(&self) {
@@ -257,6 +298,13 @@ impl Inner {
         self.close_socket();
         self.clear_timers();
     }
+}
+
+/// Whether the page is hidden now.
+fn page_hidden() -> bool {
+    web_sys::window()
+        .and_then(|window| window.document())
+        .is_some_and(|document| document.visibility_state() == VisibilityState::Hidden)
 }
 
 /// `ws:` or `wss:` to the event route at the page's own host.

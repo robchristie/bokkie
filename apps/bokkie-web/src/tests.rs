@@ -26,6 +26,7 @@ mod conversation;
 mod household;
 mod limits;
 mod member;
+mod notifications;
 mod reading;
 mod settings;
 mod stand_ins;
@@ -92,6 +93,19 @@ impl Fixture {
 
     fn sent(&self) -> Vec<ApiRequest> {
         self.sent.take()
+    }
+
+    /// Answer a grant change's read of the open Bot with the store's copy.
+    fn fresh_tutor(&mut self) {
+        let bot = self.app().open_bot().expect("a Bot is open");
+        let fresh = self
+            .app()
+            .store()
+            .bot(bot)
+            .expect("the Bot is known")
+            .clone();
+        assert_eq!(self.sent(), [ApiRequest::LoadBot(bot)]);
+        self.reply(ApiReply::Bot(bot, Ok(fresh)));
     }
 
     fn click(&mut self, label: &str) {
@@ -226,6 +240,16 @@ fn error(status: u16, code: ErrorCode, message: &str) -> CommandError {
         code,
         message: message.into(),
     }
+}
+
+/// Moving `bot`'s read marker to `message`.
+fn mark_read(bot: BotId, message: i64) -> ApiRequest {
+    ApiRequest::MarkRead(
+        bot,
+        bokkie_protocol::api::MarkReadRequest {
+            message_id: bokkie_protocol::MessageId(message),
+        },
+    )
 }
 
 fn unauthenticated() -> CommandError {

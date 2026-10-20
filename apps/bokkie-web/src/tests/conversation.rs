@@ -320,7 +320,8 @@ fn a_reply_streams_in_and_settles_and_the_list_follows() {
     assert_eq!(fixture.fact("reply_state"), "complete".into());
     assert_eq!(fixture.fact("message_count"), 4_u64.into());
     assert!(fixture.shows("Maths help · Idle"));
-    assert!(fixture.sent().is_empty(), "nothing needed reloading");
+    // Nothing needed reloading; the reply moved the read marker, once.
+    assert_eq!(fixture.sent(), [mark_read(TUTOR, 4)]);
     // The list's preview followed the conversation.
     fixture.click("Back");
     assert!(fixture.shows("A fraction is a part of a whole 🍕."));
@@ -562,8 +563,9 @@ fn a_socket_dropped_mid_reply_catches_up_without_losing_or_repeating_text() {
     assert!(!fixture.shows("Reconnecting…"));
     assert_eq!(fixture.fact("reply_state"), "complete".into());
     assert_eq!(fixture.fact("message_count"), 4_u64.into());
-    // Resumed, not reset: nothing reloads.
-    assert!(fixture.sent().is_empty());
+    // Resumed, not reset: nothing reloads. The reply moved the read
+    // marker once.
+    assert_eq!(fixture.sent(), [mark_read(TUTOR, 4)]);
 }
 
 #[test]
@@ -578,7 +580,10 @@ fn a_delta_beyond_the_text_held_reloads_the_conversation() {
         },
     );
     fixture.event(12, delta(11, "is a part "));
-    assert_eq!(fixture.sent(), [ApiRequest::LoadMessages(TUTOR)]);
+    assert_eq!(
+        fixture.sent(),
+        [mark_read(TUTOR, 4), ApiRequest::LoadMessages(TUTOR)]
+    );
 }
 
 #[test]
@@ -876,7 +881,10 @@ fn load_older_prepends_a_page_while_a_reply_streams() {
     fixture.click("Load older");
     assert_eq!(
         fixture.sent(),
-        [ApiRequest::LoadOlder(TUTOR, MessageId(20))]
+        [
+            mark_read(TUTOR, 23),
+            ApiRequest::LoadOlder(TUTOR, MessageId(20))
+        ]
     );
     assert_eq!(fixture.fact("older"), "loading".into());
     assert!(fixture.shows("Loading older messages…"));

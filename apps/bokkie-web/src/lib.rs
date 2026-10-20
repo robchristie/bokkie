@@ -14,9 +14,13 @@
 //!   oversight, limits, password resets and a member's Bots;
 //! - `settings` is one Bot's settings: its grants, notes, recent tool calls
 //!   and routines, with each routine's run history, and the account's time
-//!   zone.
+//!   zone;
+//! - `notifications` is the device's notifications switch, through Web
+//!   Push, the read markers and `viewing` frames sent while a conversation
+//!   is on screen, the app badge, and opening a tapped notification's Bot.
 //! - [`api`] describes each HTTP command and decodes its reply;
-//!   `browser` sends them with `fetch` and runs the event WebSocket.
+//!   `browser` sends them with `fetch`, runs the event WebSocket, and
+//!   connects to Stobie's Web Push bridge.
 //!
 //! Its platform-independent core performs no I/O and is tested natively:
 //!
@@ -38,6 +42,7 @@ pub mod app;
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
 pub mod connection;
+mod notifications;
 mod settings;
 pub mod socket;
 pub mod store;

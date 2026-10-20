@@ -33,6 +33,8 @@ pub enum Io {
     CancelRetry,
     /// Report [`Input::PongOverdue`] for `ping` after this delay.
     AwaitPong { ping: u32, after: Duration },
+    /// Report [`Input::ViewingDue`] for `renewal` after this delay.
+    RenewViewing { renewal: u32, after: Duration },
 }
 
 /// What the application hears from the event socket.
@@ -136,6 +138,9 @@ impl Driver {
                 Command::RetryAfter(delay) => step.io.push(Io::RetryAfter(delay)),
                 Command::CancelRetry => step.io.push(Io::CancelRetry),
                 Command::AwaitPong { ping, after } => step.io.push(Io::AwaitPong { ping, after }),
+                Command::RenewViewing { renewal, after } => {
+                    step.io.push(Io::RenewViewing { renewal, after })
+                }
                 Command::Apply(envelope) => step.updates.push(SocketUpdate::Event(*envelope)),
                 Command::Reload => step.updates.push(SocketUpdate::Reload),
                 Command::CheckSession => step.updates.push(SocketUpdate::CheckSession),
@@ -211,6 +216,38 @@ mod tests {
         );
         let step = driver.receive(&text(&ServerFrame::Event(event(5))));
         assert_eq!(step.updates, [SocketUpdate::Event(event(5))]);
+    }
+
+    #[test]
+    fn the_bot_shown_goes_out_as_viewing_and_is_renewed_by_timer() {
+        let mut driver = Driver::new();
+        let _ = driver.handle(Input::Viewing(Some(BotId(7))));
+        let _ = driver.handle(Input::Start);
+        let _ = driver.handle(Input::Opened);
+        let step = driver.receive(&text(&ServerFrame::Live { latest: Seq(4) }));
+        let viewing = Io::Send(wire::encode_frame(&ClientFrame::Viewing {
+            bot_id: Some(BotId(7)),
+        }));
+        assert_eq!(
+            step.io,
+            [
+                viewing.clone(),
+                Io::RenewViewing {
+                    renewal: 1,
+                    after: crate::connection::VIEWING_RENEW
+                }
+            ]
+        );
+        assert_eq!(
+            driver.handle(Input::ViewingDue { renewal: 1 }).io,
+            [
+                viewing,
+                Io::RenewViewing {
+                    renewal: 2,
+                    after: crate::connection::VIEWING_RENEW
+                }
+            ]
+        );
     }
 
     #[test]

@@ -28,6 +28,14 @@
 //! while the page was hidden, and gives up on it if no frame arrives within
 //! [`PONG_DEADLINE`].
 //!
+//! The machine also tells the gateway which Bot the application shows, with
+//! [`ClientFrame::Viewing`]: the Bot the application names
+//! ([`Input::Viewing`]) while the page is visible, and none while it is
+//! hidden. It says so once live, whenever that changes, again every
+//! [`VIEWING_RENEW`] while it names a Bot, and again on every new socket,
+//! because what a socket said ends with it. The application cannot say it
+//! while hidden: the host runs no pass in a hidden page.
+//!
 //! On the first connection, and whenever the gateway sends
 //! [`ServerFrame::Reset`], the client must reload its snapshots over HTTP
 //! ([`Command::Reload`]). On the first connection it does so once live, so
@@ -36,7 +44,8 @@
 
 use std::time::Duration;
 
-use bokkie_protocol::events::{ClientFrame, EventEnvelope, Seq, ServerFrame};
+use bokkie_protocol::BotId;
+use bokkie_protocol::events::{ClientFrame, EventEnvelope, Seq, ServerFrame, VIEWING_RENEW_MS};
 
 /// The first reconnection delay.
 pub const FIRST_RETRY: Duration = Duration::from_millis(250);
@@ -55,6 +64,9 @@ pub const PONG_DEADLINE: Duration = Duration::from_secs(5);
 /// Unreadable frames in a row, with no event between them, after which the
 /// client stops reconnecting and asks for the page to be reloaded.
 pub const UNREADABLE_LIMIT: u32 = 3;
+
+/// How often a socket that says it shows a Bot says so again.
+pub const VIEWING_RENEW: Duration = Duration::from_millis(VIEWING_RENEW_MS);
 
 /// Where the connection is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +109,13 @@ pub enum Input {
     RetryDue,
     /// The page became visible again.
     Visible,
+    /// The page was hidden.
+    Hidden,
+    /// The application shows this Bot's conversation, or none.
+    Viewing(Option<BotId>),
+    /// The delay from [`Command::RenewViewing`] for renewal `renewal`
+    /// passed.
+    ViewingDue { renewal: u32 },
     /// The deadline from [`Command::AwaitPong`] for ping `ping` passed.
     PongOverdue { ping: u32 },
     /// An HTTP request answered 401: the session is gone.
@@ -121,6 +140,9 @@ pub enum Command {
     /// Report [`Input::PongOverdue`] for this ping after this delay. A later
     /// frame makes the report harmless, so it needs no cancelling.
     AwaitPong { ping: u32, after: Duration },
+    /// Report [`Input::ViewingDue`] for this renewal after this delay. A
+    /// later renewal makes the report harmless, so it needs no cancelling.
+    RenewViewing { renewal: u32, after: Duration },
     /// Apply this event to the store.
     Apply(Box<EventEnvelope>),
     /// Reload every snapshot over HTTP (see [`crate::store::Store::reload_all`]).
@@ -155,6 +177,14 @@ pub struct Connection {
     /// The gateway's refusals of this client's frames (close 4000) since the
     /// socket was last live.
     refusals: u32,
+    /// The Bot the application shows, if any.
+    viewing: Option<BotId>,
+    /// Whether the page is hidden.
+    hidden: bool,
+    /// What this socket last told the gateway it shows, since it went live.
+    told: Option<BotId>,
+    /// Renewals scheduled so far, which number them.
+    renewals: u32,
 }
 
 impl Default for Connection {
@@ -175,6 +205,10 @@ impl Connection {
             awaiting: None,
             unreadable: 0,
             refusals: 0,
+            viewing: None,
+            hidden: false,
+            told: None,
+            renewals: 0,
         }
     }
 
@@ -188,6 +222,12 @@ impl Connection {
         self.last
     }
 
+    /// The Bot this connection says the page shows: the application's,
+    /// unless the page is hidden.
+    pub fn shown(&self) -> Option<BotId> {
+        if self.hidden { None } else { self.viewing }
+    }
+
     /// The delay before attempt `attempt` (1 for the first retry): 250 ms,
     /// doubling to 8 s.
     pub fn delay(attempt: u32) -> Duration {
@@ -197,6 +237,52 @@ impl Connection {
 
     /// Handle one input and return what to do.
     pub fn handle(&mut self, input: Input) -> Vec<Command> {
+        let viewing = match input {
+            Input::Visible => {
+                self.hidden = false;
+                true
+            }
+            Input::Hidden => {
+                self.hidden = true;
+                true
+            }
+            Input::Viewing(bot) => {
+                self.viewing = bot;
+                true
+            }
+            _ => false,
+        };
+        let mut commands = self.transition(input);
+        if viewing {
+            commands.extend(self.say_viewing());
+        }
+        commands
+    }
+
+    /// Tell the gateway what the page shows, if this live socket has not
+    /// said it.
+    fn say_viewing(&mut self) -> Vec<Command> {
+        let shown = self.shown();
+        if self.state != State::Live || self.told == shown {
+            return Vec::new();
+        }
+        self.told = shown;
+        let mut commands = vec![Command::Send(ClientFrame::Viewing { bot_id: shown })];
+        commands.extend(self.renew_later());
+        commands
+    }
+
+    /// Schedule the next renewal while this socket says it shows a Bot.
+    fn renew_later(&mut self) -> Option<Command> {
+        self.told?;
+        self.renewals = self.renewals.wrapping_add(1);
+        Some(Command::RenewViewing {
+            renewal: self.renewals,
+            after: VIEWING_RENEW,
+        })
+    }
+
+    fn transition(&mut self, input: Input) -> Vec<Command> {
         use State::*;
         match (self.state, input) {
             (SignedOut, _) => Vec::new(),
@@ -236,6 +322,14 @@ impl Connection {
             (Live, Input::PongOverdue { ping }) if self.awaiting == Some(ping) => {
                 self.awaiting = None;
                 self.resync()
+            }
+            // Said again before the gateway forgets it.
+            (Live, Input::ViewingDue { renewal })
+                if renewal == self.renewals && self.told.is_some() =>
+            {
+                let mut commands = vec![Command::Send(ClientFrame::Viewing { bot_id: self.told })];
+                commands.extend(self.renew_later());
+                commands
             }
             (Connecting, Input::Opened) => {
                 self.state = Resuming;
@@ -345,12 +439,16 @@ impl Connection {
                 // socket that sends no resume in time, as a suspended page
                 // may not.)
                 self.refusals = 0;
-                if !self.synced || replaced {
+                let mut commands = if !self.synced || replaced {
                     self.synced = true;
                     vec![Command::Reload]
                 } else {
                     Vec::new()
-                }
+                };
+                // A new socket has said nothing yet.
+                self.told = None;
+                commands.extend(self.say_viewing());
+                commands
             }
             ServerFrame::Reset { after } => {
                 self.last = Some(after);

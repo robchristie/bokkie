@@ -65,7 +65,10 @@ fn stop_is_offered_only_while_a_reply_runs_and_the_reply_shows_as_stopped() {
     }
     assert!(fixture.enabled(BokkieAction::Stop));
     fixture.click("Stop");
-    assert_eq!(fixture.sent(), [ApiRequest::StopBot(TUTOR)]);
+    assert_eq!(
+        fixture.sent(),
+        [mark_read(TUTOR, 4), ApiRequest::StopBot(TUTOR)]
+    );
     assert_eq!(fixture.fact("stopping"), true.into());
     assert!(fixture.shows("Stopping…"));
     assert!(!fixture.enabled(BokkieAction::Stop), "one stop at a time");

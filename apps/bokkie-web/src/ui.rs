@@ -315,8 +315,36 @@ fn bots_ui(
                 }
                 ui.separator();
                 crate::settings::time_zone_ui(ui, &mut rows, frame, signed_in);
+                ui.separator();
+                notifications_ui(ui, &mut rows, frame, app);
             });
     });
+}
+
+/// This device's notifications switch, below the Bot list.
+fn notifications_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
+) {
+    p.heading(ui, "notifications-title", "Notifications on this device");
+    p.content(
+        ui,
+        "notifications-about",
+        "Notify this device when a Bot sends you a notification or a routine run finishes, unless one of your devices shows that Bot's conversation.",
+        line(TextRole::Secondary, 3),
+    );
+    frame.toggle(
+        ui,
+        p,
+        "notifications",
+        BokkieAction::Notifications,
+        app.notifications_on(),
+    );
+    if let Some((status, error)) = app.notifications_status() {
+        p.status(ui, "notifications-status", &status, error);
+    }
 }
 
 /// The notices a signed-in user sees on every screen: that an admin can
@@ -644,12 +672,12 @@ fn bot_row(
 ) {
     let key = bot.id.0;
     p.content(ui, ("name", key), &bot.name, line(TextRole::Body, 1));
-    p.content(
-        ui,
-        ("details", key),
-        &details(bot),
-        line(TextRole::Secondary, 1),
-    );
+    // A plain stand-in for an unread dot.
+    let details = match bot.unread {
+        true => format!("Unread · {}", details(bot)),
+        false => details(bot),
+    };
+    p.content(ui, ("details", key), &details, line(TextRole::Secondary, 1));
     if let Some(preview) = &bot.last_message {
         p.content(
             ui,

@@ -228,6 +228,11 @@ fn a_member_may_grant_only_notes_seen_and_notify() {
     assert!(fixture.shows(crate::settings::view::EXFILTRATION_NOTICE));
     fixture.click("Grant notes");
     assert_eq!(
+        fixture.availability_of(BokkieAction::GrantSeen),
+        disabled("Saving the Bot")
+    );
+    fixture.fresh_tutor();
+    assert_eq!(
         fixture.sent(),
         [ApiRequest::UpdateBot(
             TUTOR,
@@ -253,6 +258,7 @@ fn a_member_may_grant_only_notes_seen_and_notify() {
     assert!(fixture.enabled(BokkieAction::GrantWebSearch));
     assert!(fixture.shows("Grant web.search"));
     fixture.click("Grant web.search");
+    fixture.fresh_tutor();
     assert_eq!(
         fixture.sent(),
         [ApiRequest::UpdateBot(
@@ -288,6 +294,7 @@ fn an_admin_may_grant_web_fetch_but_not_web_search() {
         disabled("Web search is not available yet")
     );
     fixture.click("Grant web.fetch");
+    fixture.fresh_tutor();
     assert_eq!(
         fixture.sent(),
         [ApiRequest::UpdateBot(
@@ -965,4 +972,57 @@ fn the_settings_present_their_controls_at_phone_width() {
     fixture.reveal("On chosen days");
     fixture.click("On chosen days");
     fixture.assert_presentable();
+}
+
+#[test]
+fn a_grant_change_keeps_what_another_device_changed_meanwhile() {
+    let mut fixture = Fixture::new();
+    fixture.settings_loaded(Vec::new());
+    fixture.click("Grant notes");
+    // Another device granted `seen`; this store has not heard yet.
+    let mut fresh = fixture.app().store().bot(TUTOR).unwrap().clone();
+    fresh.grants = vec![Grant::Seen];
+    assert_eq!(fixture.sent(), [ApiRequest::LoadBot(TUTOR)]);
+    fixture.reply(ApiReply::Bot(TUTOR, Ok(fresh.clone())));
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::UpdateBot(
+            TUTOR,
+            UpdateBotRequest {
+                grants: Some(vec![Grant::Notes, Grant::Seen]),
+                ..Default::default()
+            }
+        )]
+    );
+    fixture.reply(ApiReply::BotUpdated(TUTOR, Ok(fresh.clone())));
+    // The grant tapped goes the way its switch showed: on to off here,
+    // whatever the gateway now holds of it.
+    fixture.tutor_updated(11, vec![Grant::Seen]);
+    fixture.click("Grant seen");
+    fresh.grants = vec![Grant::Notes];
+    let _ = fixture.sent();
+    fixture.reply(ApiReply::Bot(TUTOR, Ok(fresh)));
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::UpdateBot(
+            TUTOR,
+            UpdateBotRequest {
+                grants: Some(vec![Grant::Notes]),
+                ..Default::default()
+            }
+        )]
+    );
+}
+
+#[test]
+fn a_grant_change_that_cannot_read_the_bot_says_why() {
+    let mut fixture = Fixture::new();
+    fixture.settings_loaded(Vec::new());
+    fixture.click("Grant notes");
+    let _ = fixture.sent();
+    fixture.reply(ApiReply::Bot(TUTOR, Err(CommandError::unreachable())));
+    assert!(fixture.sent().is_empty(), "nothing is changed blind");
+    assert_eq!(fixture.fact("updating"), false.into());
+    assert_ne!(fixture.fact("profile_error"), "".into());
+    assert!(fixture.enabled(BokkieAction::GrantNotes), "try again");
 }

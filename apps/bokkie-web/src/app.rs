@@ -21,6 +21,7 @@ use bokkie_protocol::events::Event;
 use bokkie_protocol::{BotId, MessageId, Timestamp};
 use serde::Serialize;
 use stobie_ui_egui::local_time::{Clock, LocalTime, TimeLocale, TimeZone};
+use stobie_ui_egui::web_push::PushEvent;
 use stobie_ui_egui::{
     Action, ActionArgument, ActionKey, ActionTarget, Application, ApplicationIdentity,
     Availability, Frame, IntentSender, Observation, PassContext, application_identity,
@@ -500,6 +501,11 @@ pub enum BokkieAction {
     )]
     ShowRun,
     #[action(
+        label = "Notifications",
+        description = "Notify this device when a Bot has something for you, or stop notifying it"
+    )]
+    Notifications,
+    #[action(
         label = "Save time zone",
         description = "Save the time zone entered, which routines run in and times show in"
     )]
@@ -545,9 +551,13 @@ pub enum BokkieIntent {
     /// The page is visible again, after the viewer may have changed their
     /// time zone or locale.
     Foreground,
+    /// The page is hidden: nothing on it is being read.
+    Background,
+    /// A result from Web Push.
+    Push(PushEvent),
 }
 
-// The password must never reach a log line.
+// The password and a push subscription must never reach a log line.
 impl std::fmt::Debug for BokkieIntent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -590,6 +600,9 @@ impl std::fmt::Debug for BokkieIntent {
                 .field("update", update)
                 .finish(),
             Self::Foreground => f.write_str("Foreground"),
+            Self::Background => f.write_str("Background"),
+            // Never the endpoint or the keys.
+            Self::Push(event) => write!(f, "Push({})", crate::notifications::describe(event)),
         }
     }
 }
@@ -663,6 +676,8 @@ pub(crate) struct SignedIn {
     pub(crate) zone_saving: bool,
     /// Why the last time zone change failed.
     pub(crate) zone_error: Option<String>,
+    /// This sign-in's push subscription and read markers.
+    pub(crate) push: crate::notifications::Signed,
 }
 
 impl SignedIn {
@@ -814,9 +829,12 @@ pub(crate) struct Open {
     pub(crate) anchor: Option<(u64, MessageId)>,
     /// The profile editor, when open.
     pub(crate) editor: Option<ProfileEditor>,
-    /// A pin or hide is under way.
+    /// A pin, hide or grant change is under way.
     pub(crate) updating: bool,
-    /// Why the last pin or hide failed.
+    /// The grant to turn on (`true`) or off once the Bot's current grants
+    /// arrive.
+    pub(crate) grant: Option<(bokkie_protocol::api::Grant, bool)>,
+    /// Why the last pin, hide or grant change failed.
     pub(crate) update_error: Option<String>,
     /// The routine runs whose prompt is shown, by their marker's ID; every
     /// other run's prompt is folded away.
@@ -846,6 +864,7 @@ impl Open {
             anchor: None,
             editor: None,
             updating: false,
+            grant: None,
             update_error: None,
             prompts: BTreeSet::new(),
             settings: None,
@@ -881,7 +900,9 @@ pub struct App {
     /// started.
     gotos: u64,
     make_api: Option<ApiFactory>,
-    api: Option<Box<dyn Api>>,
+    pub(crate) api: Option<Box<dyn Api>>,
+    /// The device's Web Push and badge, and whether the page is hidden.
+    pub(crate) device: crate::notifications::Device,
     /// The viewer's zone and locale, as the transport last read them.
     viewer: Option<LocalTime>,
 }
@@ -911,6 +932,7 @@ impl App {
             gotos: 0,
             make_api: Some(make_api),
             api: None,
+            device: crate::notifications::Device::default(),
             viewer: None,
         }
     }
@@ -1057,6 +1079,16 @@ impl App {
     }
 
     fn signed_out(&mut self, message: Option<String>) {
+        self.leave(message, true);
+    }
+
+    /// Show the sign-in form. `ended` says the gateway has no session for
+    /// this browser, so whatever push subscription the device holds is no
+    /// session's.
+    fn leave(&mut self, message: Option<String>, ended: bool) {
+        if ended {
+            self.forget_subscription();
+        }
         let username = match &self.session {
             Session::SignedOut(form) => form.username.clone(),
             Session::SignedIn(signed_in) => signed_in.user.username.clone(),
@@ -1076,6 +1108,11 @@ impl App {
     }
 
     fn signed_in(&mut self, session: SessionResponse) {
+        // Only a launch with a live session keeps the device's
+        // subscription; a new sign-in switches notifications on itself.
+        if !matches!(self.session, Session::Checking) {
+            self.forget_subscription();
+        }
         self.next_generation();
         self.session = Session::SignedIn(Box::new(SignedIn {
             zone: TimeZone::named(&session.user.time_zone).ok(),
@@ -1096,6 +1133,7 @@ impl App {
             zone_draft: None,
             zone_saving: false,
             zone_error: None,
+            push: crate::notifications::Signed::default(),
         }));
         // The list shows at once. Once the socket is live it is loaded again,
         // so that no event can fall between the list and the socket.
@@ -1168,6 +1206,7 @@ impl App {
         self.load_usage();
         self.check_session();
         self.send(ApiRequest::CodexAccount);
+        self.retry_push();
     }
 
     /// Ask for the session's account again. An `account_updated` event that
@@ -1199,6 +1238,10 @@ impl App {
             Err(reply) => *reply,
         };
         let reply = match self.settings_reply(reply) {
+            Ok(changed) => return changed,
+            Err(reply) => *reply,
+        };
+        let reply = match self.push_reply(reply) {
             Ok(changed) => return changed,
             Err(reply) => *reply,
         };
@@ -1237,8 +1280,9 @@ impl App {
             (ApiReply::Session(Err(error)), Session::Checking) => {
                 // 401 is the ordinary signed-out answer; anything else is
                 // worth saying.
-                let message = (!error.is_unauthenticated()).then_some(error.message);
-                self.signed_out(message);
+                let ended = error.is_unauthenticated();
+                let message = (!ended).then_some(error.message);
+                self.leave(message, ended);
             }
             // The socket asked whether the session still holds.
             (ApiReply::Session(Err(error)), Session::SignedIn(_)) if error.is_unauthenticated() => {
@@ -1793,7 +1837,7 @@ impl App {
         }
     }
 
-    fn open_conversation(&mut self, bot: BotId) -> Result<bool, String> {
+    pub(crate) fn open_conversation(&mut self, bot: BotId) -> Result<bool, String> {
         let Session::SignedIn(signed_in) = &mut self.session else {
             return Ok(false);
         };
@@ -1805,6 +1849,7 @@ impl App {
             self.store.close_routines(open.bot);
         }
         signed_in.open = Some(Open::new(bot));
+        signed_in.push.opened();
         self.load(Snapshot::Messages(bot));
         Ok(true)
     }
@@ -1926,6 +1971,13 @@ impl Application for App {
             return reason.map_or(Availability::Enabled, |reason| Availability::Disabled {
                 reason,
             });
+        }
+        if target.action == BokkieAction::Notifications {
+            return self
+                .notifications_availability()
+                .map_or(Availability::Enabled, |reason| Availability::Disabled {
+                    reason,
+                });
         }
         let signed_in = match &self.session {
             Session::SignedIn(signed_in) => Some(signed_in),
@@ -2161,8 +2213,11 @@ impl Application for App {
         self.send(ApiRequest::CheckSession);
     }
 
-    /// Poll the household's sign-in while its device code is on screen.
+    /// Bring the device and the gateway in line with the state (see
+    /// `notifications`), and poll the household's sign-in while its device
+    /// code is on screen.
     fn prepare(&mut self, pass: &mut PassContext<'_>, _: &mut ()) {
+        self.sync();
         let now = self.now();
         let Session::SignedIn(signed_in) = &mut self.session else {
             return;
@@ -2201,8 +2256,10 @@ impl Application for App {
                 let viewer = self.api.as_ref().map(|api| api.local_time());
                 let changed = viewer != self.viewer;
                 self.viewer = viewer;
-                changed
+                self.set_hidden(false) || changed
             }
+            BokkieIntent::Background => self.set_hidden(true),
+            BokkieIntent::Push(event) => self.push_event(event),
             BokkieIntent::EditUsername(username) => match &mut self.session {
                 Session::SignedOut(form) if !form.busy => {
                     form.username = username;
@@ -2281,6 +2338,10 @@ impl Application for App {
         }
         if let Some(done) = self.settings_perform(target.action) {
             return Ok(done);
+        }
+        if target.action == BokkieAction::Notifications {
+            // Inside the tap, where Safari lets a page subscribe.
+            return Ok(self.toggle_notifications());
         }
         if let Some(bot) = self.settings().and(self.open_bot()) {
             match target.action {
@@ -2617,6 +2678,7 @@ impl Application for App {
             matches!(&self.session, Session::SignedOut(form) if form.joining),
         );
         self.observe_admin(observation);
+        self.observe_device(observation);
         observation.fact(
             "user",
             self.user().map_or("", |user| user.username.as_str()),
