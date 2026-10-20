@@ -6,8 +6,8 @@
 //!
 //! This is the proof of the capability rule: the gateway's configuration
 //! leaves every Codex tool off, and a thread offers exactly the Bokkie
-//! tools of its grants, with Codex's web search only on a thread granted
-//! `web.search`. It captures the tools the app server actually offers a
+//! tools of its grants (`web_fetch` among them), with Codex's web search
+//! only on a thread granted `web.search`. It captures the tools the app server actually offers a
 //! model. `tests/live_search.rs` follows web search further.
 
 mod common;
@@ -148,7 +148,7 @@ async fn the_real_app_server_offers_exactly_the_granted_tools() {
     let user = UserId(1);
     let runtime = supervisor.runtime(user).await.expect("the checks pass");
     // Every grant with tools today, alone and together, and none.
-    let with_tools = [Grant::Notes, Grant::Seen, Grant::WebSearch];
+    let with_tools = [Grant::Notes, Grant::Seen, Grant::WebSearch, Grant::WebFetch];
     let combinations: Vec<GrantSet> = (0..(1u32 << with_tools.len()))
         .map(|bits| {
             with_tools
@@ -168,11 +168,16 @@ async fn the_real_app_server_offers_exactly_the_granted_tools() {
         // web search.
         assert_eq!(offered, expected_tools(grants), "grants {grants:?}");
     }
-    // The grants whose tools do not exist yet offer nothing of Bokkie's;
-    // web.search brings Codex's own search instead.
-    for grant in [Grant::Notify, Grant::WebSearch, Grant::WebFetch] {
+    // notify has no tools yet, so it offers nothing of Bokkie's; web.search
+    // brings Codex's own search instead; web.fetch brings exactly
+    // web_fetch.
+    for grant in [Grant::Notify, Grant::WebSearch] {
         assert_eq!(bokkie_gateway::tools::granted(&[grant].into()).count(), 0);
     }
+    let fetch: Vec<&str> = bokkie_gateway::tools::granted(&[Grant::WebFetch].into())
+        .map(|tool| tool.name)
+        .collect();
+    assert_eq!(fetch, ["web_fetch"]);
 
     // The configuration and the catalog both matter: this app server's
     // config.toml is the gateway's, and its CODEX_HOME is the user's own.

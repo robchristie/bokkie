@@ -64,8 +64,8 @@ These crates appear as each phase needs them:
   Bot is mid-turn maps to `turn/steer`.
 - Bokkie's own capabilities are tools the Bot can call, each brought by a
   grant (see [The capability model](#the-capability-model)). The first are
-  the Bot's notes and seen items; notifications and web access follow, and
-  "message another Bot" later.
+  the Bot's notes and seen items and reading the web; notifications
+  follow, and "message another Bot" later.
 - Those tools are experimental app-server `dynamicTools`, served through
   `item/tool/call`. Phase 0 chose them over an MCP server: the call names the
   calling thread and turn, needs no extra process, and survives
@@ -288,7 +288,13 @@ gateway does today.
 9. **Any public host, and its risk.** A Bot that reads the web may fetch
    from any public host. Such a Bot can leak what it is told through the
    URLs it fetches or searches for; the Bot's grants say so where they are
-   set, and a per-Bot domain allowlist is a later option.
+   set, and a per-Bot domain allowlist is a later option. Fetches go
+   through the gateway's own HTTP client, which resolves each host itself,
+   connects only to a checked public address (never loopback, private,
+   link-local or tailnet ones), follows at most five redirects, each
+   checked again, and bounds what it reads, how long it takes and how
+   often a Bot may fetch; the content reaches the model marked untrusted.
+   [docs/gateway.md](gateway.md#web-fetch) gives the rules.
 10. **Memory through tools.** A Bot's notes and seen items live in the
     gateway's database, reached only through tools, with no command
     execution. Notes are one Markdown document per Bot, at most 16 KB, that

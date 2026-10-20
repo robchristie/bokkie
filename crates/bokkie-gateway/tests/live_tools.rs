@@ -6,7 +6,8 @@
 //! The model is offered exactly the tools of the Bot's grants; a grant
 //! change starts a fresh thread at the next turn, carrying the conversation
 //! over; and a tool call reaches the broker, which answers it from the
-//! calling Bot's own notes or seen items.
+//! calling Bot's own notes or seen items, or fetches from a local site
+//! through the test network.
 
 mod common;
 
@@ -290,5 +291,73 @@ async fn seen_items_work_end_to_end_beside_notes() {
         "1 item: arxiv:2401.12345"
     );
     assert_eq!(calls.body["calls"][1]["outcome"], "ok");
+    live.assert_nothing_left_the_machine();
+}
+
+#[tokio::test]
+async fn web_fetch_works_end_to_end_through_the_test_network() {
+    let Some(live) = Live::start(&["Read it."]).await else {
+        return;
+    };
+    let mock = &live.model;
+    let gateway = Gateway::live(&live).await;
+    gateway.route().await;
+    // The gateway's fetches reach only a local site, by made-up names.
+    let site = common::site::Site::start().await;
+    let network = site.network();
+    gateway
+        .state
+        .conversations
+        .fetcher()
+        .use_network(network.network());
+    let rob = gateway.admin("rob").await;
+    let bot = gateway
+        .send(Call::post("/api/v1/bots").cookie(&rob).json(&json!({
+            "name": "Reader", "label": "Research", "description": "Read the news."})))
+        .await;
+    let bot = bot.body["id"].as_i64().unwrap();
+    let granted = gateway
+        .send(
+            Call::new(axum::http::Method::PATCH, &format!("/api/v1/bots/{bot}"))
+                .cookie(&rob)
+                .json(&json!({"grants": ["web.fetch"]})),
+        )
+        .await;
+    assert_eq!(granted.status, 200, "{:?}", granted.body);
+    assert_eq!(granted.body["grants"], json!(["web.fetch"]));
+
+    mock.call_tool_next(
+        "web_fetch",
+        json!({"url": "https://papers.example/feed.xml"}),
+    );
+    exchange(&gateway, &rob, bot, "What is new?", 1).await;
+    let first = request(mock, 0);
+    // The real app server offers exactly web_fetch, and the instructions
+    // describe it.
+    assert_eq!(
+        MockModel::tools_in(&first),
+        names(&["request_user_input", "web_fetch"])
+    );
+    assert!(first.to_string().contains("Web fetch (web_fetch)"));
+    // The model got the condensed feed back, marked untrusted.
+    let output = tool_output(&request(mock, 1));
+    assert!(output.contains("untrusted-web-content"), "{output}");
+    assert!(output.contains("First paper"), "{output}");
+    assert!(output.contains("https://papers.example/abs/1"), "{output}");
+    assert_eq!(site.paths(), ["/feed.xml"]);
+
+    let calls = gateway
+        .send(Call::get(&format!("/api/v1/bots/{bot}/tool-calls")).cookie(&rob))
+        .await;
+    assert_eq!(calls.body["calls"][0]["tool"], "web_fetch");
+    assert_eq!(calls.body["calls"][0]["outcome"], "ok");
+    assert!(
+        calls.body["calls"][0]["summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://papers.example/feed.xml: 200 application/rss+xml, "),
+        "{}",
+        calls.body
+    );
     live.assert_nothing_left_the_machine();
 }

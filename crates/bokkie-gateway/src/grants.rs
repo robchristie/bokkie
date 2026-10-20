@@ -8,7 +8,7 @@
 //! Setting grants follows three rules, checked by [`check_change`]:
 //!
 //! - **Availability.** A grant whose tools do not exist yet cannot be
-//!   granted. Today that is `notify`, `web.search` and `web.fetch`.
+//!   granted. Today that is `notify` and `web.search`.
 //!   `web.search` brings Codex's own web search rather than a Bokkie tool;
 //!   its threads turn it on ([`crate::codex::config::thread_overrides`]),
 //!   but it stays unavailable until the path Codex searches by is settled
@@ -54,8 +54,8 @@ pub fn class(grant: Grant) -> Class {
 /// Whether the gateway can grant this yet: its tools exist.
 pub fn available(grant: Grant) -> bool {
     match grant {
-        Grant::Notes | Grant::Seen => true,
-        Grant::Notify | Grant::WebSearch | Grant::WebFetch => false,
+        Grant::Notes | Grant::Seen | Grant::WebFetch => true,
+        Grant::Notify | Grant::WebSearch => false,
     }
 }
 
@@ -209,12 +209,13 @@ mod tests {
     fn only_grants_with_tools_can_be_granted() {
         assert!(available(Grant::Notes));
         assert!(available(Grant::Seen));
+        assert!(available(Grant::WebFetch));
         let none = GrantSet::new();
         assert_eq!(
             check_change(Role::Member, &none, &[Grant::Seen, Grant::Notes]).unwrap(),
             [Grant::Notes, Grant::Seen].into()
         );
-        for grant in [Grant::Notify, Grant::WebSearch, Grant::WebFetch] {
+        for grant in [Grant::Notify, Grant::WebSearch] {
             assert!(!available(grant));
             let refused = check_change(Role::Admin, &none, &[grant]).unwrap_err();
             assert_eq!(refused.code, ErrorCode::InvalidRequest, "{grant}");

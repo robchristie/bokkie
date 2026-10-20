@@ -15,8 +15,10 @@
 pub mod audit;
 pub mod notes;
 pub mod seen;
+pub mod web_fetch;
 pub mod web_search;
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bokkie_codex::protocol::{DynamicToolCallParams, DynamicToolCallResponse, DynamicToolSpec};
@@ -29,6 +31,7 @@ use crate::bots::store;
 use crate::clock::Clock;
 use crate::codex::ToolReply;
 use crate::grants::GrantSet;
+use crate::http::Network;
 
 /// What the model is told when a call cannot be served.
 pub const NOT_AVAILABLE: &str = "This tool is not available.";
@@ -137,6 +140,23 @@ pub const TOOLS: &[Tool] = &[
             })
         },
     },
+    Tool {
+        name: web_fetch::TOOL,
+        grant: Grant::WebFetch,
+        description: web_fetch::DESCRIPTION,
+        deadline: web_fetch::DEADLINE,
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {"url": {
+                    "type": "string",
+                    "description": "The http or https link to fetch.",
+                }},
+                "required": ["url"],
+                "additionalProperties": false,
+            })
+        },
+    },
 ];
 
 /// The tools of these grants, in catalogue order.
@@ -213,6 +233,10 @@ fn summary(tool: &Tool, arguments: &Value) -> String {
             None => "invalid arguments".into(),
         },
         "seen_check" | "seen_mark" => seen::summary(tool.name, arguments),
+        web_fetch::TOOL => match arguments["url"].as_str() {
+            Some(url) => url.chars().take(audit::SUMMARY_CHARS).collect(),
+            None => "invalid arguments".into(),
+        },
         _ => String::new(),
     }
 }
@@ -230,11 +254,23 @@ pub async fn within<T>(
 pub struct Broker {
     db: SqlitePool,
     clock: Clock,
+    fetcher: Arc<web_fetch::Fetcher>,
 }
 
 impl Broker {
+    /// A broker whose fetches go out through the system's network, public
+    /// addresses only.
     pub fn new(db: SqlitePool, clock: Clock) -> Self {
-        Self { db, clock }
+        Self {
+            db,
+            clock,
+            fetcher: Arc::new(web_fetch::Fetcher::new(Network::system())),
+        }
+    }
+
+    /// What runs `web_fetch` calls.
+    pub fn fetcher(&self) -> &Arc<web_fetch::Fetcher> {
+        &self.fetcher
     }
 
     /// Serves one `item/tool/call` from `user`'s app server and answers it.
@@ -286,34 +322,42 @@ impl Broker {
         // The thread was granted the tool when it started, but the Bot may
         // have lost the grant since; the change reaches the thread only at
         // the next turn.
-        let (outcome, output) = if !bot.grants.contains(&tool.grant) {
+        // A fetch keeps its place in the fetch counts until it is
+        // recorded.
+        let mut reservation = None;
+        let (outcome, output, summary) = if !bot.grants.contains(&tool.grant) {
             (
                 ToolCallOutcome::Refused,
                 Err(format!(
                     "Your {} capability was removed, so this tool is no longer available.",
                     tool.grant
                 )),
+                summary(tool, &call.arguments),
             )
+        } else if tool.name == web_fetch::TOOL {
+            // The fetcher applies its own deadline, so that a fetch that
+            // runs out of time is still logged with its link.
+            let served = self
+                .fetcher
+                .serve(&caller, &call.thread_id, &call.turn_id, &call.arguments)
+                .await;
+            reservation = served.reservation;
+            (served.outcome, served.output, served.summary)
         } else {
-            match within(tool.deadline, run(tool, &caller, &call.arguments)).await {
-                Some(Ok(text)) => (ToolCallOutcome::Ok, Ok(text)),
-                Some(Err(error)) => (ToolCallOutcome::Failed, Err(error)),
-                None => (
-                    ToolCallOutcome::TimedOut,
-                    Err(format!("{} did not finish in time.", tool.name)),
-                ),
-            }
+            let (outcome, output) =
+                match within(tool.deadline, run(tool, &caller, &call.arguments)).await {
+                    Some(Ok(text)) => (ToolCallOutcome::Ok, Ok(text)),
+                    Some(Err(error)) => (ToolCallOutcome::Failed, Err(error)),
+                    None => (
+                        ToolCallOutcome::TimedOut,
+                        Err(format!("{} did not finish in time.", tool.name)),
+                    ),
+                };
+            (outcome, output, summary(tool, &call.arguments))
         };
-        self.record(
-            user,
-            bot.id,
-            call,
-            tool.name,
-            outcome,
-            summary(tool, &call.arguments),
-            started,
-        )
-        .await;
+        self.record(user, bot.id, call, tool.name, outcome, summary, started)
+            .await;
+        drop(reservation);
         tracing::info!(user = %user, bot = %bot.id, tool = tool.name, ?outcome, "served a tool call");
         match output {
             Ok(text) => DynamicToolCallResponse::text(true, text),
@@ -414,9 +458,16 @@ mod tests {
         assert_eq!(names, ["seen_check", "seen_mark"]);
         let both: GrantSet = [Grant::Seen, Grant::Notes].into();
         assert_eq!(granted(&both).count(), 5);
-        // Grants without tools yet bring none, and web.search brings Codex's
-        // own web search, not a Bokkie tool.
-        for grant in [Grant::Notify, Grant::WebSearch, Grant::WebFetch] {
+        let fetch: GrantSet = [Grant::WebFetch].into();
+        let names: Vec<&str> = granted(&fetch).map(|t| t.name).collect();
+        assert_eq!(names, ["web_fetch"]);
+        assert_eq!(
+            find("web_fetch", None).unwrap().deadline,
+            Duration::from_secs(30)
+        );
+        // notify has no tools yet, and web.search brings Codex's own web
+        // search, not a Bokkie tool.
+        for grant in [Grant::Notify, Grant::WebSearch] {
             assert_eq!(granted(&[grant].into()).count(), 0, "{grant}");
         }
     }

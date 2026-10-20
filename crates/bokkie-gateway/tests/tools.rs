@@ -423,6 +423,62 @@ async fn a_web_search_on_a_web_search_bot_is_logged_and_kept_out_of_the_conversa
 }
 
 #[tokio::test]
+async fn a_granted_search_is_logged_as_ok_even_when_its_app_server_is_replaced_first() {
+    // The read loop's verdict travels with the search, so a search the
+    // gateway handles after its app server was replaced, whose successor
+    // has not served the thread yet, is still logged as allowed.
+    let gateway = Gateway::new().await;
+    let rob = gateway.admin("rob").await;
+    let bot = create_bot(&gateway, &rob, "Scout", json!([])).await;
+    searching(&gateway, bot).await;
+    let thread = thread(&gateway, &rob, 1, bot).await;
+    search_item(
+        &gateway,
+        "item/completed",
+        &thread,
+        "ws-1",
+        "q",
+        json!({"type": "search", "query": "q"}),
+    );
+    // Hold the app server's events back until it has been replaced.
+    let mut held = Vec::new();
+    {
+        let mut events = gateway.events.lock().await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let event = events.recv().await.expect("events flow");
+                let done = matches!(
+                    &event.kind,
+                    bokkie_gateway::codex::RuntimeEventKind::Notification(
+                        bokkie_codex::protocol::ServerNotification::ItemCompleted(item)
+                    ) if matches!(item.item, bokkie_codex::protocol::ThreadItem::WebSearch { .. })
+                );
+                held.push(event);
+                if done {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("the search is reported");
+    }
+    let first = gateway.state.supervisor.running(UserId(1)).await.unwrap();
+    gateway.fake.crash(UserId(1));
+    // Wake the watcher so it sees the closed stream.
+    let _ = first.start_turn(&thread, "hi", None).await;
+    wait_until(|| !first.is_alive()).await;
+    let second = gateway.state.supervisor.runtime(UserId(1)).await.unwrap();
+    assert!(second.thread_grants(&thread).is_none());
+    for event in held {
+        gateway.state.conversations.handle(event).await.unwrap();
+    }
+    let logged = calls(&gateway, 1, bot).await;
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    assert_eq!(logged[0].tool, "web_search");
+    assert_eq!(logged[0].outcome, ToolCallOutcome::Ok);
+}
+
+#[tokio::test]
 async fn a_bot_that_lost_web_search_still_has_a_thread_that_holds_it_until_its_next_turn() {
     // The thread's grants decide, as for Bokkie's own tools: a search on a
     // thread started with web.search is allowed even after the Bot lost
