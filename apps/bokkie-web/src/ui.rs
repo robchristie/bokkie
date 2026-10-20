@@ -1,5 +1,6 @@
-//! The application's presentation: plain stand-ins (settled decision 3), one
-//! screen at a time, each control on a row of its own.
+//! The application's presentation: sign-in on a page of its own, and once
+//! signed in Stobie's navigation recipe (see `navigation`), whose panes hold
+//! plain stand-ins (settled decision 3), each control on a row of its own.
 
 use std::collections::BTreeSet;
 
@@ -10,8 +11,9 @@ use bokkie_protocol::api::{
 };
 use stobie_ui_egui::local_time::LocalTime;
 use stobie_ui_egui::{
-    ActionEmphasis, BoundAction, ContentTextSpec, Frame, LinkSpec, MarkdownSpec,
-    NativeTextControlKind, PresentationContext, PresentationScope, ReadingTextSpec, SemanticUiId,
+    ActionEmphasis, BoundAction, ContentTextSpec, DomainReference, Frame, IconId, LinkSpec,
+    MarkdownSpec, NativeTextControlKind, NavigationContent, NavigationDetail, NavigationPane,
+    NavigationSpec, PresentationContext, PresentationScope, ReadingTextSpec, SemanticUiId,
     TextInteraction, TextOverflow, TextRole, UiNode, UiRole, observe_visible_only,
 };
 
@@ -36,27 +38,121 @@ pub(crate) const METER_REFRESH: std::time::Duration = std::time::Duration::from_
 const OPENS_A_NEW_TAB: &str = "Opens in a new tab";
 
 pub(crate) fn present(app: &App, ui: &mut egui::Ui, frame: &mut BokkieFrame<'_, '_>) {
-    egui::CentralPanel::default().show(ui, |ui| {
-        let mut p = frame.presentation(ui, PresentationScope::new("bokkie"), SemanticUiId::root());
-        match &app.session {
-            Session::Checking => {
-                p.heading(ui, "title", APPLICATION_NAME);
-                p.status(ui, "status", "Checking your session…", false);
-            }
-            Session::SignedOut(form) => sign_in_ui(ui, &mut p, frame, form),
-            Session::SignedIn(signed_in) if signed_in.admin.is_some() => {
-                crate::admin::present(ui, &mut p, frame, app, signed_in);
-            }
-            Session::SignedIn(signed_in) => match (&signed_in.household, &signed_in.open) {
-                (Some(household), _) => household_ui(ui, &mut p, frame, app, signed_in, household),
-                (None, Some(open)) if open.settings.is_some() => {
-                    crate::settings::present(ui, &mut p, frame, app, signed_in, open);
+    let Session::SignedIn(signed_in) = &app.session else {
+        // Sign-in stays a page of its own, outside the navigation.
+        egui::CentralPanel::default().show(ui, |ui| {
+            let mut p =
+                frame.presentation(ui, PresentationScope::new("bokkie"), SemanticUiId::root());
+            match &app.session {
+                Session::SignedOut(form) => sign_in_ui(ui, &mut p, frame, form),
+                _ => {
+                    p.heading(ui, "title", APPLICATION_NAME);
+                    p.status(ui, "status", "Checking your session…", false);
                 }
-                (None, Some(open)) => conversation_ui(ui, &mut p, frame, app, signed_in, open),
-                (None, None) => bots_ui(ui, &mut p, frame, app, signed_in),
+            }
+        });
+        return;
+    };
+    navigation_ui(app, ui, frame, signed_in);
+}
+
+/// The Bot list, the content open from it and the open Bot's settings,
+/// across the whole page: the recipe lays them out by its width.
+fn navigation_ui(
+    app: &App,
+    ui: &mut egui::Ui,
+    frame: &mut BokkieFrame<'_, '_>,
+    signed_in: &SignedIn,
+) {
+    let mut p = frame.presentation(ui, PresentationScope::new("bokkie"), SemanticUiId::root());
+    let store = app.store();
+    let open = signed_in.open.as_ref();
+    let bot_name = open
+        .and_then(|open| store.bot(open.bot))
+        .map_or("Bot", |bot| bot.name.as_str());
+    let settings_title = format!("{bot_name} settings");
+    let admin_title = crate::admin::title(signed_in);
+    let content = match app.content() {
+        "admin" => Some(NavigationContent {
+            title: admin_title.as_str(),
+            reference: None,
+            detail: None,
+        }),
+        "household" => Some(NavigationContent {
+            title: HOUSEHOLD_TITLE,
+            reference: None,
+            detail: None,
+        }),
+        "conversation" => open.map(|open| NavigationContent {
+            title: bot_name,
+            reference: Some(DomainReference::External {
+                namespace: "bot".into(),
+                id: open.bot.0.to_string(),
+            }),
+            detail: Some(NavigationDetail {
+                title: settings_title.as_str(),
+                shown: open.settings.is_some(),
+                toggle: BokkieAction::BotSettings,
+                icon: IconId::Settings,
+            }),
+        }),
+        _ => None,
+    };
+    let spec = NavigationSpec {
+        list_title: APPLICATION_NAME,
+        content,
+        back: BokkieAction::Back,
+    };
+    let banners = app.banner_pane();
+    frame.navigation(ui, &mut p, "navigation", &spec, |ui, p, frame, pane| {
+        if banners == Some(pane) {
+            banners_ui(ui, p, frame, app, signed_in);
+        }
+        match pane {
+            NavigationPane::List => bots_ui(ui, p, frame, app, signed_in),
+            NavigationPane::Content => match (&signed_in.household, open) {
+                _ if signed_in.admin.is_some() => {
+                    crate::admin::present(ui, p, frame, app, signed_in);
+                }
+                (Some(household), _) => household_ui(ui, p, frame, app, signed_in, household),
+                (None, Some(open)) => conversation_ui(ui, p, frame, app, signed_in, open, bot_name),
+                (None, None) => {}
             },
+            NavigationPane::Detail => {
+                if let Some(open) = open {
+                    crate::settings::present(ui, p, frame, app, signed_in, open);
+                }
+            }
+            NavigationPane::Empty => {
+                p.content(
+                    ui,
+                    "choose",
+                    "Choose a Bot to open its conversation",
+                    line(TextRole::Secondary, 2),
+                );
+            }
         }
     });
+}
+
+/// The household's ChatGPT sign-in screen's title.
+const HOUSEHOLD_TITLE: &str = "ChatGPT for the household";
+
+/// What shows above whatever the reader is looking at, once: the notices,
+/// the event socket's state and the limit-reached banner.
+fn banners_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
+    signed_in: &SignedIn,
+) {
+    notices_ui(ui, p, frame, app, signed_in);
+    link_status(ui, p, signed_in.link);
+    if signed_in.link == Link::Outdated {
+        frame.action(ui, p, BokkieAction::ReloadPage, ActionEmphasis::Primary);
+    }
+    limit_ui(ui, p, frame, app);
 }
 
 pub(crate) fn line(role: TextRole, max_lines: u8) -> ContentTextSpec {
@@ -249,29 +345,16 @@ fn bots_ui(
     let store = app.store();
     // Stobie's headings and content lines take the whole row, so controls
     // go on rows of their own.
-    p.heading(ui, "title", APPLICATION_NAME);
-    let who = format!("Signed in as {}", signed_in.user.display_name);
-    p.content(ui, "user", &who, line(TextRole::Secondary, 1));
-    frame.action(ui, p, BokkieAction::SignOut, ActionEmphasis::Normal);
-    if signed_in.is_admin() {
-        frame.action(ui, p, BokkieAction::Admin, ActionEmphasis::Normal);
-    }
     if signed_in.signing_out {
         p.status(ui, "status", "Signing out…", false);
     } else if let Some(message) = &signed_in.message {
         p.status(ui, "status", message, true);
     }
-    notices_ui(ui, p, frame, app, signed_in);
-    link_status(ui, p, signed_in.link);
-    if signed_in.link == Link::Outdated {
-        frame.action(ui, p, BokkieAction::ReloadPage, ActionEmphasis::Primary);
-    }
-    limit_ui(ui, p, frame, app);
-    account_ui(ui, p, frame, signed_in);
-    meter_ui(ui, p, frame, app);
-    ui.separator();
     p.heading(ui, "bots-title", "Bots");
-    frame.action(ui, p, BokkieAction::Refresh, ActionEmphasis::Normal);
+    // The list's Refresh, while no other pane shows one of its own.
+    if signed_in.open.is_none() && signed_in.admin.is_none() {
+        frame.action(ui, p, BokkieAction::Refresh, ActionEmphasis::Normal);
+    }
     frame.toggle(
         ui,
         p,
@@ -283,7 +366,6 @@ fn bots_ui(
         p.status(ui, "bots-status", message, true);
     } else if !store.bots_loaded() {
         p.status(ui, "bots-status", "Loading Bots…", false);
-        return;
     }
     let bots = if signed_in.show_hidden {
         store.listed_bots()
@@ -297,26 +379,39 @@ fn bots_ui(
             .show(ui, |ui| {
                 let mut rows =
                     frame.presentation(ui, PresentationScope::new("bots"), SemanticUiId::root());
-                if bots.is_empty() && store.bots_loaded() {
-                    rows.content(ui, "no-bots", "No Bots yet", line(TextRole::Secondary, 1));
+                if store.bots_loaded() {
+                    if bots.is_empty() {
+                        rows.content(ui, "no-bots", "No Bots yet", line(TextRole::Secondary, 1));
+                    }
+                    for bot in bots {
+                        bot_row(ui, &mut rows, frame, bot);
+                    }
+                    if signed_in.may_create_bots() {
+                        new_bot_ui(ui, &mut rows, frame, &signed_in.new_bot);
+                    } else {
+                        rows.content(
+                            ui,
+                            "no-new-bot",
+                            "An admin makes your Bots",
+                            line(TextRole::Secondary, 1),
+                        );
+                    }
                 }
-                for bot in bots {
-                    bot_row(ui, &mut rows, frame, bot);
-                }
-                if signed_in.may_create_bots() {
-                    new_bot_ui(ui, &mut rows, frame, &signed_in.new_bot);
-                } else {
-                    rows.content(
-                        ui,
-                        "no-new-bot",
-                        "An admin makes your Bots",
-                        line(TextRole::Secondary, 1),
-                    );
-                }
+                // The account and this device, at the bottom of the list.
+                ui.separator();
+                let who = format!("Signed in as {}", signed_in.user.display_name);
+                rows.content(ui, "user", &who, line(TextRole::Secondary, 1));
+                account_ui(ui, &mut rows, frame, signed_in);
+                meter_ui(ui, &mut rows, frame, app);
                 ui.separator();
                 crate::settings::time_zone_ui(ui, &mut rows, frame, signed_in);
                 ui.separator();
                 notifications_ui(ui, &mut rows, frame, app);
+                ui.separator();
+                frame.action(ui, &mut rows, BokkieAction::SignOut, ActionEmphasis::Normal);
+                if signed_in.is_admin() {
+                    frame.action(ui, &mut rows, BokkieAction::Admin, ActionEmphasis::Normal);
+                }
             });
     });
 }
@@ -492,15 +587,12 @@ fn household_ui(
     signed_in: &SignedIn,
     household: &Household,
 ) {
-    frame.action(ui, p, BokkieAction::Back, ActionEmphasis::Normal);
-    p.heading(ui, "title", "ChatGPT for the household");
     p.content(
         ui,
         "about",
         "Every account's Bots reply through this one ChatGPT sign-in. Only admins sign it in or out.",
         line(TextRole::Secondary, 4),
     );
-    notices_ui(ui, p, frame, app, signed_in);
     match &signed_in.account {
         Account::Checking => p.status(ui, "account", "Checking the sign-in…", false),
         Account::SignedIn { email, plan } => p.status(
@@ -703,26 +795,17 @@ fn conversation_ui(
     app: &App,
     signed_in: &SignedIn,
     open: &Open,
+    name: &str,
 ) {
     let store = app.store();
-    frame.action(ui, p, BokkieAction::Back, ActionEmphasis::Normal);
     let bot = store.bot(open.bot);
-    let name = bot.map_or("Bot", |bot| bot.name.as_str());
-    p.heading(ui, "title", name);
     if let Some(bot) = bot {
         p.content(ui, "details", &details(bot), line(TextRole::Secondary, 1));
-    }
-    notices_ui(ui, p, frame, app, signed_in);
-    if let Some(bot) = bot {
         bot_controls_ui(ui, p, frame, signed_in, open, bot);
     }
-    link_status(ui, p, signed_in.link);
-    if signed_in.link == Link::Outdated {
-        frame.action(ui, p, BokkieAction::ReloadPage, ActionEmphasis::Primary);
-    }
-    limit_ui(ui, p, frame, app);
-    // A conversation that failed to load can be loaded again here.
-    if open.error.is_some() && store.conversation(open.bot).is_none() {
+    // A conversation that failed to load can be loaded again here, unless
+    // the settings beside it take Refresh for their own.
+    if open.error.is_some() && store.conversation(open.bot).is_none() && open.settings.is_none() {
         frame.action(ui, p, BokkieAction::Refresh, ActionEmphasis::Normal);
     }
     if let Some(error) = store.error(open.bot) {
@@ -758,7 +841,6 @@ fn bot_controls_ui(
         if signed_in.may_edit_profiles() {
             frame.action(ui, p, BokkieAction::EditProfile, ActionEmphasis::Normal);
         }
-        frame.action(ui, p, BokkieAction::BotSettings, ActionEmphasis::Normal);
     });
     if open.updating {
         p.status(ui, "update-status", "Saving…", false);

@@ -21,7 +21,7 @@ use bokkie_protocol::{BotId, MessageId, UserId};
 use crate::api::{ApiReply, ApiRequest, Invitation};
 use crate::app::{App, BokkieAction, NewBot, ProfileEditor, Session, SignedIn};
 
-pub(crate) use view::present;
+pub(crate) use view::{present, title};
 
 /// The daily turns field's stable ID.
 pub const DAILY_TURNS_ID: &str = "bokkie.daily-turns";
@@ -500,9 +500,7 @@ impl App {
         Some(match action {
             BokkieAction::Admin => match signed_in {
                 Some(s) if s.user.role != Role::Admin => Some("Only an admin manages accounts"),
-                Some(s) if s.open.is_some() || s.household.is_some() || s.admin.is_some() => {
-                    Some("Return to the list of Bots first")
-                }
+                Some(s) if s.admin.is_some() => Some("The accounts are open"),
                 _ => None,
             },
             BokkieAction::OpenAccount => match admin {
@@ -622,15 +620,20 @@ impl App {
     /// Perform an admin action without an argument, or `None` for any other
     /// action.
     pub(crate) fn admin_perform(&mut self, action: BokkieAction) -> Option<Result<bool, String>> {
-        let Session::SignedIn(signed_in) = &mut self.session else {
-            return None;
-        };
         if action == BokkieAction::Admin {
+            // The content pane holds one thing at a time.
+            self.close_content();
+            let Session::SignedIn(signed_in) = &mut self.session else {
+                return None;
+            };
             signed_in.admin = Some(Admin::default());
             self.load_accounts();
             self.load_invitations();
             return Some(Ok(true));
         }
+        let Session::SignedIn(signed_in) = &mut self.session else {
+            return None;
+        };
         let admin = signed_in.admin.as_mut()?;
         let screen = admin.account.as_mut();
         let account = screen.as_ref().and_then(|screen| {

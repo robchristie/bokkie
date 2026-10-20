@@ -513,7 +513,8 @@ impl App {
     /// The Bot whose conversation the page shows, if any. The socket says
     /// none while the page is hidden.
     fn sync_viewing(&mut self) {
-        let shown = (self.screen() == "conversation")
+        let shown = self
+            .conversation_visible()
             .then(|| self.open_bot())
             .flatten();
         if shown != self.device.viewing {
@@ -527,7 +528,7 @@ impl App {
     /// Move the read marker to the newest message of the conversation on
     /// screen while its Bot is unread.
     fn sync_read(&mut self) {
-        if self.device.hidden || self.screen() != "conversation" {
+        if self.device.hidden || !self.conversation_visible() {
             return;
         }
         let Some(bot) = self.open_bot() else {

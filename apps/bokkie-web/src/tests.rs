@@ -26,6 +26,7 @@ mod conversation;
 mod household;
 mod limits;
 mod member;
+mod navigation;
 mod notifications;
 mod reading;
 mod settings;
@@ -106,6 +107,21 @@ impl Fixture {
             .clone();
         assert_eq!(self.sent(), [ApiRequest::LoadBot(bot)]);
         self.reply(ApiReply::Bot(bot, Ok(fresh)));
+    }
+
+    /// Perform `action` with `argument` as an agent's invocation does,
+    /// with no control clicked.
+    fn perform_with(&mut self, action: BokkieAction, argument: f64) {
+        self.harness
+            .state_mut()
+            .app_mut()
+            .perform_with(
+                ActionTarget::application(action),
+                stobie_ui_egui::ActionArgument::Number(argument),
+                &mut (),
+            )
+            .unwrap();
+        self.harness.run();
     }
 
     fn click(&mut self, label: &str) {
@@ -524,9 +540,19 @@ impl Fixture {
         );
         let buttons: Vec<_> = snapshot.by_role(stobie_ui_egui::UiRole::Button).collect();
         assert!(!buttons.is_empty());
+        let page = self.harness.ctx.content_rect().width();
         for button in buttons {
             let width = button.rect.max_x - button.rect.min_x;
-            assert!(width >= 40.0 && button.rect.max_x <= 390.0, "{button:?}");
+            // The navigation header's Back and settings toggle are Stobie's
+            // icon controls, as wide as its least hit size.
+            let header = [BokkieAction::Back, BokkieAction::BotSettings]
+                .iter()
+                .any(|action| {
+                    let id = stobie_ui_egui::ActionKey::stable_id(*action);
+                    button.actions.iter().any(|held| held.0 == id)
+                });
+            let least = if header { 32.0 } else { 40.0 };
+            assert!(width >= least && button.rect.max_x <= page, "{button:?}");
         }
     }
 }
