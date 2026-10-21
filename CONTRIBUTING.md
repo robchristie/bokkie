@@ -120,13 +120,26 @@ stack, one at a time, with Back; from 720 the list stands beside the
 content, or beside the settings with Back to the conversation; from 1040
 the settings stand beside the conversation too. Beside the list the admin
 section keeps a Back of its own, to go back a level. Choosing the open Bot
-again keeps its conversation as it stands. Each pane is a region named by
-its title, and the conversation's pane carries the Bot as its domain
-reference (`bot`, with its ID). A resize changes only the layout. The facts `layout` (`stack`,
+again keeps its conversation as it stands. `bokkie.refresh` loads the
+open conversation, the open Bot's settings or the admin screen again; on
+the list alone, which has Refresh Bots, it is unavailable. Each pane is a
+region named by its title, and the conversation's pane carries the Bot as
+its domain reference (`bot`, with its ID). A resize changes only the
+layout. The facts `layout` (`stack`,
 `split` or `columns`, empty while signed out), `content` (`conversation`,
 `household`, `admin`, or empty), `detail` (`settings` or empty) and
 `panes` (those on screen, from the start of the line, comma-separated,
 among `list`, `content`, `detail` and `empty`) say how it stands. The
+client is light or dark as the system is (the browser's
+`prefers-color-scheme`), and `theme` (`light` or `dark`) says which it is
+drawn in. Text sizes follow Stobie's preferences: the browser's own text
+size does not reach them. Every control is at least Stobie's least hit
+size, 32 points, each way. Stobie's panes give their bodies the whole
+width, so the client insets each body by the gutter the pane's header
+gives its title. Host tests check the control sizes, that nothing reaches
+past the page's sides and that nothing in a pane meets its sides, in both
+themes at each layout, at the widths where the layout changes and with the
+largest text. The
 client's other facts say where it is: `screen`, `user`, `bots`,
 `bot_count`, `show_hidden`, `strip` (the IDs of the pinned Bots in the
 strip above the list, comma-separated: only on a phone while the list
@@ -215,10 +228,13 @@ routine's form with `stobie set-text` on `bokkie.routine-name`,
 `bokkie.routine-prompt`, `bokkie.routine-at` and `bokkie.routine-every`,
 and act on one routine with `bokkie.edit-routine`, `bokkie.pause-routine`,
 `bokkie.run-routine`, `bokkie.delete-routine` and `bokkie.routine-history`
-with `--value ROUTINE_ID`; `bokkie.show-run --value RUN_ID` closes the
-settings and brings that run's marker into view. The bottom of the Bot
-list holds the account: who is signed in, the usage meter, the account's
-time zone (`stobie set-text bokkie.time-zone`), this device's
+with `--value ROUTINE_ID`. The form's Repeats line names the whole
+schedule, such as "Every 4 hours from 03:00 to 23:00", once it is valid.
+`bokkie.show-run --value RUN_ID` closes the settings and brings that run's
+marker into view, loading up to 20 earlier pages (1,000 messages) to find
+it; past those, a note says to load older messages by hand. The bottom of
+the Bot list holds the account: who is signed in, the usage meter, the
+account's time zone (`stobie set-text bokkie.time-zone`), this device's
 notifications, `bokkie.refresh-bots` (Refresh Bots, which loads the list
 and the household's sign-in again, and stays in reach beside a
 conversation or the admin section), Sign out and, for an admin, the
@@ -226,9 +242,13 @@ admin section. `stobie invoke bokkie.notifications`, a switch named
 "Notifications on this device", switches this device's notifications on
 or off. The switch subscribes through Stobie's Web Push
 bridge with the gateway's key and sends the subscription; each launch sends
-it again, and switching off or signing out unsubscribes the device. While a
-conversation shows with the page in the foreground, the client tells the
-gateway it views that Bot (the event socket's `viewing`), so its pushes are
+it again, and switching off or signing out unsubscribes the device. When
+the browser fails to unsubscribe after a switch-off, the subscription it
+still holds is not sent again until the next launch or a switch-on; a
+subscription the gateway refuses is sent once more each time the event
+socket reloads. While a conversation shows with the page in the
+foreground, the client tells the gateway it views that Bot (the event
+socket's `viewing`), so its pushes are
 not sent, and moves the Bot's read marker to its newest message. Unread
 Bots show the unread dot in the list, and the app badge counts them,
 hidden ones included. A tapped notification opens its Bot. Times
@@ -259,11 +279,19 @@ checks:
   catches up with exactly the stored text;
 - a reply in Markdown, its link split across pieces, reads formatted, with
   the link presented as a link that opens a new tab;
+- Return typed in the composer sends, and so does a pointer's click on
+  Send;
 - resizing the page from a phone's width to a tablet's and a desktop's and
   back moves between the stack, the split and the columns, with each pane
   a named region, Back beside the conversation only in the stack and the
   settings beside the conversation in the columns, and keeps the open
   conversation as it was;
+- the page follows the system's appearance: in light and in dark, at 390
+  by 844 and at 1280 by 800, beside a pinned Bot whose name and label are
+  long, the page never scrolls sideways and every control lies within it,
+  and each screen's screenshot goes to the evidence
+  (`<appearance>-<width>-<screen>.png`) to compare with the visual target;
+  the member's browser context, below, is light where the admin's is dark;
 - a conversation longer than one page opens on its newest 50 messages, and
   loading the older ones while a reply streams leaves both whole;
 - the notifications switch subscribes the device through a stand-in push
@@ -292,8 +320,9 @@ checks:
 - the font notices are served as text;
 - no CSP violation, page error or unexpected console error occurs.
 
-Its logs and `smoke.json` go to ignored `.tools/runtime/browser-smoke/`,
-which CI keeps as an artifact.
+Its logs, screenshots and `smoke.json` go to ignored
+`.tools/runtime/browser-smoke/`, which CI keeps as an artifact. Both browser
+contexts run in the `en-US` locale, so times read in its 12-hour clock.
 
 It never calls a real model or uses a real ChatGPT credential, and no
 request leaves the machine:

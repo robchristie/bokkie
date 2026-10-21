@@ -18,6 +18,7 @@
 //! - `notifications` is the device's notifications switch, through Web
 //!   Push, the read markers and `viewing` frames sent while a conversation
 //!   is on screen, the app badge, and opening a tapped notification's Bot.
+//! - `appearance` follows the system's light or dark appearance;
 //! - [`api`] describes each HTTP command and decodes its reply;
 //!   `browser` sends them with `fetch`, runs the event WebSocket, and
 //!   connects to Stobie's Web Push bridge.
@@ -39,6 +40,7 @@
 mod admin;
 pub mod api;
 pub mod app;
+mod appearance;
 mod avatars;
 #[cfg(target_arch = "wasm32")]
 pub mod browser;

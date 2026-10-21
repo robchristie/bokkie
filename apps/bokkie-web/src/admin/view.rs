@@ -1,5 +1,5 @@
-//! The admin section's screens, in the navigation's content pane: plain
-//! stand-ins, each control on a row of its own.
+//! The admin section's screens, in the navigation's content pane, laid out
+//! from Stobie's ordinary controls, each on a row of its own.
 
 use bokkie_protocol::api::{AdminUser, InvitationSummary, MemberBot, Role};
 use stobie_ui_egui::{

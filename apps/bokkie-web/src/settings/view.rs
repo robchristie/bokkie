@@ -1,6 +1,6 @@
 //! A Bot's settings, in the navigation's detail pane, and the time zone
-//! section: plain stand-ins, short controls sharing a wrapped row and the
-//! rest on rows of their own.
+//! section, laid out from Stobie's ordinary controls: short ones share a
+//! wrapped row and the rest have rows of their own.
 
 use bokkie_protocol::api::{Grant, Role, Routine, RoutinePush, RoutineRun, RunTrigger, Weekday};
 use bokkie_protocol::api::{ToolCall, ToolCallOutcome};
@@ -444,12 +444,13 @@ fn form_ui(
             frame.emit(BokkieIntent::EditRoutinePrompt(prompt));
         }
     });
-    p.content(
-        ui,
-        "repeat-about",
-        &format!("Repeats {}", repeat_label(form.repeat)),
-        line(TextRole::Secondary, 1),
-    );
+    // The whole schedule as the routine's row will word it, once the form
+    // holds one; until then, the kind of repeat chosen.
+    let repeats = match form.schedule() {
+        Ok(schedule) => format!("Repeats: {}", schedule_text(&schedule)),
+        Err(_) => format!("Repeats {}", repeat_label(form.repeat)),
+    };
+    p.content(ui, "repeat-about", &repeats, line(TextRole::Secondary, 2));
     ui.horizontal_wrapped(|ui| {
         for repeat in Repeat::ALL {
             frame.toggle(

@@ -7,7 +7,7 @@ use bokkie_protocol::api::{
     MessagePage, MessageState, PushKey, PushSubscriptionKeys, PushSubscriptionRequest,
     PushSubscriptionState, ReadState,
 };
-use bokkie_protocol::events::Event;
+use bokkie_protocol::events::{Event, ServerFrame};
 use stobie_ui_egui::Availability;
 use stobie_ui_egui::web_push::{
     NotificationPermission, NotificationRoute, PushEvent, PushOperation, PushState,
@@ -17,6 +17,7 @@ use stobie_ui_egui::web_push::{
 use super::conversation::{TUTOR, hello, message, tutor_list};
 use super::*;
 use crate::api::DeviceControl;
+use crate::connection::Input;
 
 const ENDPOINT: &str = "https://push.example/device-1";
 
@@ -314,6 +315,98 @@ fn a_failed_removal_is_neither_tried_again_nor_sent() {
         fixture.fact("push_error"),
         "The service worker is not active".into()
     );
+}
+
+impl Fixture {
+    /// The socket drops and comes back after a reset, so everything shown
+    /// reloads; what it asked for is returned.
+    fn reset(&mut self, after: u64) -> Vec<ApiRequest> {
+        let _ = self.sent();
+        self.socket(Input::Closed { code: None });
+        self.socket(Input::RetryDue);
+        self.socket(Input::Opened);
+        self.frame(ServerFrame::Reset { after: Seq(after) });
+        self.sent()
+    }
+}
+
+#[test]
+fn a_failed_switch_off_is_not_sent_again_until_switched_on() {
+    let mut fixture = Fixture::new();
+    fixture.notifications_on();
+    fixture.click("Notifications on this device");
+    assert_eq!(fixture.sent(), [ApiRequest::DeletePushSubscription]);
+    assert_eq!(fixture.push_controls(), [DeviceControl::Unsubscribe]);
+    fixture.reply(ApiReply::PushUnsubscribed(Ok(())));
+    fixture.push(PushEvent::Failed {
+        operation: PushOperation::Unsubscribe,
+        message: "The service worker is not active".into(),
+    });
+    // The browser still holds the subscription, but the user said off.
+    fixture.push(state(NotificationPermission::Granted, true));
+    assert!(fixture.sent().is_empty(), "not sent behind the user's back");
+    assert!(fixture.push_controls().is_empty(), "nor removed in a loop");
+    assert_eq!(fixture.fact("push"), "off".into());
+    assert_eq!(
+        fixture.fact("push_error"),
+        "The service worker is not active".into()
+    );
+    let reloaded = fixture.reset(6_000);
+    assert!(!reloaded.contains(&request()), "{reloaded:?}");
+    assert!(fixture.sent().is_empty());
+    // Switching on again is deliberate: the subscription is sent.
+    assert!(fixture.enabled(BokkieAction::Notifications));
+    fixture.click("Notifications on this device");
+    assert_eq!(
+        fixture.push_controls(),
+        [DeviceControl::Subscribe("SERVER-KEY".into())]
+    );
+    fixture.push(PushEvent::Subscribed(subscription()));
+    assert_eq!(fixture.sent(), [request()]);
+    assert_eq!(fixture.fact("push"), "on".into());
+}
+
+#[test]
+fn a_refused_subscription_is_sent_once_more_on_each_reload() {
+    let mut fixture = Fixture::new();
+    fixture.notifications_off();
+    fixture.reveal("Notifications on this device");
+    fixture.click("Notifications on this device");
+    fixture.push(PushEvent::Subscribed(subscription()));
+    assert_eq!(fixture.sent(), [request()]);
+    let refused = || {
+        ApiReply::PushSubscribed(Err(error(
+            503,
+            ErrorCode::Unavailable,
+            "The gateway is busy",
+        )))
+    };
+    fixture.reply(refused());
+    assert_eq!(fixture.fact("push_error"), "The gateway is busy".into());
+    // Not again on later passes.
+    fixture.push(state(NotificationPermission::Granted, true));
+    assert!(fixture.sent().is_empty());
+    // A reload tries it once.
+    let reloaded = fixture.reset(6_000);
+    assert_eq!(
+        reloaded.iter().filter(|sent| **sent == request()).count(),
+        1,
+        "{reloaded:?}"
+    );
+    assert_eq!(fixture.fact("push_error"), "".into());
+    fixture.reply(refused());
+    fixture.push(state(NotificationPermission::Granted, true));
+    assert!(fixture.sent().is_empty(), "once, not in a loop");
+    // The next reload tries again, and this time it is saved.
+    let reloaded = fixture.reset(7_000);
+    assert!(reloaded.contains(&request()), "{reloaded:?}");
+    fixture.reply(ApiReply::PushSubscribed(Ok(PushSubscriptionState {
+        subscribed: true,
+    })));
+    assert_eq!(fixture.fact("push_saved"), true.into());
+    assert_eq!(fixture.fact("push_error"), "".into());
+    let reloaded = fixture.reset(8_000);
+    assert!(!reloaded.contains(&request()), "saved: {reloaded:?}");
 }
 
 #[test]

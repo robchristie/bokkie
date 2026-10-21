@@ -1,5 +1,4 @@
-//! The New Bot form, a stand-in of settled decision 8, against scripted
-//! replies.
+//! The New Bot form, which asks for a name only, against scripted replies.
 
 use bokkie_protocol::api::CreateBotRequest;
 use bokkie_protocol::events::Event;

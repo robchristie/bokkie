@@ -9,7 +9,10 @@
 //!   browser; signing out removes it from the browser too, since the
 //!   gateway removed it with the session. A new sign-in never takes over a
 //!   subscription an earlier session left on the device: it removes it, and
-//!   the user switches notifications on again.
+//!   the user switches notifications on again. A switch-off the browser
+//!   failed leaves the subscription unsent until the next launch or the
+//!   user switches notifications on again; a subscription the gateway
+//!   refused is sent once more each time the socket reloads.
 //! - **Reading.** While a conversation is on screen with the page in the
 //!   foreground, the gateway hears that the device shows that Bot (the
 //!   socket's `viewing` frames), so it sends no push for it, and the read
@@ -54,6 +57,10 @@ pub(crate) struct Device {
     viewing: Option<BotId>,
     /// The page is hidden, so nothing on it is being read.
     hidden: bool,
+    /// The user switched notifications off: whatever subscription the
+    /// browser still holds is not sent until a deliberate switch-on or the
+    /// next launch.
+    held: bool,
 }
 
 // The subscription's endpoint must never reach a log line.
@@ -103,7 +110,7 @@ impl Device {
             (_, PushSupport::Unsupported(_)) => "unsupported",
             (Some(Busy::Subscribing), _) => "subscribing",
             (Some(Busy::Unsubscribing), _) => "unsubscribing",
-            _ if state.subscription.is_some() && self.forget == Forget::No => "on",
+            _ if state.subscription.is_some() && self.forget == Forget::No && !self.held => "on",
             _ if state.permission == Some(NotificationPermission::Denied) => "denied",
             _ => "off",
         }
@@ -123,6 +130,9 @@ pub(crate) struct Signed {
     saved: bool,
     /// Why the gateway refused the subscription, or the key.
     error: Option<String>,
+    /// The gateway refused the subscription last sent, other than for the
+    /// session: the next reload sends it once more.
+    refused: bool,
     /// The read marker being sent.
     marking: Option<(BotId, MessageId)>,
     /// The read marker last sent, answered or not, which is not sent
@@ -208,7 +218,7 @@ impl App {
 
     /// Whether the switch shows notifications on.
     pub(crate) fn notifications_on(&self) -> bool {
-        self.device.subscribed() && self.device.forget == Forget::No
+        self.device.subscribed() && self.device.forget == Forget::No && !self.device.held
     }
 
     /// The notifications' state, when it is worth saying.
@@ -271,10 +281,14 @@ impl App {
         if self.notifications_on() {
             self.device.busy = Some(Busy::Unsubscribing);
             self.device.error = None;
+            // Should the browser fail to remove it, the subscription it
+            // still holds is not sent again behind the user's back.
+            self.device.held = true;
             if let Some(signed) = self.signed_mut() {
                 signed.sent = None;
                 signed.saved = false;
                 signed.error = None;
+                signed.refused = false;
             }
             self.send(ApiRequest::DeletePushSubscription);
             if let Some(api) = &self.api {
@@ -292,8 +306,10 @@ impl App {
         let key = key.public_key.clone();
         self.device.busy = Some(Busy::Subscribing);
         self.device.error = None;
+        self.device.held = false;
         if let Some(signed) = self.signed_mut() {
             signed.error = None;
+            signed.refused = false;
         }
         if let Some(api) = &self.api {
             api.subscribe_push(&key);
@@ -320,6 +336,7 @@ impl App {
                 if signed_in {
                     device.forget = Forget::No;
                 }
+                device.held = false;
                 let state = device.state.get_or_insert(PushState {
                     support: PushSupport::Supported,
                     permission: None,
@@ -333,6 +350,7 @@ impl App {
                     device.busy = None;
                 }
                 device.forget = Forget::No;
+                device.held = false;
                 if let Some(state) = &mut device.state {
                     state.subscription = None;
                 }
@@ -404,6 +422,7 @@ impl App {
                     Err(error) if error.is_unauthenticated() => true,
                     Err(error) => {
                         signed.error = Some(error.message);
+                        signed.refused = true;
                         false
                     }
                 }
@@ -438,12 +457,20 @@ impl App {
         Ok(true)
     }
 
-    /// The socket is live again after missing events: try what failed.
+    /// The socket is live again after missing events: try what failed,
+    /// once. A refused subscription is sent again on the next pass, and
+    /// refused again only waits for the next reload.
     pub(crate) fn retry_push(&mut self) {
-        if let Some(signed) = self.signed_mut()
-            && matches!(signed.key, Key::Failed)
-        {
+        let Some(signed) = self.signed_mut() else {
+            return;
+        };
+        if matches!(signed.key, Key::Failed) {
             signed.key = Key::NotLoaded;
+            signed.error = None;
+        }
+        if signed.refused && !signed.saving {
+            signed.refused = false;
+            signed.sent = None;
             signed.error = None;
         }
     }
@@ -483,7 +510,7 @@ impl App {
             return;
         }
         let json = state.subscription.as_ref().map(|s| s.json.clone());
-        let adopt = self.device.forget == Forget::No;
+        let adopt = self.device.forget == Forget::No && !self.device.held;
         let Some(signed) = self.signed_mut() else {
             return;
         };
