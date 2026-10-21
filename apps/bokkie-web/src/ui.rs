@@ -2,8 +2,8 @@
 //! signed in Stobie's navigation recipe (see `navigation`). The Bot list is
 //! Stobie's conversation rows, with each Bot's avatar from `avatars`; the
 //! conversation is Stobie's message bubbles, each with Copy, above its
-//! composer. The other panes still hold plain stand-ins (settled decision
-//! 3), each control on a row of its own.
+//! composer. The Bot's settings, the admin section and the New Bot form are
+//! laid out from Stobie's ordinary controls, each on a row of its own.
 
 use std::collections::BTreeSet;
 
@@ -120,35 +120,62 @@ fn navigation_ui(
         back: BokkieAction::Back,
     };
     let banners = app.banner_pane();
+    // Stobie's panes give their bodies the whole width, edge to edge, so
+    // each body keeps the gutter the pane's header gives its title.
+    let gutter = p.tokens().spacing.inline.0;
     frame.navigation(ui, &mut p, "navigation", &spec, |ui, p, frame, pane| {
-        if banners == Some(pane) {
-            banners_ui(ui, p, frame, app, signed_in);
-        }
-        match pane {
-            NavigationPane::List => bots_ui(ui, p, frame, app, signed_in),
-            NavigationPane::Content => match (&signed_in.household, open) {
-                _ if signed_in.admin.is_some() => {
-                    crate::admin::present(ui, p, frame, app, signed_in);
-                }
-                (Some(household), _) => household_ui(ui, p, frame, app, signed_in, household),
-                (None, Some(open)) => conversation_ui(ui, p, frame, app, signed_in, open, bot_name),
-                (None, None) => {}
-            },
-            NavigationPane::Detail => {
-                if let Some(open) = open {
-                    crate::settings::present(ui, p, frame, app, signed_in, open);
-                }
-            }
-            NavigationPane::Empty => {
-                p.content(
-                    ui,
-                    "choose",
-                    "Choose a Bot to open its conversation",
-                    line(TextRole::Secondary, 2),
-                );
-            }
-        }
+        let body = ui
+            .available_rect_before_wrap()
+            .shrink2(egui::vec2(gutter, 0.0));
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(body)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+            |ui| pane_ui(ui, p, frame, app, signed_in, pane, banners, bot_name),
+        );
     });
+}
+
+/// One pane's body, inside the page's gutter.
+#[allow(clippy::too_many_arguments)]
+fn pane_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
+    signed_in: &SignedIn,
+    pane: NavigationPane,
+    banners: Option<NavigationPane>,
+    bot_name: &str,
+) {
+    let open = signed_in.open.as_ref();
+    if banners == Some(pane) {
+        banners_ui(ui, p, frame, app, signed_in);
+    }
+    match pane {
+        NavigationPane::List => bots_ui(ui, p, frame, app, signed_in),
+        NavigationPane::Content => match (&signed_in.household, open) {
+            _ if signed_in.admin.is_some() => {
+                crate::admin::present(ui, p, frame, app, signed_in);
+            }
+            (Some(household), _) => household_ui(ui, p, frame, app, signed_in, household),
+            (None, Some(open)) => conversation_ui(ui, p, frame, app, signed_in, open, bot_name),
+            (None, None) => {}
+        },
+        NavigationPane::Detail => {
+            if let Some(open) = open {
+                crate::settings::present(ui, p, frame, app, signed_in, open);
+            }
+        }
+        NavigationPane::Empty => {
+            p.content(
+                ui,
+                "choose",
+                "Choose a Bot to open its conversation",
+                line(TextRole::Secondary, 2),
+            );
+        }
+    }
 }
 
 /// The household's ChatGPT sign-in screen's title.
@@ -436,7 +463,7 @@ fn bots_ui(
 /// The pinned Bots, above the list on a phone: each Bot's avatar over its
 /// name, a row scrolled sideways when they do not fit.
 ///
-/// A plain stand-in until Stobie has an avatar strip: the name below each
+/// Stobie has no avatar strip, so this one is Bokkie's: the name below each
 /// avatar is the control that keyboards, assistive technology and agents
 /// use (`bokkie.open-pinned`), and a tap on the avatar does the same.
 fn strip_ui(
@@ -599,7 +626,8 @@ fn notices_ui(
     }
 }
 
-/// The New Bot form, after the list: a name only (settled decision 8).
+/// The New Bot form, after the list: a name only, since everything else
+/// about a new Bot is set in its settings.
 fn new_bot_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
@@ -1399,7 +1427,7 @@ fn marker_ui(
 /// a field that grows with the draft, hinted with the Bot's name, and Send
 /// as an icon. Return sends and Shift+Return starts a new line, except in a
 /// touch device's own field, where Return is the platform's. The microphone
-/// and `+` are not drawn (settled decision 26).
+/// and `+` are not drawn: nothing stands behind them yet.
 fn composer_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,

@@ -24,7 +24,7 @@ use stobie_ui_egui::local_time::{Clock, LocalTime, TimeLocale, TimeZone};
 use stobie_ui_egui::web_push::PushEvent;
 use stobie_ui_egui::{
     Action, ActionArgument, ActionKey, ActionTarget, Application, ApplicationIdentity,
-    Availability, Frame, IntentSender, NavigationLayout, Observation, PassContext,
+    Availability, Frame, IntentSender, NavigationLayout, Observation, PassContext, UiPreferences,
     application_identity,
 };
 
@@ -58,6 +58,11 @@ pub const PROFILE_DESCRIPTION_ID: &str = "bokkie.profile-description";
 /// largest integer a JSON number carries exactly.
 const MAX_ID: f64 = 9_007_199_254_740_991.0;
 
+/// How many earlier pages a message asked for, such as a routine run's
+/// marker, may load before the client stops looking: 20 pages of 50, or
+/// 1,000 messages back. Load older goes on from there.
+pub(crate) const GOTO_PAGES: u32 = 20;
+
 /// Every user action, declared once. Buttons, shortcuts and agents share
 /// them; IDs are `bokkie.<kebab-case variant>`.
 #[derive(Action, Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -72,7 +77,7 @@ pub enum BokkieAction {
     SignOut,
     #[action(
         label = "Refresh",
-        description = "Load the list of Bots, or the open conversation, again"
+        description = "Load the open conversation, the Bot's settings or the admin screen shown again"
     )]
     Refresh,
     #[action(
@@ -874,6 +879,8 @@ pub(crate) struct Open {
     pub(crate) goto: Option<(u64, MessageId)>,
     /// Why the last message asked for could not be shown.
     pub(crate) goto_note: Option<String>,
+    /// The earlier pages loaded to find the message asked for.
+    pub(crate) goto_pages: u32,
 }
 
 impl Open {
@@ -897,6 +904,7 @@ impl Open {
             settings: None,
             goto: None,
             goto_note: None,
+            goto_pages: 0,
         }
     }
 }
@@ -934,6 +942,10 @@ pub struct App {
     viewer: Option<LocalTime>,
     /// The navigation's layout at the width of the last pass.
     pub(crate) layout: NavigationLayout,
+    /// The appearance asked of Stobie (see `appearance`).
+    pub(crate) preferences: UiPreferences,
+    /// The theme the last pass drew in, light or dark as the system is.
+    pub(crate) theme: egui::Theme,
 }
 
 impl std::fmt::Debug for App {
@@ -964,6 +976,8 @@ impl App {
             device: crate::notifications::Device::default(),
             viewer: None,
             layout: NavigationLayout::Stack,
+            preferences: crate::appearance::preferences(),
+            theme: egui::Theme::Dark,
         }
     }
 
@@ -1746,6 +1760,7 @@ impl App {
         if let Some(open) = self.open_mut() {
             open.goto = Some((gotos, message));
             open.goto_note = None;
+            open.goto_pages = 0;
         }
         self.seek_goto();
     }
@@ -1764,16 +1779,28 @@ impl App {
         if conversation.message(message).is_some() {
             return;
         }
-        if conversation.older().is_some() {
+        let far = self
+            .open()
+            .is_some_and(|open| open.goto_pages >= GOTO_PAGES);
+        if conversation.older().is_some() && !far {
             // After a failed page, Load older tries again and carries on.
-            if self.open().is_some_and(|open| open.older_error.is_none()) {
+            if self.open().is_some_and(|open| open.older_error.is_none())
+                && !self.in_flight.contains(&Snapshot::Older(bot))
+            {
+                if let Some(open) = self.open_mut() {
+                    open.goto_pages += 1;
+                }
                 self.load(Snapshot::Older(bot));
             }
             return;
         }
         if let Some(open) = self.open_mut() {
             open.goto = None;
-            open.goto_note = Some("That run's messages are no longer in the conversation".into());
+            open.goto_note = Some(if far {
+                "That run is more than 1,000 messages back. Load older messages to find it".into()
+            } else {
+                "That run's messages are no longer in the conversation".into()
+            });
         }
     }
 
@@ -2027,6 +2054,10 @@ impl Application for App {
         application_identity!(APPLICATION_NAME)
     }
 
+    fn preferences(&self) -> UiPreferences {
+        self.preferences
+    }
+
     fn availability(&self, target: ActionTarget<BokkieAction>) -> Availability {
         if let Some(reason) = self.admin_availability(target.action) {
             return reason.map_or(Availability::Enabled, |reason| Availability::Disabled {
@@ -2100,10 +2131,11 @@ impl Application for App {
             {
                 Some("Loading the conversation")
             }
+            // The list has Refresh Bots of its own.
             (BokkieAction::Refresh, _)
-                if self.open().is_none() && self.in_flight.contains(&Snapshot::Bots) =>
+                if self.open().is_none() && self.admin_screen().is_none() =>
             {
-                Some("Loading the Bots")
+                Some("No conversation is open")
             }
             (BokkieAction::Refresh, _) => None,
             (BokkieAction::RefreshBots, _) if self.in_flight.contains(&Snapshot::Bots) => {
@@ -2285,6 +2317,7 @@ impl Application for App {
     fn prepare(&mut self, pass: &mut PassContext<'_>, _: &mut ()) {
         // The navigation lays its panes out across the whole page.
         self.layout = NavigationLayout::for_width(pass.available_rect().width());
+        self.theme = pass.context().theme();
         self.sync();
         let now = self.now();
         let Session::SignedIn(signed_in) = &mut self.session else {
@@ -2460,20 +2493,17 @@ impl Application for App {
                 signed_in.message = None;
                 self.send(ApiRequest::SignOut);
             }
-            // On the list, the list; in a conversation, that conversation.
-            // The household's sign-in announces no events, so the list's
-            // Refresh asks after it too.
+            // The open conversation; the settings and the admin section
+            // took theirs above.
             (BokkieAction::Refresh, Session::SignedIn(signed_in)) => match &signed_in.open {
                 Some(open) => {
                     let bot = open.bot;
                     self.load(Snapshot::Messages(bot));
                 }
-                None => {
-                    self.load(Snapshot::Bots);
-                    self.send(ApiRequest::CodexAccount);
-                }
+                None => return Ok(false),
             },
-            // Wherever the user is, the Bots and the household's sign-in.
+            // Wherever the user is, the Bots and the household's sign-in,
+            // which announces no events of its own.
             (BokkieAction::RefreshBots, Session::SignedIn(_)) => {
                 self.load(Snapshot::Bots);
                 self.send(ApiRequest::CodexAccount);
@@ -2744,6 +2774,7 @@ impl Application for App {
     fn observe(&self, observation: &mut Observation<'_>) {
         observation.fact("screen", self.screen());
         self.observe_navigation(observation);
+        self.observe_appearance(observation);
         observation.fact(
             "joining",
             matches!(&self.session, Session::SignedOut(form) if form.joining),

@@ -22,16 +22,17 @@ use crate::socket::{Driver, Io, Step};
 use crate::wire::CommandError;
 
 mod admin;
+mod appearance;
 mod conversation;
 mod household;
 mod limits;
 mod list;
 mod member;
 mod navigation;
+mod new_bot;
 mod notifications;
 mod reading;
 mod settings;
-mod stand_ins;
 
 struct Fixture {
     harness: Harness<'static, AppHost<App>>,
@@ -446,7 +447,10 @@ fn signing_in_loads_and_lists_the_bots() {
     fixture.sign_in();
     assert_eq!(fixture.fact("screen"), "signed_in".into());
     assert!(fixture.shows("Signed in as Ada"));
-    assert!(!fixture.enabled(BokkieAction::Refresh), "already loading");
+    assert!(
+        !fixture.enabled(BokkieAction::RefreshBots),
+        "already loading"
+    );
     let mut hidden = bot(3, "Hidden", "Secret", BotStatus::Idle, None);
     hidden.hidden = true;
     fixture.reply(ApiReply::Bots(Ok(BotList {
@@ -479,7 +483,10 @@ fn signing_in_loads_and_lists_the_bots() {
             .starts_with("Working · Maths help; ")
     );
     assert!(!fixture.lists("Hidden"));
-    assert!(fixture.enabled(BokkieAction::Refresh));
+    assert!(fixture.enabled(BokkieAction::RefreshBots));
+    // Refresh is a conversation's, or a screen's beside the list: on the
+    // list alone there is nothing for it to load.
+    assert!(!fixture.enabled(BokkieAction::Refresh));
 }
 
 #[test]
@@ -578,7 +585,8 @@ fn a_failed_sign_out_stays_signed_in_and_says_why() {
 }
 
 impl Fixture {
-    /// Every button is on screen at a usable size, and the audits are clean.
+    /// Every button is on screen at a usable size, nothing reaches past the
+    /// page's sides, so it never scrolls sideways, and the audits are clean.
     fn assert_presentable(&self) {
         let snapshot = self.host().ui_snapshot();
         assert!(snapshot.by_name(APPLICATION_NAME).next().is_some());
@@ -589,7 +597,12 @@ impl Fixture {
         );
         let buttons: Vec<_> = snapshot.by_role(stobie_ui_egui::UiRole::Button).collect();
         assert!(!buttons.is_empty());
-        let page = self.harness.ctx.content_rect().width();
+        // The harness frames the page in an 8-point margin, which a browser
+        // does not: the page is what is inside it. A button cut at its
+        // foot by a scroll area is presented as far as it shows.
+        let harness = self.harness.ctx.content_rect();
+        let page = harness.width() - 8.0;
+        let foot = harness.height() - 8.5;
         for button in buttons {
             let width = button.rect.max_x - button.rect.min_x;
             // The navigation header's Back and settings toggle, the
@@ -606,7 +619,42 @@ impl Fixture {
                 button.actions.iter().any(|held| held.0 == id)
             }) || button.name == crate::ui::COPY_MESSAGE;
             let least = if icon { 32.0 } else { 40.0 };
-            assert!(width >= least && button.rect.max_x <= page, "{button:?}");
+            let height = button.rect.max_y - button.rect.min_y;
+            // Stobie's least hit size, 32 points, is the tallest a control
+            // is made at either density.
+            assert!(
+                width >= least
+                    && (height >= 32.0 || button.rect.max_y >= foot)
+                    && button.rect.max_x <= page,
+                "{button:?}"
+            );
+        }
+        // Nothing but a pane itself reaches a pane's side: each body keeps
+        // the gutter its header gives the title.
+        let panes: Vec<_> = snapshot
+            .by_role(stobie_ui_egui::UiRole::Pane)
+            .map(|pane| (pane.rect.min_x, pane.rect.max_x))
+            .collect();
+        let gutter = 4.5;
+        for node in &snapshot.nodes {
+            assert!(
+                node.rect.min_x >= 7.5 && node.rect.max_x <= page + 0.5,
+                "past the page's sides: {node:?}"
+            );
+            if matches!(
+                node.role,
+                stobie_ui_egui::UiRole::Pane | stobie_ui_egui::UiRole::Application
+            ) {
+                continue;
+            }
+            for (left, right) in &panes {
+                let inside = node.rect.min_x >= *left && node.rect.max_x <= *right;
+                assert!(
+                    !inside
+                        || (node.rect.min_x >= left + gutter && node.rect.max_x <= right - gutter),
+                    "against a pane's side: {node:?}"
+                );
+            }
         }
     }
 }

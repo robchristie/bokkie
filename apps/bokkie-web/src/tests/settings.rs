@@ -873,6 +873,88 @@ fn show_run_brings_its_marker_into_view_loading_earlier_pages() {
 }
 
 #[test]
+fn show_run_stops_looking_after_a_bounded_number_of_earlier_pages() {
+    use crate::app::GOTO_PAGES;
+    let mut fixture = Fixture::new();
+    fixture.sent.set_now(Timestamp(NOW));
+    fixture.signed_in_and_live_as(session(user()), 10);
+    fixture.open("Tutor");
+    let _ = fixture.sent();
+    let page = |id: i64| MessagePage {
+        messages: vec![message(id, Author::User, "Hello", MessageState::Complete)],
+        older: Some(MessageId(id)),
+        seq: Seq(10),
+    };
+    fixture.reply(ApiReply::Messages(TUTOR, Ok(page(5_000))));
+    fixture.click("Settings");
+    let _ = fixture.sent();
+    fixture.reply(ApiReply::Routines(
+        TUTOR,
+        Ok(RoutineList {
+            routines: vec![digest()],
+            seq: Seq(10),
+        }),
+    ));
+    fixture.click("History Morning digest");
+    let _ = fixture.sent();
+    fixture.reply(ApiReply::Runs(
+        TUTOR,
+        DIGEST,
+        None,
+        Ok(RoutineRunPage {
+            runs: vec![run(5, RunState::Succeeded, &[2])],
+            older: None,
+        }),
+    ));
+    fixture.act_on(BokkieAction::ShowRun, 5);
+    // Every earlier page lacks the marker, and there are always more.
+    let mut oldest = 5_000;
+    for _ in 0..GOTO_PAGES {
+        assert_eq!(
+            fixture.sent(),
+            [ApiRequest::LoadOlder(TUTOR, MessageId(oldest))]
+        );
+        let older = oldest - 50;
+        fixture.reply(ApiReply::Older(TUTOR, MessageId(oldest), Ok(page(older))));
+        oldest = older;
+    }
+    assert!(fixture.sent().is_empty(), "no page past the bound");
+    assert_eq!(fixture.fact("showing"), 0.into());
+    assert!(
+        fixture.shows("That run is more than 1,000 messages back. Load older messages to find it")
+    );
+    // Load older carries on from there by hand.
+    assert!(fixture.enabled(BokkieAction::LoadOlder));
+    fixture
+        .harness
+        .state_mut()
+        .app_mut()
+        .perform(ActionTarget::application(BokkieAction::LoadOlder), &mut ())
+        .unwrap();
+    fixture.harness.run();
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::LoadOlder(TUTOR, MessageId(oldest))]
+    );
+}
+
+#[test]
+fn the_routine_form_names_the_whole_schedule() {
+    let mut fixture = Fixture::new();
+    fixture.settings_loaded(Vec::new());
+    fixture.reveal("New routine");
+    fixture.click("New routine");
+    fixture.send(BokkieIntent::EditRoutineAt("07:00".into()));
+    fixture.reveal("Every few hours");
+    fixture.click("Every few hours");
+    fixture.send(BokkieIntent::EditRoutineEvery("4".into()));
+    assert!(fixture.shows("Repeats: Every 4 hours from 03:00 to 23:00"));
+    // A schedule not yet valid falls back to how it repeats.
+    fixture.send(BokkieIntent::EditRoutineEvery("5".into()));
+    assert!(fixture.shows("Repeats every few hours"));
+}
+
+#[test]
 fn the_time_zone_is_saved_and_times_follow_it() {
     let mut fixture = Fixture::new();
     fixture.settings_loaded(Vec::new());

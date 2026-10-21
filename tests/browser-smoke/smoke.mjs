@@ -20,6 +20,12 @@
 //   nothing lost or repeated;
 // - shows a reply in Markdown, streamed with its link split across
 //   pieces, formatted, with the link a link that opens a new tab;
+// - sends by Return typed in the composer and by a pointer's click on Send;
+// - follows the page's width from a phone's to a desktop's;
+// - follows the system's appearance, light and dark, at a phone's width
+//   (390 by 844) and a desktop's (1280 by 800), with a Bot whose name and
+//   label are long: the page never scrolls sideways, every control lies
+//   within it, and a screenshot of each goes to the evidence;
 // - switches notifications on for the device, through a stand-in push
 //   service: the subscription reaches the gateway, and no observation
 //   carries its endpoint;
@@ -38,7 +44,8 @@
 // - has the admin invite a member, with permissions, from the accounts
 //   screen, and copy the code with its Copy, read back from the clipboard
 //   and published nowhere; the member joins with it in a second browser
-//   context and sees the household's status only; the member makes a Bot;
+//   context, whose system appearance is light where the admin's is dark,
+//   and sees the household's status only; the member makes a Bot;
 //   the admin sets the member's limit and permissions, which reach the
 //   member live; the member is refused beyond the limit; and oversight,
 //   switched on while the member is signed in, shows its notice on the
@@ -426,6 +433,10 @@ try {
     headless: false,
     args: ['--ozone-platform=x11', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
     viewport: { width: 430, height: 900 },
+    // Times read in a fixed locale's 12-hour clock, and the system's
+    // appearance is dark until the smoke changes it.
+    locale: 'en-US',
+    colorScheme: 'dark',
   });
   report.browser = context.browser()?.version() ?? 'persistent context';
   const page = context.pages()[0] ?? await context.newPage();
@@ -499,8 +510,9 @@ try {
   await typeInto('Username', USERNAME);
   await typeInto('Password', PASSWORD);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await app.until('signed in and live', facts => facts.bots === 'loaded' && facts.connection === 'live' && facts.user === USERNAME);
-  step('signed in by typing');
+  const signedIn = await app.until('signed in and live', facts => facts.bots === 'loaded' && facts.connection === 'live' && facts.user === USERNAME);
+  assert.equal(signedIn.theme, 'dark', 'the page follows the system\'s dark appearance');
+  step('signed in by typing', { theme: signedIn.theme });
 
   // The installable application, after Stobie's pwa-smoke.mjs.
   const cdp = await context.newCDPSession(page);
@@ -643,6 +655,34 @@ try {
   assert(!readTexts.some(text => text.includes('**') || text.includes('](')), 'no Markdown source on the page');
   step('Markdown reply with a link', { reply: formatted.reply, link: guide.value });
 
+  // Return typed in the composer sends, and so does a pointer's click on
+  // Send, as a person's keyboard and mouse reach them. A control's point
+  // on the page is its rectangle's centre, in points from the canvas's
+  // corner.
+  await controlRequest('reply', { pieces: ['Noted.'], piece_delay_ms: 0 });
+  const centre = async selector => {
+    const [node, ...more] = await app.nodes(selector);
+    assert(node && more.length === 0, `one ${JSON.stringify(selector)}`);
+    const canvas = await page.locator('#app-canvas').boundingBox();
+    return { x: canvas.x + (node.rect.min_x + node.rect.max_x) / 2, y: canvas.y + (node.rect.min_y + node.rect.max_y) / 2 };
+  };
+  const answered = async (description, count) => app.until(description, facts => facts.message_count === count
+    && facts.reply === 'Noted.' && facts.reply_state === 'complete' && facts.bot_status === 'idle' && facts.draft === '', 60000);
+  await app.until('the Planner idle', facts => facts.bot_status === 'idle' && facts.reply_state !== 'streaming', 60000);
+  const typedFrom = (await app.facts()).message_count;
+  const field = await centre({ role: 'multiline_text_input', name: 'Message' });
+  await page.mouse.click(field.x, field.y);
+  await page.keyboard.type('Thanks');
+  await app.until('the draft typed', facts => facts.draft === 'Thanks', 5000);
+  await page.keyboard.press('Enter');
+  await answered('the reply to Return', typedFrom + 2);
+  await app.compose('Thanks again');
+  await app.until('the draft entered', facts => facts.draft === 'Thanks again', 5000);
+  const sendAt = await centre({ capability: 'bokkie.send' });
+  await page.mouse.click(sendAt.x, sendAt.y);
+  await answered('the reply to Send', typedFrom + 4);
+  step('sent by Return and by a click on Send', { messages: typedFrom + 4 });
+
   // The navigation follows the page's width: one pane at a time on a
   // phone, the list beside the conversation from 720 points, and the
   // settings beside both from 1040. Nothing is lost or loaded again on the
@@ -679,6 +719,59 @@ try {
     resized.push({ width, layout, panes });
   }
   step('navigation followed the page width', { layouts: resized });
+
+  // Light and dark, as the system's appearance says, at a phone's width
+  // and a desktop's, beside a Bot whose name and label are long and which
+  // is pinned, so the phone's list shows the strip of avatars too. The
+  // page never scrolls sideways and every control lies within it; each
+  // screen's screenshot goes to the evidence, to compare with the visual
+  // target.
+  // As long as a name and a label may be: 40 characters and 60.
+  const LONG_NAME = 'The household\'s meal planner and lists';
+  const long = (await api('POST', '/bots', { name: LONG_NAME, label: 'Plans the week\'s dinners around what is in season and cheap', description: 'Plan meals.' }, cookie)).body;
+  assert(Number.isInteger(long?.id), 'the long-named Bot was created');
+  assert.equal((await api('PATCH', `/bots/${long.id}`, { pinned: true }, cookie)).response.status, 200, 'the long-named Bot pinned');
+  const fits = async (at, width) => {
+    const page_ = await page.evaluate(() => ({
+      scroll: document.scrollingElement.scrollWidth, inner: window.innerWidth,
+      canvas: document.getElementById('app-canvas').getBoundingClientRect().right,
+    }));
+    assert(page_.scroll <= page_.inner && page_.canvas <= page_.inner, `no sideways scroll ${at}: ${JSON.stringify(page_)}`);
+    const controls = await app.nodes({ role: 'button' });
+    assert(controls.length > 0, `controls ${at}`);
+    for (const node of controls) {
+      assert(node.rect.min_x >= -0.5 && node.rect.max_x <= width + 0.5, `${node.name} within the page ${at}: ${JSON.stringify(node.rect)}`);
+    }
+    return controls.length;
+  };
+  const looks = [];
+  const shoot = async (scheme, width, screen) => {
+    // Let the page paint the frame the facts describe.
+    await wait(300);
+    const file = `${scheme}-${width}-${screen}.png`;
+    await page.screenshot({ path: join(evidence, file) });
+    looks.push({ scheme, width, screen, file, controls: await fits(`${screen}, ${scheme}, ${width}`, width) });
+  };
+  for (const scheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: scheme });
+    for (const [width, height, layout, panes] of [[390, 844, 'stack', 'content'], [1280, 800, 'columns', 'list,content']]) {
+      await page.setViewportSize({ width, height });
+      await app.until(`the conversation, ${scheme}, at ${width}`, facts => facts.theme === scheme && facts.layout === layout
+        && facts.panes === panes && facts.conversation === 'loaded' && facts.bot === bot.id && facts.bot_count === 2);
+      await shoot(scheme, width, layout === 'stack' ? 'conversation' : 'list-and-conversation');
+      if (layout === 'stack') {
+        await app.action('bokkie.back');
+        await app.until(`the list, ${scheme}, at ${width}`, facts => facts.panes === 'list' && facts.strip.split(',').includes(String(long.id)));
+        await shoot(scheme, width, 'list');
+        await app.action('bokkie.open-bot', bot.id);
+        await app.until('the Planner again', facts => facts.conversation === 'loaded' && facts.bot === bot.id && facts.panes === 'content');
+      }
+    }
+  }
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.setViewportSize({ width: 430, height: 900 });
+  await app.until('dark at a phone\'s width again', facts => facts.theme === 'dark' && facts.layout === 'stack' && facts.panes === 'content');
+  step('both appearances at a phone\'s and a desktop\'s width', { looks });
 
   // A routine, made in the Bot's settings and run now: its run shows in its
   // history as it goes, and Show brings its marker and reply into view.
@@ -740,7 +833,9 @@ try {
     if (plannerRow?.description?.startsWith('Unread; Routine done.; ')) break;
     assert(Date.now() < deadline, `the Planner's row: ${JSON.stringify(plannerRow)}`);
   }
-  assert.match(plannerRow.description, /^Unread; Routine done\.; \d{1,2}:\d{2} [AP]M; Open the conversation of the Bot with this ID$/);
+  // The time of day in en-US's 12-hour clock, or Yesterday for a run that
+  // midnight overtook.
+  assert.match(plannerRow.description, /^Unread; Routine done\.; (\d{1,2}:\d{2} [AP]M|Yesterday); Open the conversation of the Bot with this ID$/);
   assert.equal((await app.nodes({ role: 'navigation_item', name: 'Planner' })).length, 1, 'one row for the Planner');
   const ariaRow = page.getByRole('button', { name: 'Planner', exact: true });
   assert.equal(await ariaRow.count(), 1, 'the accessibility layer presents the row');
@@ -825,7 +920,7 @@ try {
     await settled();
   }
   await app.action('bokkie.back');
-  await app.until('the list with the Diary', facts => facts.screen === 'signed_in' && facts.bot_count === 2);
+  await app.until('the list with the Diary', facts => facts.screen === 'signed_in' && facts.bot_count === 3);
   await app.action('bokkie.open-bot', diary.id);
   const newest = await app.until('the Diary\'s newest page', facts => facts.conversation === 'loaded' && facts.bot === diary.id);
   assert.equal(newest.message_count, 50, 'the newest page of 50');
@@ -909,6 +1004,8 @@ try {
     headless: false,
     args: ['--ozone-platform=x11', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
     viewport: { width: 430, height: 900 },
+    locale: 'en-US',
+    colorScheme: 'light',
   });
   const memberPage = memberContext.pages()[0] ?? await memberContext.newPage();
   await watch(memberPage);
@@ -935,11 +1032,13 @@ try {
   assert.equal(joined.may_create_bots, true);
   assert.equal(joined.may_edit_profiles, false, 'the invitation\'s permissions');
   assert.equal(joined.oversight, false);
+  assert.equal(joined.theme, 'light', 'the member\'s page follows its system\'s light appearance');
   // Household status only: signed in, never as whom.
   const memberTexts = await pageTexts(memberPage);
   assert(memberTexts.includes('ChatGPT: signed in for the household'), 'the household status');
   assert(!memberTexts.some(text => text.includes('@')), 'no email on the member\'s page');
-  step('member joined in a second context', { role: joined.role, chatgpt: joined.chatgpt });
+  await memberPage.screenshot({ path: join(evidence, 'member-light-430.png') });
+  step('member joined in a second context', { role: joined.role, chatgpt: joined.chatgpt, theme: joined.theme });
 
   // The member makes a Bot, as the invitation allows.
   await member.setText('bokkie.bot-name', 'Helper');
