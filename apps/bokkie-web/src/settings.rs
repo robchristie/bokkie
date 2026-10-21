@@ -29,7 +29,7 @@ use crate::app::{App, BokkieAction, Session};
 use crate::store::Snapshot;
 use crate::wire::CommandError;
 
-pub(crate) use view::{present, time_zone_ui};
+pub(crate) use view::{dialog_ui, present, time_zone_sheet_ui, time_zone_ui};
 
 /// The routine form's name field's stable ID.
 pub const ROUTINE_NAME_ID: &str = "bokkie.routine-name";
@@ -868,12 +868,24 @@ impl App {
                 None => because("No conversation is open"),
                 Some(_) => None,
             },
+            BokkieAction::ChangeTimeZone => match signed_in {
+                None => because("Not signed in"),
+                Some(s) if s.zone_saving => because("Saving the time zone"),
+                Some(s) if s.zone_draft.is_some() => because("The time zone sheet is open"),
+                Some(_) => None,
+            },
+            BokkieAction::CloseTimeZone => match signed_in {
+                None => because("Not signed in"),
+                Some(s) if s.zone_saving => because("Saving the time zone"),
+                Some(s) if s.zone_draft.is_none() => because("Choose Change time zone first"),
+                Some(_) => None,
+            },
             BokkieAction::SaveTimeZone => match signed_in {
                 None => because("Not signed in"),
                 Some(s) if s.zone_saving => because("Saving the time zone"),
                 Some(s) => match s.zone_draft.as_deref().map(str::trim) {
                     Some("") => because("Enter a time zone, such as Europe/London"),
-                    None => because("That is your time zone already"),
+                    None => because("Choose Change time zone first"),
                     Some(zone) if zone == s.user.time_zone => {
                         because("That is your time zone already")
                     }
@@ -1060,6 +1072,21 @@ impl App {
         // The conversation header's toggle shows or hides the settings.
         if action == BokkieAction::BotSettings {
             return Some(self.close_settings() || self.open_settings());
+        }
+        // The time zone sheet is open while there is a draft, which starts
+        // as the account's time zone; closing it drops the draft and any
+        // refusal.
+        if matches!(
+            action,
+            BokkieAction::ChangeTimeZone | BokkieAction::CloseTimeZone
+        ) {
+            let Session::SignedIn(signed_in) = &mut self.session else {
+                return Some(false);
+            };
+            signed_in.zone_draft =
+                (action == BokkieAction::ChangeTimeZone).then(|| signed_in.user.time_zone.clone());
+            signed_in.zone_error = None;
+            return Some(true);
         }
         if action == BokkieAction::SaveTimeZone {
             let Session::SignedIn(signed_in) = &mut self.session else {

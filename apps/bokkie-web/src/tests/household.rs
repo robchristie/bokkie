@@ -376,18 +376,52 @@ fn signing_the_household_out_warns_that_it_signs_out_everyone() {
     fixture.click("Sign out of ChatGPT");
     assert!(fixture.sent().is_empty(), "nothing yet: it asks first");
     assert_eq!(fixture.fact("chatgpt_sign_out"), "confirming".into());
-    assert!(
-        fixture
-            .shows("Sign out everyone? No account's Bots can reply until an admin signs in again.")
+    // A confirm that says it signs out every account's Bots, with Keep
+    // signed in first and focused, and nothing behind it in reach.
+    let confirm = fixture
+        .dialog(stobie_ui_egui::UiRole::AlertDialog)
+        .expect("the confirm is open");
+    assert_eq!(confirm.name, "Sign out everyone?");
+    assert_eq!(
+        confirm.description.as_deref(),
+        Some(crate::ui::SIGN_OUT_EVERYONE)
     );
-    // Keeping it signed in sends nothing.
+    assert!(fixture.shows(crate::ui::SIGN_OUT_EVERYONE));
+    assert_eq!(fixture.focused_label().as_deref(), Some("Keep signed in"));
+    for _ in 0..6 {
+        fixture.press_key(egui::Key::Tab);
+        let label = fixture.focused_label().expect("a control has focus");
+        assert!(!fixture.hidden(&label), "{label} is behind the confirm");
+    }
+    fixture.refused_behind(BokkieAction::RefreshBots, "Sign out everyone?");
+    fixture.refused_behind(BokkieAction::Back, "Sign out everyone?");
+    assert!(fixture.hidden("Sign out of ChatGPT"));
+    assert!(fixture.sent().is_empty());
+    // Escape keeps it signed in, as Keep signed in does, and sends nothing.
+    fixture.press_key(egui::Key::Escape);
+    assert_eq!(fixture.fact("chatgpt_sign_out"), "".into());
+    assert_eq!(
+        fixture.focused_label().as_deref(),
+        Some("Sign out of ChatGPT")
+    );
+    fixture.click("Sign out of ChatGPT");
     fixture.click("Keep signed in");
     assert!(fixture.sent().is_empty());
     assert_eq!(fixture.fact("chatgpt_sign_out"), "".into());
+    assert_eq!(
+        fixture.focused_label().as_deref(),
+        Some("Sign out of ChatGPT")
+    );
     fixture.click("Sign out of ChatGPT");
     fixture.click("Sign out everyone");
     assert_eq!(fixture.sent(), [ApiRequest::CodexLogout]);
     assert_eq!(fixture.fact("chatgpt_sign_out"), "signing_out".into());
+    // Chosen, the confirm closes and the screen says it is signing out.
+    assert!(
+        fixture
+            .dialog(stobie_ui_egui::UiRole::AlertDialog)
+            .is_none()
+    );
     assert!(fixture.shows("Signing out…"));
     assert!(!fixture.enabled(BokkieAction::ConfirmSignOutChatGpt));
     // A failure says why, and it can be tried again.

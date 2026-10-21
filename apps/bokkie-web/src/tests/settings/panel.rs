@@ -50,7 +50,7 @@ impl Fixture {
     /// and its panel open and loaded on a page of `size` in `theme`: two
     /// routines, one paused; three recent runs, one failed; Markdown notes;
     /// and two tool calls, one in a run.
-    fn panel_at(theme: egui::Theme, size: egui::Vec2, messages: Vec<Message>) -> Self {
+    pub(super) fn panel_at(theme: egui::Theme, size: egui::Vec2, messages: Vec<Message>) -> Self {
         let mut fixture = Fixture::new();
         fixture.harness.input_mut().system_theme = Some(theme);
         // The harness frames the page in an 8-point margin.

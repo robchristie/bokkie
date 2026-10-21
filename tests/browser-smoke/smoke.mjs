@@ -29,7 +29,9 @@
 // - switches notifications on for the device, through a stand-in push
 //   service: the subscription reaches the gateway, and no observation
 //   carries its endpoint;
-// - makes a routine in the Bot's settings and runs it now: the run
+// - makes a routine in the Bot's settings, in its sheet, which keeps the
+//   panel behind it out of reach and closes without saving first, and runs
+//   it now: the run
 //   succeeds in its history; its push is recorded for the one subscription
 //   (whose endpoint, on a loopback name, the gateway refuses to reach), the
 //   Bot is unread and the badge counts it; beside the settings, the list's
@@ -39,7 +41,8 @@
 //   marks it read;
 // - opens the Bot's panel, grants notes with its switch and runs the
 //   routine again, calling a tool: the panel shows the routine, the run
-//   among its recent runs and the call in its activity;
+//   among its recent runs and the call in its activity; then deletes the
+//   routine through its confirm, kept first and then confirmed;
 // - opens the Bot a tapped notification names, through the service
 //   worker's own route handling, then switches notifications off;
 // - shows the subscription meter and the limit-reached banner from windows
@@ -53,6 +56,8 @@
 //   member live; the member is refused beyond the limit; and oversight,
 //   switched on while the member is signed in, shows its notice on the
 //   member's page while the admin reads the conversation, read-only;
+// - signs the household out of ChatGPT, refused until confirmed: asked,
+//   kept signed in, then asked and confirmed;
 // - checks the installable application as Stobie's pwa-smoke.mjs does, and
 //   that the font notices are served as text;
 // - fails on any CSP violation, page error or console error;
@@ -784,8 +789,21 @@ try {
   await app.action('bokkie.bot-settings');
   await app.until('the settings', facts => facts.screen === 'bot_settings' && facts.routines === 'loaded'
     && facts.routine_count === 0);
+  // The sheet opens over the panel, which is out of reach behind it, and
+  // Close without saving closes it.
   await app.action('bokkie.new-routine');
-  await app.until('the new routine form', facts => facts.routine_form === 'new');
+  await app.until('the routine sheet', facts => facts.routine_form === 'new');
+  const [sheet, ...otherSheets] = await app.nodes({ role: 'dialog', name: 'New routine' });
+  assert(sheet && otherSheets.length === 0, 'one routine sheet');
+  await assert.rejects(app.action('bokkie.refresh'), /unavailable/, 'the panel is behind the sheet');
+  // egui fades a new layer in; let it settle before the picture.
+  await wait(500);
+  await page.screenshot({ path: join(evidence, 'routine-sheet-dark-430.png') });
+  await app.action('bokkie.cancel-routine');
+  await app.until('the sheet closed', facts => facts.routine_form === '');
+  assert.equal((await app.nodes({ role: 'dialog' })).length, 0, 'no sheet');
+  await app.action('bokkie.new-routine');
+  await app.until('the routine sheet again', facts => facts.routine_form === 'new');
   await app.setText('bokkie.routine-name', ROUTINE);
   await app.setText('bokkie.routine-prompt', 'Check the smoke.');
   await app.scrollTo({ id: 'bokkie.routine-at', capability: 'stobie.set-text' });
@@ -918,6 +936,25 @@ try {
   assert.deepEqual(inPanel, { routine: true, run: true, call: true }, 'the panel showed the routine, its run and its call');
   await page.screenshot({ path: join(evidence, 'panel-dark-430.png') });
   step('the Bot\'s panel', { recent_run: again.recent_run, recent_runs: again.recent_runs, tool_calls: again.tool_calls, seen: inPanel });
+  // Deleting the routine asks first, in a confirm that names it, with
+  // nothing behind it in reach: kept, then deleted.
+  await app.scrollTo({ capability: 'bokkie.delete-routine' }, -200);
+  await app.action('bokkie.delete-routine', routine.id);
+  await app.until('asked before deleting', facts => facts.routine_delete === routine.id);
+  const [deleting, ...otherConfirms] = await app.nodes({ role: 'alert_dialog', name: 'Delete this routine?' });
+  assert(deleting && otherConfirms.length === 0, 'one confirm');
+  assert(deleting.description?.includes(`"${ROUTINE}"`), `the confirm names the routine: ${deleting.description}`);
+  await assert.rejects(app.action('bokkie.new-routine'), /unavailable/, 'the panel is behind the confirm');
+  await app.action('bokkie.keep-routine');
+  await app.until('the routine kept', facts => facts.routine_delete === 0 && facts.routine_count === 1);
+  assert.equal((await api('GET', `/bots/${bot.id}/routines`, undefined, cookie)).body.routines.length, 1, 'kept');
+  await app.scrollTo({ capability: 'bokkie.delete-routine' }, -200);
+  await app.action('bokkie.delete-routine', routine.id);
+  await app.until('asked again', facts => facts.routine_delete === routine.id);
+  await app.action('bokkie.confirm-delete-routine');
+  await app.until('the routine deleted', facts => facts.routine_delete === 0 && facts.routine_count === 0, 30000);
+  assert.equal((await api('GET', `/bots/${bot.id}/routines`, undefined, cookie)).body.routines.length, 0, 'deleted');
+  step('the routine deleted after its confirm', { kept: true, deleted: routine.id });
   // Closed, the conversation is in view again and read.
   await app.action('bokkie.bot-settings');
   await app.until('the Planner read again', facts => facts.screen === 'conversation' && facts.unread === ''
@@ -1152,6 +1189,27 @@ try {
   const reading = await app.until('the conversation read', facts => facts.screen === 'overseen' && facts.reading === helper.id
     && facts.reading_count === 2, 30000);
   step('oversight notice and read-only view', { notice, oversight: overseen.oversight, read: reading.reading_count });
+
+  // Signing the household out of ChatGPT signs out every account's Bots, so
+  // it is refused until confirmed: asked and kept, then asked and confirmed.
+  await app.action('bokkie.household');
+  await app.until('the household screen', facts => facts.screen === 'household' && facts.chatgpt === 'signed_in');
+  await assert.rejects(app.action('bokkie.confirm-sign-out-chatgpt'), /unavailable/, 'refused before asking');
+  await app.action('bokkie.sign-out-chatgpt');
+  await app.until('asked before signing out', facts => facts.chatgpt_sign_out === 'confirming');
+  const [signingOut, ...otherAsks] = await app.nodes({ role: 'alert_dialog', name: 'Sign out everyone?' });
+  assert(signingOut && otherAsks.length === 0, 'one confirm');
+  assert.match(signingOut.description ?? '', /signs out every account's Bots/);
+  await assert.rejects(app.action('bokkie.refresh-bots'), /unavailable/, 'the screen is behind the confirm');
+  await app.action('bokkie.keep-chatgpt');
+  await app.until('kept signed in', facts => facts.chatgpt_sign_out === '' && facts.chatgpt === 'signed_in');
+  assert.equal((await api('GET', '/codex/account', undefined, cookie)).body.signed_in, true, 'still signed in');
+  await app.action('bokkie.sign-out-chatgpt');
+  await app.until('asked again', facts => facts.chatgpt_sign_out === 'confirming');
+  await app.action('bokkie.confirm-sign-out-chatgpt');
+  await app.until('the household signed out', facts => facts.chatgpt === 'signed_out' && facts.chatgpt_sign_out === '', 30000);
+  assert.equal((await api('GET', '/codex/account', undefined, cookie)).body.signed_in, false, 'signed out');
+  step('the household signed out after its confirm', { kept: true, signed_out: true });
   for (const each of [page, memberPage]) {
     assert.deepEqual(await each.evaluate(() => window.__cspViolations), [], 'CSP violations');
   }

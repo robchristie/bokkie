@@ -548,10 +548,21 @@ pub enum BokkieAction {
     )]
     Notifications,
     #[action(
+        label = "Change time zone",
+        description = "Open the time zone sheet, to change the time zone routines run in and times show in"
+    )]
+    ChangeTimeZone,
+    #[action(
         label = "Save time zone",
         description = "Save the time zone entered, which routines run in and times show in"
     )]
     SaveTimeZone,
+    #[action(
+        label = "Close without saving",
+        description = "Close the time zone sheet without saving the time zone entered",
+        id = "bokkie.close-time-zone"
+    )]
+    CloseTimeZone,
     #[action(
         label = "Reload page",
         description = "Reload the page to fetch the client that matches Bokkie's server"
@@ -715,7 +726,8 @@ pub(crate) struct SignedIn {
     /// The user's own time zone, which times are shown in, or `None` when
     /// it is not one the platform knows.
     pub(crate) zone: Option<TimeZone>,
-    /// The time zone being entered, until it is saved.
+    /// The time zone being entered while the time zone sheet is open, until
+    /// it is saved; `None` while the sheet is closed.
     pub(crate) zone_draft: Option<String>,
     /// A time zone change is under way.
     pub(crate) zone_saving: bool,
@@ -2445,7 +2457,9 @@ impl Application for App {
             BokkieIntent::EditRoutineAt(text) => self.edit_routine(|f| &mut f.at, text),
             BokkieIntent::EditRoutineEvery(text) => self.edit_routine(|f| &mut f.every, text),
             BokkieIntent::EditTimeZone(text) => match &mut self.session {
-                Session::SignedIn(signed_in) if !signed_in.zone_saving => {
+                Session::SignedIn(signed_in)
+                    if !signed_in.zone_saving && signed_in.zone_draft.is_some() =>
+                {
                     signed_in.zone_draft = Some(text);
                     true
                 }

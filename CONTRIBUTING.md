@@ -180,7 +180,9 @@ marker's text), `showing` and `showing_error` for a routine run brought into
 view; and for a Bot's settings (`screen` is `bot_settings`) `grants`,
 `notes`, `notes_chars`, `notes_clear`, `tool_calls`, `tool_calls_state`,
 `routines`, `routine_count`, `routine_form` (`new`, `editing` or
-`saving`), `routine_error`, `routine_delete`, `history` (the routine whose
+`saving` while the routine sheet is open), `routine_error`,
+`routine_delete` (the routine whose deletion is asked about or under
+way), `history` (the routine whose
 runs show), `runs`, and the newest run's `run`, `run_state` and
 `run_messages`; and for the panel's recent runs `recent_runs` (how many
 show), `recent_runs_state` (`loading`, `loaded` or `failed`), and the
@@ -232,24 +234,46 @@ with Show; its grants, each a switch named by its action's label, such
 as "Grant notes" (a member may grant only `notes`, `seen` and `notify`);
 its notes, read as Markdown; and its activity, the recent tool calls with
 their outcomes. The notes and the activity load again each time a turn of
-the Bot's ends, since the gateway sends no event for a tool call. Fill a
-routine's form with `stobie set-text` on `bokkie.routine-name`,
-`bokkie.routine-prompt`, `bokkie.routine-at` and `bokkie.routine-every`,
-and act on one routine with `bokkie.edit-routine`, `bokkie.pause-routine`,
-`bokkie.resume-routine`, `bokkie.run-routine`, `bokkie.delete-routine` and `bokkie.routine-history`
-with `--value ROUTINE_ID`. The form's Repeats line names the whole
-schedule, such as "Every 4 hours from 03:00 to 23:00", once it is valid.
+the Bot's ends, since the gateway sends no event for a tool call.
+`bokkie.new-routine` and `bokkie.edit-routine` open the routine sheet,
+Stobie's full-height sheet, which covers a phone's screen and is centred
+from the wide breakpoint. Fill it with `stobie set-text` on
+`bokkie.routine-name`, `bokkie.routine-prompt`, `bokkie.routine-at` and
+`bokkie.routine-every`; `bokkie.save-routine` saves it, and its close
+control, Close without saving (`bokkie.cancel-routine`), or Escape closes
+it without saving, except while it saves. What stops a save, and why one
+failed, show in the sheet. Its Repeats line names the whole schedule, such
+as "Repeats: Every 4 hours from 03:00 to 23:00", once it is valid, and the
+kind of repeat, such as "Repeats: Every few hours", until then. Act on one
+routine with `bokkie.edit-routine`, `bokkie.pause-routine`,
+`bokkie.resume-routine`, `bokkie.run-routine`, `bokkie.delete-routine` and
+`bokkie.routine-history` with `--value ROUTINE_ID`. Deleting a routine,
+clearing the notes (`bokkie.clear-notes`) and signing the household out of
+ChatGPT (`bokkie.sign-out-chatgpt`) each ask first in Stobie's confirm
+dialog, which names what it affects: signing the household out signs out
+every account's Bots. Confirm with `bokkie.confirm-delete-routine`,
+`bokkie.confirm-clear-notes` or `bokkie.confirm-sign-out-chatgpt`, or keep
+with `bokkie.keep-routine`, `bokkie.keep-notes` or `bokkie.keep-chatgpt`,
+or Escape. A confirm closes when chosen, and the panel or the household
+screen says what is under way. While the sheet or a confirm is open,
+focus stays in it and returns to the control that opened it when it
+closes, what is behind it is hidden from assistive technology, and every
+action outside it is refused as `The dialog "TITLE" is open`.
 `bokkie.show-run --value RUN_ID` from a routine's history, or
 `bokkie.show-recent-run --value RUN_ID` from the recent runs, closes the
 panel unless it shows beside the conversation, and brings that run's
 marker into view, loading up to 20 earlier pages (1,000 messages) to find
 it; past those, a note says to load older messages by hand. The bottom of
 the Bot list holds the account: who is signed in, the usage meter, the
-account's time zone (`stobie set-text bokkie.time-zone`), this device's
-notifications, `bokkie.refresh-bots` (Refresh Bots, which loads the list
-and the household's sign-in again, and stays in reach beside a
-conversation or the admin section), Sign out and, for an admin, the
-admin section. `stobie invoke bokkie.notifications`, a switch named
+account's time zone, this device's notifications, and one row of
+`bokkie.refresh-bots` (Refresh Bots, which loads the list and the
+household's sign-in again, and stays in reach beside a conversation or the
+admin section), Sign out and, for an admin, the admin section.
+`bokkie.change-time-zone` opens the time zone sheet, "Your time zone",
+where `stobie set-text bokkie.time-zone` enters a time zone and
+`bokkie.save-time-zone` saves it; a refusal shows in the sheet, a saved
+time zone closes it, and `bokkie.close-time-zone` (Close without saving)
+or Escape closes it unsaved. It is modal, as the routine sheet is. `stobie invoke bokkie.notifications`, a switch named
 "Notifications on this device", switches this device's notifications on
 or off. The switch subscribes through Stobie's Web Push
 bridge with the gateway's key and sends the subscription; each launch sends
@@ -308,13 +332,18 @@ checks:
 - the notifications switch subscribes the device through a stand-in push
   service, and the gateway holds the subscription, whose endpoint no
   observation and no log line carries;
-- a routine made in the Bot's settings and run now succeeds in its
-  history; its push is recorded and sent to that one subscription; the
+- a routine made in the Bot's settings, in the routine sheet (which keeps
+  the panel behind it out of reach, closes once without saving first, and
+  goes to the evidence as `routine-sheet-dark-430.png`), and run now
+  succeeds in its history; its push is recorded and sent to that one subscription; the
   Bot shows unread and the app badge counts it; beside the settings, the
   list's row for the Bot, a navigation item named by the Bot and presented
   as a button, reads it unread with the run's reply as its preview and the
   time of day; showing the run brings its
   marker and reply into view, says the Bot is viewed and marks it read;
+- deleting the routine asks first, in a confirm that names it and keeps
+  the panel behind it out of reach: kept, then confirmed, and the gateway
+  no longer has it;
 - the route of a tapped notification opens its Bot, and switching
   notifications off unsubscribes the device and the gateway forgets it;
 - the subscription meter and the limit-reached banner show;
@@ -326,6 +355,9 @@ checks:
   page follows live; the member's second turn is refused beyond the limit;
 - oversight, switched on while the member is signed in, shows its notice
   on the member's page, and the admin reads the conversation read-only;
+- signing the household out of ChatGPT is refused until confirmed: asked,
+  with the screen behind out of reach, and kept signed in, then asked and
+  confirmed, after which the gateway says it is signed out;
 - the manifest has no errors and the page is installable, the service
   worker controls the page, and nothing from `/api/` is in Cache Storage;
 - the font notices are served as text;
