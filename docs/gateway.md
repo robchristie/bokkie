@@ -413,14 +413,18 @@ query and action; the gateway ignores any results it carries. What a Bot searche
 for leaves the household, so a Bot can leak what it is told through its
 queries.
 
-`web.search` cannot be granted yet (`invalid_request`): which of those
-paths Bokkie's Bots search by is not settled. `tests/live_search.rs`
-proves both paths against the mock model, which answers both and reaches
-nothing: only a `web.search` thread offers search, by its model's path,
-after starting and after a cold resume; a `web.run` call reaches the
-mock's search endpoint and its `webSearch` item is allowed; a hosted
-search's item is allowed; and a search on a thread without `web.search`
-stops Codex.
+Bokkie's Bots run on the default model, so a Bot granted `web.search`
+searches through `web.run`, which reaches only the model provider; an
+admin grants it ([Grants and tools](#grants-and-tools)).
+`tests/live_search.rs` proves both paths against the mock model, which
+answers both and reaches nothing: only a `web.search` thread offers
+search, by its model's path, after starting and after a cold resume; a
+`web.run` call reaches the mock's search endpoint and its `webSearch`
+item is allowed; a hosted search's item is allowed; a search on a thread
+without `web.search` stops Codex; and through the whole gateway, a Bot
+granted `web.search` through the API is offered `web.run`, before and
+after a cold resume, and its search is logged and kept out of the
+conversation, while a Bot without the grant is offered no search.
 
 ## Bots and conversations
 
@@ -509,8 +513,8 @@ Each Bot holds a set of grants from the catalogue `notes`, `seen`,
 `notify`, `web.search` and `web.fetch`, carried as `grants` on the Bot (in
 `GET /api/v1/bots` and `bot_updated` events). `notes`, `seen`, `notify`
 and `web.fetch` have tools. `web.search` brings Codex's own web search
-([Web search](#web-search)), which its threads already turn on and
-describe in their instructions; it is refused until its path is settled.
+([Web search](#web-search)), which its threads turn on and describe in
+their instructions.
 
 - **Setting them.** `PATCH /api/v1/bots/{id}` with `grants` replaces the
   Bot's set, which commits with a `bot_updated` event. An admin may grant

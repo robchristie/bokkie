@@ -251,14 +251,20 @@ gateway does today.
    Phase 4's acceptance passes on the deployed profile: command execution,
    file changes, shell, MCP, memories and the tools that model catalogue
    entries add. The one exception is web search, which is on only for a
-   thread of a Bot holding `web.search`. A thread's `dynamicTools` are
-   exactly the tools of its Bot's grants. The gateway checks the
-   configuration at startup and for each thread through `config/read` and
-   the `thread/start` or `thread/resume` response. Each thread records the
-   grants it started with, and a turn runs only while they equal the Bot's
-   grants. During a turn, a call of a tool the thread was not granted, or a
-   web search on a thread without `web.search`, is a violation: the gateway
-   refuses the thread and stops Codex for every user. Live tests capture
+   thread of a Bot holding `web.search`: the app server's own setting
+   keeps it off, and such a thread turns it on for itself. It is Codex's
+   own search tool. On Bokkie's default model, as on most models Codex
+   bundles, that is Codex's `web.run`, which the app server runs by
+   sending the query and recent conversation to the model provider's
+   search endpoint, so a search reaches only the provider. A thread's
+   `dynamicTools` are exactly the tools of its Bot's grants. The gateway
+   checks the configuration at startup and for each thread through
+   `config/read` and the `thread/start` or `thread/resume` response. Each
+   thread records the grants it started with, and a turn runs only while
+   they equal the Bot's grants. During a turn, a call of a tool the
+   thread was not granted, or a web search on a thread without
+   `web.search`, is a violation: the gateway refuses the thread and stops
+   Codex for every user. Live tests capture
    the tools offered to the model for every combination of the grants that
    have tools, with a control that shows the capture sees unsafe tools.
 3. **A grant change starts a fresh thread** at the Bot's next turn, because

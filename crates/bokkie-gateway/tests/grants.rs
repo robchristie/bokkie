@@ -125,24 +125,32 @@ async fn grants_are_set_read_and_announced() {
 }
 
 #[tokio::test]
-async fn grants_without_tools_yet_are_refused_even_to_admins() {
+async fn an_admin_may_grant_the_whole_catalogue() {
     let (gateway, rob) = setup().await;
     let bot = create_bot(&gateway, &rob, "Scout").await;
-    let refused = set_grants(&gateway, &rob, bot, json!(["web.search"])).await;
-    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
-    assert!(
-        refused.body["message"]
-            .as_str()
-            .unwrap()
-            .contains("not available"),
-        "{:?}",
-        refused.body
+    let searching = set_grants(&gateway, &rob, bot, json!(["web.search"])).await;
+    assert_eq!(searching.status, StatusCode::OK, "{:?}", searching.body);
+    assert_eq!(searching.body["grants"], json!(["web.search"]));
+    // Both web grants read untrusted input, which the taint rule allows
+    // together: only a privileged grant beside them is refused, and none
+    // exists yet.
+    let every = set_grants(
+        &gateway,
+        &rob,
+        bot,
+        json!(["web.fetch", "notify", "web.search", "seen", "notes"]),
+    )
+    .await;
+    assert_eq!(every.status, StatusCode::OK, "{:?}", every.body);
+    assert_eq!(
+        every.body["grants"],
+        json!(["notes", "seen", "notify", "web.search", "web.fetch"])
     );
     let bot = store::bot(&gateway.state.db, UserId(1), BotId(bot))
         .await
         .unwrap()
         .unwrap();
-    assert!(bot.grants.is_empty());
+    assert_eq!(bot.grants, Grant::ALL.into());
 }
 
 #[tokio::test]
@@ -169,45 +177,81 @@ async fn members_may_add_only_their_grants() {
 }
 
 #[tokio::test]
-async fn web_fetch_is_granted_by_admins_only() {
-    let (gateway, rob) = setup().await;
-    // An admin grants it on their own Bot.
-    let own = create_bot(&gateway, &rob, "Reader").await;
-    let granted = set_grants(&gateway, &rob, own, json!(["web.fetch", "notes"])).await;
-    assert_eq!(granted.status, StatusCode::OK, "{:?}", granted.body);
-    assert_eq!(granted.body["grants"], json!(["notes", "web.fetch"]));
+async fn web_grants_are_granted_by_admins_only() {
+    for grant in ["web.search", "web.fetch"] {
+        let (gateway, rob) = setup().await;
+        // An admin grants it on their own Bot.
+        let own = create_bot(&gateway, &rob, "Reader").await;
+        let granted = set_grants(&gateway, &rob, own, json!([grant, "notes"])).await;
+        assert_eq!(
+            granted.status,
+            StatusCode::OK,
+            "{grant}: {:?}",
+            granted.body
+        );
+        assert_eq!(granted.body["grants"], json!(["notes", grant]));
 
-    // And on a Bot an admin made for a member, whose member may not add it
-    // back once it is removed, nor add it to their own Bot.
-    let (amy, amy_id) = gateway.member(&rob, "amy").await;
-    let made = gateway
-        .send(
-            Call::post(&format!("/api/v1/admin/users/{amy_id}/bots"))
-                .cookie(&rob)
-                .json(&json!({"name": "Tutor", "label": "", "description": ""})),
-        )
-        .await;
-    let made = made.body["id"].as_i64().unwrap();
-    let path = format!("/api/v1/admin/users/{amy_id}/bots/{made}");
-    let granted = gateway
-        .send(
-            Call::new(Method::PATCH, &path)
-                .cookie(&rob)
-                .json(&json!({"grants": ["web.fetch"]})),
-        )
-        .await;
-    assert_eq!(granted.status, StatusCode::OK, "{:?}", granted.body);
-    assert_eq!(granted.body["grants"], json!(["web.fetch"]));
-    // Keeping it while adding notes is not adding it.
-    let kept = set_grants(&gateway, &amy, made, json!(["web.fetch", "notes"])).await;
-    assert_eq!(kept.status, StatusCode::OK, "{:?}", kept.body);
-    let removed = set_grants(&gateway, &amy, made, json!(["notes"])).await;
-    assert_eq!(removed.status, StatusCode::OK, "{:?}", removed.body);
-    let again = set_grants(&gateway, &amy, made, json!(["notes", "web.fetch"])).await;
-    assert_eq!(again.status, StatusCode::FORBIDDEN, "{:?}", again.body);
-    let diary = create_bot(&gateway, &amy, "Diary").await;
-    let refused = set_grants(&gateway, &amy, diary, json!(["web.fetch"])).await;
-    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{:?}", refused.body);
+        // And on a Bot an admin made for a member, whose member may not add
+        // it back once it is removed, nor add it to their own Bot.
+        let (amy, amy_id) = gateway.member(&rob, "amy").await;
+        let made = gateway
+            .send(
+                Call::post(&format!("/api/v1/admin/users/{amy_id}/bots"))
+                    .cookie(&rob)
+                    .json(&json!({"name": "Tutor", "label": "", "description": ""})),
+            )
+            .await;
+        let made = made.body["id"].as_i64().unwrap();
+        let path = format!("/api/v1/admin/users/{amy_id}/bots/{made}");
+        let granted = gateway
+            .send(
+                Call::new(Method::PATCH, &path)
+                    .cookie(&rob)
+                    .json(&json!({"grants": [grant]})),
+            )
+            .await;
+        assert_eq!(
+            granted.status,
+            StatusCode::OK,
+            "{grant}: {:?}",
+            granted.body
+        );
+        assert_eq!(granted.body["grants"], json!([grant]));
+        // Keeping it while adding notes is not adding it.
+        let kept = set_grants(&gateway, &amy, made, json!([grant, "notes"])).await;
+        assert_eq!(kept.status, StatusCode::OK, "{grant}: {:?}", kept.body);
+        let removed = set_grants(&gateway, &amy, made, json!(["notes"])).await;
+        assert_eq!(
+            removed.status,
+            StatusCode::OK,
+            "{grant}: {:?}",
+            removed.body
+        );
+        let again = set_grants(&gateway, &amy, made, json!(["notes", grant])).await;
+        assert_eq!(
+            again.status,
+            StatusCode::FORBIDDEN,
+            "{grant}: {:?}",
+            again.body
+        );
+        assert_eq!(
+            again.body["message"],
+            format!("Only an admin can grant {grant}")
+        );
+        let diary = create_bot(&gateway, &amy, "Diary").await;
+        let refused = set_grants(&gateway, &amy, diary, json!([grant])).await;
+        assert_eq!(
+            refused.status,
+            StatusCode::FORBIDDEN,
+            "{grant}: {:?}",
+            refused.body
+        );
+        let diary = store::bot(&gateway.state.db, UserId(amy_id), BotId(diary))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(diary.grants.is_empty(), "{grant}");
+    }
 }
 
 #[tokio::test]
@@ -239,12 +283,12 @@ async fn admins_set_grants_only_on_bots_an_admin_made() {
             Event::BotUpdated { bot } if bot.id == BotId(made) && bot.grants == [Grant::Notes])),
         "{announced:?}"
     );
-    // The admin's taint and availability rules hold here too.
+    // The admin's rules hold here too: an unknown grant is malformed.
     let refused = gateway
         .send(
             Call::new(Method::PATCH, &path)
                 .cookie(&rob)
-                .json(&json!({"grants": ["web.search"]})),
+                .json(&json!({"grants": ["host.run"]})),
         )
         .await;
     assert_eq!(refused.status, StatusCode::BAD_REQUEST);
@@ -445,19 +489,6 @@ async fn a_thread_offers_exactly_its_bots_grants() {
     }
 }
 
-/// Gives rob's Bot these grants in the database, past the API's rules.
-async fn hold(gateway: &Gateway, bot: i64, grants: &[Grant]) {
-    store::set_grants(
-        &gateway.state.db,
-        gateway.state.clock.now(),
-        UserId(1),
-        BotId(bot),
-        &grants.iter().copied().collect(),
-    )
-    .await
-    .unwrap();
-}
-
 /// Crashes the user's app server and waits until the gateway sees it.
 async fn crash(gateway: &Gateway, user: i64) {
     gateway.fake.crash(UserId(user));
@@ -492,15 +523,14 @@ async fn only_a_web_search_bots_threads_turn_web_search_on_at_every_start_and_re
     let bare = create_bot(&gateway, &rob, "Bare").await;
     let scribe = create_bot(&gateway, &rob, "Scribe").await;
     set_grants(&gateway, &rob, scribe, json!(["notes", "seen"])).await;
-    // web.search cannot be granted through the API yet; a Bot holding it
-    // is made in the database.
     let scout = create_bot(&gateway, &rob, "Scout").await;
-    hold(&gateway, scout, &[Grant::WebSearch]).await;
+    set_grants(&gateway, &rob, scout, json!(["web.search"])).await;
     let digest = create_bot(&gateway, &rob, "Digest").await;
-    hold(
+    set_grants(
         &gateway,
+        &rob,
         digest,
-        &[Grant::Seen, Grant::WebSearch, Grant::Notes],
+        json!(["seen", "web.search", "notes"]),
     )
     .await;
     let bots = [bare, scribe, scout, digest];
@@ -558,7 +588,7 @@ async fn only_a_web_search_bots_threads_turn_web_search_on_at_every_start_and_re
     // Losing the grant starts a fresh thread without it; gaining it, one
     // with it.
     set_grants(&gateway, &rob, scout, json!([])).await;
-    hold(&gateway, bare, &[Grant::WebSearch]).await;
+    set_grants(&gateway, &rob, bare, json!(["web.search"])).await;
     say(&gateway, &rob, scout, "and now?").await;
     idle(&gateway, &rob, scout).await;
     say(&gateway, &rob, bare, "and now?").await;

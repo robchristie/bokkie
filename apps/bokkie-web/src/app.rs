@@ -362,7 +362,7 @@ pub enum BokkieAction {
     GrantWebFetch,
     #[action(
         label = "Grant web.search",
-        description = "Take web search away from the Bot; it cannot be granted yet"
+        description = "Let the Bot search the web, or take the grant away; only an admin can grant it"
     )]
     GrantWebSearch,
     #[action(

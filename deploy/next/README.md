@@ -62,7 +62,8 @@ sign-in limit per address does not hold; they are the owner's own
 services, and the gateway still checks `Host`, `Origin` and the session
 on every request.
 
-Every Codex tool stays off and Bokkie's own tools run in the gateway, as it
+Every Codex tool stays off, except web search for a Bot granted
+`web.search`, and Bokkie's own tools run in the gateway, as it
 enforces today ([docs/gateway.md](../../docs/gateway.md#the-capability-rule)),
 so no thread runs a command, and the gateway needs no Bubblewrap and no
 relaxed confinement. The image carries no

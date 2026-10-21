@@ -49,12 +49,6 @@ pub(crate) fn member_may_grant(grant: Grant) -> bool {
     matches!(grant, Grant::Notes | Grant::Seen | Grant::Notify)
 }
 
-/// The grants the gateway can grant: `web.search` has no tool yet, and is
-/// refused until it does.
-pub(crate) fn grantable(grant: Grant) -> bool {
-    grant != Grant::WebSearch
-}
-
 /// The action that turns a grant on or off.
 pub(crate) fn grant_action(grant: Grant) -> BokkieAction {
     match grant {
@@ -811,8 +805,6 @@ impl App {
                 if bot.grants.contains(&grant) {
                     // Any grant can be taken away.
                     None
-                } else if !grantable(grant) {
-                    because("Web search is not available yet")
                 } else if signed_in.is_some_and(|s| s.user.role != Role::Admin)
                     && !member_may_grant(grant)
                 {
