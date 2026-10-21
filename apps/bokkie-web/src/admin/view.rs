@@ -3,8 +3,8 @@
 
 use bokkie_protocol::api::{AdminUser, InvitationSummary, MemberBot, Role};
 use stobie_ui_egui::{
-    ActionEmphasis, BoundAction, NavigationLayout, PresentationContext, PresentationScope,
-    SemanticUiId, TextRole, observe_visible_only,
+    ActionEmphasis, BoundAction, CopySpec, NavigationLayout, PresentationContext,
+    PresentationScope, SemanticUiId, TextRole, observe_visible_only,
 };
 
 use super::{
@@ -277,14 +277,26 @@ fn invite_ui(
             "Give this code to the new account's owner. It is shown only now.",
             false,
         );
-        // Selectable, so it can be copied; kept out of every fact.
-        p.raw(ui, "code", "the invitation code, selectable", |ui| {
-            ui.add(
-                egui::Label::new(egui::RichText::new(&invitation.code).monospace().strong())
-                    .wrap()
-                    .selectable(true),
-            )
+        // On screen for the person, and copied with Copy; never in content
+        // text, a fact or an observation.
+        stobie_ui_egui::withhold_content_text(ui, |ui| {
+            p.content(
+                ui,
+                "code",
+                &invitation.code,
+                line(TextRole::MonospaceTechnical, 2),
+            );
         });
+        p.copy(
+            ui,
+            "copy-code",
+            &CopySpec::new(
+                &invitation.code,
+                "Copy invitation code",
+                "Copied",
+                "Couldn't copy",
+            ),
+        );
         p.content(
             ui,
             "code-expiry",

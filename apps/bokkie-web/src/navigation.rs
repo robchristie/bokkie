@@ -115,7 +115,7 @@ impl App {
         };
         signed_in.household = None;
         signed_in.admin = None;
-        if let Some(open) = signed_in.open.take() {
+        if let Some(open) = signed_in.take_open() {
             self.store.close_conversation(open.bot);
             self.store.close_routines(open.bot);
         }

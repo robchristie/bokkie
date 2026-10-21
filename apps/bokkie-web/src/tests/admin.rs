@@ -261,6 +261,11 @@ fn an_invitation_carries_its_role_and_permissions_and_its_code_shows_once() {
     }))));
     assert_eq!(fixture.fact("invitation_shown"), true.into());
     assert!(fixture.shows(CODE));
+    // Copy gives the code to the clipboard, never to an observation.
+    fixture.press(|harness| harness.get_by_label("Copy invitation code"));
+    assert_eq!(fixture.copied(), Some(CODE.into()));
+    fixture.harness.run();
+    assert!(fixture.shows("Copied"));
     assert!(fixture.shows("Give this code to the new account's owner. It is shown only now."));
     assert!(fixture.shows("It expires in 3 days"));
     // The list is loaded again.

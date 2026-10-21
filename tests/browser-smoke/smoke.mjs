@@ -11,8 +11,9 @@
 //
 // - starts the page under the gateway's Content-Security-Policy;
 // - signs in by clicking the fields and typing;
-// - opens the Bot and sends; the reply streams in more than one delta and
-//   completes;
+// - opens the Bot and sends from the composer; the reply streams in more
+//   than one delta and completes, and its Copy, pressed through the
+//   accessibility layer, puts it on the clipboard;
 // - stops a second reply mid-stream, which shows as interrupted;
 // - drops the connection mid-reply and refuses new ones while more than one
 //   piece arrives, then lets the client reconnect: the reply completes with
@@ -35,12 +36,13 @@
 // - shows the subscription meter and the limit-reached banner from windows
 //   the mock reports;
 // - has the admin invite a member, with permissions, from the accounts
-//   screen; the member joins with the code in a second browser context and
-//   sees the household's status only; the member makes a Bot; the admin
-//   sets the member's limit and permissions, which reach the member live;
-//   the member is refused beyond the limit; and oversight, switched on while
-//   the member is signed in, shows its notice on the member's page while
-//   the admin reads the conversation, read-only;
+//   screen, and copy the code with its Copy, read back from the clipboard
+//   and published nowhere; the member joins with it in a second browser
+//   context and sees the household's status only; the member makes a Bot;
+//   the admin sets the member's limit and permissions, which reach the
+//   member live; the member is refused beyond the limit; and oversight,
+//   switched on while the member is signed in, shows its notice on the
+//   member's page while the admin reads the conversation, read-only;
 // - checks the installable application as Stobie's pwa-smoke.mjs does, and
 //   that the font notices are served as text;
 // - fails on any CSP violation, page error or console error;
@@ -88,6 +90,8 @@ const PIECES = ['Kia ora! ', 'Here ', 'is ', 'a ', 'plan: ', 'Monday, ', 'a ', '
   'Saturday, ', 'the ', 'market; ', 'Sunday, ', 'a ', 'roast. ', 'Enjoy!'];
 const REPLY = PIECES.join('');
 const PIECE_MS = 200;
+// Stobie's accessibility layer, the page's ARIA tree.
+const LAYER = '[id^="stobie-a11y:layer"]';
 const PASSWORD = `synthetic ${randomUUID()}`;
 // The stand-in push service's subscription. Its endpoint names a loopback
 // host, which the gateway refuses to send to; its keys are well-formed, as
@@ -227,6 +231,12 @@ class Automation {
     return nodes.map(({ node }) => node);
   }
   setText(id, text) { return this.invoke({ id, capability: 'stobie.set-text' }, text); }
+  // Write in the composer, which Stobie names "Message", as a person types.
+  async compose(text) {
+    const [field, ...others] = await this.nodes({ role: 'multiline_text_input', name: 'Message' });
+    assert(field && others.length === 0, 'one composer');
+    await this.setText(field.id, text);
+  }
   // Scroll down (or up) with the mouse wheel, as a person does, until a
   // control is in view and so presented.
   async scrollTo(selector, by = 200) {
@@ -251,9 +261,9 @@ class Automation {
 }
 
 // Visible text the page's accessibility layer carries: aria-labels and leaf
-// text. Facts never carry content text, nor ever an invitation code, and
-// content text carries no control's label, so the code and controls are
-// read here; Bot text is read as content text.
+// text. Facts never carry content text, and content text carries no
+// control's label, so controls and notices are read here; Bot text is read
+// as content text, and an invitation code only from the clipboard.
 const pageTexts = page => page.evaluate(() => {
   const texts = new Set();
   for (const element of document.querySelectorAll('body *:not(style):not(script)')) {
@@ -265,6 +275,20 @@ const pageTexts = page => page.evaluate(() => {
   }
   return [...texts];
 });
+
+// The clipboard's text once `holds` accepts it, within five seconds. It is
+// read from here, since a page function's promise is not awaited by
+// waitForFunction.
+async function clipboardText(page, holds) {
+  let text = '';
+  for (let tries = 0; tries < 100; tries++) {
+    text = await page.evaluate(() => navigator.clipboard.readText());
+    if (holds(text)) return text;
+    await wait(50);
+  }
+  throw new Error(`the clipboard holds ${text.length} characters, not what was copied`);
+}
+const clipboardHolds = (page, expected) => clipboardText(page, text => text === expected);
 
 // The page's stand-ins for a push service and the app badge, as Stobie's
 // web-push smoke has them: subscribing records the call and keeps the
@@ -407,7 +431,8 @@ try {
   const page = context.pages()[0] ?? await context.newPage();
   // Notifications are allowed, as a person allows them when the switch
   // asks, and the push service is the stand-in.
-  await context.grantPermissions(['notifications'], { origin });
+  // So is the clipboard, which Copy writes and the smoke reads back.
+  await context.grantPermissions(['notifications', 'clipboard-read', 'clipboard-write'], { origin });
   await page.addInitScript(pushStandIn, { endpoint: PUSH_ENDPOINT, keys: PUSH_KEYS });
   const problems = [];
   // Failed requests are expected: the session check before signing in
@@ -528,9 +553,9 @@ try {
   // than steering the last one.
   const send = async text => {
     await app.until('the Bot idle', facts => facts.bot_status === 'idle' && facts.reply_state !== 'streaming', 60000);
-    await app.setText('bokkie.draft', text);
+    await app.compose(text);
     await app.until('the draft entered', facts => facts.draft === text, 5000);
-    await app.action('bokkie.send');
+    await app.action('bokkie.send', text);
     await app.until('delivered', facts => facts.delivery === 'new_turn' && facts.draft === '');
   };
   let before = deltas();
@@ -547,6 +572,17 @@ try {
   assert.equal(complete.reply, REPLY, 'the page holds the whole reply');
   assert.equal((await storedReply()).text, REPLY);
   step('reply streamed and completed', { delta_frames: firstDeltas, lengths_seen: [...seen].sort((a, b) => a - b) });
+
+  // Copy the reply, as VoiceOver's double tap does: a click on its control
+  // in the accessibility layer. The clipboard holds the reply, and the
+  // control says so.
+  await page.evaluate(() => navigator.clipboard.writeText(''));
+  const copies = page.locator(`${LAYER} [role="button"][aria-label="Copy message"]`);
+  assert.equal(await copies.count(), 2, 'a Copy for each message');
+  await copies.last().evaluate(target => target.click());
+  await page.locator(`${LAYER} [role="status"]`, { hasText: 'Copied' }).first().waitFor({ state: 'attached', timeout: 5000 });
+  await clipboardHolds(page, REPLY);
+  step('reply copied', { copies: 2 });
 
   // Stop a second reply mid-stream.
   await send('And next week?');
@@ -858,9 +894,13 @@ try {
   await app.action('bokkie.create-invitation');
   await app.until('the code shown', facts => facts.invitation_shown === true && facts.invitations === 1);
   // The code is on the page, which a person reads off it, and never a fact.
-  const codes = (await pageTexts(page)).filter(text => /^[A-Za-z0-9_-]{43}$/.test(text));
-  assert.equal(codes.length, 1, `one invitation code on the page: ${codes.length}`);
-  const [invitationCode] = codes;
+  // The code reaches the admin only by Copy: an agent's copy, as a person's
+  // press, puts it on the clipboard, read back here.
+  await page.evaluate(() => navigator.clipboard.writeText(''));
+  const [copyCode, ...otherCopies] = await app.nodes({ role: 'button', name: 'Copy invitation code' });
+  assert(copyCode && otherCopies.length === 0, 'one Copy for the code');
+  await app.invoke({ id: copyCode.id, capability: 'stobie.copy-text' });
+  const invitationCode = await clipboardText(page, text => /^[A-Za-z0-9_-]{43}$/.test(text));
   assert(!JSON.stringify(await app.request({ op: 'observe' })).includes(invitationCode), 'the code is in no observation');
   step('admin invited a member', { invitations: 1 });
 
@@ -934,14 +974,14 @@ try {
   const helper = (await api('GET', '/bots', undefined, memberCookie)).body.bots[0];
   await member.action('bokkie.open-bot', helper.id);
   await member.until('the Helper', facts => facts.conversation === 'loaded' && facts.bot === helper.id);
-  await member.setText('bokkie.draft', 'Hello');
+  await member.compose('Hello');
   await member.until('the draft entered', facts => facts.draft === 'Hello', 5000);
-  await member.action('bokkie.send');
+  await member.action('bokkie.send', 'Hello');
   await member.until('the member\'s reply', facts => facts.reply === 'Hello there.' && facts.reply_state === 'complete'
     && facts.bot_status === 'idle', 60000);
-  await member.setText('bokkie.draft', 'And again');
+  await member.compose('And again');
   await member.until('the second draft entered', facts => facts.draft === 'And again', 5000);
-  await member.action('bokkie.send');
+  await member.action('bokkie.send', 'And again');
   const refused = await member.until('the send refused', facts => facts.sending === false && facts.send_error !== '', 30000);
   assert.equal(refused.send_error, 'You have used your allowance for now. It refills over the next day or week');
   assert.equal(refused.draft, 'And again', 'the draft stays');

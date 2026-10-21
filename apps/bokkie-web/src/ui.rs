@@ -1,8 +1,9 @@
 //! The application's presentation: sign-in on a page of its own, and once
 //! signed in Stobie's navigation recipe (see `navigation`). The Bot list is
 //! Stobie's conversation rows, with each Bot's avatar from `avatars`; the
-//! other panes still hold plain stand-ins (settled decision 3), each control
-//! on a row of its own.
+//! conversation is Stobie's message bubbles, each with Copy, above its
+//! composer. The other panes still hold plain stand-ins (settled decision
+//! 3), each control on a row of its own.
 
 use std::collections::BTreeSet;
 
@@ -13,8 +14,9 @@ use bokkie_protocol::api::{
 };
 use stobie_ui_egui::local_time::LocalTime;
 use stobie_ui_egui::{
-    ActionArgument, ActionEmphasis, AvatarSize, AvatarSpec, BoundAction, ContentTextSpec,
-    ConversationRowSpec, DomainReference, Frame, IconId, LinkSpec, ListRowSpec, MarkdownSpec,
+    ActionArgument, ActionEmphasis, AvatarSize, AvatarSpec, BoundAction, ComposerControl,
+    ComposerSpec, ContentTextSpec, ConversationRowSpec, CopyContent, CopySpec, DomainReference,
+    Frame, IconId, LinkSpec, ListRowSpec, MarkdownSpec, MessageBubbleSpec, MessageSide,
     NativeTextControlKind, NavigationContent, NavigationDetail, NavigationPane, NavigationSpec,
     PresentationContext, PresentationScope, ReadingTextSpec, SemanticUiId, SwitchSpec,
     TextInteraction, TextOverflow, TextRole, UiNode, UiRole, avatar_size, observe_visible_only,
@@ -22,8 +24,8 @@ use stobie_ui_egui::{
 };
 
 use crate::app::{
-    APPLICATION_NAME, Account, App, BOT_NAME_ID, BokkieAction, BokkieIntent, DRAFT_ID, Household,
-    Login, NewBot, Open, PASSWORD_ID, PROFILE_DESCRIPTION_ID, PROFILE_LABEL_ID, PROFILE_NAME_ID,
+    APPLICATION_NAME, Account, App, BOT_NAME_ID, BokkieAction, BokkieIntent, Household, Login,
+    NewBot, Open, PASSWORD_ID, PROFILE_DESCRIPTION_ID, PROFILE_LABEL_ID, PROFILE_NAME_ID,
     ProfileEditor, Session, SignInForm, SignOut, SignedIn, USERNAME_ID,
 };
 use crate::app::{DISPLAY_NAME_ID, INVITATION_CODE_ID};
@@ -32,9 +34,18 @@ use crate::socket::Link;
 
 pub(crate) type BokkieFrame<'a, 'b> = Frame<'a, BokkieAction, BokkieIntent>;
 
-/// Room kept below a conversation's messages for the message field, its
-/// buttons and a status line.
-const COMPOSER_HEIGHT: f32 = 230.0;
+/// Room kept below a conversation's messages for the composer and its
+/// status lines until the composer has been measured.
+const COMPOSER_HEIGHT: f32 = 120.0;
+
+/// The composer's accessible name; its hint names the Bot.
+pub(crate) const COMPOSER_NAME: &str = "Message";
+
+/// The name of each message's Copy.
+pub(crate) const COPY_MESSAGE: &str = "Copy message";
+/// What a copy control says once it has copied, and when it could not.
+const COPIED: &str = "Copied";
+const NOT_COPIED: &str = "Couldn't copy";
 
 /// How often a meter with reset times is shown again, so they stay true.
 pub(crate) const METER_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
@@ -305,20 +316,13 @@ fn sign_in_ui(
     }
 }
 
-/// A Bot's label and status, or its status alone for a Bot with no label,
-/// and whether it is pinned or hidden.
+/// A Bot's label and status, or its status alone for a Bot with no label.
+/// Whether it is pinned or hidden is its header's Pin and Hide.
 fn details(bot: &Bot) -> String {
-    let mut details = match bot.label.as_str() {
+    match bot.label.as_str() {
         "" => status_text(bot.status).to_owned(),
         label => format!("{label} · {}", status_text(bot.status)),
-    };
-    if bot.pinned {
-        details.push_str(" · Pinned");
     }
-    if bot.hidden {
-        details.push_str(" · Hidden");
-    }
-    details
 }
 
 pub(crate) fn status_text(status: BotStatus) -> &'static str {
@@ -932,7 +936,12 @@ fn conversation_ui(
     let store = app.store();
     let bot = store.bot(open.bot);
     if let Some(bot) = bot {
-        p.content(ui, "details", &details(bot), line(TextRole::Secondary, 1));
+        // The pane's header names the Bot and toggles its settings; below
+        // it, its avatar, label and status, and Pin, Hide and the profile.
+        ui.horizontal(|ui| {
+            p.avatar(ui, &bot_avatar(bot.id, AvatarSize::Header));
+            p.content(ui, "details", &details(bot), line(TextRole::Secondary, 1));
+        });
         bot_controls_ui(ui, p, frame, signed_in, open, bot);
     }
     // A conversation that failed to load can be loaded again here, unless
@@ -947,9 +956,21 @@ fn conversation_ui(
         p.status(ui, "goto-status", note, true);
     }
     ui.separator();
-    messages_ui(ui, frame, app, open, name);
+    // The composer grows with its draft, so the messages take what its
+    // height last pass leaves.
+    let measured = ui.id().with("bokkie.composer-height");
+    let reserved = ui
+        .data(|data| data.get_temp::<f32>(measured))
+        .unwrap_or(COMPOSER_HEIGHT);
+    messages_ui(ui, frame, app, open, name, reserved);
+    let start = ui.cursor().top();
     ui.separator();
-    composer_ui(ui, p, frame, app, open);
+    composer_ui(ui, p, frame, app, open, name);
+    let height = ui.cursor().top() - start;
+    if (height - reserved).abs() > 0.5 {
+        ui.data_mut(|data| data.insert_temp(measured, height));
+        frame.request_repaint("composer height");
+    }
 }
 
 /// Pin and hide, which every user can, and the profile, which needs the
@@ -1073,9 +1094,10 @@ fn messages_ui(
     app: &App,
     open: &Open,
     bot_name: &str,
+    reserved: f32,
 ) {
     let store = app.store();
-    let height = (ui.available_height() - COMPOSER_HEIGHT).max(80.0);
+    let height = (ui.available_height() - reserved - ui.spacing().item_spacing.y).max(80.0);
     observe_visible_only(ui, |ui| {
         egui::ScrollArea::vertical()
             .max_height(height)
@@ -1189,6 +1211,9 @@ pub(crate) fn message_by(
     first
 }
 
+/// A message in its bubble: the user's at the end of the line as reading
+/// text, the Bot's at the start as Markdown, each with its byline above and
+/// Copy below.
 fn text_message_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
@@ -1196,9 +1221,9 @@ fn text_message_ui(
     message: &Message,
 ) -> egui::Response {
     let key = message.id.0;
-    let author = match message.author {
-        Author::User => shown.user_name,
-        Author::Bot => shown.bot_name,
+    let (side, author) = match message.author {
+        Author::User => (MessageSide::Own, shown.user_name),
+        Author::Bot => (MessageSide::Other, shown.bot_name),
     };
     let time = crate::times::message_time(shown.local, message.created_at);
     let byline = match message.state {
@@ -1207,24 +1232,110 @@ fn text_message_ui(
         MessageState::Interrupted => format!("{author} · {time} · stopped"),
         MessageState::Failed => format!("{author} · {time} · failed"),
     };
-    let byline = p.content(ui, ("author", key), &byline, line(TextRole::Caption, 1));
-    if message.text.is_empty() && message.state == MessageState::Streaming {
-        p.reading_text(ui, ("text", key), "…", ReadingTextSpec::default());
-    } else if message.author == Author::Bot {
-        // A reply that is still arriving is safe to show as it stands.
-        p.markdown(
+    let spec = MessageBubbleSpec {
+        side,
+        sender: author,
+    };
+    let byline = p.message_bubble(ui, ("message", key), spec, |ui, p| {
+        let byline = p.content(ui, ("author", key), &byline, line(TextRole::Caption, 1));
+        if message.text.is_empty() && message.state == MessageState::Streaming {
+            p.reading_text(ui, ("text", key), "…", ReadingTextSpec::default());
+        } else if message.author == Author::Bot {
+            // A reply that is still arriving is safe to show as it stands.
+            p.markdown(
+                ui,
+                ("text", key),
+                &message.text,
+                MarkdownSpec {
+                    link_description: Some(OPENS_A_NEW_TAB),
+                    ..MarkdownSpec::default()
+                },
+            );
+        } else {
+            p.reading_text(ui, ("text", key), &message.text, ReadingTextSpec::default());
+        }
+        byline
+    });
+    copies_ui(ui, p, message, side);
+    byline
+}
+
+/// Copy for a message, and for each code block in a Bot's reply, once the
+/// message has settled: below its bubble, on the bubble's side.
+///
+/// Stand-ins: Stobie's Markdown has no Copy on a code block, so each
+/// block's Copy sits with the message's, numbered in order when there are
+/// several; and a Copy inside a bubble kept a long conversation from
+/// settling, so they sit outside it.
+fn copies_ui(ui: &mut egui::Ui, p: &mut PresentationContext, message: &Message, side: MessageSide) {
+    if message.state == MessageState::Streaming || message.text.trim().is_empty() {
+        return;
+    }
+    let key = message.id.0;
+    let blocks = match message.author {
+        Author::Bot => code_blocks(&message.text),
+        Author::User => Vec::new(),
+    };
+    let layout = match side {
+        MessageSide::Own => egui::Layout::right_to_left(egui::Align::Center),
+        MessageSide::Other => egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
+    };
+    let inset = p.tokens().spacing.section.0;
+    // One row high, as `ui.horizontal` is: a row laid out in the scrolled
+    // column's whole height would centre its controls far below the bubble.
+    let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(row, layout, |ui| {
+        ui.add_space(inset);
+        p.copy(
             ui,
-            ("text", key),
-            &message.text,
-            MarkdownSpec {
-                link_description: Some(OPENS_A_NEW_TAB),
-                ..MarkdownSpec::default()
+            ("copy", key),
+            &CopySpec {
+                content: CopyContent::Icon,
+                ..CopySpec::new(&message.text, COPY_MESSAGE, COPIED, NOT_COPIED)
             },
         );
-    } else {
-        p.reading_text(ui, ("text", key), &message.text, ReadingTextSpec::default());
+        for (index, block) in blocks.iter().enumerate() {
+            let label = match blocks.len() {
+                1 => "Copy code".to_owned(),
+                _ => format!("Copy code {}", index + 1),
+            };
+            p.copy(
+                ui,
+                ("copy-code", key, index),
+                &CopySpec::new(block, &label, COPIED, NOT_COPIED),
+            );
+        }
+    });
+}
+
+/// The text of each code block in a Bot's reply, in order, as Stobie's
+/// Markdown reads them, without the newline that ends a block.
+pub(crate) fn code_blocks(markdown: &str) -> Vec<String> {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+    let mut blocks = Vec::new();
+    let mut block: Option<String> = None;
+    for event in Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH) {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => block = Some(String::new()),
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some(mut text) = block.take() {
+                    if text.ends_with('\n') {
+                        text.pop();
+                    }
+                    if !text.trim().is_empty() {
+                        blocks.push(text);
+                    }
+                }
+            }
+            Event::Text(text) => {
+                if let Some(block) = &mut block {
+                    block.push_str(&text);
+                }
+            }
+            _ => {}
+        }
     }
-    byline
+    blocks
 }
 
 /// A marker: a capability change, a routine's run with its prompt folded
@@ -1284,14 +1395,19 @@ fn marker_ui(
     first
 }
 
+/// Stop on a row of its own while a reply runs, then Stobie's composer:
+/// a field that grows with the draft, hinted with the Bot's name, and Send
+/// as an icon. Return sends and Shift+Return starts a new line, except in a
+/// touch device's own field, where Return is the platform's. The microphone
+/// and `+` are not drawn (settled decision 26).
 fn composer_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
     frame: &mut BokkieFrame<'_, '_>,
     app: &App,
     open: &Open,
+    bot_name: &str,
 ) {
-    // Only while a reply runs, on a row of its own.
     if app.shows_stop() {
         frame.action(ui, p, BokkieAction::Stop, ActionEmphasis::Normal);
     }
@@ -1300,16 +1416,22 @@ fn composer_ui(
     } else if let Some(note) = &open.stop_note {
         p.status(ui, "stop-status", note, false);
     }
-    ui.add_enabled_ui(!open.sending, |ui| {
-        let (draft, field) = text_field(ui, p, DRAFT_ID, "Message", &open.draft, false);
-        if draft != open.draft {
-            frame.emit(BokkieIntent::EditDraft(draft));
-        }
-        if submitted(ui, &field) {
-            frame.trigger(BokkieAction::Send);
-        }
-    });
-    frame.action(ui, p, BokkieAction::Send, ActionEmphasis::Primary);
+    let hint = format!("Message {bot_name}");
+    let spec = ComposerSpec::new(
+        COMPOSER_NAME,
+        ComposerControl::icon(BokkieAction::Send, IconId::Send),
+    )
+    .hint(&hint);
+    // The draft is fixed while a send is under way, and the field keeps
+    // its focus, so typing goes on once it is sent.
+    frame.composer(
+        ui,
+        p,
+        "composer",
+        &spec,
+        &open.draft,
+        BokkieIntent::EditDraft,
+    );
     if open.sending {
         p.status(ui, "send-status", "Sending…", false);
     } else if let Some(error) = open

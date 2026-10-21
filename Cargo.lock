@@ -795,6 +795,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "http-body-util",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "stobie-core",
