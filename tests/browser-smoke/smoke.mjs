@@ -37,6 +37,9 @@
 //   from its node and its accessible button; Show brings its
 //   marker and the mock's reply into view, says the Bot is viewed, and
 //   marks it read;
+// - opens the Bot's panel, grants notes with its switch and runs the
+//   routine again, calling a tool: the panel shows the routine, the run
+//   among its recent runs and the call in its activity;
 // - opens the Bot a tapped notification names, through the service
 //   worker's own route handling, then switches notifications off;
 // - shows the subscription meter and the limit-reached banner from windows
@@ -870,6 +873,55 @@ try {
   assert.equal((await page.evaluate(() => window.__pushStandIn.badges)).at(-1), 0, 'the app badge cleared');
   assert.equal(viewingSent().at(-1), bot.id, 'the page says it views the Planner');
   step('viewed and read', { read_up_to: read.read_up_to, viewing: viewingSent() });
+
+  // The Bot's panel, from the conversation's header: notes granted with
+  // their switch, then the routine run again, calling notes_read before it
+  // replies. The panel shows the routine, the run among its recent runs and
+  // the call in its activity, as the turn's end reloads it.
+  await controlRequest('reply', { pieces: ['Read the notes.'], piece_delay_ms: 0 });
+  await app.action('bokkie.bot-settings');
+  const opened = await app.until('the panel', facts => facts.screen === 'bot_settings' && facts.routines === 'loaded'
+    && facts.routine_count === 1 && facts.recent_runs_state === 'loaded' && facts.tool_calls_state === 'loaded');
+  assert.equal(opened.recent_run, ran.run, 'the first run is the newest recent run');
+  assert.equal(opened.tool_calls, 0, 'no tool calls yet');
+  await app.scrollTo({ capability: 'bokkie.grant-notes' });
+  const [notesSwitch, ...otherSwitches] = await app.nodes({ role: 'switch', name: 'Grant notes' });
+  assert(notesSwitch && otherSwitches.length === 0, 'one switch for the notes grant');
+  await app.action('bokkie.grant-notes');
+  await app.until('notes granted', facts => facts.grants === 'notes' && facts.updating === false);
+  // The accessibility layer presents the switch, on.
+  const ariaSwitch = page.getByRole('switch', { name: 'Grant notes', exact: true });
+  for (const deadline = Date.now() + 10000; await ariaSwitch.getAttribute('aria-checked').catch(() => null) !== 'true'; await wait(50)) {
+    assert(Date.now() < deadline, 'the notes switch reads on');
+  }
+  await controlRequest('tool-call', { name: 'notes_read', arguments: {} });
+  await app.scrollTo({ capability: 'bokkie.run-routine' }, -200);
+  await app.action('bokkie.run-routine', routine.id);
+  const again = await app.until('the run and its call in the panel', facts => facts.recent_run > ran.run
+    && facts.recent_run_state === 'succeeded' && facts.recent_runs === 2 && facts.tool_calls === 1
+    && facts.tool_calls_state === 'loaded' && facts.bot_status === 'idle', 60000);
+  const { body: { calls } } = await api('GET', `/bots/${bot.id}/tool-calls?limit=10`, undefined, cookie);
+  assert.deepEqual(calls.map(call => [call.tool, call.outcome, call.routine_run_id]), [['notes_read', 'ok', again.recent_run]]);
+  // Down the panel, as a person scrolls it: the routine, the run and the
+  // call, each in view in turn.
+  const inPanel = { routine: false, run: false, call: false };
+  await app.scrollTo({ capability: 'bokkie.run-routine' }, -200);
+  for (let attempt = 0; attempt < 40 && !(inPanel.routine && inPanel.run && inPanel.call); attempt++) {
+    const texts = await app.contents();
+    inPanel.routine ||= texts.includes(ROUTINE) && texts.some(text => text.startsWith('Every day at 06:45 · Next run '));
+    inPanel.run ||= texts.some(text => text.startsWith('Succeeded · run now · '));
+    inPanel.call ||= texts.some(text => /^notes_read · done · \d+ ms · .* · routine run$/.test(text));
+    await page.mouse.move(215, 600);
+    await page.mouse.wheel(0, 200);
+    await wait(100);
+  }
+  assert.deepEqual(inPanel, { routine: true, run: true, call: true }, 'the panel showed the routine, its run and its call');
+  await page.screenshot({ path: join(evidence, 'panel-dark-430.png') });
+  step('the Bot\'s panel', { recent_run: again.recent_run, recent_runs: again.recent_runs, tool_calls: again.tool_calls, seen: inPanel });
+  // Closed, the conversation is in view again and read.
+  await app.action('bokkie.bot-settings');
+  await app.until('the Planner read again', facts => facts.screen === 'conversation' && facts.unread === ''
+    && facts.badge === 0 && facts.viewing === bot.id);
 
   // A tapped notification opens its Bot: Chromium cannot click a system
   // notification under automation, so the worker's own openRoute, which its

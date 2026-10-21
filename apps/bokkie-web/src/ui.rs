@@ -51,7 +51,7 @@ const NOT_COPIED: &str = "Couldn't copy";
 pub(crate) const METER_REFRESH: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// What assistive technology says of every link in a Bot's reply.
-const OPENS_A_NEW_TAB: &str = "Opens in a new tab";
+pub(crate) const OPENS_A_NEW_TAB: &str = "Opens in a new tab";
 
 pub(crate) fn present(app: &App, ui: &mut egui::Ui, frame: &mut BokkieFrame<'_, '_>) {
     let Session::SignedIn(signed_in) = &app.session else {

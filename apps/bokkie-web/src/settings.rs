@@ -1,12 +1,16 @@
-//! A Bot's settings, opened from its conversation: its grants, its notes,
-//! its recent tool calls, and its routines with their run history. Also the
-//! user's own time zone, which routines run in and times are shown in.
+//! A Bot's panel, opened from its conversation: its routines with their
+//! run history, its recent runs, its grants, its notes and its activity,
+//! the recent tool calls. Also the user's own time zone, which routines
+//! run in and times are shown in.
 //!
 //! The routines themselves live in the [`Store`](crate::store::Store),
 //! which keeps them current from the event log; everything else here loads
-//! when the settings open and again on Refresh. A routine's history takes
+//! when the panel opens and again on Refresh. The recent runs gather each
+//! routine's newest few, and they and a routine's history take
 //! [`Event::RoutineRunUpdated`](bokkie_protocol::events::Event) directly,
-//! keeping whichever copy of a run is further on.
+//! keeping whichever copy of a run is further on. The gateway sends no
+//! event for a tool call, so the activity and the notes load again when a
+//! turn of the Bot's ends.
 
 pub(crate) mod view;
 
@@ -37,6 +41,9 @@ pub const ROUTINE_AT_ID: &str = "bokkie.routine-at";
 pub const ROUTINE_EVERY_ID: &str = "bokkie.routine-every";
 /// The time zone field's stable ID.
 pub const TIME_ZONE_ID: &str = "bokkie.time-zone";
+
+/// How many runs the recent runs show, newest first, across the routines.
+pub(crate) const RECENT_SHOWN: usize = 8;
 
 /// The longest routine name the gateway accepts, in characters.
 const NAME_CHARS: usize = 60;
@@ -131,9 +138,29 @@ pub(crate) struct Settings {
     pub(crate) routine_error: Option<String>,
     /// The run history shown, of one routine at a time.
     pub(crate) history: Option<History>,
+    /// Each routine's newest few runs, gathered for the recent runs, with
+    /// those the events have added since.
+    pub(crate) recent: BTreeMap<RoutineRunId, RoutineRun>,
+    /// The routines whose newest runs are loading.
+    pub(crate) recent_loading: BTreeSet<RoutineId>,
+    /// Why a routine's newest runs last failed to load.
+    pub(crate) recent_error: Option<String>,
 }
 
 impl Settings {
+    /// The recent runs shown, newest first.
+    pub(crate) fn recent_runs(&self) -> impl Iterator<Item = &RoutineRun> {
+        self.recent.values().rev().take(RECENT_SHOWN)
+    }
+
+    /// A run the panel shows, in the history or the recent runs.
+    fn shown_run(&self, run: RoutineRunId) -> Option<&RoutineRun> {
+        self.history
+            .as_ref()
+            .and_then(|h| h.runs.get(&run))
+            .or_else(|| self.recent.get(&run))
+    }
+
     /// The routines' state, as the `routines` fact names it.
     fn routines_state(&self, app: &App, bot: BotId) -> &'static str {
         if app.store().routines(bot).is_some() {
@@ -313,29 +340,32 @@ impl History {
     /// events about it can arrive in either order; a run only moves on, from
     /// waiting to running to its outcome, gathering messages.
     pub(crate) fn merge(&mut self, run: RoutineRun) -> bool {
-        if run.routine_id != self.routine {
-            return false;
-        }
-        let rank = |run: &RoutineRun| match run.state {
-            RunState::Waiting => 0,
-            RunState::Running => 1,
-            _ => 2,
-        };
-        match self.runs.get(&run.id) {
-            Some(held) if *held == run => false,
-            Some(held) if (rank(held), held.messages.len()) > (rank(&run), run.messages.len()) => {
-                false
-            }
-            _ => {
-                self.runs.insert(run.id, run);
-                true
-            }
-        }
+        run.routine_id == self.routine && merge_run(&mut self.runs, run)
     }
 
     /// The runs, newest first.
     pub(crate) fn newest_first(&self) -> impl Iterator<Item = &RoutineRun> {
         self.runs.values().rev()
+    }
+}
+
+/// Keep a copy of a run in `runs` unless the one held is further on.
+/// Returns whether it changed. Runs carry no sequence number, so a page and
+/// the events about it can arrive in either order; a run only moves on,
+/// from waiting to running to its outcome, gathering messages.
+fn merge_run(runs: &mut BTreeMap<RoutineRunId, RoutineRun>, run: RoutineRun) -> bool {
+    let rank = |run: &RoutineRun| match run.state {
+        RunState::Waiting => 0,
+        RunState::Running => 1,
+        _ => 2,
+    };
+    match runs.get(&run.id) {
+        Some(held) if *held == run => false,
+        Some(held) if (rank(held), held.messages.len()) > (rank(&run), run.messages.len()) => false,
+        _ => {
+            runs.insert(run.id, run);
+            true
+        }
     }
 }
 
@@ -537,11 +567,18 @@ impl App {
                 }
                 match result {
                     Ok(list) => {
+                        let routines: Vec<RoutineId> =
+                            list.routines.iter().map(|routine| routine.id).collect();
                         if let Some(settings) = self.settings_of(bot) {
                             settings.routines_error = None;
+                            settings.recent_error = None;
+                            settings.recent_loading.extend(routines.iter().copied());
                         }
                         let applied = self.store.load_routines(bot, list);
                         self.load_all(applied.reload);
+                        for routine in routines {
+                            self.send(ApiRequest::LoadRecentRuns(bot, routine));
+                        }
                     }
                     Err(error) if ended(&error) => return Ok(self.settings_ended()),
                     Err(_) if again => {}
@@ -647,6 +684,29 @@ impl App {
                 }
                 Ok(true)
             }
+            ApiReply::RecentRuns(bot, routine, result) => {
+                let Some(settings) = self
+                    .settings_of(bot)
+                    .filter(|s| s.recent_loading.contains(&routine))
+                else {
+                    return Ok(false);
+                };
+                settings.recent_loading.remove(&routine);
+                match result {
+                    Ok(page) => {
+                        for run in page
+                            .runs
+                            .into_iter()
+                            .filter(|run| run.routine_id == routine)
+                        {
+                            merge_run(&mut settings.recent, run);
+                        }
+                    }
+                    Err(error) if ended(&error) => return Ok(self.settings_ended()),
+                    Err(error) => settings.recent_error = Some(error.message),
+                }
+                Ok(true)
+            }
             ApiReply::RoutineCreated(bot, result) => {
                 let Some(settings) = self.settings_of(bot) else {
                     return Ok(false);
@@ -728,8 +788,9 @@ impl App {
                 match result {
                     Ok(run) => {
                         if let Some(history) = &mut settings.history {
-                            history.merge(run);
+                            history.merge(run.clone());
                         }
+                        merge_run(&mut settings.recent, run);
                     }
                     Err(error) if ended(&error) => return Ok(self.settings_ended()),
                     Err(error) => settings.routine_error = Some(error.message),
@@ -740,12 +801,38 @@ impl App {
         }
     }
 
-    /// A run's update from the event socket, for the history shown.
-    /// Returns whether it changed.
+    /// A run's update from the event socket, for the history shown and the
+    /// recent runs. Returns whether it changed.
     pub(crate) fn run_updated(&mut self, run: &RoutineRun) -> bool {
-        self.settings_of(run.bot_id)
-            .and_then(|settings| settings.history.as_mut())
-            .is_some_and(|history| history.merge(run.clone()))
+        let Some(settings) = self.settings_of(run.bot_id) else {
+            return false;
+        };
+        let history = settings
+            .history
+            .as_mut()
+            .is_some_and(|history| history.merge(run.clone()));
+        merge_run(&mut settings.recent, run.clone()) || history
+    }
+
+    /// A turn of `bot`'s ended: what it did may have changed its activity
+    /// and its notes, which no event reports, so load them again unless
+    /// they are loading or the notes are being cleared. Returns whether
+    /// anything changed.
+    pub(crate) fn turn_ended(&mut self, bot: BotId) -> bool {
+        let Some(settings) = self.settings_of(bot) else {
+            return false;
+        };
+        let calls = settings.calls_loading.is_none();
+        let notes = !settings.notes_loading && settings.clear == Clear::Idle;
+        if calls {
+            settings.calls_loading = Some(None);
+            self.send(ApiRequest::LoadToolCalls(bot, None));
+        }
+        if notes && let Some(settings) = self.settings_of(bot) {
+            settings.notes_loading = true;
+            self.send(ApiRequest::LoadNotes(bot));
+        }
+        calls || notes
     }
 
     /// A routine deleted, as the event socket says: its history and any
@@ -867,9 +954,11 @@ impl App {
                 None => None,
             },
             BokkieAction::PauseRoutine
+            | BokkieAction::ResumeRoutine
             | BokkieAction::RunRoutine
             | BokkieAction::RoutineHistory
-            | BokkieAction::ShowRun => need(),
+            | BokkieAction::ShowRun
+            | BokkieAction::ShowRecentRun => need(),
             BokkieAction::DeleteRoutine => match settings {
                 None => need(),
                 Some(s) if s.delete.is_some_and(|(_, busy)| busy) => because("Deleting a routine"),
@@ -896,8 +985,8 @@ impl App {
     }
 
     /// Whether a settings row action's row is listed: a routine of the
-    /// open Bot's, or a run shown with its messages. `None` for an action
-    /// that is not one of them.
+    /// open Bot's, or a run shown, in a history or the recent runs, with
+    /// its messages. `None` for an action that is not one of them.
     pub(crate) fn settings_lists(&self, action: BokkieAction, id: i64) -> Option<bool> {
         let routines = || {
             self.settings()
@@ -906,6 +995,7 @@ impl App {
         Some(match action {
             BokkieAction::EditRoutine
             | BokkieAction::PauseRoutine
+            | BokkieAction::ResumeRoutine
             | BokkieAction::RunRoutine
             | BokkieAction::DeleteRoutine
             | BokkieAction::RoutineHistory => {
@@ -913,8 +1003,11 @@ impl App {
             }
             BokkieAction::ShowRun => self
                 .settings()
-                .and_then(|s| s.history.as_ref())
-                .and_then(|h| h.runs.get(&RoutineRunId(id)))
+                .and_then(|s| s.history.as_ref()?.runs.get(&RoutineRunId(id)))
+                .is_some_and(|run| !run.messages.is_empty()),
+            BokkieAction::ShowRecentRun => self
+                .settings()
+                .and_then(|s| s.recent_runs().find(|run| run.id == RoutineRunId(id)))
                 .is_some_and(|run| !run.messages.is_empty()),
             _ => return None,
         })
@@ -928,18 +1021,34 @@ impl App {
             .form
             .as_ref()
             .is_some_and(|form| form.busy && form.editing == Some(routine));
+        let paused = self
+            .open_bot()
+            .and_then(|bot| self.store().routines(bot)?.routine(routine))
+            .map(|routine| routine.paused);
         match action {
-            BokkieAction::PauseRoutine | BokkieAction::RunRoutine | BokkieAction::DeleteRoutine
+            BokkieAction::PauseRoutine
+            | BokkieAction::ResumeRoutine
+            | BokkieAction::RunRoutine
+            | BokkieAction::DeleteRoutine
                 if settings
                     .delete
                     .is_some_and(|(id, busy)| id == routine && busy) =>
             {
                 because("Deleting the routine")
             }
-            BokkieAction::PauseRoutine | BokkieAction::RunRoutine | BokkieAction::EditRoutine
+            BokkieAction::PauseRoutine
+            | BokkieAction::ResumeRoutine
+            | BokkieAction::RunRoutine
+            | BokkieAction::EditRoutine
                 if settings.busy.contains(&routine) || saving =>
             {
                 because("Saving the routine")
+            }
+            BokkieAction::PauseRoutine if paused == Some(true) => {
+                because("The routine is paused already")
+            }
+            BokkieAction::ResumeRoutine if paused == Some(false) => {
+                because("The routine is not paused")
             }
             _ => None,
         }
@@ -1035,17 +1144,19 @@ impl App {
             action,
             BokkieAction::EditRoutine
                 | BokkieAction::PauseRoutine
+                | BokkieAction::ResumeRoutine
                 | BokkieAction::RunRoutine
                 | BokkieAction::DeleteRoutine
                 | BokkieAction::RoutineHistory
                 | BokkieAction::ShowRun
+                | BokkieAction::ShowRecentRun
         ) {
             return None;
         }
         let Some(bot) = self.open_bot() else {
             return Some(Err("No conversation is open".into()));
         };
-        if action == BokkieAction::ShowRun {
+        if matches!(action, BokkieAction::ShowRun | BokkieAction::ShowRecentRun) {
             return Some(self.show_run(RoutineRunId(id)));
         }
         let routine_id = RoutineId(id);
@@ -1062,11 +1173,11 @@ impl App {
         };
         match action {
             BokkieAction::EditRoutine => settings.form = Some(RoutineForm::of(&routine)),
-            BokkieAction::PauseRoutine => {
+            BokkieAction::PauseRoutine | BokkieAction::ResumeRoutine => {
                 settings.busy.insert(routine_id);
                 settings.routine_error = None;
                 let changes = UpdateRoutineRequest {
-                    paused: Some(!routine.paused),
+                    paused: Some(action == BokkieAction::PauseRoutine),
                     ..Default::default()
                 };
                 self.send(ApiRequest::UpdateRoutine(bot, routine_id, changes));
@@ -1209,19 +1320,23 @@ impl App {
         true
     }
 
-    /// Show a run's marker in the conversation: close the settings, then
-    /// bring the marker into view, loading earlier messages until the
-    /// conversation holds it.
+    /// Show a run's marker in the conversation: close the panel unless the
+    /// conversation stands beside it, then bring the marker into view,
+    /// loading earlier messages until the conversation holds it.
     fn show_run(&mut self, run: RoutineRunId) -> Result<bool, String> {
         let Some(marker) = self
             .settings()
-            .and_then(|s| s.history.as_ref())
-            .and_then(|h| h.runs.get(&run))
+            .and_then(|s| s.shown_run(run))
             .and_then(|run| run.messages.first().copied())
         else {
             return Err(format!("Run {run} has no messages to show"));
         };
-        self.close_settings();
+        if !self
+            .panes()
+            .contains(&stobie_ui_egui::NavigationPane::Content)
+        {
+            self.close_settings();
+        }
         self.go_to(marker);
         Ok(true)
     }
@@ -1341,6 +1456,25 @@ impl App {
             newest.map_or("", |run| run_state_name(run.state)),
         );
         observation.fact("run_messages", newest.map_or(0, |run| run.messages.len()));
+        observation.fact(
+            "recent_runs",
+            settings.map_or(0, |s| s.recent_runs().count()),
+        );
+        observation.fact(
+            "recent_runs_state",
+            match settings {
+                None => "",
+                Some(s) if !s.recent_loading.is_empty() || routines.is_none() => "loading",
+                Some(s) if s.recent_error.is_some() => "failed",
+                Some(_) => "loaded",
+            },
+        );
+        let recent = settings.and_then(|s| s.recent_runs().next());
+        observation.fact("recent_run", recent.map_or(0, |run| run.id.0));
+        observation.fact(
+            "recent_run_state",
+            recent.map_or("", |run| run_state_name(run.state)),
+        );
     }
 }
 
@@ -1367,5 +1501,10 @@ fn forget_routine(settings: &mut Settings, routine: RoutineId) -> bool {
     if settings.busy.remove(&routine) {
         changed = true;
     }
-    changed
+    if settings.recent_loading.remove(&routine) {
+        changed = true;
+    }
+    let before = settings.recent.len();
+    settings.recent.retain(|_, run| run.routine_id != routine);
+    changed || settings.recent.len() != before
 }

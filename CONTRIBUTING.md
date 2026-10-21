@@ -182,7 +182,9 @@ view; and for a Bot's settings (`screen` is `bot_settings`) `grants`,
 `routines`, `routine_count`, `routine_form` (`new`, `editing` or
 `saving`), `routine_error`, `routine_delete`, `history` (the routine whose
 runs show), `runs`, and the newest run's `run`, `run_state` and
-`run_messages`. Name a new Bot with `stobie set-text
+`run_messages`; and for the panel's recent runs `recent_runs` (how many
+show), `recent_runs_state` (`loading`, `loaded` or `failed`), and the
+newest one's `recent_run` and `recent_run_state`. Name a new Bot with `stobie set-text
 bokkie.bot-name`. Each Bot's row in the list is Stobie's conversation
 row: a navigation item named by the Bot, with its avatar (a soft shape
 with eyes and a colour, picked from the Bot's ID and drawn from
@@ -222,15 +224,24 @@ The gateway's markers, such as a capability change, a routine's run or a
 notification, are compact lines, and `stobie invoke bokkie.show-prompt
 --value MESSAGE_ID` shows or folds away the prompt below a routine run's
 marker. `stobie invoke bokkie.bot-settings`, the toggle in the
-conversation's header, shows or hides the open Bot's settings: its grants (a member may grant only `notes`, `seen` and
-`notify`), its notes, its recent tool calls and its routines. Fill a
+conversation's header, shows or hides the open Bot's panel: beside the
+conversation from the column layout, in place of it otherwise, with Back
+on a phone. The panel shows the Bot's avatar, name and label; its
+routines; its recent runs, the newest eight of each routine's latest five, each
+with Show; its grants, each a switch named by its action's label, such
+as "Grant notes" (a member may grant only `notes`, `seen` and `notify`);
+its notes, read as Markdown; and its activity, the recent tool calls with
+their outcomes. The notes and the activity load again each time a turn of
+the Bot's ends, since the gateway sends no event for a tool call. Fill a
 routine's form with `stobie set-text` on `bokkie.routine-name`,
 `bokkie.routine-prompt`, `bokkie.routine-at` and `bokkie.routine-every`,
 and act on one routine with `bokkie.edit-routine`, `bokkie.pause-routine`,
-`bokkie.run-routine`, `bokkie.delete-routine` and `bokkie.routine-history`
+`bokkie.resume-routine`, `bokkie.run-routine`, `bokkie.delete-routine` and `bokkie.routine-history`
 with `--value ROUTINE_ID`. The form's Repeats line names the whole
 schedule, such as "Every 4 hours from 03:00 to 23:00", once it is valid.
-`bokkie.show-run --value RUN_ID` closes the settings and brings that run's
+`bokkie.show-run --value RUN_ID` from a routine's history, or
+`bokkie.show-recent-run --value RUN_ID` from the recent runs, closes the
+panel unless it shows beside the conversation, and brings that run's
 marker into view, loading up to 20 earlier pages (1,000 messages) to find
 it; past those, a note says to load older messages by hand. The bottom of
 the Bot list holds the account: who is signed in, the usage meter, the

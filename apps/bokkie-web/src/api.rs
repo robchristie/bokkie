@@ -19,6 +19,10 @@ use bokkie_protocol::{API_PREFIX, BotId, MessageId, RoutineId, RoutineRunId, Tim
 /// How many tool calls, or routine runs, a page asks for.
 pub const PAGE_SIZE: u32 = 20;
 
+/// How many of each routine's newest runs the Bot panel's recent runs
+/// gather.
+pub const RECENT_RUNS: u32 = 5;
+
 use crate::wire::{self, CommandError};
 
 /// A command for the gateway.
@@ -117,6 +121,9 @@ pub enum ApiRequest {
     /// `GET /api/v1/bots/{id}/routines/{routine}/runs?limit=[&before=]`: a
     /// page of the routine's runs, newest first.
     LoadRuns(BotId, RoutineId, Option<RoutineRunId>),
+    /// `GET /api/v1/bots/{id}/routines/{routine}/runs?limit=`: the
+    /// routine's newest few runs, for the Bot panel's recent runs.
+    LoadRecentRuns(BotId, RoutineId),
     /// `GET /api/v1/bots/{id}`: one Bot as it is now.
     LoadBot(BotId),
     /// `PUT /api/v1/bots/{id}/read`: the user has seen the Bot's
@@ -237,6 +244,11 @@ impl std::fmt::Debug for ApiRequest {
                 .field(routine)
                 .field(before)
                 .finish(),
+            Self::LoadRecentRuns(bot, routine) => f
+                .debug_tuple("LoadRecentRuns")
+                .field(bot)
+                .field(routine)
+                .finish(),
             Self::LoadBot(bot) => f.debug_tuple("LoadBot").field(bot).finish(),
             Self::MarkRead(bot, read) => f
                 .debug_tuple("MarkRead")
@@ -332,6 +344,8 @@ pub enum ApiReply {
         Option<RoutineRunId>,
         Result<RoutineRunPage, CommandError>,
     ),
+    /// A routine's newest few runs, for the recent runs.
+    RecentRuns(BotId, RoutineId, Result<RoutineRunPage, CommandError>),
     /// One Bot, as asked for to change its grants.
     Bot(BotId, Result<Bot, CommandError>),
     /// The read marker after asking to move it to that message.
@@ -384,6 +398,7 @@ impl ApiRequest {
             | Self::LoadToolCalls(..)
             | Self::ListRoutines(_)
             | Self::LoadRuns(..)
+            | Self::LoadRecentRuns(..)
             | Self::LoadBot(_)
             | Self::PushKey => Method::Get,
             Self::SignIn(_)
@@ -471,6 +486,9 @@ impl ApiRequest {
             }
             Self::LoadRuns(bot, routine, Some(before)) => {
                 format!("/bots/{bot}/routines/{routine}/runs?limit={PAGE_SIZE}&before={before}")
+            }
+            Self::LoadRecentRuns(bot, routine) => {
+                format!("/bots/{bot}/routines/{routine}/runs?limit={RECENT_RUNS}")
             }
         };
         format!("{API_PREFIX}{route}")
@@ -576,6 +594,9 @@ impl ApiRequest {
             Self::LoadRuns(bot, routine, before) => {
                 ApiReply::Runs(*bot, *routine, *before, wire::decode_response(status, body))
             }
+            Self::LoadRecentRuns(bot, routine) => {
+                ApiReply::RecentRuns(*bot, *routine, wire::decode_response(status, body))
+            }
             Self::LoadBot(bot) => ApiReply::Bot(*bot, wire::decode_response(status, body)),
             Self::MarkRead(bot, read) => {
                 ApiReply::MarkedRead(*bot, read.message_id, wire::decode_response(status, body))
@@ -643,6 +664,7 @@ impl ApiRequest {
             Self::LoadRuns(bot, routine, before) => {
                 ApiReply::Runs(*bot, *routine, *before, Err(error))
             }
+            Self::LoadRecentRuns(bot, routine) => ApiReply::RecentRuns(*bot, *routine, Err(error)),
             Self::LoadBot(bot) => ApiReply::Bot(*bot, Err(error)),
             Self::MarkRead(bot, read) => ApiReply::MarkedRead(*bot, read.message_id, Err(error)),
             Self::PushKey => ApiReply::PushKey(Err(error)),
@@ -1083,6 +1105,7 @@ mod tests {
             ApiRequest::RunRoutine(bot, routine),
             ApiRequest::LoadRuns(bot, routine, None),
             ApiRequest::LoadRuns(bot, routine, Some(RoutineRunId(9))),
+            ApiRequest::LoadRecentRuns(bot, routine),
         ]
         .iter()
         .map(|request| (request.method().as_str(), request.path()))
@@ -1108,6 +1131,7 @@ mod tests {
                     "GET",
                     "/api/v1/bots/3/routines/5/runs?limit=20&before=9".to_owned()
                 ),
+                ("GET", "/api/v1/bots/3/routines/5/runs?limit=5".to_owned()),
             ]
         );
         assert_eq!(

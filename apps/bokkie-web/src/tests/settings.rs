@@ -15,6 +15,8 @@ use stobie_ui_egui::{ActionArgument, Availability};
 use super::conversation::{TUTOR, hello, message};
 use super::*;
 
+mod panel;
+
 const NOW: i64 = 1_800_000_000_000;
 const HOUR: i64 = 3_600_000;
 const DIGEST: RoutineId = RoutineId(3);
@@ -118,8 +120,9 @@ impl Fixture {
     }
 
     /// Ada's Tutor settings, loaded: notes, two tool calls with more to
-    /// load, and `routines`.
+    /// load, and `routines`, none of which has run.
     fn settings_loaded(&mut self, routines: Vec<Routine>) {
+        let ids: Vec<RoutineId> = routines.iter().map(|routine| routine.id).collect();
         self.settings_as(user());
         self.reply(ApiReply::Notes(TUTOR, Ok(notes("Likes fractions."))));
         self.reply(ApiReply::ToolCalls(
@@ -141,6 +144,23 @@ impl Fixture {
             }),
         ));
         assert_eq!(self.fact("routines"), "loaded".into());
+        // Each routine's newest runs, for the recent runs.
+        let recent: Vec<ApiRequest> = ids
+            .iter()
+            .map(|id| ApiRequest::LoadRecentRuns(TUTOR, *id))
+            .collect();
+        assert_eq!(self.sent(), recent);
+        for id in ids {
+            self.reply(ApiReply::RecentRuns(
+                TUTOR,
+                id,
+                Ok(RoutineRunPage {
+                    runs: Vec::new(),
+                    older: None,
+                }),
+            ));
+        }
+        assert_eq!(self.fact("recent_runs_state"), "loaded".into());
     }
 
     /// A phone's width, tall enough that the whole of the settings is in
@@ -614,7 +634,13 @@ fn editing_a_routine_sends_only_what_changed() {
 fn a_routine_pauses_resumes_and_is_deleted_after_confirming() {
     let mut fixture = Fixture::new();
     fixture.settings_loaded(vec![digest()]);
-    fixture.click("Paused Morning digest");
+    // Only the routine's Pause is offered while it runs on its schedule.
+    assert!(!fixture.shows("Resume Morning digest"));
+    assert_eq!(
+        fixture.availability_with(BokkieAction::ResumeRoutine, DIGEST.0),
+        disabled("The routine is not paused")
+    );
+    fixture.click("Pause Morning digest");
     assert_eq!(
         fixture.sent(),
         [ApiRequest::UpdateRoutine(
@@ -640,7 +666,12 @@ fn a_routine_pauses_resumes_and_is_deleted_after_confirming() {
     paused.updated_at = Timestamp(3_000);
     fixture.reply(ApiReply::RoutineUpdated(TUTOR, DIGEST, Ok(paused)));
     assert!(fixture.shows("Every day at 07:00 · Paused"));
-    fixture.click("Paused Morning digest");
+    assert!(!fixture.shows("Pause Morning digest"));
+    assert_eq!(
+        fixture.availability_with(BokkieAction::PauseRoutine, DIGEST.0),
+        disabled("The routine is paused already")
+    );
+    fixture.click("Resume Morning digest");
     assert_eq!(
         fixture.sent(),
         [ApiRequest::UpdateRoutine(
@@ -793,7 +824,13 @@ fn show_run_brings_its_marker_into_view_loading_earlier_pages() {
         }),
     ));
     fixture.click("History Morning digest");
-    assert_eq!(fixture.sent(), [ApiRequest::LoadRuns(TUTOR, DIGEST, None)]);
+    assert_eq!(
+        fixture.sent(),
+        [
+            ApiRequest::LoadRecentRuns(TUTOR, DIGEST),
+            ApiRequest::LoadRuns(TUTOR, DIGEST, None)
+        ]
+    );
     fixture.reply(ApiReply::Runs(
         TUTOR,
         DIGEST,
