@@ -8,10 +8,10 @@
 //! Setting grants follows three rules, checked by [`check_change`]:
 //!
 //! - **Availability.** A grant whose tools do not exist yet cannot be
-//!   granted. Today that is `web.search`, which brings Codex's own web search rather than a Bokkie tool;
-//!   its threads turn it on ([`crate::codex::config::thread_overrides`]),
-//!   but it stays unavailable until the path Codex searches by is settled
-//!   for Bokkie's models.
+//!   granted ([`available`]). Every grant in the catalogue has them today;
+//!   `web.search` brings Codex's own web search rather than a Bokkie tool,
+//!   which its threads turn on
+//!   ([`crate::codex::config::thread_overrides`]).
 //! - **Who grants what.** An admin may grant anything available; a member
 //!   may add only `notes`, `seen` and `notify` ([`member_may_grant`]), and
 //!   may remove any grant.
@@ -50,11 +50,12 @@ pub fn class(grant: Grant) -> Class {
     }
 }
 
-/// Whether the gateway can grant this yet: its tools exist.
+/// Whether the gateway can grant this yet: its tools exist. Every grant in
+/// the catalogue can be granted today; a grant added before its tools must
+/// be refused here.
 pub fn available(grant: Grant) -> bool {
     match grant {
-        Grant::Notes | Grant::Seen | Grant::Notify | Grant::WebFetch => true,
-        Grant::WebSearch => false,
+        Grant::Notes | Grant::Seen | Grant::Notify | Grant::WebSearch | Grant::WebFetch => true,
     }
 }
 
@@ -83,6 +84,18 @@ pub fn taint_conflict<G: Copy>(grants: impl IntoIterator<Item = (G, Class)>) -> 
 /// Checks a request to replace a Bot's grants `current` with `requested`,
 /// made by an account with `role`, and returns the new set.
 pub fn check_change(role: Role, current: &GrantSet, requested: &[Grant]) -> Result<GrantSet> {
+    check_change_classed(role, current, requested, class)
+}
+
+/// [`check_change`], with each grant's class from `class`, so that a test
+/// can show the taint rule refusing a set before any privileged grant
+/// exists.
+fn check_change_classed(
+    role: Role,
+    current: &GrantSet,
+    requested: &[Grant],
+    class: impl Fn(Grant) -> Class,
+) -> Result<GrantSet> {
     let requested: GrantSet = requested.iter().copied().collect();
     for grant in requested.difference(current) {
         if role != Role::Admin && !member_may_grant(*grant) {
@@ -205,11 +218,10 @@ mod tests {
     }
 
     #[test]
-    fn only_grants_with_tools_can_be_granted() {
-        assert!(available(Grant::Notes));
-        assert!(available(Grant::Seen));
-        assert!(available(Grant::WebFetch));
-        assert!(available(Grant::Notify));
+    fn every_grant_in_the_catalogue_can_be_granted() {
+        for grant in Grant::ALL {
+            assert!(available(grant), "{grant}");
+        }
         let none = GrantSet::new();
         assert_eq!(
             check_change(Role::Member, &none, &[Grant::Seen, Grant::Notes]).unwrap(),
@@ -219,15 +231,49 @@ mod tests {
             check_change(Role::Member, &none, &[Grant::Notify]).unwrap(),
             [Grant::Notify].into()
         );
-        assert!(!available(Grant::WebSearch));
-        let refused = check_change(Role::Admin, &none, &[Grant::WebSearch]).unwrap_err();
-        assert_eq!(refused.code, ErrorCode::InvalidRequest);
-        assert!(refused.message.contains("not available"));
+        // An admin may grant the whole catalogue: both web grants are
+        // untrusted input, and none is privileged.
+        assert_eq!(
+            check_change(Role::Admin, &none, &Grant::ALL).unwrap(),
+            Grant::ALL.into()
+        );
+        assert_eq!(
+            check_change(Role::Admin, &none, &[Grant::WebSearch]).unwrap(),
+            [Grant::WebSearch].into()
+        );
         // Duplicates collapse.
         assert_eq!(
             check_change(Role::Admin, &none, &[Grant::Notes, Grant::Notes]).unwrap(),
             [Grant::Notes].into()
         );
+    }
+
+    #[test]
+    fn a_web_grant_is_refused_beside_a_privileged_one() {
+        // No grant is privileged yet, so `notify` stands in for one.
+        let pretend = |grant| match grant {
+            Grant::Notify => Class::Privileged,
+            other => class(other),
+        };
+        let none = GrantSet::new();
+        for web in [Grant::WebSearch, Grant::WebFetch] {
+            let refused = check_change_classed(Role::Admin, &none, &[Grant::Notify, web], pretend)
+                .unwrap_err();
+            assert_eq!(refused.code, ErrorCode::InvalidRequest, "{web}");
+            assert_eq!(
+                refused.message,
+                format!("A Bot granted {web} reads untrusted input, so it cannot also hold notify")
+            );
+            // Already holding the privileged grant makes no difference.
+            let held: GrantSet = [Grant::Notify].into();
+            assert!(
+                check_change_classed(Role::Admin, &held, &[Grant::Notify, web], pretend).is_err()
+            );
+            assert_eq!(
+                check_change_classed(Role::Admin, &none, &[web, Grant::Notes], pretend).unwrap(),
+                [web, Grant::Notes].into()
+            );
+        }
     }
 
     #[test]

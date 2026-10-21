@@ -318,9 +318,9 @@ pub struct ResetPasswordRequest {
 /// brings, so no credential enters a Bot's sandbox. A Bot's thread offers
 /// the model exactly the tools of its grants.
 ///
-/// A grant is named on the wire as its [`Grant::name`]. Some grants are in
-/// the catalogue before their tools exist; the gateway refuses to grant
-/// those until they do.
+/// A grant is named on the wire as its [`Grant::name`]. A grant may join
+/// the catalogue before its tools exist; the gateway refuses to grant it
+/// until they do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Grant {
     /// One Markdown notes document of the Bot's own, which it reads,

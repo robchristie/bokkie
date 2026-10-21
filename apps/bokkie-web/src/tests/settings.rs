@@ -219,12 +219,11 @@ fn a_member_may_grant_only_notes_seen_and_notify() {
         disabled("Only an admin can grant web.fetch")
     );
     assert!(fixture.shows("Reads web pages. Only an admin can grant web.fetch."));
-    // Web search is never offered while it cannot be granted.
     assert_eq!(
         fixture.availability_of(BokkieAction::GrantWebSearch),
-        disabled("Web search is not available yet")
+        disabled("Only an admin can grant web.search")
     );
-    assert!(!fixture.shows("Grant web.search"));
+    assert!(fixture.shows("Searches the web. Only an admin can grant web.search."));
     assert!(fixture.shows(crate::settings::view::EXFILTRATION_NOTICE));
     fixture.click("Grant notes");
     assert_eq!(
@@ -285,14 +284,14 @@ fn a_member_may_grant_only_notes_seen_and_notify() {
 }
 
 #[test]
-fn an_admin_may_grant_web_fetch_but_not_web_search() {
+fn an_admin_may_grant_web_fetch_and_web_search() {
     let mut fixture = Fixture::new();
     fixture.settings_loaded(Vec::new());
     assert!(fixture.enabled(BokkieAction::GrantWebFetch));
-    assert_eq!(
-        fixture.availability_of(BokkieAction::GrantWebSearch),
-        disabled("Web search is not available yet")
-    );
+    assert!(fixture.enabled(BokkieAction::GrantWebSearch));
+    assert!(fixture.shows("Searches the web."));
+    assert!(!fixture.shows("Only an admin can grant"));
+    assert!(fixture.shows(crate::settings::view::EXFILTRATION_NOTICE));
     fixture.click("Grant web.fetch");
     fixture.fresh_tutor();
     assert_eq!(
@@ -301,6 +300,23 @@ fn an_admin_may_grant_web_fetch_but_not_web_search() {
             TUTOR,
             UpdateBotRequest {
                 grants: Some(vec![Grant::WebFetch]),
+                ..Default::default()
+            }
+        )]
+    );
+    fixture.reply(ApiReply::BotUpdated(
+        TUTOR,
+        Ok(fixture.app().store().bot(TUTOR).unwrap().clone()),
+    ));
+    fixture.tutor_updated(11, vec![Grant::WebFetch]);
+    fixture.click("Grant web.search");
+    fixture.fresh_tutor();
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::UpdateBot(
+            TUTOR,
+            UpdateBotRequest {
+                grants: Some(vec![Grant::WebSearch, Grant::WebFetch]),
                 ..Default::default()
             }
         )]

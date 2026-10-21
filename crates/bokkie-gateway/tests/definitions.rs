@@ -382,25 +382,21 @@ async fn refusals_name_their_cause_and_change_nothing() {
         refused(&gateway, "nobody", GARDENER).await,
         "No account is named \"nobody\"; this command creates none"
     );
-    assert_eq!(
-        refused(
-            &gateway,
-            "rob",
-            &GARDENER.replace("[\"notes\", \"notify\"]", "[\"notes\", \"web.search\"]")
-        )
-        .await,
-        "The grants: web.search is not available yet"
-    );
     // A member may add only the grants a member may add.
-    assert_eq!(
-        refused(
-            &gateway,
-            "ann",
-            &GARDENER.replace("[\"notes\", \"notify\"]", "[\"notes\", \"web.fetch\"]")
-        )
-        .await,
-        "The grants: Only an admin can grant web.fetch"
-    );
+    for web in ["web.search", "web.fetch"] {
+        assert_eq!(
+            refused(
+                &gateway,
+                "ann",
+                &GARDENER.replace(
+                    "[\"notes\", \"notify\"]",
+                    &format!("[\"notes\", \"{web}\"]")
+                )
+            )
+            .await,
+            format!("The grants: Only an admin can grant {web}")
+        );
+    }
     assert_eq!(
         refused(&gateway, "bea", GARDENER).await,
         "bea may not create Bots; an admin makes that account's Bots"

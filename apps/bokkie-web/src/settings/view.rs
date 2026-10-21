@@ -12,15 +12,15 @@ use stobie_ui_egui::{
 
 use super::{
     Clear, History, ROUTINE_AT_ID, ROUTINE_EVERY_ID, ROUTINE_NAME_ID, ROUTINE_PROMPT_ID, Repeat,
-    RoutineForm, Settings, TIME_ZONE_ID, day_action, day_name, grant_action, grantable,
-    member_may_grant, repeat_action, run_state_text, schedule_text,
+    RoutineForm, Settings, TIME_ZONE_ID, day_action, day_name, grant_action, member_may_grant,
+    repeat_action, run_state_text, schedule_text,
 };
 use crate::app::{App, BokkieAction, BokkieIntent, Open, SignedIn};
 use crate::ui::{BokkieFrame, line, submitted, text_area, text_field};
 
-/// What every grants view says of reading the web.
-pub(crate) const EXFILTRATION_NOTICE: &str =
-    "A Bot that reads the web can leak what you tell it through the addresses it fetches.";
+/// What every grants view says of searching and reading the web.
+pub(crate) const EXFILTRATION_NOTICE: &str = "A Bot that searches or reads the web can leak \
+     what you tell it through what it searches for and the addresses it fetches.";
 
 pub(crate) fn present(
     ui: &mut egui::Ui,
@@ -72,7 +72,7 @@ fn grant_about(grant: Grant) -> &'static str {
         Grant::Seen => "Remembers what it has already shown you.",
         Grant::Notify => "Sends you notifications.",
         Grant::WebFetch => "Reads web pages.",
-        Grant::WebSearch => "Searches the web. Web search is not available yet.",
+        Grant::WebSearch => "Searches the web.",
     }
 }
 
@@ -92,10 +92,6 @@ fn grants_ui(
     let member = signed_in.user.role != Role::Admin;
     for grant in Grant::ALL {
         let held = grants.contains(&grant);
-        // Never offered until it exists; one held can still be taken away.
-        if !held && !grantable(grant) {
-            continue;
-        }
         frame.toggle(ui, p, ("grant", grant.name()), grant_action(grant), held);
         let mut about = grant_about(grant).to_owned();
         if member && !held && !member_may_grant(grant) {

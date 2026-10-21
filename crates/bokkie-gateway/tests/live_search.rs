@@ -14,7 +14,9 @@
 //!   provider runs within its response.
 //!
 //! Either way a search reaches the client as a `webSearch` item, which the
-//! gateway allows only on a thread granted `web.search`.
+//! gateway allows only on a thread granted `web.search`. The last test
+//! follows a Bot granted `web.search` through the API across the whole
+//! gateway.
 
 mod common;
 
@@ -27,6 +29,7 @@ use bokkie_mock_model::{MockModel, SEARCH_OUTPUT};
 use bokkie_protocol::UserId;
 use bokkie_protocol::api::Grant;
 use common::live::Live;
+use common::{Call, Gateway};
 use serde_json::{Value, json};
 
 type Events = tokio::sync::mpsc::UnboundedReceiver<bokkie_gateway::codex::RuntimeEvent>;
@@ -325,5 +328,181 @@ async fn a_search_on_a_thread_without_web_search_stops_codex() {
     assert!(reason.contains("web.search"), "{reason}");
     assert!(!reason.contains("private"), "{reason}");
     assert!(supervisor.tainted().is_some());
+    live.assert_nothing_left_the_machine();
+}
+
+/// Creates rob's Bot `name` and grants it `grants` through the API.
+async fn granted_bot(gateway: &Gateway, cookie: &str, name: &str, grants: Value) -> i64 {
+    let created = gateway
+        .send(Call::post("/api/v1/bots").cookie(cookie).json(&json!({
+            "name": name, "label": "Helper", "description": "Be brief."})))
+        .await;
+    assert_eq!(created.status, 201, "{:?}", created.body);
+    let bot = created.body["id"].as_i64().unwrap();
+    let set = gateway
+        .send(
+            Call::new(axum::http::Method::PATCH, &format!("/api/v1/bots/{bot}"))
+                .cookie(cookie)
+                .json(&json!({ "grants": grants })),
+        )
+        .await;
+    assert_eq!(set.status, 200, "{:?}", set.body);
+    assert_eq!(set.body["grants"], grants);
+    bot
+}
+
+/// Sends `text` to the Bot and waits until it has `replies` complete text
+/// replies and is idle again. Returns the conversation.
+async fn exchange(gateway: &Gateway, cookie: &str, bot: i64, text: &str, replies: usize) -> Value {
+    let sent = gateway
+        .send(
+            Call::post(&format!("/api/v1/bots/{bot}/messages"))
+                .cookie(cookie)
+                .json(&json!({ "text": text })),
+        )
+        .await;
+    assert_eq!(sent.status, 200, "{:?}", sent.body);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let page = gateway
+            .send(Call::get(&format!("/api/v1/bots/{bot}/messages")).cookie(cookie))
+            .await;
+        let done = page.body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["author"] == "bot" && m["kind"] == "text" && m["state"] == "complete")
+            .count();
+        let idle = done >= replies
+            && gateway
+                .send(Call::get(&format!("/api/v1/bots/{bot}")).cookie(cookie))
+                .await
+                .body["status"]
+                == "idle";
+        if idle {
+            return page.body;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no reply: {}",
+            page.body
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// The model requests made since the first `from`.
+fn requests_since(mock: &MockModel, from: usize) -> Vec<Value> {
+    mock.requests.lock().unwrap()[from..].to_vec()
+}
+
+/// Through the whole gateway: an admin grants a Bot `web.search` through
+/// the API, and the real app server then offers its thread Codex's
+/// `web.run`, which it offers only under the per-thread `web_search =
+/// "live"` override the gateway sends (its own setting is `disabled`),
+/// both after the thread starts and after a cold resume. The Bot's search
+/// reaches only the mock provider, is logged and stays out of the
+/// conversation. The control, a Bot of the same account without the grant,
+/// is offered no search. A member may not grant it.
+#[tokio::test]
+async fn a_bot_granted_web_search_through_the_api_searches_and_its_control_does_not() {
+    let Some(live) = Live::start(&["Found it."]).await else {
+        return;
+    };
+    let mock = &live.model;
+    let gateway = Gateway::live(&live).await;
+    gateway.route().await;
+    let rob = gateway.admin("rob").await;
+    let scout = granted_bot(&gateway, &rob, "Scout", json!(["web.search"])).await;
+    let scribe = granted_bot(&gateway, &rob, "Scribe", json!(["notes"])).await;
+    let (amy, _) = gateway.member(&rob, "amy").await;
+    let diary = gateway
+        .send(Call::post("/api/v1/bots").cookie(&amy).json(&json!({
+            "name": "Diary", "label": "", "description": ""})))
+        .await;
+    let diary = diary.body["id"].as_i64().unwrap();
+    let refused = gateway
+        .send(
+            Call::new(axum::http::Method::PATCH, &format!("/api/v1/bots/{diary}"))
+                .cookie(&amy)
+                .json(&json!({"grants": ["web.search"]})),
+        )
+        .await;
+    assert_eq!(refused.status, 403, "{:?}", refused.body);
+
+    let searching: std::collections::BTreeSet<String> =
+        ["request_user_input", "run"].map(String::from).into();
+    let notes: std::collections::BTreeSet<String> = [
+        "notes_append",
+        "notes_read",
+        "notes_replace",
+        "request_user_input",
+    ]
+    .map(String::from)
+    .into();
+    let user = UserId(1);
+    for round in ["started", "cold resume"] {
+        let query = format!("bokkie gateway query, {round}");
+        let asked = mock.requests.lock().unwrap().len();
+        mock.call_namespaced_tool_next("web", "run", json!({"search_query": [{"q": query}]}));
+        let replies = if round == "started" { 1 } else { 2 };
+        let conversation = exchange(&gateway, &rob, scout, "What is new?", replies).await;
+        let made = requests_since(mock, asked);
+        assert_eq!(made.len(), 2, "{round}: the search and its follow-up");
+        for request in &made {
+            assert_eq!(search_offered(request), Some("web.run"), "{round}");
+            assert_eq!(MockModel::tools_in(request), searching, "{round}");
+        }
+        assert!(made[1].to_string().contains(SEARCH_OUTPUT), "{round}");
+        // The search went to the mock provider alone, and stays out of the
+        // conversation; the reply says what was found.
+        let asked_search = mock.searches.lock().unwrap().last().unwrap().clone();
+        assert!(asked_search.to_string().contains(&query), "{round}");
+        let messages = conversation["messages"].as_array().unwrap();
+        assert!(
+            messages.iter().all(|m| !m.to_string().contains(&query)),
+            "{round}: {conversation}"
+        );
+        assert_eq!(
+            messages.last().unwrap()["text"],
+            "Found it.",
+            "{round}: {conversation}"
+        );
+        // It is in the Bot's tool-call log.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let calls = loop {
+            let calls = gateway
+                .send(Call::get(&format!("/api/v1/bots/{scout}/tool-calls")).cookie(&rob))
+                .await
+                .body["calls"]
+                .clone();
+            if calls.as_array().unwrap().len() == replies {
+                break calls;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "{round}: {calls}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_eq!(calls[0]["tool"], "web_search", "{round}: {calls}");
+        assert_eq!(calls[0]["outcome"], "ok", "{round}: {calls}");
+        assert!(
+            calls[0]["summary"].as_str().unwrap().contains(&query),
+            "{round}: {calls}"
+        );
+
+        // The control, on the same app server, is offered no search.
+        let asked = mock.requests.lock().unwrap().len();
+        exchange(&gateway, &rob, scribe, "Hello.", replies).await;
+        let made = requests_since(mock, asked);
+        assert_eq!(made.len(), 1, "{round}");
+        assert_eq!(search_offered(&made[0]), None, "{round}");
+        assert_eq!(MockModel::tools_in(&made[0]), notes, "{round}");
+
+        // Codex keeps the override only while a thread is loaded: a fresh
+        // app server resumes both threads, and the gateway sends it again
+        // for the Scout's alone.
+        gateway.state.supervisor.stop(user).await;
+    }
+    assert_eq!(mock.searches.lock().unwrap().len(), 2);
+    assert!(gateway.state.supervisor.tainted().is_none());
     live.assert_nothing_left_the_machine();
 }

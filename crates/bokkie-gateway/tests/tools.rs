@@ -331,8 +331,7 @@ async fn a_web_search_without_web_search_stops_codex() {
     assert!(!reason.contains("private"), "{reason}");
 }
 
-/// Gives rob's Bot `web.search` in the database: the API cannot grant it
-/// yet.
+/// Gives rob's Bot `web.search` in the database.
 async fn searching(gateway: &Gateway, bot: i64) {
     store::set_grants(
         &gateway.state.db,
