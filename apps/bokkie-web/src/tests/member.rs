@@ -112,7 +112,12 @@ fn profile_editing_is_hidden_without_the_permission_and_pin_and_hide_stay() {
     fixture.reply(ApiReply::BotUpdated(TUTOR, Ok(pinned.clone())));
     fixture.event(11, Event::BotUpdated { bot: pinned });
     assert_eq!(fixture.fact("bot_pinned"), true.into());
-    assert!(fixture.shows("Maths help · Idle · Pinned"));
+    assert!(fixture.shows("Maths help · Idle"));
+    assert_eq!(
+        egui_kittest::kittest::NodeT::accesskit_node(&fixture.harness.get_by_label("Pin Bot"))
+            .toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
     // Allowed live, the control appears; an editor open when it is taken
     // back closes.
     let both = with(Permissions::default());

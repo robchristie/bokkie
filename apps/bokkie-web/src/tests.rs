@@ -592,15 +592,20 @@ impl Fixture {
         let page = self.harness.ctx.content_rect().width();
         for button in buttons {
             let width = button.rect.max_x - button.rect.min_x;
-            // The navigation header's Back and settings toggle are Stobie's
-            // icon controls, as wide as its least hit size.
-            let header = [BokkieAction::Back, BokkieAction::BotSettings]
-                .iter()
-                .any(|action| {
-                    let id = stobie_ui_egui::ActionKey::stable_id(*action);
-                    button.actions.iter().any(|held| held.0 == id)
-                });
-            let least = if header { 32.0 } else { 40.0 };
+            // The navigation header's Back and settings toggle, the
+            // composer's Send and a message's Copy are Stobie's icon
+            // controls, as wide as its least hit size.
+            let icon = [
+                BokkieAction::Back,
+                BokkieAction::BotSettings,
+                BokkieAction::Send,
+            ]
+            .iter()
+            .any(|action| {
+                let id = stobie_ui_egui::ActionKey::stable_id(*action);
+                button.actions.iter().any(|held| held.0 == id)
+            }) || button.name == crate::ui::COPY_MESSAGE;
+            let least = if icon { 32.0 } else { 40.0 };
             assert!(width >= least && button.rect.max_x <= page, "{button:?}");
         }
     }

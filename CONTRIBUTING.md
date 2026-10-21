@@ -147,7 +147,8 @@ for the New Bot form `new_bot_name`, `creating` and `create_error`; and
 publishes its device code; `joining` while the sign-in screen takes an
 invitation code instead; and for the admin section (`screen` is `admin`,
 `account` or `overseen`) `accounts`, `invitations`, `inviting`,
-`invite_error`, `invitation_shown` (never the code itself), `account` (the
+`invite_error`, `invitation_shown` (never the code itself, which is
+withheld from content text and given only by its Copy), `account` (the
 open account's ID), `account_role`, `account_may_create_bots`,
 `account_may_edit_profiles`, `account_oversight`, `account_disabled`,
 `account_daily_turns` (-1 for no limit), `account_saving`,
@@ -180,16 +181,30 @@ time: the time of day today, otherwise its day. Read a row's name and
 preview from its node, as the browser smoke does; a row publishes no
 content text. On a phone the pinned Bots also show as a strip of avatars
 above the list. Open a Bot with `stobie invoke bokkie.open-bot --value ID`,
-or from the strip with `bokkie.open-pinned --value ID`, and fill the
-message field with `stobie set-text bokkie.draft`. Each row's control
+or from the strip with `bokkie.open-pinned --value ID`. Each row's control
 carries its row's ID, so `--value ID` acts through that row's control,
 and an ID that no row (or, for `bokkie.open-pinned`, no avatar in the
 strip) lists is refused; the admin's
 `bokkie.open-account`, `bokkie.withdraw-invitation`,
 `bokkie.edit-member-bot` and `bokkie.read-conversation` work the same way.
 A conversation opens on its newest 50 messages; `stobie invoke
-bokkie.load-older` loads the 50 before them. The Bot's replies read as
-Markdown, whose links open a new tab; the user's messages read as written.
+bokkie.load-older` loads the 50 before them. Its header shows the Bot's
+avatar, label and status, with Pin, Hide and (with the permission) Edit
+profile. Each message is Stobie's message bubble, a section named by its
+sender: the user's own on the right, the Bot's on the left. The Bot's
+replies read as Markdown, whose links open a new tab; the user's messages
+read as written. Once a message has settled, Copy (a button named "Copy
+message", Stobie's `stobie.copy-text`) puts it on the clipboard, and each
+code block in a reply has its own ("Copy code", numbered when there are
+several), beside the message's below its bubble. The composer at the
+foot is Stobie's: a multi-line field named "Message", hinted with the
+Bot's name, that grows to six rows and then scrolls, and Send as an icon.
+Return sends, Shift+Return starts a new line. Fill the field with `stobie
+set-text` on the `multiline_text_input` node named "Message" (its ID is
+Stobie's, not Bokkie's), and send with `stobie invoke bokkie.send --value
+TEXT`, which sends that text. A refused send keeps the draft, and an
+unsent draft waits for its Bot while another Bot is open, until the page
+reloads. Stop shows on its own row while a reply streams.
 The gateway's markers, such as a capability change, a routine's run or a
 notification, are compact lines, and `stobie invoke bokkie.show-prompt
 --value MESSAGE_ID` shows or folds away the prompt below a routine run's
@@ -235,7 +250,10 @@ checks:
 
 - the page starts under the gateway's Content-Security-Policy;
 - it signs in by clicking the fields and typing;
-- a reply streams in several deltas and completes;
+- a message written in the composer is sent, and its reply streams in
+  several deltas and completes;
+- the reply's Copy, pressed through the accessibility layer, puts it on the
+  clipboard and says so;
 - a second reply is stopped;
 - a connection dropped mid-reply, and refused while several pieces arrive,
   catches up with exactly the stored text;
@@ -262,7 +280,8 @@ checks:
   notifications off unsubscribes the device and the gateway forgets it;
 - the subscription meter and the limit-reached banner show;
 - the admin invites a member from the accounts screen, with permissions,
-  and the member joins with the code in a second browser context and sees
+  copies the code with its Copy (the page publishes it nowhere else), and
+  the member joins with the code in a second browser context and sees
   only whether the household is signed in;
 - the admin sets the member's limit and permissions, which the member's
   page follows live; the member's second turn is refused beyond the limit;

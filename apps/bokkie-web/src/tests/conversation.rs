@@ -444,12 +444,12 @@ fn typing_a_message_and_pressing_enter_sends_it() {
     fixture.open_tutor(hello(), 10);
     fixture
         .harness
-        .get_by_role_and_label(egui::accesskit::Role::TextInput, "Message")
+        .get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "Message")
         .click();
     fixture.harness.run();
     fixture
         .harness
-        .get_by_role_and_label(egui::accesskit::Role::TextInput, "Message")
+        .get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "Message")
         .type_text("Explain fractions");
     fixture.harness.run();
     assert_eq!(fixture.fact("draft"), "Explain fractions".into());
@@ -1238,4 +1238,304 @@ fn reloading_the_newest_page_clears_a_failed_older_page() {
     ));
     assert_eq!(fixture.fact("older"), "more".into());
     assert!(!fixture.shows(&CommandError::unreachable().message));
+}
+
+impl Fixture {
+    /// The composer's field, which Stobie names by the composer.
+    fn composer(&self) -> egui_kittest::Node<'_> {
+        self.harness.get_by_role_and_label(
+            egui::accesskit::Role::MultilineTextInput,
+            crate::ui::COMPOSER_NAME,
+        )
+    }
+
+    /// The text the last pass asked the platform to copy, if it did.
+    pub(super) fn copied(&self) -> Option<String> {
+        self.harness
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+    }
+
+    /// Press a control and run the one pass that handles the press.
+    pub(super) fn press(
+        &mut self,
+        node: impl for<'h> Fn(
+            &'h egui_kittest::Harness<'static, AppHost<App>>,
+        ) -> egui_kittest::Node<'h>,
+    ) {
+        node(&self.harness).click();
+        self.harness.step();
+    }
+}
+
+#[test]
+fn the_header_shows_the_bots_details_and_its_controls_above_the_messages() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor(hello(), 10);
+    let details = fixture.harness.get_by_label("Maths help · Idle").rect();
+    let first = fixture.harness.get_by_label("You · 9:30 AM").rect();
+    assert!(details.bottom() < first.top(), "the header leads the page");
+    for control in ["Pin Bot", "Hide Bot", "Settings", "Back"] {
+        let rect = fixture.harness.get_by_label(control).rect();
+        assert!(rect.bottom() < first.top(), "{control}");
+    }
+    // The avatar stands before the details on their row.
+    assert!(details.left() > 40.0, "{details:?}");
+}
+
+#[test]
+fn each_message_is_a_bubble_named_by_its_sender_on_its_side() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor(hello(), 10);
+    let snapshot = fixture.host().ui_snapshot();
+    let bubble = |name: &str| {
+        snapshot
+            .by_name(name)
+            .find(|node| node.role == stobie_ui_egui::UiRole::Section)
+            .unwrap_or_else(|| panic!("{name}'s bubble"))
+            .rect
+    };
+    let own = bubble("You");
+    let bot = bubble("Tutor");
+    let page = fixture.harness.ctx.content_rect().width();
+    // The user's own message sits at the right and the Bot's at the left,
+    // each hugging its text.
+    assert!(own.min_x > page / 2.0, "{own:?}");
+    assert!(bot.min_x < page / 4.0, "{bot:?}");
+    assert!(own.max_x - own.min_x < page * 0.85, "{own:?}");
+}
+
+#[test]
+fn a_bots_reply_is_markdown_and_the_users_own_text_is_not() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor(
+        vec![
+            message(1, Author::User, "**not bold**", MessageState::Complete),
+            message(
+                2,
+                Author::Bot,
+                "**Bold** and *more*",
+                MessageState::Complete,
+            ),
+        ],
+        10,
+    );
+    assert!(fixture.shows("**not bold**"));
+    assert!(!fixture.shows("**Bold** and *more*"));
+    assert!(fixture.shows("Bold and more"));
+}
+
+#[test]
+fn the_composer_is_hinted_with_the_bots_name_and_sends_with_its_icon() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor(hello(), 10);
+    let field = egui_kittest::kittest::NodeT::accesskit_node(&fixture.composer());
+    assert_eq!(field.placeholder(), Some("Message Tutor"));
+    let send = fixture.harness.get_by_label("Send").rect();
+    // An icon: as wide as Stobie's least hit size, not a word.
+    assert!(send.width() < 40.0, "{send:?}");
+    assert!(!fixture.enabled(BokkieAction::Send), "nothing written yet");
+    fixture.write("Explain fractions");
+    assert!(fixture.enabled(BokkieAction::Send));
+    fixture.click("Send");
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::SendMessage(
+            TUTOR,
+            SendMessageRequest {
+                text: "Explain fractions".into()
+            }
+        )]
+    );
+}
+
+#[test]
+fn shift_return_starts_a_new_line_and_the_field_grows_to_six_rows() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor(hello(), 10);
+    fixture.composer().click();
+    fixture.harness.run();
+    fixture.composer().type_text("One");
+    fixture.harness.run();
+    let one = fixture.composer().rect().height();
+    fixture
+        .harness
+        .key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Enter);
+    fixture.harness.run();
+    fixture.composer().type_text("Two");
+    fixture.harness.run();
+    assert_eq!(fixture.fact("draft"), "One\nTwo".into());
+    assert!(fixture.sent().is_empty(), "Shift+Return does not send");
+    let two = fixture.composer().rect().height();
+    assert!(two > one, "{one} then {two}");
+    let lines = |count: usize| {
+        (1..=count)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    fixture.write(&lines(stobie_ui_egui::COMPOSER_DEFAULT_MAX_ROWS));
+    fixture.harness.run();
+    let most = fixture.composer().rect().height();
+    assert!(most > two);
+    fixture.write(&lines(stobie_ui_egui::COMPOSER_DEFAULT_MAX_ROWS * 2));
+    fixture.harness.run();
+    let longer = fixture.composer().rect().height();
+    assert!(
+        (longer - most).abs() < 0.5,
+        "{most} then {longer}: it scrolls"
+    );
+}
+
+#[test]
+fn agents_send_a_message_as_the_sends_argument() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor(hello(), 10);
+    let send = ActionTarget::application(BokkieAction::Send);
+    let text = |text: &str| ActionArgument::Text(text.into());
+    assert!(matches!(
+        fixture.app().availability_with(send, &text("  ")),
+        Availability::Disabled { .. }
+    ));
+    assert_eq!(
+        fixture
+            .app()
+            .availability_with(send, &text("Explain fractions")),
+        Availability::Enabled
+    );
+    let app = fixture.harness.state_mut().app_mut();
+    assert_eq!(
+        app.perform_with(send, ActionArgument::None, &mut ()),
+        Err("Send needs the message's text".into())
+    );
+    assert_eq!(
+        app.perform_with(send, text("  Explain fractions "), &mut ()),
+        Ok(true)
+    );
+    assert_eq!(
+        fixture.sent(),
+        [ApiRequest::SendMessage(
+            TUTOR,
+            SendMessageRequest {
+                text: "Explain fractions".into()
+            }
+        )]
+    );
+    fixture.harness.run();
+    assert_eq!(fixture.fact("sending"), true.into());
+}
+
+#[test]
+fn copy_puts_a_settled_message_on_the_clipboard_and_says_so() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor(hello(), 10);
+    // One Copy for each message, the Bot's last.
+    assert_eq!(
+        fixture
+            .harness
+            .query_all_by_label(crate::ui::COPY_MESSAGE)
+            .count(),
+        2
+    );
+    fixture.press(|harness| {
+        harness
+            .query_all_by_label(crate::ui::COPY_MESSAGE)
+            .last()
+            .unwrap()
+    });
+    assert_eq!(
+        fixture.copied(),
+        Some("Kia ora! What shall we study?".into())
+    );
+    fixture.harness.run();
+    assert!(fixture.shows("Copied"));
+}
+
+#[test]
+fn a_reply_still_arriving_has_no_copy() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor(
+        vec![
+            message(1, Author::User, "Hi", MessageState::Complete),
+            message(2, Author::Bot, "Kia", MessageState::Streaming),
+        ],
+        10,
+    );
+    assert_eq!(
+        fixture
+            .harness
+            .query_all_by_label(crate::ui::COPY_MESSAGE)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn each_code_block_in_a_reply_has_its_own_copy() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    let reply = "Try this:\n\n```rust\nlet half = 1.0 / 2.0;\n```\n\nor `inline`.";
+    fixture.open_tutor(
+        vec![message(2, Author::Bot, reply, MessageState::Complete)],
+        10,
+    );
+    assert!(fixture.shows("Copy code"));
+    fixture.press(|harness| harness.get_by_label("Copy code"));
+    assert_eq!(fixture.copied(), Some("let half = 1.0 / 2.0;".into()));
+}
+
+#[test]
+fn the_code_blocks_are_read_as_stobies_markdown_reads_them() {
+    use crate::ui::code_blocks;
+    assert!(code_blocks("No code, only `inline`.").is_empty());
+    assert_eq!(
+        code_blocks("```\nfirst\n```\n\n    indented\n\n~~~py\nsecond\nline\n~~~\n```\n\n```"),
+        ["first", "indented", "second\nline"]
+    );
+    assert_eq!(code_blocks("```\nunclosed"), ["unclosed"]);
+}
+
+#[test]
+fn several_code_blocks_are_numbered_in_order() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    let reply = "```\none\n```\n\n```\ntwo\n```";
+    fixture.open_tutor(
+        vec![message(2, Author::Bot, reply, MessageState::Complete)],
+        10,
+    );
+    assert!(!fixture.shows("Copy code"));
+    fixture.press(|harness| harness.get_by_label("Copy code 2"));
+    assert_eq!(fixture.copied(), Some("two".into()));
+}
+
+#[test]
+fn an_unsent_draft_waits_for_its_bot_and_a_sent_one_does_not() {
+    let mut fixture = Fixture::new();
+    fixture.signed_in_and_live(10);
+    fixture.open_tutor(hello(), 10);
+    fixture.write("Explain fractions");
+    fixture.click("Back");
+    fixture.open_tutor(hello(), 10);
+    assert_eq!(fixture.fact("draft"), "Explain fractions".into());
+    fixture.click("Send");
+    let _ = fixture.sent();
+    assert_eq!(fixture.fact("sending"), true.into());
+    fixture.click("Back");
+    fixture.open_tutor(hello(), 10);
+    assert_eq!(fixture.fact("draft"), "".into());
 }

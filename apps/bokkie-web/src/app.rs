@@ -10,7 +10,7 @@
 //! same transitions with a [`Recorder`](crate::api::Recorder) and a
 //! [`Driver`](crate::socket::Driver).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bokkie_protocol::api::{
     Author, Bot, BotStatus, CodexAccount, CreateBotRequest, Delivery, ErrorCode, LoginRequest,
@@ -41,8 +41,6 @@ pub const APPLICATION_NAME: &str = "Bokkie";
 pub const USERNAME_ID: &str = "bokkie.username";
 /// The password field's stable ID.
 pub const PASSWORD_ID: &str = "bokkie.password";
-/// The message field's stable ID.
-pub const DRAFT_ID: &str = "bokkie.draft";
 /// The New Bot name field's stable ID.
 pub const BOT_NAME_ID: &str = "bokkie.bot-name";
 /// The invitation code field's stable ID.
@@ -118,7 +116,8 @@ pub enum BokkieAction {
     ShowPrompt,
     #[action(
         label = "Send",
-        description = "Send the message to the Bot; while it replies, the message steers the reply"
+        description = "Send the message to the Bot; while it replies, the message steers the reply",
+        argument = "text"
     )]
     Send,
     #[action(
@@ -673,6 +672,9 @@ pub(crate) struct SignedIn {
     pub(crate) link: Link,
     /// The conversation shown, if any; otherwise the Bot list is.
     pub(crate) open: Option<Open>,
+    /// The unsent drafts of the Bots not open now, kept until their
+    /// conversation opens again or the user signs out.
+    pub(crate) drafts: BTreeMap<BotId, String>,
     pub(crate) new_bot: NewBot,
     /// Whether the list shows hidden Bots too.
     pub(crate) show_hidden: bool,
@@ -696,6 +698,16 @@ pub(crate) struct SignedIn {
 }
 
 impl SignedIn {
+    /// Close the open conversation, keeping its unsent draft for when it
+    /// opens again. A draft being sent is not kept: it is on its way.
+    pub(crate) fn take_open(&mut self) -> Option<Open> {
+        let open = self.open.take()?;
+        if !open.sending && !open.draft.is_empty() {
+            self.drafts.insert(open.bot, open.draft.clone());
+        }
+        Some(open)
+    }
+
     pub(crate) fn is_admin(&self) -> bool {
         self.user.role == Role::Admin
     }
@@ -1143,6 +1155,7 @@ impl App {
             message: None,
             link: Link::Stopped,
             open: None,
+            drafts: BTreeMap::new(),
             new_bot: NewBot::default(),
             show_hidden: false,
             account: Account::Checking,
@@ -1872,11 +1885,13 @@ impl App {
             let shown = self.layout == NavigationLayout::Columns || self.close_settings();
             return Ok(shown);
         }
-        if let Some(open) = signed_in.open.take() {
+        if let Some(open) = signed_in.take_open() {
             self.store.close_conversation(open.bot);
             self.store.close_routines(open.bot);
         }
-        signed_in.open = Some(Open::new(bot));
+        let mut open = Open::new(bot);
+        open.draft = signed_in.drafts.remove(&bot).unwrap_or_default();
+        signed_in.open = Some(open);
         signed_in.push.opened();
         self.load(Snapshot::Messages(bot));
         Ok(true)
@@ -1902,6 +1917,27 @@ impl App {
         } else {
             "more"
         }
+    }
+
+    /// Send `text` to the open Bot, as the composer or an agent gives it.
+    /// The draft is cleared once the gateway accepts it, and kept if it
+    /// refuses it.
+    fn send_text(&mut self, text: &str) -> Result<bool, String> {
+        self.can_send(Some(text))?;
+        let Session::SignedIn(signed_in) = &mut self.session else {
+            return Ok(false);
+        };
+        let Some(open) = &mut signed_in.open else {
+            return Ok(false);
+        };
+        open.sending = true;
+        open.delivery = None;
+        open.send_error = None;
+        open.stop_note = None;
+        let bot = open.bot;
+        let text = text.trim().to_owned();
+        self.send(ApiRequest::SendMessage(bot, SendMessageRequest { text }));
+        Ok(true)
     }
 
     fn can_stop(&self) -> Result<(), &'static str> {
@@ -1963,14 +1999,16 @@ impl App {
         self.store.bot(open.bot).ok_or("Loading the Bot")
     }
 
-    fn can_send(&self) -> Result<(), &'static str> {
+    /// Whether `text` can be sent to the open Bot now; without a text, its
+    /// draft.
+    fn can_send(&self, text: Option<&str>) -> Result<(), &'static str> {
         let Some(open) = self.open() else {
             return Err("No conversation is open");
         };
         if open.sending {
             return Err("Sending");
         }
-        if open.draft.trim().is_empty() {
+        if text.unwrap_or(&open.draft).trim().is_empty() {
             return Err("Write a message");
         }
         match self.store.bot(open.bot).map(|bot| bot.status) {
@@ -2165,7 +2203,7 @@ impl Application for App {
                     household_availability(target.action, &signed_in.account, household)
                 }
             },
-            (BokkieAction::Send, _) => self.can_send().err(),
+            (BokkieAction::Send, _) => self.can_send(None).err(),
             (BokkieAction::Stop, _) => self.can_stop().err(),
             // The admin section's actions answered above.
             _ => None,
@@ -2183,6 +2221,15 @@ impl Application for App {
         target: ActionTarget<BokkieAction>,
         argument: &ActionArgument,
     ) -> Availability {
+        // The composer asks about the text it would send.
+        if let (BokkieAction::Send, ActionArgument::Text(text)) = (target.action, argument) {
+            return match self.can_send(Some(text)) {
+                Ok(()) => Availability::Enabled,
+                Err(reason) => Availability::Disabled {
+                    reason: reason.into(),
+                },
+            };
+        }
         let id = match argument {
             ActionArgument::Number(id) if id.fract() == 0.0 && (1.0..=MAX_ID).contains(id) => {
                 Some(*id as i64)
@@ -2436,7 +2483,7 @@ impl Application for App {
                 if signed_in.household.take().is_some() {
                     return Ok(true);
                 }
-                let Some(open) = signed_in.open.take() else {
+                let Some(open) = signed_in.take_open() else {
                     return Ok(false);
                 };
                 self.store.close_conversation(open.bot);
@@ -2587,18 +2634,6 @@ impl Application for App {
                 }
                 self.send(ApiRequest::CodexLogout);
             }
-            (BokkieAction::Send, Session::SignedIn(signed_in)) => {
-                let Some(open) = &mut signed_in.open else {
-                    return Ok(false);
-                };
-                open.sending = true;
-                open.delivery = None;
-                open.send_error = None;
-                open.stop_note = None;
-                let bot = open.bot;
-                let text = open.draft.trim().to_owned();
-                self.send(ApiRequest::SendMessage(bot, SendMessageRequest { text }));
-            }
             (BokkieAction::Stop, Session::SignedIn(signed_in)) => {
                 let Some(open) = &mut signed_in.open else {
                     return Ok(false);
@@ -2674,6 +2709,8 @@ impl Application for App {
                 Ok(true)
             }
             (BokkieAction::ShowPrompt, _) => Err("Show prompt needs a message ID".into()),
+            (BokkieAction::Send, ActionArgument::Text(text)) => self.send_text(&text),
+            (BokkieAction::Send, _) => Err("Send needs the message's text".into()),
             (_, ActionArgument::None) => self.perform(target, state),
             (action, _) => Err(format!(
                 "{} takes no argument",
