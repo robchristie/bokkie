@@ -12,9 +12,9 @@
 //!   password reset;
 //! - `admin` is the admin section: accounts, invitations, permissions,
 //!   oversight, limits, password resets and a member's Bots;
-//! - `settings` is one Bot's settings: its grants, notes, recent tool calls
-//!   and routines, with each routine's run history, and the account's time
-//!   zone;
+//! - `settings` is one Bot's panel: its header, routines with each one's
+//!   run history, recent runs, grants, notes and activity (its recent tool
+//!   calls), and the account's time zone;
 //! - `notifications` is the device's notifications switch, through Web
 //!   Push, the read markers and `viewing` frames sent while a conversation
 //!   is on screen, the app badge, and opening a tapped notification's Bot.

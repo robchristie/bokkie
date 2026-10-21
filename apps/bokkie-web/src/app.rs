@@ -342,7 +342,7 @@ pub enum BokkieAction {
     Stop,
     #[action(
         label = "Settings",
-        description = "Show or hide the open Bot's settings: its grants, notes, tool calls and routines"
+        description = "Show or hide the open Bot's panel: its routines, recent runs, grants, notes and activity"
     )]
     BotSettings,
     #[action(
@@ -453,8 +453,8 @@ pub enum BokkieAction {
     )]
     CancelRoutine,
     #[action(
-        label = "Paused",
-        description = "Pause the routine with this ID, or resume it",
+        label = "Pause",
+        description = "Pause the routine with this ID, so it runs only when run now",
         id = "bokkie.pause-routine",
         argument = "number",
         minimum = 1,
@@ -462,6 +462,16 @@ pub enum BokkieAction {
         integer = true
     )]
     PauseRoutine,
+    #[action(
+        label = "Resume",
+        description = "Resume the paused routine with this ID, so it runs on its schedule again",
+        id = "bokkie.resume-routine",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    ResumeRoutine,
     #[action(
         label = "Run now",
         description = "Run the routine with this ID now, even while it is paused",
@@ -519,6 +529,19 @@ pub enum BokkieAction {
         integer = true
     )]
     ShowRun,
+    // The recent runs' Show is an action of its own, since a run can show
+    // in its routine's history at the same time, and one ID must name one
+    // control.
+    #[action(
+        label = "Show",
+        description = "Show the recent run with this ID in the conversation, from its marker",
+        id = "bokkie.show-recent-run",
+        argument = "number",
+        minimum = 1,
+        maximum = 9007199254740991,
+        integer = true
+    )]
+    ShowRecentRun,
     #[action(
         label = "Notifications",
         description = "Notify this device when a Bot has something for you, or stop notifying it"
@@ -1848,6 +1871,10 @@ impl App {
                 self.load_all(applied.reload);
                 match &envelope.event {
                     Event::RoutineRunUpdated { run } => changed |= self.run_updated(run),
+                    Event::BotStatusChanged {
+                        bot_id,
+                        status: BotStatus::Idle,
+                    } => changed |= self.turn_ended(*bot_id),
                     Event::RoutineDeleted {
                         bot_id, routine_id, ..
                     } => changed |= self.routine_gone(*bot_id, *routine_id),

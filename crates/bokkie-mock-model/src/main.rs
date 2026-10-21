@@ -18,6 +18,9 @@
 //! Control, as JSON:
 //! - `PUT /control/reply` `{"pieces": [...], "piece_delay_ms": N}`;
 //! - `PUT /control/rate-limits` with [`RateLimits`] or `null`;
+//! - `PUT /control/tool-call` `{"name": "...", "arguments": {...}}`: answer
+//!   the next request with a call of that tool instead of the reply
+//!   ([`MockModel::call_tool_next`]);
 //! - `GET /control/requests` `{"count": N, "refreshes": N, "refused": [...]}`:
 //!   the requests the model answered, the refreshes the authority answered,
 //!   and the hosts the deny proxy refused.
@@ -48,6 +51,23 @@ struct Mocks {
 async fn set_reply(State(mocks): State<Mocks>, Json(reply): Json<Reply>) -> Json<Value> {
     mocks.model.set_reply(reply.pieces);
     *mocks.model.piece_delay.lock().unwrap() = Duration::from_millis(reply.piece_delay_ms);
+    Json(json!({}))
+}
+
+#[derive(Deserialize)]
+struct ToolCall {
+    name: String,
+    #[serde(default)]
+    arguments: Value,
+}
+
+async fn call_tool(State(mocks): State<Mocks>, Json(call): Json<ToolCall>) -> Json<Value> {
+    let arguments = if call.arguments.is_null() {
+        json!({})
+    } else {
+        call.arguments
+    };
+    mocks.model.call_tool_next(&call.name, arguments);
     Json(json!({}))
 }
 
@@ -88,6 +108,7 @@ async fn main() {
     let control = axum::Router::new()
         .route("/control/reply", put(set_reply))
         .route("/control/rate-limits", put(set_rate_limits))
+        .route("/control/tool-call", put(call_tool))
         .route("/control/requests", get(requests))
         .with_state(mocks);
     let base_url = bokkie_mock_model::serve(model.router().merge(control), &listen).await;

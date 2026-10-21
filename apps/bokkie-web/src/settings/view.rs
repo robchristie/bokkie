@@ -1,13 +1,18 @@
-//! A Bot's settings, in the navigation's detail pane, and the time zone
-//! section, laid out from Stobie's ordinary controls: short ones share a
+//! A Bot's panel, in the navigation's detail pane beside its conversation
+//! or, on a phone, a screen of its own with Back, and the time zone
+//! section. The panel is a header with the Bot's avatar, name and label,
+//! then its routines, its recent runs, its grants, its notes and its
+//! activity, laid out from Stobie's ordinary controls: short ones share a
 //! wrapped row and the rest have rows of their own.
 
-use bokkie_protocol::api::{Grant, Role, Routine, RoutinePush, RoutineRun, RunTrigger, Weekday};
+use bokkie_protocol::api::{
+    Bot, Grant, Role, Routine, RoutinePush, RoutineRun, RunTrigger, Weekday,
+};
 use bokkie_protocol::api::{ToolCall, ToolCallOutcome};
 use stobie_ui_egui::local_time::LocalTime;
 use stobie_ui_egui::{
-    ActionEmphasis, BoundAction, PresentationContext, PresentationScope, ReadingTextSpec,
-    SemanticUiId, TextRole, observe_visible_only,
+    ActionEmphasis, AvatarSize, BoundAction, MarkdownSpec, PresentationContext, PresentationScope,
+    SemanticUiId, SwitchSpec, TextRole, observe_visible_only,
 };
 
 use super::{
@@ -16,7 +21,8 @@ use super::{
     repeat_action, run_state_text, schedule_text,
 };
 use crate::app::{App, BokkieAction, BokkieIntent, Open, SignedIn};
-use crate::ui::{BokkieFrame, line, submitted, text_area, text_field};
+use crate::avatars::bot_avatar;
+use crate::ui::{BokkieFrame, OPENS_A_NEW_TAB, line, submitted, text_area, text_field};
 
 /// What every grants view says of searching and reading the web.
 pub(crate) const EXFILTRATION_NOTICE: &str = "A Bot that searches or reads the web can leak \
@@ -48,6 +54,19 @@ pub(crate) fn present(
                     SemanticUiId::root(),
                 );
                 let p = &mut rows;
+                header_ui(ui, p, bot);
+                ui.separator();
+                routines_ui(ui, p, frame, app, signed_in, &local, settings);
+                ui.separator();
+                // A run can be in a routine's history too: the recent
+                // runs have a scope of their own.
+                let mut recent = frame.presentation(
+                    ui,
+                    PresentationScope::new("recent-runs"),
+                    SemanticUiId::root(),
+                );
+                recent_runs_ui(ui, &mut recent, frame, app, &local, settings);
+                ui.separator();
                 grants_ui(
                     ui,
                     p,
@@ -59,11 +78,41 @@ pub(crate) fn present(
                 ui.separator();
                 notes_ui(ui, p, frame, &local, settings);
                 ui.separator();
-                tool_calls_ui(ui, p, frame, &local, settings);
-                ui.separator();
-                routines_ui(ui, p, frame, app, signed_in, &local, settings);
+                activity_ui(ui, p, frame, &local, settings);
             });
     });
+}
+
+/// The Bot's avatar, name and label.
+fn header_ui(ui: &mut egui::Ui, p: &mut PresentationContext, bot: Option<&Bot>) {
+    let Some(bot) = bot else {
+        p.status(ui, "header-status", "Loading the Bot…", false);
+        return;
+    };
+    ui.horizontal(|ui| {
+        p.avatar(ui, &bot_avatar(bot.id, AvatarSize::Header));
+        let width = ui.available_width();
+        ui.allocate_ui_with_layout(
+            egui::vec2(width, 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                p.content(
+                    ui,
+                    "header-name",
+                    &bot.name,
+                    line(TextRole::SectionHeading, 2),
+                );
+                if !bot.label.is_empty() {
+                    p.content(ui, "header-label", &bot.label, line(TextRole::Secondary, 2));
+                }
+            },
+        );
+    });
+}
+
+/// A grant's switch's label, which is its action's.
+fn grant_label(grant: Grant) -> String {
+    format!("Grant {}", grant.name())
 }
 
 fn grant_about(grant: Grant) -> &'static str {
@@ -92,7 +141,15 @@ fn grants_ui(
     let member = signed_in.user.role != Role::Admin;
     for grant in Grant::ALL {
         let held = grants.contains(&grant);
-        frame.toggle(ui, p, ("grant", grant.name()), grant_action(grant), held);
+        frame.switch(
+            ui,
+            p,
+            grant_action(grant),
+            SwitchSpec {
+                label: &grant_label(grant),
+                on: held,
+            },
+        );
         let mut about = grant_about(grant).to_owned();
         if member && !held && !member_may_grant(grant) {
             about.push_str(&format!(" Only an admin can grant {}.", grant.name()));
@@ -104,6 +161,7 @@ fn grants_ui(
             line(TextRole::Secondary, 2),
         );
     }
+    // Below the web grants, which come last.
     p.content(
         ui,
         "exfiltration",
@@ -142,11 +200,15 @@ fn notes_ui(
             );
         }
         Some(notes) => {
-            p.reading_text(
+            // The Bot writes its notes, often in Markdown.
+            p.markdown(
                 ui,
                 "notes-text",
                 &notes.text,
-                ReadingTextSpec::new(TextRole::Body),
+                MarkdownSpec {
+                    link_description: Some(OPENS_A_NEW_TAB),
+                    ..MarkdownSpec::default()
+                },
             );
             if let Some(at) = notes.updated_at {
                 let when = crate::times::on_day_at(local, at);
@@ -209,14 +271,16 @@ fn call_text(local: &LocalTime, call: &ToolCall) -> String {
     text
 }
 
-fn tool_calls_ui(
+/// The activity: the Bot's recent tool calls, newest first, with their
+/// outcomes.
+fn activity_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
     frame: &mut BokkieFrame<'_, '_>,
     local: &LocalTime,
     settings: &Settings,
 ) {
-    p.heading(ui, "calls-title", "Recent tool calls");
+    p.heading(ui, "calls-title", "Activity");
     if settings.calls_loaded && settings.calls.is_empty() {
         p.content(
             ui,
@@ -329,13 +393,12 @@ fn routines_ui(
                 bound(BokkieAction::RunRoutine),
                 ActionEmphasis::Normal,
             );
-            frame.toggle(
-                ui,
-                p,
-                ("paused", key),
-                bound(BokkieAction::PauseRoutine),
-                routine.paused,
-            );
+            let pause = if routine.paused {
+                BokkieAction::ResumeRoutine
+            } else {
+                BokkieAction::PauseRoutine
+            };
+            frame.action(ui, p, bound(pause), ActionEmphasis::Normal);
             frame.action(
                 ui,
                 p,
@@ -537,6 +600,69 @@ fn form_ui(
         p.status(ui, "routine-form-status", "Saving…", false);
     } else if let Some(error) = &form.error {
         p.status(ui, "routine-form-status", error, true);
+    }
+}
+
+/// The newest runs across the routines, each with its routine, outcome,
+/// trigger and time, and Show for one with messages.
+fn recent_runs_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
+    local: &LocalTime,
+    settings: &Settings,
+) {
+    p.heading(ui, "recent-title", "Recent runs");
+    let routines = app.open_bot().and_then(|bot| app.store().routines(bot));
+    let mut shown = false;
+    for run in settings.recent_runs() {
+        let Some(routine) = routines.and_then(|r| r.routine(run.routine_id)) else {
+            continue;
+        };
+        shown = true;
+        let id = run.id.0;
+        p.content(
+            ui,
+            ("recent-routine", id),
+            &routine.name,
+            line(TextRole::Body, 2),
+        );
+        p.content(
+            ui,
+            ("recent-run", id),
+            &run_text(local, run),
+            line(TextRole::Caption, 2),
+        );
+        if let Some(reason) = run.reason.as_deref().filter(|r| !r.is_empty()) {
+            p.content(
+                ui,
+                ("recent-reason", id),
+                reason,
+                line(TextRole::Secondary, 3),
+            );
+        }
+        if !run.messages.is_empty() {
+            frame.action(
+                ui,
+                p,
+                BoundAction::new(BokkieAction::ShowRecentRun, id)
+                    .with_subject(format!("run {id} of {}", routine.name)),
+                ActionEmphasis::Normal,
+            );
+        }
+    }
+    if !settings.recent_loading.is_empty() {
+        p.status(ui, "recent-status", "Loading runs…", false);
+    } else if let Some(error) = &settings.recent_error {
+        p.status(ui, "recent-status", error, true);
+    } else if !shown && routines.is_some() {
+        p.content(
+            ui,
+            "recent-empty",
+            "No runs yet",
+            line(TextRole::Secondary, 1),
+        );
     }
 }
 
