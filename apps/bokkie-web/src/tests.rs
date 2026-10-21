@@ -608,10 +608,12 @@ impl Fixture {
             // The navigation header's Back and settings toggle, the
             // composer's Send and a message's Copy are Stobie's icon
             // controls, as wide as its least hit size.
+            // A dialog's close control is one too.
             let icon = [
                 BokkieAction::Back,
                 BokkieAction::BotSettings,
                 BokkieAction::Send,
+                BokkieAction::CancelRoutine,
             ]
             .iter()
             .any(|action| {
@@ -637,14 +639,21 @@ impl Fixture {
             .collect();
         let gutter = 4.5;
         for node in &snapshot.nodes {
+            // A sheet covering a phone's screen covers the harness's margin
+            // too, and the application's node holds a dialog's.
+            if matches!(
+                node.role,
+                stobie_ui_egui::UiRole::Application
+                    | stobie_ui_egui::UiRole::Dialog
+                    | stobie_ui_egui::UiRole::AlertDialog
+            ) {
+                continue;
+            }
             assert!(
                 node.rect.min_x >= 7.5 && node.rect.max_x <= page + 0.5,
                 "past the page's sides: {node:?}"
             );
-            if matches!(
-                node.role,
-                stobie_ui_egui::UiRole::Pane | stobie_ui_egui::UiRole::Application
-            ) {
+            if node.role == stobie_ui_egui::UiRole::Pane {
                 continue;
             }
             for (left, right) in &panes {
@@ -656,6 +665,91 @@ impl Fixture {
                 );
             }
         }
+    }
+}
+
+/// What a modal dialog makes of the page, as a person, the keyboard, an
+/// agent and assistive technology meet it.
+impl Fixture {
+    /// The label of the control with keyboard focus, if one has it.
+    fn focused_label(&self) -> Option<String> {
+        use egui_kittest::kittest::NodeT;
+        let widget = self.harness.ctx.memory(|memory| memory.focused())?;
+        let node = widget.accesskit_id();
+        self.harness
+            .query_by(|candidate| candidate.locate().0 == node)
+            .map(|found| found.accesskit_node().label().unwrap_or_default())
+    }
+
+    fn press_key(&mut self, key: egui::Key) {
+        self.harness.key_press_modifiers(egui::Modifiers::NONE, key);
+        self.harness.run();
+    }
+
+    /// The dialog open, of `role`, as Stobie publishes it.
+    fn dialog(&self, role: stobie_ui_egui::UiRole) -> Option<stobie_ui_egui::UiNode> {
+        self.host().ui_snapshot().by_role(role).next().cloned()
+    }
+
+    /// Whether the AccessKit node labelled `label`, or an ancestor, is
+    /// hidden from assistive technology.
+    fn hidden(&self, label: &str) -> bool {
+        use egui_kittest::kittest::NodeT;
+        let node = self.harness.get_by_label(label);
+        let mut current = Some(node.accesskit_node());
+        while let Some(node) = current {
+            if node.is_hidden() {
+                return true;
+            }
+            current = node.parent();
+        }
+        false
+    }
+
+    /// `action`, behind the dialog `title`: an agent discovers it disabled
+    /// because the dialog is open, and invoking it is refused.
+    fn refused_behind(&mut self, action: BokkieAction, title: &str) {
+        use stobie_ui_egui::{ActionKey, InspectionErrorCode, InspectionSelector, ReceiptState};
+        let selector = || InspectionSelector {
+            capability: Some(action.stable_id().into()),
+            ..Default::default()
+        };
+        let capabilities = self.discover(action);
+        assert!(!capabilities.is_empty(), "{action:?} is not offered");
+        let reason = format!("The dialog \"{title}\" is open");
+        for capability in &capabilities {
+            assert_eq!(
+                capability.availability.disabled_reason(),
+                Some(reason.as_str()),
+                "{action:?}"
+            );
+        }
+        let id = format!(
+            "{}-{}",
+            action.stable_id(),
+            self.harness.ctx.cumulative_pass_nr()
+        );
+        let reply = self.inspect(
+            &id,
+            InspectionOperation::Invoke {
+                selector: selector(),
+                expected: capabilities[0].target.clone(),
+                arguments: serde_json::Value::Null,
+            },
+        );
+        let error = match reply.result {
+            Some(InspectionResult::Receipt { receipt }) => {
+                assert_eq!(
+                    receipt.state,
+                    ReceiptState::Rejected,
+                    "{action:?}: {receipt:?}"
+                );
+                receipt.error.expect("a rejected receipt has an error")
+            }
+            _ => reply.error.expect("a reply without a receipt has an error"),
+        };
+        assert_eq!(error.code, InspectionErrorCode::Unavailable, "{action:?}");
+        self.harness.run();
     }
 }
 

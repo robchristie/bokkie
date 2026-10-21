@@ -10,11 +10,12 @@ use bokkie_protocol::api::{
 };
 use bokkie_protocol::events::Event;
 use bokkie_protocol::{MessageId, RoutineId, RoutineRunId};
-use stobie_ui_egui::{ActionArgument, Availability};
+use stobie_ui_egui::{ActionArgument, Availability, UiRole};
 
 use super::conversation::{TUTOR, hello, message};
 use super::*;
 
+mod dialogs;
 mod panel;
 
 const NOW: i64 = 1_800_000_000_000;
@@ -988,7 +989,7 @@ fn the_routine_form_names_the_whole_schedule() {
     assert!(fixture.shows("Repeats: Every 4 hours from 03:00 to 23:00"));
     // A schedule not yet valid falls back to how it repeats.
     fixture.send(BokkieIntent::EditRoutineEvery("5".into()));
-    assert!(fixture.shows("Repeats every few hours"));
+    assert!(fixture.shows("Repeats: Every few hours"));
 }
 
 #[test]
@@ -999,12 +1000,25 @@ fn the_time_zone_is_saved_and_times_follow_it() {
     fixture.click("Back");
     fixture.click("Back");
     assert_eq!(fixture.fact("time_zone"), "Australia/Adelaide".into());
+    assert!(fixture.shows("Time zone: Australia/Adelaide"));
+    // The time zone is entered in its sheet, which starts with the
+    // account's own.
+    assert_eq!(
+        fixture.availability_of(BokkieAction::SaveTimeZone),
+        disabled("Choose Change time zone first")
+    );
+    fixture.send(BokkieIntent::EditTimeZone("Europe/Lndon".into()));
+    assert_eq!(
+        fixture.availability_of(BokkieAction::SaveTimeZone),
+        disabled("Choose Change time zone first")
+    );
+    fixture.reveal("Change time zone");
+    fixture.click("Change time zone");
     assert_eq!(
         fixture.availability_of(BokkieAction::SaveTimeZone),
         disabled("That is your time zone already")
     );
     fixture.send(BokkieIntent::EditTimeZone("Europe/Lndon".into()));
-    fixture.reveal("Save time zone");
     fixture.click("Save time zone");
     assert_eq!(
         fixture.sent(),
@@ -1021,6 +1035,13 @@ fn the_time_zone_is_saved_and_times_follow_it() {
         fixture.fact("time_zone_error"),
         "Europe/Lndon is not a time zone".into()
     );
+    // The refusal shows in the sheet, which stays open to correct it.
+    assert_eq!(
+        fixture.dialog(UiRole::Dialog).map(|sheet| sheet.name),
+        Some("Your time zone".into())
+    );
+    assert!(fixture.shows("Europe/Lndon is not a time zone"));
+    assert!(!fixture.hidden("Europe/Lndon is not a time zone"));
     fixture.send(BokkieIntent::EditTimeZone("Europe/London".into()));
     fixture.click("Save time zone");
     assert_eq!(
@@ -1035,6 +1056,10 @@ fn the_time_zone_is_saved_and_times_follow_it() {
     }))));
     assert_eq!(fixture.fact("time_zone"), "Europe/London".into());
     assert_eq!(fixture.fact("time_zone_error"), "".into());
+    // Saved, the sheet closes and focus returns to its opener.
+    assert!(fixture.dialog(UiRole::Dialog).is_none());
+    assert_eq!(fixture.focused_label().as_deref(), Some("Change time zone"));
+    assert!(fixture.shows("Time zone: Europe/London"));
     // Times now show on the London clock.
     fixture.open("Tutor");
     let _ = fixture.sent();

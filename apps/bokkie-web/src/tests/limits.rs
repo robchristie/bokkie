@@ -11,7 +11,7 @@ use super::*;
 const NOW: i64 = 1_800_000_000_000;
 const HOUR: i64 = 3_600_000;
 
-fn usage(reached: bool, exhausted: bool) -> Usage {
+pub(super) fn usage(reached: bool, exhausted: bool) -> Usage {
     Usage {
         subscription: vec![RateLimitBucket {
             id: "codex".into(),

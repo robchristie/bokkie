@@ -31,7 +31,7 @@ impl Fixture {
             .clone()
     }
 
-    fn inspect(&self, id: &str, operation: InspectionOperation) -> InspectionReply {
+    pub(super) fn inspect(&self, id: &str, operation: InspectionOperation) -> InspectionReply {
         let inspection = self.host().inspection().unwrap();
         inspection.handle(InspectionRequest {
             version: 1,
@@ -42,7 +42,7 @@ impl Fixture {
     }
 
     /// Every binding of `action` an agent discovers.
-    fn discover(&self, action: BokkieAction) -> Vec<CapabilityDescription> {
+    pub(super) fn discover(&self, action: BokkieAction) -> Vec<CapabilityDescription> {
         let reply = self.inspect(
             "discover",
             InspectionOperation::Discover {

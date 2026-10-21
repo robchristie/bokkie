@@ -15,12 +15,12 @@ use bokkie_protocol::api::{
 use stobie_ui_egui::local_time::LocalTime;
 use stobie_ui_egui::{
     ActionArgument, ActionEmphasis, AvatarSize, AvatarSpec, BoundAction, ComposerControl,
-    ComposerSpec, ContentTextSpec, ConversationRowSpec, CopyContent, CopySpec, DomainReference,
-    Frame, IconId, LinkSpec, ListRowSpec, MarkdownSpec, MessageBubbleSpec, MessageSide,
-    NativeTextControlKind, NavigationContent, NavigationDetail, NavigationPane, NavigationSpec,
-    PresentationContext, PresentationScope, ReadingTextSpec, SemanticUiId, SwitchSpec,
-    TextInteraction, TextOverflow, TextRole, UiNode, UiRole, avatar_size, observe_visible_only,
-    paint_avatar,
+    ComposerSpec, ConfirmSpec, ContentTextSpec, ConversationRowSpec, CopyContent, CopySpec,
+    DomainReference, Frame, IconId, LinkSpec, ListRowSpec, MarkdownSpec, MessageBubbleSpec,
+    MessageSide, NativeTextControlKind, NavigationContent, NavigationDetail, NavigationPane,
+    NavigationSpec, PresentationContext, PresentationScope, ReadingTextSpec, SemanticUiId,
+    SwitchSpec, TextInteraction, TextOverflow, TextRole, UiNode, UiRole, avatar_size,
+    observe_visible_only, paint_avatar,
 };
 
 use crate::app::{
@@ -134,7 +134,49 @@ fn navigation_ui(
             |ui| pane_ui(ui, p, frame, app, signed_in, pane, banners, bot_name),
         );
     });
+    dialogs_ui(ui, &mut p, frame, app, signed_in);
 }
+
+/// The dialog open over the navigation, if one is: the open Bot's routine
+/// sheet or one of its panel's confirms, the time zone sheet, or the
+/// confirm before signing the household out. Stobie's dialogs are modal, and at most one is open.
+fn dialogs_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
+    signed_in: &SignedIn,
+) {
+    if let Some(open) = &signed_in.open
+        && crate::settings::dialog_ui(ui, p, frame, app, signed_in, open)
+    {
+        return;
+    }
+    if crate::settings::time_zone_sheet_ui(ui, p, frame, signed_in) {
+        return;
+    }
+    // The confirm closes when chosen; the household screen says it is
+    // signing out.
+    if let Some(household) = &signed_in.household
+        && household.sign_out == SignOut::Confirming
+    {
+        frame.confirm(
+            ui,
+            p,
+            "sign-out-household",
+            &ConfirmSpec::new(
+                "Sign out everyone?",
+                SIGN_OUT_EVERYONE,
+                BokkieAction::ConfirmSignOutChatGpt,
+                BokkieAction::KeepChatGpt,
+            ),
+        );
+    }
+}
+
+/// What the confirm before signing the household out says it does.
+pub(crate) const SIGN_OUT_EVERYONE: &str = "This signs the household out of ChatGPT, which \
+     signs out every account's Bots: no one's Bots can reply until an admin signs in again.";
 
 /// One pane's body, inside the page's gutter.
 #[allow(clippy::too_many_arguments)]
@@ -255,7 +297,8 @@ fn field(
     });
     let mut node = UiNode::container(
         SemanticUiId::new(id),
-        Some(SemanticUiId::root()),
+        // Within a dialog, the field is the dialog's.
+        Some(p.parent().clone()),
         UiRole::TextInput,
         field.rect.into(),
     );
@@ -523,8 +566,8 @@ fn strip_ui(
 }
 
 /// The bottom of the list: who is signed in, the household's ChatGPT
-/// account and the usage meter, the time zone, this device's
-/// notifications, and Refresh Bots, Sign out and the accounts.
+/// account and the usage meter, the time zone (changed in its sheet), this
+/// device's notifications, and Refresh Bots, Sign out and the accounts.
 fn footer_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
@@ -543,12 +586,15 @@ fn footer_ui(
     crate::settings::time_zone_ui(ui, p, frame, signed_in);
     notifications_ui(ui, p, frame, app);
     // Beside an open conversation, the accounts or the settings, which
-    // each refresh their own, the list still can.
-    frame.action(ui, p, BokkieAction::RefreshBots, ActionEmphasis::Normal);
-    frame.action(ui, p, BokkieAction::SignOut, ActionEmphasis::Normal);
-    if signed_in.is_admin() {
-        frame.action(ui, p, BokkieAction::Admin, ActionEmphasis::Normal);
-    }
+    // each refresh their own, the list still can. One row, wrapping only
+    // where it must, keeps the list's foot in view in a laptop's window.
+    ui.horizontal_wrapped(|ui| {
+        frame.action(ui, p, BokkieAction::RefreshBots, ActionEmphasis::Normal);
+        frame.action(ui, p, BokkieAction::SignOut, ActionEmphasis::Normal);
+        if signed_in.is_admin() {
+            frame.action(ui, p, BokkieAction::Admin, ActionEmphasis::Normal);
+        }
+    });
 }
 
 /// This device's notifications switch, at the bottom of the Bot list.
@@ -851,7 +897,7 @@ fn household_ui(
 }
 
 /// Signing the household out, which signs out every account's Bots, so it
-/// asks first.
+/// asks first, in a confirm dialog (see [`dialogs_ui`]).
 fn sign_out_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
@@ -859,37 +905,21 @@ fn sign_out_ui(
     sign_out: &SignOut,
 ) {
     ui.separator();
+    p.content(
+        ui,
+        "sign-out-about",
+        "Signing out signs out every account's Bots at once, until an admin signs in again.",
+        line(TextRole::Secondary, 3),
+    );
+    frame.action(ui, p, BokkieAction::SignOutChatGpt, ActionEmphasis::Normal);
     match sign_out {
-        SignOut::Idle | SignOut::Failed(_) => {
-            p.content(
-                ui,
-                "sign-out-about",
-                "Signing out signs out every account's Bots at once, until an admin signs in again.",
-                line(TextRole::Secondary, 3),
-            );
-            frame.action(ui, p, BokkieAction::SignOutChatGpt, ActionEmphasis::Normal);
-            if let SignOut::Failed(message) = sign_out {
-                p.status(ui, "sign-out-status", message, true);
-            }
-        }
-        SignOut::Confirming => {
-            p.status(
-                ui,
-                "sign-out-warning",
-                "Sign out everyone? No account's Bots can reply until an admin signs in again.",
-                true,
-            );
-            frame.action(
-                ui,
-                p,
-                BokkieAction::ConfirmSignOutChatGpt,
-                ActionEmphasis::Primary,
-            );
-            frame.action(ui, p, BokkieAction::KeepChatGpt, ActionEmphasis::Normal);
-        }
         SignOut::Busy => {
             p.status(ui, "sign-out-status", "Signing out…", false);
         }
+        SignOut::Failed(message) => {
+            p.status(ui, "sign-out-status", message, true);
+        }
+        SignOut::Idle | SignOut::Confirming => {}
     }
 }
 

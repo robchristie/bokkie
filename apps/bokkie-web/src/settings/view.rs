@@ -3,7 +3,10 @@
 //! section. The panel is a header with the Bot's avatar, name and label,
 //! then its routines, its recent runs, its grants, its notes and its
 //! activity, laid out from Stobie's ordinary controls: short ones share a
-//! wrapped row and the rest have rows of their own.
+//! wrapped row and the rest have rows of their own. A routine is made and
+//! changed in Stobie's sheet, and deleting a routine and clearing the notes
+//! ask first in its confirm dialog (see [`dialog_ui`]): each is modal, so
+//! nothing behind it can be reached until it closes.
 
 use bokkie_protocol::api::{
     Bot, Grant, Role, Routine, RoutinePush, RoutineRun, RunTrigger, Weekday,
@@ -11,8 +14,9 @@ use bokkie_protocol::api::{
 use bokkie_protocol::api::{ToolCall, ToolCallOutcome};
 use stobie_ui_egui::local_time::LocalTime;
 use stobie_ui_egui::{
-    ActionEmphasis, AvatarSize, BoundAction, MarkdownSpec, PresentationContext, PresentationScope,
-    SemanticUiId, SwitchSpec, TextRole, observe_visible_only,
+    ActionEmphasis, AvatarSize, BoundAction, ConfirmSpec, DialogSpec, MarkdownSpec,
+    PresentationContext, PresentationScope, SemanticUiId, SwitchSpec, TextRole,
+    observe_visible_only,
 };
 
 use super::{
@@ -221,30 +225,10 @@ fn notes_ui(
             }
         }
     }
-    match settings.clear {
-        Clear::Idle => {
-            frame.action(ui, p, BokkieAction::ClearNotes, ActionEmphasis::Normal);
-        }
-        Clear::Confirming => {
-            p.status(
-                ui,
-                "notes-confirm",
-                "Clear the Bot's notes for good? This cannot be undone.",
-                false,
-            );
-            ui.horizontal_wrapped(|ui| {
-                frame.action(
-                    ui,
-                    p,
-                    BokkieAction::ConfirmClearNotes,
-                    ActionEmphasis::Primary,
-                );
-                frame.action(ui, p, BokkieAction::KeepNotes, ActionEmphasis::Normal);
-            });
-        }
-        Clear::Clearing => {
-            p.status(ui, "notes-confirm", "Clearing…", false);
-        }
+    // Clear asks first, in a confirm dialog.
+    frame.action(ui, p, BokkieAction::ClearNotes, ActionEmphasis::Normal);
+    if settings.clear == Clear::Clearing {
+        p.status(ui, "notes-clearing", "Clearing the notes…", false);
     }
 }
 
@@ -419,62 +403,111 @@ fn routines_ui(
                 ActionEmphasis::Normal,
             );
         });
-        if settings.busy.contains(&routine.id) {
+        if settings.delete == Some((routine.id, true)) {
+            p.status(ui, ("routine-busy", key), "Deleting…", false);
+        } else if settings.busy.contains(&routine.id) {
             p.status(ui, ("routine-busy", key), "Saving…", false);
-        }
-        if let Some((_, busy)) = settings.delete.filter(|(id, _)| *id == routine.id) {
-            if busy {
-                p.status(ui, ("routine-delete", key), "Deleting…", false);
-            } else {
-                p.status(
-                    ui,
-                    ("routine-delete", key),
-                    &format!(
-                        "Delete {} and its run history for good? Its runs stay in the conversation.",
-                        routine.name
-                    ),
-                    false,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    frame.action(
-                        ui,
-                        p,
-                        BokkieAction::ConfirmDeleteRoutine,
-                        ActionEmphasis::Primary,
-                    );
-                    frame.action(ui, p, BokkieAction::KeepRoutine, ActionEmphasis::Normal);
-                });
-            }
-        }
-        if let Some(form) = settings
-            .form
-            .as_ref()
-            .filter(|form| form.editing == Some(routine.id))
-        {
-            form_ui(ui, p, frame, signed_in, form);
         }
         if let Some(history) = history {
             history_ui(ui, p, frame, local, history);
         }
         ui.separator();
     }
-    match settings.form.as_ref() {
-        Some(form) if form.editing.is_none() => form_ui(ui, p, frame, signed_in, form),
-        _ => {
-            frame.action(ui, p, BokkieAction::NewRoutine, ActionEmphasis::Normal);
-        }
-    }
+    // Each opens the routine sheet.
+    frame.action(ui, p, BokkieAction::NewRoutine, ActionEmphasis::Normal);
 }
 
+/// How the sheet names a kind of repeat, until the schedule is whole.
 fn repeat_label(repeat: Repeat) -> &'static str {
     match repeat {
-        Repeat::Daily => "every day",
-        Repeat::Weekdays => "weekdays",
-        Repeat::Days => "on chosen days",
-        Repeat::Hours => "every few hours",
+        Repeat::Daily => "Every day",
+        Repeat::Weekdays => "Weekdays",
+        Repeat::Days => "On chosen days",
+        Repeat::Hours => "Every few hours",
     }
 }
 
+/// The open Bot's dialog, if its panel has one open: the routine sheet, or
+/// the confirm before deleting a routine or clearing the notes. Presented
+/// after the navigation, over everything behind it; returns whether one is.
+pub(crate) fn dialog_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    app: &App,
+    signed_in: &SignedIn,
+    open: &Open,
+) -> bool {
+    let Some(settings) = &open.settings else {
+        return false;
+    };
+    if let Some(form) = &settings.form {
+        let title = if form.editing.is_some() {
+            "Edit routine"
+        } else {
+            "New routine"
+        };
+        // Its close control is Close without saving, which Escape triggers
+        // too; neither closes it while it saves.
+        let spec = DialogSpec::new(title, BokkieAction::CancelRoutine)
+            .sheet()
+            .full_height();
+        frame.dialog(ui, p, "routine-sheet", &spec, |ui, frame, p| {
+            form_ui(ui, p, frame, signed_in, form);
+        });
+        return true;
+    }
+    // A confirm closes when chosen, so focus returns to its opener while
+    // that is still presented, and the panel says what is under way.
+    if let Some((routine, false)) = settings.delete {
+        let name = app
+            .store()
+            .routines(open.bot)
+            .and_then(|routines| routines.routine(routine))
+            .map_or("this routine", |routine| routine.name.as_str());
+        let message = format!(
+            "\"{name}\" and its run history are deleted for good. \
+             What its runs said stays in the conversation."
+        );
+        frame.confirm(
+            ui,
+            p,
+            "delete-routine",
+            &ConfirmSpec::new(
+                "Delete this routine?",
+                &message,
+                BokkieAction::ConfirmDeleteRoutine,
+                BokkieAction::KeepRoutine,
+            ),
+        );
+        return true;
+    }
+    if settings.clear == Clear::Confirming {
+        let bot = app
+            .store()
+            .bot(open.bot)
+            .map_or("the Bot", |bot| bot.name.as_str());
+        let message = format!(
+            "{bot}'s notes are cleared for good, and it starts its next turn without them."
+        );
+        frame.confirm(
+            ui,
+            p,
+            "clear-notes",
+            &ConfirmSpec::new(
+                "Clear notes?",
+                &message,
+                BokkieAction::ConfirmClearNotes,
+                BokkieAction::KeepNotes,
+            ),
+        );
+        return true;
+    }
+    false
+}
+
+/// The routine sheet's form: name, prompt, schedule and push, then Save.
+/// What stops a save, and why one failed, show in the sheet.
 fn form_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
@@ -482,12 +515,6 @@ fn form_ui(
     signed_in: &SignedIn,
     form: &RoutineForm,
 ) {
-    let title = if form.editing.is_some() {
-        "Edit routine"
-    } else {
-        "New routine"
-    };
-    p.heading(ui, "routine-form-title", title);
     ui.add_enabled_ui(!form.busy, |ui| {
         let (name, field) = text_field(ui, p, ROUTINE_NAME_ID, "Name", &form.name, false);
         if name != form.name {
@@ -510,10 +537,15 @@ fn form_ui(
     // The whole schedule as the routine's row will word it, once the form
     // holds one; until then, the kind of repeat chosen.
     let repeats = match form.schedule() {
-        Ok(schedule) => format!("Repeats: {}", schedule_text(&schedule)),
-        Err(_) => format!("Repeats {}", repeat_label(form.repeat)),
+        Ok(schedule) => schedule_text(&schedule),
+        Err(_) => repeat_label(form.repeat).to_owned(),
     };
-    p.content(ui, "repeat-about", &repeats, line(TextRole::Secondary, 2));
+    p.content(
+        ui,
+        "repeat-about",
+        &format!("Repeats: {repeats}"),
+        line(TextRole::Secondary, 2),
+    );
     ui.horizontal_wrapped(|ui| {
         for repeat in Repeat::ALL {
             frame.toggle(
@@ -571,12 +603,14 @@ fn form_ui(
         &format!("Times are in your time zone, {}.", signed_in.user.time_zone),
         line(TextRole::Secondary, 2),
     );
-    frame.toggle(
+    frame.switch(
         ui,
         p,
-        "routine-push",
         BokkieAction::RoutinePush,
-        form.push == RoutinePush::EveryRun,
+        SwitchSpec {
+            label: "Notify every run",
+            on: form.push == RoutinePush::EveryRun,
+        },
     );
     p.content(
         ui,
@@ -592,10 +626,8 @@ fn form_ui(
             line(TextRole::Secondary, 2),
         );
     }
-    ui.horizontal_wrapped(|ui| {
-        frame.action(ui, p, BokkieAction::SaveRoutine, ActionEmphasis::Primary);
-        frame.action(ui, p, BokkieAction::CancelRoutine, ActionEmphasis::Normal);
-    });
+    // Close without saving is the sheet's close control.
+    frame.action(ui, p, BokkieAction::SaveRoutine, ActionEmphasis::Primary);
     if form.busy {
         p.status(ui, "routine-form-status", "Saving…", false);
     } else if let Some(error) = &form.error {
@@ -726,40 +758,63 @@ fn history_ui(
     }
 }
 
-/// The user's time zone, which routines run in and times are shown in.
+/// The user's time zone, which routines run in and times are shown in, at
+/// the bottom of the Bot list: one line and Change time zone, which opens
+/// the time zone sheet (see [`time_zone_sheet_ui`]).
 pub(crate) fn time_zone_ui(
     ui: &mut egui::Ui,
     p: &mut PresentationContext,
     frame: &mut BokkieFrame<'_, '_>,
     signed_in: &SignedIn,
 ) {
-    p.heading(ui, "time-zone-title", "Time zone");
     p.content(
         ui,
-        "time-zone-about",
-        &format!(
-            "Times show and routines run in {}. Enter another IANA name, such as Europe/London.",
-            signed_in.user.time_zone
-        ),
-        line(TextRole::Secondary, 3),
+        "time-zone",
+        &format!("Time zone: {}", signed_in.user.time_zone),
+        line(TextRole::Secondary, 2),
     );
-    let value = signed_in
-        .zone_draft
-        .as_deref()
-        .unwrap_or(&signed_in.user.time_zone);
-    ui.add_enabled_ui(!signed_in.zone_saving, |ui| {
-        let (zone, field) = text_field(ui, p, TIME_ZONE_ID, "Time zone", value, false);
-        if zone != value {
-            frame.emit(BokkieIntent::EditTimeZone(zone));
-        }
-        if submitted(ui, &field) {
-            frame.trigger(BokkieAction::SaveTimeZone);
+    frame.action(ui, p, BokkieAction::ChangeTimeZone, ActionEmphasis::Normal);
+}
+
+/// The time zone sheet, while it is open; returns whether it is. Its close
+/// control is Close without saving, which Escape triggers too; neither
+/// closes it while it saves, and a saved time zone closes it.
+pub(crate) fn time_zone_sheet_ui(
+    ui: &mut egui::Ui,
+    p: &mut PresentationContext,
+    frame: &mut BokkieFrame<'_, '_>,
+    signed_in: &SignedIn,
+) -> bool {
+    let Some(value) = &signed_in.zone_draft else {
+        return false;
+    };
+    let spec = DialogSpec::new("Your time zone", BokkieAction::CloseTimeZone).sheet();
+    frame.dialog(ui, p, "time-zone-sheet", &spec, |ui, frame, p| {
+        p.content(
+            ui,
+            "time-zone-about",
+            &format!(
+                "Times show and routines run in {}. Enter another IANA name, such as \
+                 Europe/London.",
+                signed_in.user.time_zone
+            ),
+            line(TextRole::Secondary, 3),
+        );
+        ui.add_enabled_ui(!signed_in.zone_saving, |ui| {
+            let (zone, field) = text_field(ui, p, TIME_ZONE_ID, "Time zone", value, false);
+            if zone != *value {
+                frame.emit(BokkieIntent::EditTimeZone(zone));
+            }
+            if submitted(ui, &field) {
+                frame.trigger(BokkieAction::SaveTimeZone);
+            }
+        });
+        frame.action(ui, p, BokkieAction::SaveTimeZone, ActionEmphasis::Primary);
+        if signed_in.zone_saving {
+            p.status(ui, "time-zone-status", "Saving…", false);
+        } else if let Some(error) = &signed_in.zone_error {
+            p.status(ui, "time-zone-status", error, true);
         }
     });
-    frame.action(ui, p, BokkieAction::SaveTimeZone, ActionEmphasis::Normal);
-    if signed_in.zone_saving {
-        p.status(ui, "time-zone-status", "Saving…", false);
-    } else if let Some(error) = &signed_in.zone_error {
-        p.status(ui, "time-zone-status", error, true);
-    }
+    true
 }
